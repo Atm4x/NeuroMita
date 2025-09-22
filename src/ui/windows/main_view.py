@@ -1078,6 +1078,13 @@ class ChatGUI(QMainWindow):
         self.debug_window.setObjectName("DebugWindow")
         self.debug_window.setMinimumHeight(200)
         parent_layout.addWidget(self.debug_window)
+
+        # Кнопка для просмотра БД
+        view_db_button = QPushButton(_("Просмотр БД", "View Database"))
+        view_db_button.setObjectName("ViewDbButton")
+        view_db_button.clicked.connect(lambda: self.event_bus.emit(Events.GUI.SHOW_DB_VIEWER))
+        parent_layout.addWidget(view_db_button)
+
         self.update_debug_info()
 
     def _news_wrapper(self, parent_layout):

@@ -41,8 +41,13 @@ class MigrationManager:
             for msg in messages:
                 role = msg.get('role')
                 content = msg.get('content')
+                if isinstance(content, list):
+                    content = "\n".join(content) # Объединяем список строк в одну строку
+                elif not isinstance(content, str):
+                    content = str(content) # Преобразуем в строку, если это не список и не строка
+                
                 # В старой истории нет timestamp, используем текущее время или заглушку
-                timestamp = datetime.now().isoformat() 
+                timestamp = datetime.now().isoformat()
                 if role and content:
                     self.db_manager.add_history_message(character_name, role, content, timestamp)
             

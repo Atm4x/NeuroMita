@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget,
                              QTableView, QHeaderView, QPushButton, QHBoxLayout, QLabel, QLineEdit)
 from PyQt6.QtCore import Qt, QAbstractTableModel, QVariant
 from PyQt6.QtGui import QColor
+from PySide6.QtWidgets import QComboBox
 
 from managers.database_manager import DatabaseManager
 from main_logger import logger
