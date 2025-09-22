@@ -226,8 +226,11 @@ from ui.windows.main_view import ChatGUI
 from controllers.main_controller import MainController
 from core.events import get_event_bus
 from main_logger import logger
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 import sys
+
+from managers.database_manager import DatabaseManager
+from utils.migration_manager import MigrationManager
 
 if __name__ == "__main__":
     logger.info("Функция main() запущена")
@@ -237,14 +240,36 @@ if __name__ == "__main__":
 
         if sys.platform == 'win32':
             import ctypes
-            myappid = 'mycompany.myproduct.subproduct.version' 
+            myappid = 'mycompany.myproduct.subproduct.version'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+        # Инициализация менеджера БД
+        db_manager = DatabaseManager()
 
         # Создаем пустой объект для контроллера
         logger.info("Создаю MainController...")
-        controller = MainController(None)
+        controller = MainController(None, db_manager) # Передаем db_manager
         logger.info("MainController создан")
-    
+
+        # Инициализация менеджера миграции (теперь он внутри MainController)
+        migration_manager = controller.migration_manager
+        
+        # Проверка и предложение миграции при запуске
+        if migration_manager.check_for_old_files():
+            reply = QMessageBox.question(
+                None,
+                "Миграция данных",
+                "Обнаружены старые файлы истории и памяти. Хотите импортировать их в новую базу данных?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                logger.info("Пользователь согласился на миграцию данных.")
+                migration_manager.run_migration()
+                QMessageBox.information(None, "Миграция завершена", "Данные успешно импортированы в базу данных.")
+            else:
+                logger.info("Пользователь отказался от миграции данных.")
+
         logger.info("Создаю ChatGUI...")
         main_win = ChatGUI(controller.settings)  # Передаем controller  settings
         logger.info("ChatGUI создан")

@@ -24,12 +24,21 @@ from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
 from controllers.server_controller import ServerController
 from controllers.server_controller_old import ServerControllerOld
+from managers.database_manager import DatabaseManager
+from utils.migration_manager import MigrationManager
+from utils.export_manager import ExportManager # Импортируем ExportManager
+from PyQt6.QtWidgets import QMessageBox, QFileDialog # Для отображения сообщений и диалога сохранения файла
+from ui.windows.db_viewer_window import DbViewerWindow # Импортируем окно просмотра БД
 
 
 class MainController:
-    def __init__(self, view):
+    def __init__(self, view, db_manager: DatabaseManager): # Добавляем db_manager в конструктор
         self.view = view
         self.event_bus = get_event_bus()
+        self.db_manager = db_manager # Сохраняем ссылку на DatabaseManager
+        self.migration_manager = MigrationManager(self.db_manager) # Инициализируем MigrationManager
+        self.export_manager = ExportManager(self.db_manager) # Инициализируем ExportManager
+        self.db_viewer_window = None # Инициализируем окно просмотра БД как None
 
         self.dialog_active = False
 
@@ -145,6 +154,9 @@ class MainController:
 
         self.event_bus.subscribe(Events.Server.SET_DIALOG_ACTIVE, self._on_set_dialog_active, weak=False)
         self.event_bus.subscribe(Events.Core.SETTING_CHANGED, self._on_setting_changed, weak=False)
+        self.event_bus.subscribe(Events.Migration.RUN_MIGRATION, self._on_run_migration, weak=False) # Подписка на событие миграции
+        self.event_bus.subscribe(Events.Export.EXPORT_CHARACTER_DATA, self._on_export_character_data, weak=False) # Подписка на событие экспорта
+        self.event_bus.subscribe(Events.GUI.SHOW_DB_VIEWER, self._on_show_db_viewer, weak=False) # Подписка на событие просмотра БД
 
     def _on_setting_changed(self, event: Event):
         key = event.data.get('key')
@@ -152,6 +164,58 @@ class MainController:
         if key == 'USE_NEW_API':
             logger.info("Обнаружено изменение настройки API, переинициализация ServerController...")
             self._init_server_controller()
+
+    def _on_show_db_viewer(self, event: Event):
+        """Обработчик события открытия окна просмотра БД."""
+        logger.info("Получен запрос на открытие окна просмотра базы данных.")
+        if self.db_viewer_window is None:
+            self.db_viewer_window = DbViewerWindow(self.db_manager, self.view)
+        self.db_viewer_window.show()
+        self.db_viewer_window.activateWindow()
+        self.db_viewer_window.raise_()
+        self.db_viewer_window._populate_character_combobox() # Обновляем список персонажей
+        self.db_viewer_window._load_data_for_selected_character() # Загружаем данные для текущего персонажа
+
+    def _on_export_character_data(self, event: Event):
+        """Обработчик события экспорта данных персонажа."""
+        logger.info("Получен запрос на экспорт данных персонажа.")
+        # Получаем имя текущего персонажа. Предполагаем, что есть способ его получить.
+        # Например, через event_bus или из настроек.
+        # Пока используем заглушку "Common"
+        character_name = self.event_bus.emit_and_wait(Events.Model.GET_CURRENT_CHARACTER, timeout=1.0)
+        if character_name and character_name[0]:
+            character_name = character_name[0].get('name', 'Common')
+        else:
+            character_name = "Common" # Fallback
+
+        # Открываем диалог сохранения файла
+        file_dialog = QFileDialog()
+        file_dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        file_dialog.setNameFilter("Text files (*.txt)")
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        file_dialog.setWindowTitle("Сохранить данные персонажа")
+        file_dialog.setDirectory(os.path.join(os.getcwd(), "Exports")) # Предлагаем папку Exports
+
+        if file_dialog.exec() == QFileDialog.DialogCode.Accepted:
+            output_path = file_dialog.selectedFiles()[0]
+            # Передаем только директорию, имя файла будет сгенерировано ExportManager
+            output_dir = os.path.dirname(output_path)
+            
+            exported_file = self.export_manager.export_character_data_to_text(character_name, output_dir)
+            if exported_file:
+                QMessageBox.information(self.view, "Экспорт завершен", f"Данные успешно экспортированы в:\n{exported_file}")
+            else:
+                QMessageBox.warning(self.view, "Ошибка экспорта", "Не удалось экспортировать данные персонажа.")
+        else:
+            logger.info("Экспорт данных отменен пользователем.")
+
+    def _on_run_migration(self, event: Event):
+        """Обработчик события запуска миграции."""
+        logger.info("Получен запрос на запуск миграции данных.")
+        if self.migration_manager.run_migration():
+            QMessageBox.information(self.view, "Миграция завершена", "Данные успешно импортированы в базу данных.")
+        else:
+            QMessageBox.information(self.view, "Миграция не требуется", "Старые файлы истории и памяти не найдены.")
 
     def close_app(self):
         logger.info("Начинаем закрытие приложения...")

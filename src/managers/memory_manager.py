@@ -1,164 +1,73 @@
-import json
 import logging
-import os
-import datetime
+from managers.database_manager import DatabaseManager
+from datetime import datetime
 
 
 class MemoryManager:
     def __init__(self, character_name):
         self.character_name = character_name
-        self.history_dir = f"Histories\\{character_name}"
-        os.makedirs(self.history_dir, exist_ok=True)
+        self.db_manager = DatabaseManager()
+        logging.info(f"MemoryManager инициализирован для персонажа: {character_name}")
 
-        self.filename = os.path.join(self.history_dir, f"{character_name}_memories.json")
-        self.memories = []
-        self.total_characters = 0  # Новый атрибут для подсчета символов
-        self.last_memory_number = 1
+    def add_memory(self, content: str, key: str = None, priority: str = "Normal", memory_type: str = "fact"):
+        """Добавляет факт в память для текущего персонажа."""
+        # Если ключ не предоставлен, используем часть контента или генерируем уникальный
+        if key is None:
+            key = f"{memory_type}_{datetime.now().isoformat()}" # Пример генерации ключа
+        
+        self.db_manager.add_memory_fact(self.character_name, key, content, datetime.now().isoformat())
+        logging.debug(f"Факт добавлен в память для {self.character_name}: {key} - {content[:50]}...")
 
-        self.load_memories()
+    def update_memory(self, key: str, content: str, priority: str = None):
+        """Обновляет существующий факт в памяти или добавляет новый."""
+        self.db_manager.update_memory_fact(self.character_name, key, content, datetime.now().isoformat())
+        logging.debug(f"Факт обновлен/добавлен в память для {self.character_name}: {key} - {content[:50]}...")
+        return True # Всегда возвращаем True, так как update_memory_fact либо обновляет, либо добавляет
 
-    def load_memories(self):
-
-        if os.path.exists(self.filename):
-            with open(self.filename, 'r', encoding='utf-8') as file:
-                self.memories = json.load(file)
-                self.last_memory_number = len(self.memories) + 1
-                self._calculate_total_characters()
-        else:
-            logging.warning(f"No memories file {self.filename} found!")
-            self.memories = []
-            self.save_memories() # Создаем пустой файл
-            logging.info(f"Created new memories file: {self.filename}")
-
-    def _calculate_total_characters(self):
-        """Пересчитывает общее количество символов"""
-        self.total_characters = sum(len(memory["content"]) for memory in self.memories)
-
-    def save_memories(self):
-        with open(self.filename, 'w', encoding='utf-8') as file:
-            json.dump(self.memories, file, ensure_ascii=False, indent=4)
-
-    def add_memory(self, content, date=datetime.datetime.now().strftime("%d.%m.%Y_%H.%M"), priority="Normal", memory_type="fact"):
-        if not self.memories:
-            new_id = 1
-        else:
-            new_id = max(memory['N'] for memory in self.memories) + 1
-
-        memory = {
-            "N": new_id,
-            "date": date,
-            "priority": priority,
-            "content": content,
-            "memory_type": memory_type  # Добавляем тип памяти
-        }
-        self.memories.append(memory)
-        self.total_characters += len(content)  # Обновляем счетчик
-        self.last_memory_number += 1
-        self.save_memories()
-
-    def update_memory(self, number, content, priority=None):
-        for memory in self.memories:
-            if memory["N"] == number:
-                # Обновляем счетчик символов
-                self.total_characters -= len(memory["content"])
-                self.total_characters += len(content)
-
-                memory["date"] = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
-                memory["content"] = content
-                if priority:
-                    memory["priority"] = priority
-                self.save_memories()
-                return True
-        return False
-
-    def delete_memory(self, number, save_as_missing = False):
-        for i, memory in enumerate(self.memories):
-            if memory["N"] == number:
-                if save_as_missing:
-                    # Сохраняем копию в missed перед удалением
-                    missed_memory = memory.copy()  # Полная копия воспоминания
-                    self.save_missed_memory(missed_memory)
-
-                # Обновляем счетчик и удаляем
-                self.total_characters -= len(memory["content"])
-                del self.memories[i]
-                self.save_memories()
-                logging.info(f"Memory {number} deleted")
-                return True
-        logging.warning(f"Memory {number} not found for deletion.")
-        return False
-
-    def save_missed_memory(self, missed_memory: dict):
-        """
-        Сохраняет удалённое воспоминание в отдельный файл для персонажа.
-        Воспоминание добавляется к существующему файлу, если он есть.
-        """
-        missed_dir = self.history_dir  # Используем ту же директорию
-        os.makedirs(missed_dir, exist_ok=True)
-        missed_file_path = os.path.join(missed_dir, f"{self.character_name}_missed_memories.json")
-
-        existing_missed_memories = []
-        if os.path.exists(missed_file_path):
-            try:
-                with open(missed_file_path, 'r', encoding='utf-8') as f:
-                    existing_missed_memories = json.load(f)
-                    if not isinstance(existing_missed_memories, list):
-                        logging.warning(
-                            f"Файл пропущенных воспоминаний {missed_file_path} поврежден или имеет неверный формат. Создаю новый.")
-                        existing_missed_memories = []
-            except (json.JSONDecodeError, FileNotFoundError):
-                logging.warning(
-                    f"Не удалось загрузить существующие пропущенные воспоминания из {missed_file_path}. Создаю новый файл.")
-                existing_missed_memories = []
-
-        # Добавляем новое пропущенное воспоминание
-        existing_missed_memories.append(missed_memory)
-
-        try:
-            with open(missed_file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_missed_memories, f, ensure_ascii=False, indent=4)
-            logging.info(f"Пропущенное воспоминание сохранено в {missed_file_path}")
-        except Exception as e:
-            logging.error(f"Ошибка при сохранении пропущенного воспоминания в {missed_file_path}: {e}", exc_info=True)
+    def delete_memory(self, key: str, save_as_missing: bool = False):
+        """Удаляет факт из памяти для персонажа."""
+        # save_as_missing не поддерживается напрямую в БД, так как это логика JSON-файлов
+        self.db_manager.delete_memory_fact(self.character_name, key)
+        logging.info(f"Факт {key} удален из памяти для {self.character_name}.")
+        return True
 
     def clear_memories(self):
-        self.memories = []
-        self.total_characters = 0  # Сбрасываем счетчик
-        self.save_memories()
-        self.last_memory_number = 1
+        """Очищает всю память для текущего персонажа."""
+        self.db_manager.clear_memory(self.character_name)
+        logging.info(f"Память для персонажа {self.character_name} очищена.")
 
     def get_memories_formatted(self):
+        """Получает и форматирует все факты из памяти для текущего персонажа."""
+        memories_dict = self.db_manager.get_memory_facts(self.character_name)
+        
         formatted_memories = []
-        for memory in self.memories:
-            if memory.get('memory_type', "") == "summary":
-                formatted_memories.append(
-                    f"N:{memory['N']}, Date {memory['date']}, Type: Summary: {memory['content']}"
-                )
-            else:
-                formatted_memories.append(
-                    f"N:{memory['N']}, Date {memory['date']}, Priority: {memory['priority']}: {memory['content']}"
-                )
+        total_characters = 0
+        for key, value in memories_dict.items():
+            # В текущей схеме БД нет полей 'N', 'date', 'priority', 'memory_type' для каждого факта
+            # Поэтому форматируем, используя доступные данные
+            formatted_memories.append(f"Key: {key}, Content: {value}")
+            total_characters += len(value)
 
-        memory_stats = f"\nMemory status: {len(self.memories)} facts, {self.total_characters} characters"
+        memory_stats = f"\nMemory status: {len(memories_dict)} facts, {total_characters} characters"
 
         # Правила для управления памятью
         management_tips = []
-        if self.total_characters > 10000:
+        if total_characters > 10000:
             management_tips.append("CRITICAL: Memory limit exceeded! Delete old or useless memories immediately!")
-        elif self.total_characters > 5000:
+        elif total_characters > 5000:
             management_tips.append("WARNING: Memory size is large. Consider optimization or summarization")
 
-        if len(self.memories) > 75:
+        if len(memories_dict) > 75:
             management_tips.append("Too many memories! Delete unimportant ones using <-memory>N</memory> syntax")
-        elif len(self.memories) > 40:
+        elif len(memories_dict) > 40:
             management_tips.append("Many memories stored. Review lower priority entries")
 
-        # Примеры команд
+        # Примеры команд (нужно будет адаптировать под работу с ключами вместо N)
         examples = [
             "Example of memory commands:",
-            "<-memory>2</memory> - delete memory 2",
-            "<+memory>high|new content</memory> - add memory with priority high",
-            "<#memory>4|low|content</memory> - change memory 4 to content with priority low"
+            "<-memory>key_to_delete</memory> - delete memory by key",
+            "<+memory>new_key|new content</memory> - add memory with a new key",
+            "<#memory>existing_key|updated content</memory> - change memory by key"
         ]
 
         full_message = (
@@ -171,3 +80,9 @@ class MemoryManager:
         )
 
         return full_message
+
+    # Методы, которые больше не нужны или будут перенесены
+    # def load_memories(self): ... (удалено)
+    # def _calculate_total_characters(self): ... (удалено)
+    # def save_memories(self): ... (удалено)
+    # def save_missed_memory(self, missed_memory: dict): ... (удалено)

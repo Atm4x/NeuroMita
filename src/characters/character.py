@@ -93,7 +93,8 @@ class Character:
         self.history_manager = HistoryManager(self.char_id)
         self.memory_system = MemoryManager(self.char_id)
 
-        self.load_history()
+        # load_history() больше не нужен здесь, так как HistoryManager сам управляет БД
+        # Переменные загружаются из config.json
 
         from managers.dsl_manager import create_dsl_interpreter
         self.dsl_interpreter = create_dsl_interpreter(self)
@@ -455,10 +456,11 @@ class Character:
     def reload_character_data(self):
         logger.info(f"[{self.char_id}] Reloading character data from disk (config + history).")
 
-        # Сначала перезагружаем config, затем историю (история может переопределить значения)
+        # Сначала перезагружаем config
         self.load_config()
-        self.load_history()
-        self.memory_system.load_memories()
+        # HistoryManager и MemoryManager теперь сами управляют загрузкой из БД
+        # self.history_manager.load_history() # Этот метод больше не нужен
+        # self.memory_system.load_memories() # Этот метод больше не нужен
         self.set_variable("SYSTEM_DATETIME", datetime.datetime.now().isoformat(" ", "minutes"))
 
         if hasattr(self, 'post_dsl_interpreter') and self.post_dsl_interpreter:
@@ -521,11 +523,10 @@ class Character:
         self.history_manager.clear_history()
         logger.info(f"[{self.char_id}] History cleared and state reset to initial defaults/overrides.")
 
-    def add_message_to_history(self, message: Dict[str, str]): 
-        current_history_data = self.history_manager.load_history()
-        messages = current_history_data.get("messages", [])
-        messages.append(message)
-        self.save_character_state_to_history(messages)
+    def add_message_to_history(self, message: Dict[str, str]):
+        """Добавляет одно сообщение в историю через HistoryManager."""
+        self.history_manager.add_message(message['role'], message['content'])
+        logger.debug(f"[{self.char_id}] Added single message to history: {message['role']} - {message['content'][:50]}...")
     #endregion
 
     # In OpenMita/character.py, class Character

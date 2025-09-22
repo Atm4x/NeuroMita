@@ -341,6 +341,7 @@ class Events:
         SHOW_EULA_DIALOG = "show_eula_dialog"
         SHOW_GUIDE = "show_guide"
         HIDE_GUIDE = "hide_guide"
+        SHOW_DB_VIEWER = "show_db_viewer" # Новое событие для открытия окна просмотра БД
 
     class Model:
         """События для управления LLM, персонажами и историей"""
@@ -541,3 +542,11 @@ class Events:
         SET_CURRENT_PRESET_ID = "set_current_preset_id"
         UPDATE_PRESET_MODELS = "update_preset_models"
         SAVE_PRESETS_ORDER = "save_presets_order"
+
+    class Migration:
+        """События для управления миграцией данных"""
+        RUN_MIGRATION = "run_migration"
+
+    class Export:
+        """События для управления экспортом данных"""
+        EXPORT_CHARACTER_DATA = "export_character_data"
