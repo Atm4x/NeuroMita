@@ -468,6 +468,7 @@ class Events:
         GET_CHAT_SERVER = "get_chat_server"
         SET_PATCH_TO_SOUND_FILE = "set_patch_to_sound_file"
         SEND_TASK_UPDATE = "send_task_update"
+        LOAD_SERVER_SETTINGS = "load_server_settings"
 
     class Telegram:
         """События для взаимодействия с Telegram"""

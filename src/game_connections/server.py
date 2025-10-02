@@ -1,6 +1,5 @@
-# src/game_connections/server.py
+# File: src/game_connections/server.py
 import json
-import socket
 import asyncio
 import threading
 from typing import Optional, Dict, Any, Set
@@ -14,23 +13,26 @@ class ChatServerNew:
     def __init__(self, host='127.0.0.1', port=12345):
         self.host = host
         self.port = port
-        self.server_socket = None
         self.active_connections: Dict[str, asyncio.StreamWriter] = {}
         self.event_bus = get_event_bus()
         self.running = False
         self._loop = None
+        self._server_thread = None
         self._server_task = None
         self.client_tasks: Dict[str, Set[str]] = {}
         self.last_idle_tasks: Dict[str, str] = {}
         self.pending_sysinfo: Dict[str, list[str]] = {}
-        self.stub_tasks: Dict[str, Dict[str, Any]] = {}
-        
+
+        self.ignore_game_requests: bool = False
+        self.game_block_level: str = 'Idle events'
+        self.game_master_voice: bool = False
+
         self._subscribe_to_events()
 
     def _subscribe_to_events(self):
         self.event_bus.subscribe(Events.Task.TASK_STATUS_CHANGED, self._on_task_status_changed, weak=False)
         self.event_bus.subscribe(Events.Server.SEND_TASK_UPDATE, self._on_send_task_update, weak=False)
-        
+
     async def start_async(self):
         self.running = True
         self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
@@ -43,25 +45,25 @@ class ChatServerNew:
             logger.debug("serve_forever cancelled on shutdown (normal)")
         finally:
             self.running = False
-    
+
     def start(self):
         self._loop = asyncio.new_event_loop()
         self._server_thread = threading.Thread(target=self._run_server_loop, daemon=True)
         self._server_thread.start()
-        
+
     def _run_server_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self.start_async())
-        
+
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')
         client_id = f"{addr[0]}:{addr[1]}"
         logger.info(f"Новое подключение от {client_id}")
-        
+
         self.active_connections[client_id] = writer
         self.client_tasks[client_id] = set()
         self.event_bus.emit(Events.Server.SET_GAME_CONNECTION, {'is_connected': True})
-        
+
         buffer = bytearray()
         decoder = json.JSONDecoder()
 
@@ -101,84 +103,89 @@ class ChatServerNew:
             logger.info(f"Клиент {client_id} отключился")
             if not self.active_connections:
                 self.event_bus.emit(Events.Server.SET_GAME_CONNECTION, {'is_connected': False})
-    
+
     async def process_request(self, request: Dict[str, Any], client_id: str):
         action = request.get('action')
-        
+
         if action == 'create_task':
             await self.handle_create_task(request, client_id)
         elif action == 'get_task_status':
             await self.handle_get_task_status(request, client_id)
+        elif action == 'get_settings':
+            await self.handle_get_settings(request, client_id)
         else:
             await self.send_error(self.active_connections[client_id], f"Unknown action: {action}")
-    
-    def _get_settings(self) -> Dict[str, Any]:
+
+    async def handle_get_settings(self, request: Dict[str, Any], client_id: str):
+        # Просто инициируем загрузку/рассылку настроек — контроллер соберёт и отправит всем
         try:
-            res = self.event_bus.emit_and_wait(Events.Settings.GET_SETTINGS, timeout=1.0)
-            return res[0] if res else {}
-        except Exception:
-            return {}
+            self.event_bus.emit(Events.Server.LOAD_SERVER_SETTINGS)
+        except Exception as e:
+            logger.warning(f"LOAD_SERVER_SETTINGS emit failed: {e}")
 
     def _should_block_event(self, event_type: str) -> bool:
-        settings = self._get_settings()
-        if not settings.get('IGNORE_GAME_REQUESTS', False):
+        if not self.ignore_game_requests:
             return False
-        block_level = settings.get('GAME_BLOCK_LEVEL', 'Idle events')
-        if event_type == 'idle_timeout' and block_level in ('Idle events', 'All events'):
+
+        if self.game_block_level == 'All events':
+            return True
+        if event_type == 'idle_timeout' and self.game_block_level == 'Idle events':
             return True
         return False
 
-    async def _send_blocked_stub(self, client_id: str, event_type: str, character: str, reason: str = 'Blocked by settings'):
+    async def _send_aborted_update(self, client_id: str, event_type: str, character: str, reason: str = 'Blocked by settings', req_id: Optional[str] = None):
         if client_id not in self.active_connections:
             return
 
         writer = self.active_connections[client_id]
-        stub_uid = f"blk_{uuid.uuid4().hex}"
+        uid = f"abrt_{uuid.uuid4().hex}"
 
-        self.stub_tasks[stub_uid] = {
-            "uid": stub_uid,
-            "status": TaskStatus.SUCCESS.value,
-            "type": "idle",
-            "result": {
-                "text": "",
-                "voiceover_path": "",
-                "instant_send": False
+        body = {
+            "uid": uid,
+            "status": TaskStatus.ABORTED.value,
+            "type": "idle" if event_type in ("idle_timeout", "idle") else "chat",
+            "data": {
+                "character": character,
+                "event_type": event_type
             },
-            "meta": {
-                "blocked": True,
-                "reason": reason,
-                "event_type": event_type,
-                "character": character
-            }
+            "created_at": 0,
+            "updated_at": 0,
+            "result": {},
+            "error": reason
         }
+        if req_id:
+            body["data"]["req_id"] = req_id
 
-        await self.send_json(writer, {"task_uid": stub_uid, "blocked": True})
-
-        await self.send_json(writer, {
+        message = {
             "type": "task_update",
-            "uid": stub_uid,
-            "status": TaskStatus.SUCCESS.value,
-            "body": self.stub_tasks[stub_uid]
-        })
+            "uid": uid,
+            "status": TaskStatus.ABORTED.value,
+            "body": body
+        }
+        await self.send_json(writer, message)
+        logger.info(f"Отправлен ABORTED для {event_type} ({character})")
 
-        logger.info(f"Заблокировано событие '{event_type}' для персонажа '{character}', uid={stub_uid}")
-    
     async def handle_create_task(self, request: Dict[str, Any], client_id: str):
         event_type = request.get('type', 'answer')
         character = request.get('character', 'Mita')
         data = request.get('data', {})
         context = request.get('context', {})
-        
+        req_id = request.get('req_id', None)
+
         self.event_bus.emit(Events.Model.SET_CHARACTER_TO_CHANGE, {'character': character})
-        
+
         self.event_bus.emit(Events.Server.SET_GAME_DATA, {
-            'distance': float(context.get('distance', '0').replace(',', '.')),
+            'distance': float(str(context.get('distance', '0')).replace(',', '.')),
             'roomPlayer': int(context.get('roomPlayer', 0)),
             'roomMita': int(context.get('roomMita', 0)),
             'nearObjects': context.get('hierarchy', ''),
             'actualInfo': context.get('currentInfo', '')
         })
-        
+
+        if self._should_block_event(event_type):
+            await self._send_aborted_update(client_id, event_type, character, req_id=req_id)
+            return
+
         if event_type == 'answer':
             user_input = data.get('message', '')
 
@@ -189,9 +196,9 @@ class ChatServerNew:
                     'is_initial': False,
                     'emotion': ''
                 })
-            
+
             collected_sys = "\n".join(self.pending_sysinfo.pop(character, []))
-            
+
             task_result = self.event_bus.emit_and_wait(Events.Task.CREATE_TASK, {
                 'type': 'chat',
                 'data': {
@@ -200,20 +207,17 @@ class ChatServerNew:
                     'system_input': collected_sys,
                     'system_info': context.get('currentInfo', ''),
                     'client_id': client_id,
-                    'event_type': event_type
+                    'event_type': event_type,
+                    'req_id': req_id
                 }
             }, timeout=5.0)
-            
+
             task = task_result[0] if task_result else None
-            
+
             if task:
                 self.client_tasks[client_id].add(task.uid)
-                
-                response = {
-                    "task_uid": task.uid
-                }
-                await self.send_json(self.active_connections[client_id], response)
-                
+                await self.send_task_update(client_id, task)
+
                 self.event_bus.emit(Events.Chat.SEND_MESSAGE, {
                     'user_input': user_input,
                     'system_input': collected_sys,
@@ -221,30 +225,22 @@ class ChatServerNew:
                     'task_uid': task.uid
                 })
             else:
-                await self.send_error(self.active_connections[client_id], "Failed to create task")
-                
-        elif event_type == 'idle_timeout':
-            if self._should_block_event(event_type):
-                await self._send_blocked_stub(client_id, event_type, character)
-                return
+                await self._send_aborted_update(client_id, event_type, character, reason="Failed to create task", req_id=req_id)
 
+        elif event_type == 'idle_timeout':
             last_idle_uid = self.last_idle_tasks.get(character)
             if last_idle_uid:
                 last_task_result = self.event_bus.emit_and_wait(Events.Task.GET_TASK, {
                     'uid': last_idle_uid
                 }, timeout=1.0)
                 last_task = last_task_result[0] if last_task_result else None
-                
+
                 if last_task and last_task.status == TaskStatus.PENDING:
-                    logger.info(f"Игнорируем дубликат idle события для {character}, предыдущая задача еще не завершена")
-                    response = {
-                        "task_uid": last_idle_uid
-                    }
-                    await self.send_json(self.active_connections[client_id], response)
+                    await self.send_task_update(client_id, last_task)
                     return
-            
+
             collected_sys = "\n".join(self.pending_sysinfo.pop(character, []))
-            
+
             task_result = self.event_bus.emit_and_wait(Events.Task.CREATE_TASK, {
                 'type': 'idle',
                 'data': {
@@ -252,26 +248,22 @@ class ChatServerNew:
                     'message': data.get('message', 'Player idle for 90 seconds'),
                     'system_input': collected_sys,
                     'client_id': client_id,
-                    'event_type': event_type
+                    'event_type': event_type,
+                    'req_id': req_id
                 }
             }, timeout=5.0)
-            
+
             task = task_result[0] if task_result else None
-            
+
             if task:
                 self.client_tasks[client_id].add(task.uid)
-                
                 self.last_idle_tasks[character] = task.uid
-                
-                response = {
-                    "task_uid": task.uid
-                }
-                await self.send_json(self.active_connections[client_id], response)
-                
+                await self.send_task_update(client_id, task)
+
                 idle_prompt = "The player has been silent for 90 seconds. React naturally to this silence."
                 if collected_sys:
                     idle_prompt += f"\n\nAdditional context:\n{collected_sys}"
-                
+
                 self.event_bus.emit(Events.Chat.SEND_MESSAGE, {
                     'user_input': '',
                     'system_input': idle_prompt,
@@ -279,37 +271,29 @@ class ChatServerNew:
                     'task_uid': task.uid
                 })
             else:
-                await self.send_error(self.active_connections[client_id], "Failed to create idle task")
-                
+                await self._send_aborted_update(client_id, event_type, character, reason="Failed to create idle task", req_id=req_id)
+
         elif event_type == 'position_move':
             logger.info(f"Position move event from {character}: {data}")
-            
-            response = {
-                "task_uid": f"pos_{uuid.uuid4()}"
-            }
-            await self.send_json(self.active_connections[client_id], response)
-            
+
         elif event_type == 'system_info':
             msg = data.get('message', '')
             if msg:
                 self.pending_sysinfo.setdefault(character, []).append(msg)
                 logger.info(f"Buffered system_info for {character}: {msg[:60]}...")
-            
+
             await self.send_json(self.active_connections[client_id], {
-                "task_uid": f"sys_{uuid.uuid4()}",
+                "type": "info",
                 "stored": len(self.pending_sysinfo.get(character, []))
             })
-            
+
         elif event_type == 'system_info_flush':
             collected_sys = "\n".join(self.pending_sysinfo.pop(character, []))
-            
+
             if not collected_sys:
-                await self.send_error(
-                    self.active_connections[client_id],
-                    "No pending system_info to flush"
-                )
+                await self._send_aborted_update(client_id, event_type, character, reason="No pending system_info to flush", req_id=req_id)
                 return
-            
+
             task_result = self.event_bus.emit_and_wait(Events.Task.CREATE_TASK, {
                 'type': 'chat',
                 'data': {
@@ -318,17 +302,16 @@ class ChatServerNew:
                     'system_input': collected_sys,
                     'system_info': context.get('currentInfo', ''),
                     'client_id': client_id,
-                    'event_type': event_type
+                    'event_type': event_type,
+                    'req_id': req_id
                 }
             }, timeout=5.0)
-            
+
             task = task_result[0] if task_result else None
             if task:
                 self.client_tasks[client_id].add(task.uid)
-                await self.send_json(self.active_connections[client_id], {
-                    "task_uid": task.uid
-                })
-                
+                await self.send_task_update(client_id, task)
+
                 self.event_bus.emit(Events.Chat.SEND_MESSAGE, {
                     'user_input': '',
                     'system_input': collected_sys,
@@ -336,59 +319,56 @@ class ChatServerNew:
                     'task_uid': task.uid
                 })
             else:
-                await self.send_error(self.active_connections[client_id], "Failed to flush system info")
-            
+                await self._send_aborted_update(client_id, event_type, character, reason="Failed to flush system info", req_id=req_id)
+
         else:
-            await self.send_error(self.active_connections[client_id], f"Unknown event type: {event_type}")
-    
+            await self._send_aborted_update(client_id, event_type, character, reason=f"Unknown event type: {event_type}", req_id=req_id)
+
     async def handle_get_task_status(self, request: Dict[str, Any], client_id: str):
         task_uid = request.get('task_uid')
-        
+
         if not task_uid:
             await self.send_error(self.active_connections[client_id], "Missing task_uid")
             return
 
-        if task_uid in self.stub_tasks:
-            response = self.stub_tasks.pop(task_uid)
-            await self.send_json(self.active_connections[client_id], response)
-            return
-            
         task_result = self.event_bus.emit_and_wait(Events.Task.GET_TASK, {
             'uid': task_uid
         }, timeout=1.0)
-        
+
         task = task_result[0] if task_result else None
-        
+
         if task:
             response = task.to_dict()
-            
+
             if task.status == TaskStatus.SUCCESS and task.result:
                 audio_path = task.result.get('voiceover_path', '')
                 if audio_path:
                     response['result']['audio_path'] = audio_path
-                    
+
                 silero_result = self.event_bus.emit_and_wait(Events.Telegram.GET_SILERO_STATUS, timeout=1.0)
                 response['silero_connected'] = silero_result[0] if silero_result else False
-                
+
                 gm_character = self.event_bus.emit_and_wait(Events.Model.GET_CURRENT_CHARACTER, timeout=1.0)
                 current_char = gm_character[0] if gm_character else {}
                 is_gm = current_char.get('name') == 'GameMaster'
-                
+
                 response['GM_ON'] = is_gm
                 response['GM_READ'] = is_gm
-                response['GM_VOICE'] = is_gm and self.event_bus.emit_and_wait(Events.Settings.GET_SETTING, {'key': 'GM_VOICE'}, timeout=1.0)[0]
-                
+                response['GM_VOICE'] = is_gm and self.event_bus.emit_and_wait(
+                    Events.Settings.GET_SETTING, {'key': 'GM_VOICE'}, timeout=1.0
+                )[0]
+
             await self.send_json(self.active_connections[client_id], response)
         else:
             await self.send_error(self.active_connections[client_id], f"Task {task_uid} not found")
-    
+
     def _on_task_status_changed(self, event: Event):
         task = event.data.get('task')
         if not task or not getattr(task, 'data', None):
             return
 
-        client_id  = task.data.get('client_id')
-        character  = task.data.get('character')
+        client_id = task.data.get('client_id')
+        character = task.data.get('character')
         event_type = task.data.get('event_type')
 
         if client_id and client_id in self.active_connections:
@@ -399,11 +379,14 @@ class ChatServerNew:
 
         if event_type in ('idle', 'idle_timeout') and character:
             if task.status in (TaskStatus.SUCCESS,
-                            TaskStatus.FAILED,
-                            TaskStatus.CANCELLED):
+                               TaskStatus.FAILED,
+                               TaskStatus.CANCELLED,
+                               TaskStatus.FAILED_ON_GENERATION,
+                               TaskStatus.FAILED_ON_VOICEOVER,
+                               TaskStatus.ABORTED):
                 if self.last_idle_tasks.get(character) == task.uid:
                     del self.last_idle_tasks[character]
-    
+
     def _on_send_task_update(self, event: Event):
         task = event.data.get('task')
         if task and hasattr(task, 'data') and task.data:
@@ -413,23 +396,41 @@ class ChatServerNew:
                     self.send_task_update(client_id, task),
                     self._loop
                 )
-    
+
     async def send_task_update(self, client_id: str, task):
         if client_id not in self.active_connections:
             return
-            
+
         writer = self.active_connections[client_id]
-        
+
         message = {
             "type": "task_update",
             "uid": task.uid,
             "status": task.status.value,
             "body": task.to_dict()
         }
-        logger.success(message)
-        
         await self.send_json(writer, message)
-    
+
+    def broadcast_loaded_settings(self, body: Dict[str, Any]):
+        if not (self._loop and self._loop.is_running()):
+            return
+
+        async def _push():
+            if not self.active_connections:
+                return
+            message = {
+                "type": "loaded_settings",
+                "body": body
+            }
+            writers = list(self.active_connections.values())
+            await asyncio.gather(*(self.send_json(w, message) for w in writers), return_exceptions=True)
+            logger.debug(f"Broadcasted loaded_settings to {len(self.active_connections)} client(s)")
+
+        try:
+            asyncio.run_coroutine_threadsafe(_push(), self._loop)
+        except Exception as e:
+            logger.warning(f"Не удалось запланировать рассылку loaded_settings: {e}")
+
     async def send_json(self, writer: asyncio.StreamWriter, data: Dict[str, Any]):
         try:
             json_str = json.dumps(data)
@@ -438,21 +439,21 @@ class ChatServerNew:
             await writer.drain()
         except Exception as e:
             logger.error(f"Ошибка отправки JSON: {e}")
-    
+
     async def send_error(self, writer: asyncio.StreamWriter, error: str):
         await self.send_json(writer, {"type": "error", "error": error})
-    
+
     def stop(self):
         self.running = False
-        
+
         if self._loop and self._loop.is_running():
             future = asyncio.run_coroutine_threadsafe(self._async_stop(), self._loop)
             try:
                 future.result(timeout=5)
             except Exception as e:
                 logger.warning(f"Ошибка при остановке сервера: {e}")
-        
-        if hasattr(self, '_server_thread') and self._server_thread:
+
+        if self._server_thread:
             self._server_thread.join(timeout=5)
             if self._server_thread.is_alive():
                 logger.warning("Server thread did not stop in time")
@@ -470,3 +471,13 @@ class ChatServerNew:
                 pass
 
         self.active_connections.clear()
+
+    # Рантайм-сеттеры (контроллер обновляет флаги)
+    def set_ignore_game_requests(self, value: bool):
+        self.ignore_game_requests = bool(value)
+
+    def set_game_block_level(self, value: str):
+        self.game_block_level = str(value) if value is not None else 'Idle events'
+
+    def set_game_master_voice(self, value: bool):
+        self.game_master_voice = bool(value)

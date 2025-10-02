@@ -9,6 +9,8 @@ from ui.settings.voiceover_settings import LOCAL_VOICE_MODELS
 from core.events import get_event_bus, Events, Event
 from managers.task_manager import TaskStatus
 from typing import Optional
+from utils import process_text_to_voice
+
 
 class AudioController:
     """
@@ -73,6 +75,8 @@ class AudioController:
 
         if not text:
             return
+        
+        text = process_text_to_voice(text)
 
         loops = self.event_bus.emit_and_wait(Events.Core.GET_EVENT_LOOP, timeout=1.0)
         loop = loops[0] if loops else None

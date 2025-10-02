@@ -15,6 +15,7 @@ class TaskStatus(Enum):
     FAILED_ON_VOICEOVER = "FAILED_ON_VOICEOVER"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    ABORTED = "ABORTED"
 
 
 @dataclass
@@ -45,7 +46,7 @@ class TaskManager:
     def __init__(self):
         self._tasks: Dict[str, Task] = {}
         self._lock = Lock()
-        self._cleanup_interval = 3600  # 1 hour
+        self._cleanup_interval = 3600
         self._last_cleanup = time.time()
         
     def create_task(self, task_type: str, data: Dict[str, Any]) -> Task:
@@ -107,7 +108,7 @@ class TaskManager:
     
     def _cleanup_old_tasks(self):
         current_time = time.time()
-        max_age = 86400  # 24 hours
+        max_age = 86400
         
         tasks_to_delete = []
         for uid, task in self._tasks.items():

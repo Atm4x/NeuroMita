@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from handlers.local_voice_handler import LocalVoice
-from utils import process_text_to_voice
 
 
 class LocalVoiceController:
@@ -380,10 +379,8 @@ class LocalVoiceController:
             'callback': handle_result
         })
 
-    async def _async_local_voiceover(self, response_text: str, future):
+    async def _async_local_voiceover(self, text: str, future):
         try:
-            text = process_text_to_voice(response_text)
-
             character_result = self.event_bus.emit_and_wait(Events.Model.GET_CURRENT_CHARACTER, timeout=3.0)
             character = character_result[0] if character_result else None
 

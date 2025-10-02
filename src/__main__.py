@@ -6,15 +6,47 @@ import os
 import sys
 import re
 from main_logger import logger
+from _version import __version__
+def create_startup_banner(title: str, version: str) -> str:
+    version_info = f"Version {version}"
+    
+    padding = 6
+    
+    content_width = max(len(title), len(version_info)) + padding
+    
+    if content_width % 2 != 0:
+        content_width += 1
+        
+    top_border = f"╔{'═' * content_width}╗"
+    bottom_border = f"╚{'═' * content_width}╝"
+    
+    empty_line = f"║{' ' * content_width}║"
+    title_line = f"║{title.center(content_width)}║"
+    version_line = f"║{version_info.center(content_width)}║"
+    
+    # Собираем и возвращаем финальный баннер
+    return (
+        f"{top_border}\n"
+        f"{empty_line}\n"
+        f"{title_line}\n"
+        f"{version_line}\n"
+        f"{empty_line}\n"
+        f"{bottom_border}"
+    )
+
+
+banner = create_startup_banner("NeuroMita", __version__)
+logger.success(f"\n\n{banner}\n\n")
+
 
 from dotenv import load_dotenv
 ENV_FILENAME = "features.env" 
 loaded = load_dotenv(dotenv_path=ENV_FILENAME)
 
 if loaded:
-    logger.success(f"Переменные окружения успешно загружены из файла: {ENV_FILENAME}")
+    logger.notify(f"Переменные окружения успешно загружены из файла: {ENV_FILENAME}")
 else:
-    logger.info(f"Файл окружения '{ENV_FILENAME}' не найден по пути: {ENV_FILENAME}. Используются системные переменные или значения по умолчанию.")
+    logger.notify(f"Файл окружения '{ENV_FILENAME}' не найден по пути: {ENV_FILENAME}. Используются системные переменные или значения по умолчанию.")
 
 # region Для исправления проблем с импортом динамично подгружаемых пакетов:
 import timeit
@@ -233,7 +265,7 @@ from managers.database_manager import DatabaseManager
 from utils.migration_manager import MigrationManager
 
 if __name__ == "__main__":
-    logger.info("Функция main() запущена")
+    logger.success("Функция main() запущена")
     try:
         app = QApplication(sys.argv)
         logger.info("QApplication создан")

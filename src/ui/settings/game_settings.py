@@ -45,12 +45,12 @@ def setup_game_controls(self, parent):
     
     # Настройки мода игры
     mod_config = [
+        {'label': _('Меню действий', 'Action menu'), 'key': 'ACTION_MENU', 'type': 'checkbutton', 
+        'default_checkbutton': True,
+        'tooltip': _('Показывать меню действий в игре (Y)', 'Show action menu in game (Y)')},
         {'label': _('Меню выбора Мит', 'Mitas selection menu'), 'key': 'MITAS_MENU', 'type': 'checkbutton', 
         'default_checkbutton': False,
         'tooltip': _('Показывать меню выбора персонажей Мит в игре', 'Show Mitas character selection menu in game')},
-        {'label': _('Меню эмоций Мит', 'Mitas emotion menu'), 'key': 'EMOTION_MENU', 'type': 'checkbutton', 
-        'default_checkbutton': False,
-        'tooltip': _('Показывать меню эмоций персонажей в игре', 'Show character emotion menu in game')},
         {'label': _('Игнорировать запросы', 'Ignore requests'), 'key': 'IGNORE_GAME_REQUESTS', 'type': 'checkbutton',
         'default_checkbutton': False,
         'tooltip': _('Блокировать запросы из игры', 'Block requests from the game'),

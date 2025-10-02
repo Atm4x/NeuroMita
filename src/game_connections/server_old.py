@@ -273,7 +273,7 @@ class ChatServer:
                 "LANGUAGE": str(settings.get("LANGUAGE")),
 
                 "MITAS_MENU": bool(settings.get("MITAS_MENU")),
-                "EMOTION_MENU": bool(settings.get("EMOTION_MENU")),
+                "EMOTION_MENU": bool(settings.get("ACTION_MENU")),
 
                 "TEXT_WAIT_TIME": int(settings.get("TEXT_WAIT_TIME")),
                 "VOICE_WAIT_TIME": int(settings.get("VOICE_WAIT_TIME")),
