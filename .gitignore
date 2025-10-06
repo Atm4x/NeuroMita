@@ -21,3 +21,8 @@ session_name.session
 session_name.session-journal
 ffmpeg_download_temp.zip
 NeuroMita
+/Models
+/data
+src/.roomodes
+vec-768-layer-12.onnx
+neuromita.db

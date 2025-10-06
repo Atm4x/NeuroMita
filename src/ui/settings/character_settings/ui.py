@@ -175,6 +175,27 @@ def build_character_settings_ui(self, parent_layout):
 
     self.history_section.add_widget(history_row)
 
+    # Кнопка импорта старых данных
+    self.btn_import_old_data = QPushButton(_("Импортировать старые данные", "Import old data"))
+    self.btn_import_old_data.setIcon(qta.icon('fa5s.file-import', color='#ffffff'))
+    self.btn_import_old_data.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    self.btn_import_old_data.setObjectName("SecondaryButton")
+    self.history_section.add_widget(self.btn_import_old_data)
+
+    # Кнопка экспорта истории и памяти
+    self.btn_export_data = QPushButton(_("Экспорт истории и памяти", "Export history and memory"))
+    self.btn_export_data.setIcon(qta.icon('fa5s.file-export', color='#ffffff'))
+    self.btn_export_data.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    self.btn_export_data.setObjectName("SecondaryButton")
+    self.history_section.add_widget(self.btn_export_data)
+
+    # Кнопка просмотра БД
+    self.btn_view_db = QPushButton(_("Просмотр БД", "View DB"))
+    self.btn_view_db.setIcon(qta.icon('fa5s.database', color='#ffffff'))
+    self.btn_view_db.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    self.btn_view_db.setObjectName("SecondaryButton")
+    self.history_section.add_widget(self.btn_view_db)
+
     # Отдельной строкой — перекачка промптов (тоже с danger-hover)
     self.btn_reload_prompts = QPushButton(_("Перекачать промпты", "Reload prompts"))
     self.btn_reload_prompts.setIcon(qta.icon('fa5s.download', color='#ffffff'))

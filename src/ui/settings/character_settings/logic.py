@@ -10,6 +10,10 @@ from main_logger import logger
 from core.events import get_event_bus, Events
 from ui.settings.prompt_catalogue_settings import list_prompt_sets
 from managers.prompt_catalogue_manager import copy_prompt_set, get_prompt_catalogue_folder_name
+from utils.migration import perform_full_migration
+from managers.database_manager import DatabaseManager
+from ui.windows.database_viewer import open_database_viewer
+from PyQt6.QtWidgets import QMessageBox, QFileDialog
 
 
 # ─── Вспомогательные функции ────────────────────────────────────────────────
@@ -207,6 +211,14 @@ def wire_character_settings_logic(self):
         self.btn_clear_all_histories.clicked.connect(lambda: clear_history_all(self))
     if hasattr(self, 'btn_reload_prompts'):
         self.btn_reload_prompts.clicked.connect(lambda: reload_prompts(self))
+
+    # Новые кнопки
+    if hasattr(self, 'btn_import_old_data'):
+        self.btn_import_old_data.clicked.connect(lambda: import_old_data(self))
+    if hasattr(self, 'btn_export_data'):
+        self.btn_export_data.clicked.connect(lambda: export_character_data(self))
+    if hasattr(self, 'btn_view_db'):
+        self.btn_view_db.clicked.connect(lambda: view_database(self))
 
     # Первичный индикатор
     _update_sync_indicator(self)
@@ -443,3 +455,61 @@ def save_character_provider(gui, provider: str):
     gui.settings.set(provider_key, provider)
     logger.info(f"Saved provider '{provider}' for character '{selected_character}'")
     event_bus.emit(Events.Model.CHECK_CHANGE_CHARACTER)
+
+
+def import_old_data(gui):
+    """Импорт старых JSON-данных в БД."""
+    reply = QMessageBox.question(gui, _("Импорт данных", "Import Data"),
+                                 _("Импортировать старые файлы истории и памяти в БД? Это переименует JSON в .bak.",
+                                   "Import old history and memory JSON files to DB? This will rename JSON to .bak."),
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    if reply != QMessageBox.StandardButton.Yes:
+        return
+
+    try:
+        db_manager = DatabaseManager()
+        result = perform_full_migration(db_manager)
+        if result["total_history"] > 0 or result["total_memory"] > 0:
+            QMessageBox.information(gui, _("Импорт завершён", "Import completed"),
+                                    f"Импортировано: {result['total_history']} сообщений, {result['total_memory']} воспоминаний для {len(result['migrated_characters'])} персонажей.")
+            logger.info(f"Ручной импорт завершён: {result}")
+        else:
+            QMessageBox.information(gui, _("Нет данных", "No data"), _("Нет данных для импорта или уже мигрировано."))
+    except Exception as e:
+        QMessageBox.critical(gui, _("Ошибка импорта", "Import error"), f"Ошибка: {str(e)}")
+        logger.error(f"Ошибка ручного импорта: {e}")
+
+
+def export_character_data(gui):
+    """Экспорт данных персонажа в файлы."""
+    selected_character = gui.character_combobox.currentText() if hasattr(gui, 'character_combobox') else None
+    if not selected_character:
+        QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран."))
+        return
+
+    format_type, ok = QFileDialog.getSaveFileName(gui, _("Экспорт данных", "Export Data"),
+                                                  f"{selected_character}_data", "JSON (*.json);;TXT (*.txt)")
+    if not ok or not format_type:
+        return
+
+    try:
+        db_manager = DatabaseManager()
+        _, ext = os.path.splitext(format_type)
+        format_type = 'txt' if ext == '.txt' else 'json'
+        output_dir = os.path.dirname(format_type) or "."
+        output_dir = db_manager.export_character_data(selected_character, output_dir, format_type)
+        QMessageBox.information(gui, _("Экспорт завершён", "Export completed"),
+                                f"Данные экспортированы в {output_dir}")
+        logger.info(f"Экспорт для {selected_character} в {output_dir}")
+    except Exception as e:
+        QMessageBox.critical(gui, _("Ошибка экспорта", "Export error"), f"Ошибка: {str(e)}")
+        logger.error(f"Ошибка экспорта: {e}")
+
+
+def view_database(gui):
+    """Открытие окна просмотра БД."""
+    selected_character = gui.character_combobox.currentText() if hasattr(gui, 'character_combobox') else None
+    if not selected_character:
+        QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран."))
+        return
+    open_database_viewer(gui, selected_character)

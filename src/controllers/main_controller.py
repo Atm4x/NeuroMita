@@ -24,6 +24,7 @@ from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
 from controllers.server_controller import ServerController
 from controllers.server_controller_old import ServerControllerOld
+from managers.database_manager import DatabaseManager
 
 
 class MainController:
@@ -50,6 +51,15 @@ class MainController:
 
             self.settings_controller = SettingsController(self.config_path)
             self.settings = self.settings_controller.settings
+            
+            # Инициализация БД если включено
+            use_sqlite = self.settings.get("USE_SQLITE_DB", True)
+            if use_sqlite:
+                self.database_manager = DatabaseManager()
+                logger.info("DatabaseManager инициализирован (SQLite включен).")
+            else:
+                self.database_manager = None
+                logger.info("SQLite отключен, используется JSON.")
         except Exception as e:
             logger.info("Не удалось удачно получить из системных переменных все данные", e)
             self.settings = SettingsController("Settings/settings.json").settings

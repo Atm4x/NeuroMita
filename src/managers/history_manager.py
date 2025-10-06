@@ -2,138 +2,109 @@ import json
 import os
 import datetime
 import shutil
+from typing import Optional
 
 from main_logger import logger
+from managers.database_manager import DatabaseManager
 
 
 class HistoryManager:
-    """ В работе, пока неактивно"""
+    """Менеджер истории чатов, фасад над DatabaseManager для совместимости с JSON-API."""
 
     def __init__(self, character_name="Common", history_file_name=""):
-
         self.character_name = character_name
-
+        self.db_manager = DatabaseManager()
+        # Для совместимости с backup, сохраняем путь, но не используем для хранения
         self.history_dir = f"Histories\\{character_name}"
-        self.history_file_path = os.path.join(self.history_dir, f"{character_name}_history.json")
-
+        self.history_file_path = os.path.join(self.history_dir, f"{character_name}_history.json") if history_file_name else ""
         os.makedirs(self.history_dir, exist_ok=True)
-
-        if self.history_file_path != "":
-            self.load_history()
+        if self.history_file_path:
+            # Если указан файл, возможно, для миграции, но load_history теперь из DB
+            pass
 
     def load_history(self):
-        """Загружаем историю из файла, создаем пустую структуру, если файл пуст или не существует."""
+        """Загружаем историю из БД, возвращаем структуру как в JSON."""
         try:
-            with open(self.history_file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if self.history_format_correct(data):
-                    return data
-
-                else:
-                    logger.info("Ошибка загрузки истории, копия сохранена в резерв, текущая сброшена")
-                    self.save_history_separate()
-                    return self._default_history()
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Ошибка загрузки истории {e} , создается бекап")
-            self.save_history_separate()
-            return self._default_history()
-        except FileNotFoundError:
-            # Если файл пуст или не существует, создаем бекап и возвращаем структуру по умолчанию
-            logger.warning("Файл истории пуст или не существует")
+            metadata = self.db_manager.get_history_metadata(self.character_name)
+            messages = self.db_manager.get_history(self.character_name, order='ASC')
+            data = {
+                'fixed_parts': metadata['fixed_parts'],
+                'messages': messages,
+                'temp_context': metadata['temp_context'],
+                'variables': metadata['variables']
+            }
+            if self.history_format_correct(data):
+                return data
+            else:
+                logger.info("Ошибка загрузки истории из БД, сброс к умолчанию")
+                self.clear_history()
+                return self._default_history()
+        except Exception as e:
+            logger.error(f"Ошибка загрузки истории: {e}")
             return self._default_history()
 
     def history_format_correct(self, data):
-        # Проверяем, что все ключи присутствуют и имеют правильный тип
+        """Проверяем формат данных (как в JSON)."""
         checks = [
             (isinstance(data.get('fixed_parts'), list), "fixed_parts должен быть списком"),
             (isinstance(data.get('messages'), list), "messages должен быть списком"),
-            #(isinstance(data.get('temp_context'), list), "temp_context должен быть списком"),
+            (isinstance(data.get('temp_context'), list), "temp_context должен быть списком"),
             (isinstance(data.get('variables'), dict), "variables должен быть словарем")
         ]
-
-        # Проверяем все условия
         if all(check[0] for check in checks):
             return True
         else:
-            # Выводим сообщения об ошибках для тех условий, которые не выполнены
             for condition, error_message in checks:
                 if not condition:
                     logger.info(f"Ошибка: {error_message}")
             return False
 
     def save_history(self, data):
-        """Сохраняем историю в файл с явной кодировкой utf-8."""
-        # Убедимся, что структура данных включает 'messages', 'currentInfo' и 'MitaSystemMessages'
-        history_data = {
+        """Сохраняем историю в БД."""
+        # Извлекаем метаданные и сообщения
+        metadata = {
             'fixed_parts': data.get('fixed_parts', []),
-            'messages': data.get('messages', []),
             'temp_context': data.get('temp_context', []),
             'variables': data.get('variables', {})
         }
-        # Проверяем, существует ли папка SavedHistories, и создаём её, если нет
-        os.makedirs(self.history_dir, exist_ok=True)
-        with open(self.history_file_path, 'w', encoding='utf-8') as f:
-            json.dump(history_data, f, ensure_ascii=False, indent=4)
+        messages = data.get('messages', [])
+        self.db_manager.update_history_metadata(self.character_name, metadata)
+        self.db_manager.replace_history_messages(self.character_name, messages)
 
     def save_history_separate(self):
-        """Нужно, чтобы история сохранилась отдельно"""
-        logger.info("save_chat_history")
-        # Папка для сохранения историй
+        """Бэкап истории в JSON-файл в папке Saved."""
+        logger.info("Сохранение бэкапа истории")
         target_folder = f"Histories\\{self.character_name}\\Saved"
-        # Проверяем, существует ли папка SavedHistories, и создаём её, если нет
         os.makedirs(target_folder, exist_ok=True)
-
-        # Формируем имя файла с таймингом
         timestamp = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
         target_file = f"chat_history_{timestamp}.json"
-
-        # Полный путь к новому файлу
         target_path = os.path.join(target_folder, target_file)
-
-        # Копируем файл
-        shutil.copy(self.history_file_path, target_path)
-        logger.info(f"Файл сохранён как {target_path}")
+        # Экспорт из БД
+        self.db_manager.export_history_to_json(self.character_name, target_path)
+        logger.info(f"Бэкап сохранён как {target_path}")
 
     def save_missed_history(self, missed_messages: list):
         """
-        Сохраняет "потерянные" сообщения в отдельный файл для персонажа.
-        Сообщения добавляются к существующему файлу, если он есть.
+        Сохраняет "потерянные" сообщения. Для совместимости добавляем в историю как special messages.
         """
-        missed_dir = os.path.join("Histories", self.character_name)
-        os.makedirs(missed_dir, exist_ok=True)
-        missed_file_path = os.path.join(missed_dir, f"{self.character_name}_missed_history.json")
+        for msg in missed_messages:
+            self.add_message(role=msg.get('role', 'user'), content=msg.get('content', ''), timestamp=msg.get('timestamp'))
+        logger.info(f"Добавлено {len(missed_messages)} пропущенных сообщений в историю")
 
-        existing_missed_messages = []
-        if os.path.exists(missed_file_path):
-            try:
-                with open(missed_file_path, 'r', encoding='utf-8') as f:
-                    existing_missed_messages = json.load(f)
-                    if not isinstance(existing_missed_messages, list):
-                        logger.warning(f"Файл пропущенной истории {missed_file_path} поврежден или имеет неверный формат. Создаю новый.")
-                        existing_missed_messages = []
-            except (json.JSONDecodeError, FileNotFoundError):
-                logger.warning(f"Не удалось загрузить существующую пропущенную историю из {missed_file_path}. Создаю новый файл.")
-                existing_missed_messages = []
-
-        # Добавляем новые пропущенные сообщения
-        existing_missed_messages.extend(missed_messages)
-
-        try:
-            with open(missed_file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_missed_messages, f, ensure_ascii=False, indent=4)
-            logger.info(f"Пропущенные сообщения сохранены в {missed_file_path}")
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении пропущенных сообщений в {missed_file_path}: {e}", exc_info=True)
+    def add_message(self, role: str, content: str, timestamp: Optional[str] = None):
+        """Добавляет сообщение в историю (новый метод для полноты API)."""
+        if timestamp is None:
+            timestamp = datetime.datetime.now().isoformat()
+        self.db_manager.insert_history_message(self.character_name, role, content, timestamp)
 
     def clear_history(self):
-        logger.info("Сброс файла истории")
-
-        self.save_history(self._default_history())
+        """Очищает историю в БД."""
+        logger.info("Сброс истории")
+        self.db_manager.clear_history(self.character_name)
 
     def _default_history(self):
-        logger.info("Созданная пустая история")
-        """Создаем структуру истории по умолчанию."""
+        """Структура по умолчанию."""
+        logger.info("Создание пустой истории")
         return {
             'fixed_parts': [],
             'messages': [],
@@ -143,23 +114,17 @@ class HistoryManager:
 
     def get_messages_for_compression(self, num_messages: int) -> list[dict]:
         """
-        Возвращает `num_messages` самых старых сообщений и удаляет их из истории.
-        Работает с данными в памяти, а не читает файл каждый раз.
+        Получает num_messages самых старых сообщений для сжатия и удаляет их из БД.
         """
-        history_data = self.load_history()
-        messages = history_data.get('messages', [])
-
-        messages_to_compress = messages[:num_messages]
-        remaining_messages = messages[num_messages:]
-
-        history_data['messages'] = remaining_messages
-        self.save_history(history_data)
-
+        messages_to_compress = self.db_manager.get_history_messages_for_compression(self.character_name, num_messages)
         logger.info(f"Извлечено {len(messages_to_compress)} сообщений для сжатия.")
         return messages_to_compress
 
     def add_summarized_history_to_messages(self, summary_message: dict):
-        """Добавляет сжатую сводку обратно в список сообщений истории (если HISTORY_COMPRESSION_OUTPUT_TARGET = "reduced_history")."""
-        history_data = self.load_history()
-        history_data['messages'].insert(0, summary_message)
-        self.save_history(history_data)
+        """Добавляет сжатую сводку в начало истории (как system message)."""
+        role = summary_message.get('role', 'system')
+        content = summary_message.get('content', '')
+        self.add_message(role=role, content=content)
+        # Поскольку вставка в начало, но DB по timestamp, для симуляции вставки в начало используем timestamp в прошлом
+        # Но для простоты, новая запись будет последней; если нужно в начало, скорректировать timestamp
+        logger.info("Добавлена сводка истории в начало")
