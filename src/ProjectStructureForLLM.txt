@@ -117,9 +117,11 @@ Handlers execute core functions, often async/threaded.
 
 - **SettingsManager** ([managers/settings_manager.py](managers/settings_manager.py:10-125)): Singleton JSON settings. Async queue save: `load_settings`, `save_settings`. UI helpers: `CollapsibleSection` (toggleable widgets).
 
-- **HistoryManager** ([managers/history_manager.py](managers/history_manager.py:9-165)): Chat history (JSON). Methods: `load_history`, `get_messages_for_compression(num_messages: int) -> list[dict]`, `add_summarized_history_to_messages(summary_message: dict)`.
+- **DatabaseManager** ([managers/database_manager.py](managers/database_manager.py:13-300)): **NEW**. Singleton class managing SQLite database (`neuromita.db`). Handles table creation, CRUD operations for `history` and `memory` tables, connection management (thread-safe with `threading.local()`), and JSON migration logic. Includes methods for clearing character data (`clear_history_for_character`, `clear_memory_for_character`).
 
-- **MemoryManager** ([managers/memory_manager.py](managers/memory_manager.py:7-173)): Character memory (facts/priorities). Methods: `add_memory(content, date, priority="Normal", memory_type="fact")`, `get_memories_formatted()`.
+- **HistoryManager** ([managers/history_manager.py](managers/history_manager.py:9-165)): Chat history (now uses `DatabaseManager`). Acts as a facade. Methods: `load_history`, `get_messages_for_compression(num_messages: int) -> list[dict]`, `add_summarized_history_to_messages(summary_message: dict)`.
+
+- **MemoryManager** ([managers/memory_manager.py](managers/memory_manager.py:7-173)): Character memory (now uses `DatabaseManager`). Acts as a facade. Methods: `add_memory(content, date, priority="Normal", memory_type="fact")`, `get_memories_formatted()`.
 
 - **GameManager** ([managers/game_manager.py](managers/game_manager.py:7-66)): Game lifecycle. Methods: `start_game(full_id_str: str)`, `process_active_game_tags(response: str) -> str`, `_parse_id_string(id_str: str) -> tuple[str, Dict]`.
 
@@ -144,6 +146,8 @@ Handlers execute core functions, often async/threaded.
 - **Core**: `events.py` (as above). `models_settings.py` (model configs).
 
 - **Utils**:
+  - `migration.py` ([utils/migration.py](utils/migration.py:16-113)): **UPDATED**. Contains functions for migrating old JSON history/memory files to SQLite. Includes `find_character_directories`, `check_migration_status` (checks for `.bak` files and original JSON), `migrate_character` (handles single character migration with optional overwrite), and `perform_full_migration` (orchestrates migration for all characters).
+
   - `pip_installer.py` ([utils/pip_installer.py](utils/pip_installer.py:165-726)): Package install/uninstall (env/winpty for Windows). `DependencyResolver` for trees; `install_package(package_spec, description) -> bool`.
   - `audio_converter.py` ([utils/audio_converter.py](utils/audio_converter.py:9-34)): WAV conversion (FFmpeg async).
   - `command_parser.py` ([utils/command_parser.py](utils/command_parser.py:22-272)): Command parsing with embeddings (cosine sim via `_find_best_match`).
@@ -175,7 +179,7 @@ Handlers execute core functions, often async/threaded.
 - **MVC-Like Pattern**: Controllers (Model-View coordination), Handlers (Controller logic), UI (View). MainController as entry point.
 - **Concurrency**: Asyncio for TTS/ASR/chat (via LoopController), threading for capture/audio (with locks). Future-based coordination (e.g., `_async_local_voiceover`).
 - **Modularity**: API presets, provider registries (LLM/ASR/TTS), game ABCs. DSL ([DSL/](DSL/)) for character scripting.
-- **State Management**: JSON/files for settings/history/memory (Managers). In-memory tasks with cleanup.
+- **State Management**: SQLite database (`neuromita.db`) managed by `DatabaseManager` for history and memory. JSON/files for settings. In-memory tasks with cleanup.
 - **Integrations**:
   - Games: HOI4 mod (event-driven), local (Chess/SeaBattle via GameManager).
   - External: Telegram (Telethon), g4f (LLM proxy), OpenCV/mss (capture), pygame (audio).
