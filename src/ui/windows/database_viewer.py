@@ -1,8 +1,8 @@
 from typing import Dict
 
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QMessageBox
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QMessageBox, QDialog, QTextEdit, QPushButton, QHBoxLayout, QStyledItemDelegate
 from PyQt6.QtSql import QSqlDatabase, QSqlTableModel
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDateTime
 
 from core.events import Events
 from managers.database_manager import DatabaseManager
@@ -50,15 +50,16 @@ class DatabaseViewer(QMainWindow):
         self.history_view = QTableView()
         self.history_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.history_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.history_view.setAlternatingRowColors(True)
+        self.history_view.setAlternatingRowColors(False)
         self.history_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         history_layout.addWidget(self.history_view)
+        self.history_view.doubleClicked.connect(self._show_content_dialog)
 
         # Модель для таблицы history
-        self.history_model = QSqlTableModel(self.history_view, self.db) # Передаем соединение
+        self.history_model = QSqlTableModel(self.history_view, self.db)  # Передаем соединение
         self.history_model.setTable("history")
         self.history_model.setEditStrategy(QSqlTableModel.EditStrategy.OnManualSubmit)
-        self.history_view.setModel(self.history_model) # Устанавливаем модель здесь
+        self.history_view.setModel(self.history_model)  # Устанавливаем модель здесь
         self.history_model.select()
 
     def _setup_memory_tab(self):
@@ -69,15 +70,16 @@ class DatabaseViewer(QMainWindow):
         self.memory_view = QTableView()
         self.memory_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.memory_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.memory_view.setAlternatingRowColors(True)
+        self.memory_view.setAlternatingRowColors(False)
         self.memory_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         memory_layout.addWidget(self.memory_view)
+        self.memory_view.doubleClicked.connect(self._show_content_dialog)
 
         # Модель для таблицы memory
-        self.memory_model = QSqlTableModel(self.memory_view, self.db) # Передаем соединение
+        self.memory_model = QSqlTableModel(self.memory_view, self.db)  # Передаем соединение
         self.memory_model.setTable("memory")
         self.memory_model.setEditStrategy(QSqlTableModel.EditStrategy.OnManualSubmit)
-        self.memory_view.setModel(self.memory_model) # Устанавливаем модель здесь
+        self.memory_view.setModel(self.memory_model)  # Устанавливаем модель здесь
         self.memory_model.select()
 
     def load_data(self):
@@ -94,6 +96,10 @@ class DatabaseViewer(QMainWindow):
                             {"id": "ID", "role": "Роль", "content": "Содержимое", "timestamp": "Время"})
         self._setup_columns(self.memory_view, self.memory_model,
                             {"id": "ID", "key": "Ключ", "value": "Значение", "timestamp": "Время"})
+
+        # Делегат для форматирования времени
+        self.history_view.setItemDelegateForColumn(self.history_model.fieldIndex("timestamp"), DateTimeDelegate(self))
+        self.memory_view.setItemDelegateForColumn(self.memory_model.fieldIndex("timestamp"), DateTimeDelegate(self))
 
     def _setup_columns(self, view: QTableView, model: QSqlTableModel, column_map: Dict[str, str]):
         """Настраивает видимые колонки, их заголовки и ширину."""
@@ -132,6 +138,46 @@ class DatabaseViewer(QMainWindow):
             QSqlDatabase.removeDatabase(self.connection_name)
         logger.info(f"Окно просмотра БД закрыто для {self.character_name}. Соединение {self.connection_name} удалено.")
         event.accept()
+
+    def _show_content_dialog(self, index):
+        """Показывает содержимое выбранной ячейки в отдельном диалоговом окне."""
+        model = index.model()
+        column_name = model.headerData(index.column(), Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+        cell_content = model.data(index, Qt.ItemDataRole.DisplayRole)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Содержимое: {column_name}")
+        dialog.setGeometry(200, 200, 600, 400)
+
+        layout = QVBoxLayout(dialog)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setText(str(cell_content))
+        layout.addWidget(text_edit)
+
+        button_layout = QHBoxLayout()
+        close_button = QPushButton("Закрыть")
+        close_button.clicked.connect(dialog.accept)
+        button_layout.addStretch()
+        button_layout.addWidget(close_button)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        dialog.exec()
+
+
+class DateTimeDelegate(QStyledItemDelegate):
+    def displayText(self, value, locale):
+        if isinstance(value, QDateTime):
+            return value.toString("yyyy-MM-dd HH:mm:ss")
+        try:
+            # Попытка преобразовать строку в QDateTime
+            dt = QDateTime.fromString(value, Qt.DateFormat.ISODate)
+            if dt.isValid():
+                return dt.toString("yyyy-MM-dd HH:mm:ss")
+        except Exception:
+            pass
+        return super().displayText(value, locale)
 
 
 def open_database_viewer(gui, character_name: str = None):
