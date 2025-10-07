@@ -2,7 +2,14 @@ import os
 import json
 import shutil
 from typing import List, Dict, Any
-from main_logger import logger
+import logging
+try:
+    from main_logger import logger
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.addHandler(logging.StreamHandler())
+    logger.setLevel(logging.INFO)
+    logger.warning("main_logger не найден, используется стандартный логгер.")
 from managers.database_manager import DatabaseManager
 
 

@@ -68,8 +68,15 @@ class MemoryManager:
         with open(self.filename, 'w', encoding='utf-8') as file:
             json.dump(self.memories, file, ensure_ascii=False, indent=4)
 
-    def add_memory(self, content, date=datetime.datetime.now().strftime("%d.%m.%Y_%H.%M"), priority="Normal", memory_type="fact"):
+    def add_memory(self, content, date=None, priority="Normal", memory_type="fact"):
         """Добавляет новое воспоминание в self.memories и БД."""
+        if date is None:
+            date = datetime.datetime.now().isoformat() # Используем ISO формат для БД
+        
+        if isinstance(content, list):
+            # Если content - это список, преобразуем его в строку
+            content = " ".join([str(item) for item in content])
+
         new_id = self.last_memory_number
         memory = {
             "N": new_id,
@@ -92,8 +99,12 @@ class MemoryManager:
         for memory in self.memories:
             if memory["N"] == number:
                 self.total_characters -= len(memory["content"])
+                
+                if isinstance(content, list):
+                    content = " ".join([str(item) for item in content])
+
                 self.total_characters += len(content)
-                memory["date"] = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
+                memory["date"] = datetime.datetime.now().isoformat() # Используем ISO формат для БД
                 memory["content"] = content
                 if priority:
                     memory["priority"] = priority
@@ -160,13 +171,15 @@ class MemoryManager:
         """Форматирует воспоминания как раньше."""
         formatted_memories = []
         for memory in self.memories:
+            # Форматируем дату для отображения
+            formatted_date = datetime.datetime.fromisoformat(memory['date']).strftime("%d.%m.%Y %H:%M")
             if memory.get('memory_type', "") == "summary":
                 formatted_memories.append(
-                    f"N:{memory['N']}, Date {memory['date']}, Type: Summary: {memory['content']}"
+                    f"N:{memory['N']}, Date {formatted_date}, Type: Summary: {memory['content']}"
                 )
             else:
                 formatted_memories.append(
-                    f"N:{memory['N']}, Date {memory['date']}, Priority: {memory['priority']}: {memory['content']}"
+                    f"N:{memory['N']}, Date {formatted_date}, Priority: {memory['priority']}: {memory['content']}"
                 )
 
         memory_stats = f"\nMemory status: {len(self.memories)} facts, {self.total_characters} characters"

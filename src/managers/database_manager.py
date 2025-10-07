@@ -27,6 +27,8 @@ class DatabaseManager:
         if self._lock is None:
             import threading
             self._lock = threading.Lock()
+        # Используем threading.local для хранения соединения для каждого потока
+        self._thread_local = threading.local()
         self.create_tables()
 
     def _ensure_db_directory(self):
@@ -37,29 +39,32 @@ class DatabaseManager:
 
     @contextmanager
     def get_connection(self):
-        """Контекстный менеджер для соединения с БД."""
+        """Контекстный менеджер для получения соединения с БД, специфичного для текущего потока."""
+        # Блокировка нужна только при создании нового соединения для потока
         with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # Для доступа по именам колонок
-            conn.execute("PRAGMA foreign_keys=ON")  # Включаем foreign keys если нужно
-            conn.execute("PRAGMA busy_timeout=5000")  # Таймаут для busy locks
-            try:
-                yield conn
-                conn.commit()
-            except Exception as e:
-                logger.error(f"Database error: {e}")
-                conn.rollback()
-                raise
-            finally:
-                conn.close()
+            if not hasattr(self._thread_local, 'conn') or self._thread_local.conn is None:
+                conn = sqlite3.connect(self.db_path)
+                conn.row_factory = sqlite3.Row  # Для доступа по именам колонок
+                conn.execute("PRAGMA foreign_keys=ON")  # Включаем foreign keys если нужно
+                conn.execute("PRAGMA busy_timeout=5000")  # Таймаут для busy locks
+                conn.execute("PRAGMA journal_mode=WAL") # Включаем WAL mode для лучшей concurrency
+                self._thread_local.conn = conn
+            
+            conn = self._thread_local.conn
+        
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            print(f"Database error: {e}") # Используем print, так как logger может быть не инициализирован
+            conn.rollback()
+            raise
+        # Соединение не закрывается здесь, оно остается открытым для данного потока
 
     def create_tables(self):
         """Создает таблицы history, memory и history_metadata, если они не существуют."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-
-            # Включаем WAL mode для лучшей concurrency
-            cursor.execute("PRAGMA journal_mode=WAL")
 
             # Таблица history
             cursor.execute("""
@@ -312,6 +317,8 @@ class DatabaseManager:
             for msg in messages:
                 role = msg.get('role', 'unknown')
                 content = msg.get('content', '')
+                if isinstance(content, list):
+                    content = " ".join([item.get('text', '[Изображение]') if item.get('type') == 'text' else '[Изображение]' for item in content])
                 timestamp = msg.get('timestamp', datetime.now().isoformat())
                 self.insert_history_message(character_name, role, content, timestamp)
                 inserted += 1
@@ -400,31 +407,36 @@ class DatabaseManager:
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            memories = data.get('memories', [])
+            # Проверяем, является ли корневой элемент списком или словарем с ключом 'memories'
+            if isinstance(data, list):
+                memories = data
+            else:
+                memories = data.get('memories', [])
+            
             inserted = 0
             for mem in memories:
-                key = mem.get('key', '')
-                value = mem.get('value', '')
-                priority = mem.get('priority', 'medium')
-                memory_type = mem.get('type', 'fact')
-                timestamp = mem.get('timestamp', datetime.now().isoformat())
-                self.insert_memory(character_name, key, value, priority, memory_type, timestamp)
-                inserted += 1
+                # Убедимся, что каждый элемент памяти является словарем
+                if isinstance(mem, dict):
+                    key = mem.get('key', '')
+                    value = mem.get('value', '')
+                    if isinstance(value, list):
+                        value = " ".join([str(item) for item in value])
+                    priority = mem.get('priority', 'medium')
+                    memory_type = mem.get('type', 'fact')
+                    timestamp = mem.get('timestamp', datetime.now().isoformat())
+                    self.insert_memory(character_name, key, value, priority, memory_type, timestamp)
+                    inserted += 1
+                else:
+                    print(f"Предупреждение: Неожиданный формат элемента памяти в {json_path}: {mem}")
             return inserted
         except Exception as e:
             print(f"Ошибка миграции памяти из {json_path}: {e}")
             return 0
 
-    # Метод для экспорта (для пункта 8)
-
-    def export_to_json(self, character_name: str, output_path: str):
-        """Экспортирует историю и память в JSON-файл."""
-        history = self.get_history(character_name)
-        memories = self.get_memories(character_name)
-        export_data = {
-            'character_name': character_name,
-            'history': {'messages': history},
-            'memory': {'memories': memories}
-        }
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, ensure_ascii=False, indent=4, default=str)
+    def close_connection(self):
+        """Закрывает соединение с базой данных для текущего потока."""
+        with self._lock:
+            if hasattr(self._thread_local, 'conn') and self._thread_local.conn:
+                self._thread_local.conn.close()
+                self._thread_local.conn = None
+                print("Соединение с базой данных для текущего потока закрыто.")

@@ -138,7 +138,7 @@ class MainController:
             self.view = view
             self.gui_controller = GuiController(self, view)
             logger.notify("GuiController успешно инициализирован.")
-            self.settings_controller.load_api_settings(False)
+            self.settings_controller.load_api_settings(False, view) # Передаем главное окно как родительский виджет
             
             # в этой логике надо добавить автоподключение.
             if self.settings.get('VOICEOVER_METHOD') == 'TG' and self.settings.get('USE_VOICEOVER', False):
@@ -203,7 +203,13 @@ class MainController:
         except Exception as e:
             logger.error(f"Ошибка при остановке EventBus: {e}", exc_info=True)
 
-        logger.info("Закрываемся")
+        # 7) Закрыть соединение с БД
+        if self.database_manager:
+            try:
+                self.database_manager.close_connection()
+                logger.info("Соединение с базой данных успешно закрыто.")
+            except Exception as e:
+                logger.error(f"Ошибка при закрытии соединения с БД: {e}", exc_info=True)
 
         logger.info("Закрываемся")
 

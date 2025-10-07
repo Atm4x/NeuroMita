@@ -390,11 +390,21 @@ class ChatModel:
             })
 
         if user_content_chunks:
-            user_message_for_history = {"role": "user", "content": user_content_chunks}
+            # Преобразуем user_content_chunks в строку для сохранения в истории
+            # Для истории в БД нам нужен строковый контент.
+            # Если есть изображения, они будут представлены как заглушки.
+            string_content = ""
+            for chunk in user_content_chunks:
+                if chunk["type"] == "text":
+                    string_content += chunk["text"]
+                elif chunk["type"] == "image_url":
+                    string_content += "[Изображение]" # Или другая подходящая заглушка
+            
+            user_message_for_history = {"role": "user", "content": string_content}
             combined_messages.append(user_message_for_history)
 
         if user_message_for_history:
-            user_message_for_history["time"] = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
+            user_message_for_history["timestamp"] = datetime.datetime.now().isoformat() # Используем timestamp для БД
             llm_messages_history_limited.append(user_message_for_history)
 
         char_provider = self.get_character_provider()
@@ -456,7 +466,7 @@ class ChatModel:
                 )
 
             assistant_message = {"role": "assistant", "content": assistant_message_content}
-            assistant_message["time"] = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+            assistant_message["timestamp"] = datetime.datetime.now().isoformat() # Используем timestamp для БД
 
             llm_messages_history_limited.append(assistant_message)
 
@@ -958,14 +968,22 @@ class ChatModel:
                 if image_processed: # Если в сообщении были изображения, обновляем его
                     if new_content_chunks:
                         new_msg = msg.copy()
-                        new_msg["content"] = new_content_chunks
+                        # Преобразуем список chunks в единую строку для сохранения в БД
+                        string_content = ""
+                        for chunk in new_content_chunks:
+                            if chunk.get("type") == "text" and chunk.get("text"):
+                                string_content += chunk["text"]
+                            elif chunk.get("type") == "image_url":
+                                string_content += "[Изображение]" # Заглушка для изображения
+                        new_msg["content"] = string_content
                         updated_messages.append(new_msg)
                     else:
                         # Если все изображения были удалены и нет другого контента, можно удалить сообщение
                         # Или оставить его только с текстом, если он был
-                        if any(item.get("type") == "text" for item in msg["content"]):
+                        text_only_content = " ".join([item["text"] for item in msg["content"] if item.get("type") == "text"])
+                        if text_only_content:
                             new_msg = msg.copy()
-                            new_msg["content"] = [item for item in msg["content"] if item.get("type") == "text"]
+                            new_msg["content"] = text_only_content
                             updated_messages.append(new_msg)
                         else:
                             logger.info(f"Сообщение {i} полностью удалено, так как все изображения были удалены и нет текста.")
@@ -1169,7 +1187,8 @@ class ChatModel:
             return
         system_message = {
             "role": "system",
-            "content": content
+            "content": content,
+            "timestamp": datetime.datetime.now().isoformat() # Добавляем timestamp
         }
         messages.append(system_message)
         logger.debug(f"Временно добавлено системное сообщение в переданный список: {content[:100]}...")

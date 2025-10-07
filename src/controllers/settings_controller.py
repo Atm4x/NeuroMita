@@ -28,9 +28,9 @@ class SettingsController:
         self.event_bus.subscribe(Events.Settings.SAVE_SETTING, self._on_save_setting, weak=False)
         self.event_bus.subscribe(Events.Settings.GET_APP_VARS, self._on_get_app_vars, weak=False)
         
-    def load_api_settings(self, update_model):
+    def load_api_settings(self, update_model, parent_widget=None):
         # Проверка на миграцию при запуске
-        self._check_and_prompt_migration()
+        self._check_and_prompt_migration(parent_widget)
         
         logger.info("Начинаю загрузку настроек API")
         
@@ -72,13 +72,13 @@ class SettingsController:
         
         logger.info("Настройки API применены")
 
-    def _check_and_prompt_migration(self):
+    def _check_and_prompt_migration(self, parent_widget=None):
         """Проверяет наличие старых JSON-файлов и предлагает миграцию."""
         characters = find_character_directories()
         needs_migration = any(not is_already_migrated(char) for char in characters)
         
         if needs_migration:
-            msg = QMessageBox(self)
+            msg = QMessageBox(parent_widget) # Передаем parent_widget
             msg.setIcon(QMessageBox.Icon.Question)
             msg.setWindowTitle(_("Миграция данных", "Data Migration"))
             msg.setText(_("Обнаружены старые файлы истории и памяти (JSON). Хотите импортировать их в новую базу данных SQLite?", "Old history and memory files (JSON) detected. Do you want to import them to the new SQLite database?"))
@@ -92,14 +92,14 @@ class SettingsController:
                     db_manager = DatabaseManager()
                     result = perform_full_migration(db_manager)
                     if result["total_history"] > 0 or result["total_memory"] > 0:
-                        QMessageBox.information(self, _("Миграция завершена", "Migration completed"),
+                        QMessageBox.information(parent_widget, _("Миграция завершена", "Migration completed"), # Передаем parent_widget
                                               f"Импортировано: {result['total_history']} сообщений истории, {result['total_memory']} воспоминаний для {len(result['migrated_characters'])} персонажей.")
                         logger.info(f"Миграция завершена: {result}")
                     else:
-                        QMessageBox.information(self, _("Нет данных для миграции", "No data to migrate"),
+                        QMessageBox.information(parent_widget, _("Нет данных для миграции", "No data to migrate"), # Передаем parent_widget
                                               _("Нет данных для импорта или миграция уже выполнена.", "No data to import or migration already done."))
                 except Exception as e:
-                    QMessageBox.critical(self, _("Ошибка миграции", "Migration error"), f"Ошибка при миграции: {str(e)}")
+                    QMessageBox.critical(parent_widget, _("Ошибка миграции", "Migration error"), f"Ошибка при миграции: {str(e)}") # Передаем parent_widget
                     logger.error(f"Ошибка миграции при запуске: {e}")
             else:
                 logger.info("Пользователь отказался от миграции при запуске.")

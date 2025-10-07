@@ -88,7 +88,11 @@ class HistoryManager:
         Сохраняет "потерянные" сообщения. Для совместимости добавляем в историю как special messages.
         """
         for msg in missed_messages:
-            self.add_message(role=msg.get('role', 'user'), content=msg.get('content', ''), timestamp=msg.get('timestamp'))
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                # Если content - это список (например, из старых форматов), преобразуем его в строку
+                content = " ".join([item.get('text', '[Изображение]') if item.get('type') == 'text' else '[Изображение]' for item in content])
+            self.add_message(role=msg.get('role', 'user'), content=content, timestamp=msg.get('timestamp'))
         logger.info(f"Добавлено {len(missed_messages)} пропущенных сообщений в историю")
 
     def add_message(self, role: str, content: str, timestamp: Optional[str] = None):
