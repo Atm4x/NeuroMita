@@ -2,7 +2,7 @@ from typing import Dict
 
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QMessageBox, QDialog, QTextEdit, QPushButton, QHBoxLayout, QStyledItemDelegate
 from PyQt6.QtSql import QSqlDatabase, QSqlTableModel
-from PyQt6.QtCore import Qt, QDateTime
+from PyQt6.QtCore import Qt, QDateTime, QVariant
 
 from core.events import Events
 from managers.database_manager import DatabaseManager
@@ -36,6 +36,124 @@ class DatabaseViewer(QMainWindow):
 
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
+
+        # Применение темного стиля к QTabWidget и QTableView
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+            }
+            QTabWidget::pane {
+                border: 1px solid #444;
+                background-color: #2b2b2b;
+            }
+            QTabBar::tab {
+                background: #3c3c3c;
+                color: #888888; /* Уточнен цвет текста вкладок на более темный */
+                padding: 8px 15px;
+                border: 1px solid #444;
+                border-bottom-color: #2b2b2b; /* same as pane color */
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background: #2b2b2b;
+                border-bottom-color: #2b2b2b;
+            }
+            QTabBar::tab:hover {
+                background: #505050;
+            }
+            QTableView {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+                gridline-color: #444;
+                selection-background-color: #555;
+                selection-color: #f0f0f0;
+                border: 1px solid #444;
+            }
+            QHeaderView::section {
+                background-color: #3c3c3c;
+                color: #f0f0f0;
+                padding: 4px;
+                border: 1px solid #444;
+                border-bottom: 1px solid #2b2b2b;
+            }
+            QTableView QTableCornerButton::section {
+                background-color: #3c3c3c;
+                border: 1px solid #444;
+            }
+            QTableView::verticalHeader {
+                background-color: #3c3c3c;
+            }
+            QTableView::verticalHeader::section {
+                background-color: #3c3c3c;
+                color: #cccccc; /* Уточнен цвет текста вертикальных заголовков на более темный */
+                padding: 4px;
+                border: 1px solid #444;
+            }
+            QTableView::item {
+                color: #f0f0f0; /* Цвет текста для элементов таблицы */
+            }
+            QTableView::indicator {
+                background-color: #3c3c3c;
+                border: 1px solid #444;
+            }
+            QPushButton {
+                background-color: #555;
+                color: #cccccc; /* Уточнен цвет текста кнопок на более темный */
+                border: 1px solid #666;
+                padding: 5px 10px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #666;
+            }
+            QPushButton:pressed {
+                background-color: #444;
+            }
+            QDialog {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+            }
+            QTextEdit {
+                background-color: #3c3c3c;
+                color: #f0f0f0;
+                border: 1px solid #444;
+            }
+            QScrollBar:vertical {
+                border: 1px solid #444;
+                background: #3c3c3c;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                min-height: 20px;
+            }
+            QScrollBar::add-line:vertical {
+                border: 1px solid #444;
+                background: #3c3c3c;
+                height: 10px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+            }
+            QScrollBar::sub-line:vertical {
+                border: 1px solid #444;
+                background: #3c3c3c;
+                height: 10px;
+                subcontrol-position: top;
+                subcontrol-origin: margin;
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+                border: 1px solid #444;
+                width: 3px;
+                height: 3px;
+                background: #f0f0f0;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
 
         self._setup_history_tab()
         self._setup_memory_tab()
@@ -168,16 +286,40 @@ class DatabaseViewer(QMainWindow):
 
 class DateTimeDelegate(QStyledItemDelegate):
     def displayText(self, value, locale):
+        # Извлекаем значение из QVariant, если оно есть
+        if isinstance(value, QVariant):
+            value = value.value()
+
+        # Проверяем, является ли значение QDateTime
         if isinstance(value, QDateTime):
             return value.toString("yyyy-MM-dd HH:mm:ss")
-        try:
-            # Попытка преобразовать строку в QDateTime
-            dt = QDateTime.fromString(value, Qt.DateFormat.ISODate)
-            if dt.isValid():
-                return dt.toString("yyyy-MM-dd HH:mm:ss")
-        except Exception:
-            pass
+        
+        # Если значение является строкой, пытаемся преобразовать ее в QDateTime
+        if isinstance(value, str):
+            try:
+                # Попытка преобразовать строку в QDateTime, учитывая ISO 8601 формат
+                dt = QDateTime.fromString(value, Qt.DateFormat.ISODate)
+                if dt.isValid():
+                    return dt.toString("yyyy-MM-dd HH:mm:ss")
+            except Exception:
+                pass # Если преобразование не удалось, продолжаем как обычный текст
+        
+        # Для всех остальных случаев используем стандартное отображение
         return super().displayText(value, locale)
+
+    def setModelData(self, editor, model, index):
+        # Этот метод нужен, если бы мы хотели редактировать данные,
+        # но для read-only просмотра он может быть пустым или вызывать базовую реализацию.
+        # В данном случае, мы не разрешаем редактирование, поэтому можно оставить так.
+        super().setModelData(editor, model, index)
+
+    def createEditor(self, parent, option, index):
+        # Для read-only просмотра нет необходимости создавать редактор
+        return super().createEditor(parent, option, index)
+
+    def updateEditorGeometry(self, editor, option, index):
+        # Для read-only просмотра нет необходимости обновлять геометрию редактора
+        super().updateEditorGeometry(editor, option, index)
 
 
 def open_database_viewer(gui, character_name: str = None):
