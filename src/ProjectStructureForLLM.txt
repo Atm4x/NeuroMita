@@ -117,7 +117,7 @@ Handlers execute core functions, often async/threaded.
 
 - **SettingsManager** ([managers/settings_manager.py](managers/settings_manager.py:10-125)): Singleton JSON settings. Async queue save: `load_settings`, `save_settings`. UI helpers: `CollapsibleSection` (toggleable widgets).
 
-- **DatabaseManager** ([managers/database_manager.py](managers/database_manager.py:13-300)): **NEW**. Singleton class managing SQLite database (`neuromita.db`). Handles table creation, CRUD operations for `history` and `memory` tables, connection management (thread-safe with `threading.local()`), and JSON migration logic. Includes methods for clearing character data (`clear_history_for_character`, `clear_memory_for_character`).
+- **DatabaseManager** ([managers/database_manager.py](managers/database_manager.py:13-442)): **UPDATED**. Singleton class managing SQLite database (`neuromita.db`). Handles table creation, CRUD operations for `history` and `memory` tables, connection management (thread-safe with `threading.local()`), and JSON migration logic. Includes methods for clearing character data (`clear_history_for_character`, `clear_memory_for_character`). **Recent Update**: `export_character_data` now explicitly removes `faiss_vector` from memory entries before JSON export to prevent serialization errors. Duplicate logging in export methods has been removed.
 
 - **HistoryManager** ([managers/history_manager.py](managers/history_manager.py:9-165)): Chat history (now uses `DatabaseManager`). Acts as a facade. Methods: `load_history`, `get_messages_for_compression(num_messages: int) -> list[dict]`, `add_summarized_history_to_messages(summary_message: dict)`.
 
