@@ -26,3 +26,5 @@ NeuroMita
 src/.roomodes
 vec-768-layer-12.onnx
 neuromita.db
+neuromita.db-wal
+neuromita.db-shm

@@ -15,6 +15,7 @@ class DatabaseViewer(QMainWindow):
 
     def __init__(self, character_name: str = None, parent=None):
         super().__init__(parent)
+        self._is_initialized = False  # Флаг для отслеживания успешной инициализации
         self.character_name = character_name or "All"  # По умолчанию все персонажи, или указанный
         self.db_manager = DatabaseManager()
         self.setWindowTitle(f"Просмотр БД: {'Все персонажи' if self.character_name == 'All' else self.character_name}")
@@ -28,7 +29,7 @@ class DatabaseViewer(QMainWindow):
             error_message = f"Не удалось открыть БД для просмотра: {self.db.lastError().text()}"
             logger.error(error_message)
             QMessageBox.critical(self, "Ошибка БД", error_message)
-            return
+            return # Преждевременный выход, если БД не открылась
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -159,6 +160,7 @@ class DatabaseViewer(QMainWindow):
         self._setup_memory_tab()
 
         self.load_data()
+        self._is_initialized = True # Устанавливаем флаг успешной инициализации
 
     def _setup_history_tab(self):
         self.history_tab = QWidget()
@@ -337,4 +339,5 @@ def open_database_viewer(gui, character_name: str = None):
         return
 
     viewer = DatabaseViewer(character_name, gui)
-    viewer.show()
+    if viewer._is_initialized: # Показываем окно только если инициализация прошла успешно
+        viewer.show()

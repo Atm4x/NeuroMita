@@ -1,6 +1,7 @@
 from typing import List, Dict, Tuple
 import re
 from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QDateTime
 from utils import getTranslationVariant as _, process_text_to_voice
 
 class ChatMessageDelegate:
@@ -29,10 +30,19 @@ class ChatMessageDelegate:
         return self.role_content_colors.get(role, None)
 
     def get_timestamp(self, show: bool, message_time: str) -> str:
-        import time
         if not show:
             return ""
-        return f"[{message_time}] " if message_time else time.strftime("[%H:%M:%S] ")
+        if message_time:
+            # Попытка распарсить строку времени и отформатировать ее
+            dt = QDateTime.fromString(message_time, Qt.DateFormat.ISODate)
+            if dt.isValid():
+                return f"[{dt.toString('yyyy-MM-dd HH:mm:ss')}] "
+            else:
+                # Если не удалось распарсить как ISO, попробовать другие форматы или вернуть как есть
+                return f"[{message_time}] "
+        else:
+            # Если message_time пустой, использовать текущее время
+            return f"[{QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')}] "
 
     def split_text_with_tags(self, text: str, hide_tags: bool) -> List[Dict]:
         if hide_tags:

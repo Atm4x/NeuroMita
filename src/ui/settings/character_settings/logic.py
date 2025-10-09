@@ -1,7 +1,7 @@
 import os
 import hashlib
 
-from PyQt6.QtWidgets import QMessageBox, QLabel
+from PyQt6.QtWidgets import QMessageBox, QLabel, QFileDialog
 from PyQt6.QtCore import QUrl, Qt, QTimer
 from PyQt6.QtGui import QDesktopServices
 
@@ -13,7 +13,6 @@ from managers.prompt_catalogue_manager import copy_prompt_set, get_prompt_catalo
 from utils.migration import perform_full_migration
 from managers.database_manager import DatabaseManager
 from ui.windows.database_viewer import open_database_viewer
-from PyQt6.QtWidgets import QMessageBox, QFileDialog
 
 
 # ─── Вспомогательные функции ────────────────────────────────────────────────
@@ -487,17 +486,18 @@ def export_character_data(gui):
         QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран."))
         return
 
-    format_type, ok = QFileDialog.getSaveFileName(gui, _("Экспорт данных", "Export Data"),
+    selected_file_path, ok = QFileDialog.getSaveFileName(gui, _("Экспорт данных", "Export Data"),
                                                   f"{selected_character}_data", "JSON (*.json);;TXT (*.txt)")
-    if not ok or not format_type:
+    if not ok or not selected_file_path:
         return
 
     try:
         db_manager = DatabaseManager()
-        _, ext = os.path.splitext(format_type)
-        format_type = 'txt' if ext == '.txt' else 'json'
-        output_dir = os.path.dirname(format_type) or "."
-        output_dir = db_manager.export_character_data(selected_character, output_dir, format_type)
+        output_dir = os.path.dirname(selected_file_path)
+        _, ext = os.path.splitext(selected_file_path)
+        export_format = 'txt' if ext.lower() == '.txt' else 'json'
+        
+        db_manager.export_character_data(selected_character, output_dir, export_format)
         QMessageBox.information(gui, _("Экспорт завершён", "Export completed"),
                                 f"Данные экспортированы в {output_dir}")
         logger.info(f"Экспорт для {selected_character} в {output_dir}")

@@ -389,15 +389,18 @@ class DatabaseManager:
             memory_path = os.path.join(output_dir, f"{character_name}_memory.txt")
             self.export_history_to_txt(character_name, history_path)
             self.export_memory_to_txt(character_name, memory_path)
-            logger.info(f"Экспорт в TXT для {character_name}: {history_path}, {memory_path}")
+            # logger.info(f"Экспорт в TXT для {character_name}: {history_path}, {memory_path}")
         else:  # json
             history_path = os.path.join(output_dir, f"{character_name}_history.json")
             memory_path = os.path.join(output_dir, f"{character_name}_memory.json")
             self.export_history_to_json(character_name, history_path)
             memories = self.get_memories(character_name)
+            # Удаляем faiss_vector из каждой записи памяти перед экспортом в JSON
+            for mem in memories:
+                mem.pop('faiss_vector', None)
             with open(memory_path, 'w', encoding='utf-8') as f:
                 json.dump({'memories': memories}, f, ensure_ascii=False, indent=4, default=str)
-            logger.info(f"Экспорт в JSON для {character_name}: {history_path}, {memory_path}")
+            # logger.info(f"Экспорт в JSON для {character_name}: {history_path}, {memory_path}")
         return output_dir
 
     def migrate_memory_from_json(self, json_path: str, character_name: str) -> int:
