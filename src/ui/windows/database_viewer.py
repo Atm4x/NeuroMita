@@ -2,12 +2,15 @@ from typing import Dict
 
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QTableView, QVBoxLayout, QWidget, QHeaderView, QMessageBox, QDialog, QTextEdit, QPushButton, QHBoxLayout, QStyledItemDelegate
 from PyQt6.QtSql import QSqlDatabase, QSqlTableModel
-from PyQt6.QtCore import Qt, QDateTime, QVariant
+from PyQt6.QtCore import Qt, QDateTime, QVariant, QSize, QTimer
+from PyQt6.QtGui import QTextDocument, QAbstractTextDocumentLayout
 
 from core.events import Events
 from managers.database_manager import DatabaseManager
 from main_logger import logger
 import uuid
+
+from ui.widgets.chat_tag_delegate import ChatTagDelegate
 
 
 class DatabaseViewer(QMainWindow):
@@ -49,8 +52,8 @@ class DatabaseViewer(QMainWindow):
                 background-color: #2b2b2b;
             }
             QTabBar::tab {
-                background: #3c3c3c;
-                color: #888888; /* Уточнен цвет текста вкладок на более темный */
+                background: #3c3c3c; /* Темный фон для невыбранных вкладок */
+                color: #f0f0f0; /* Светлый текст для невыбранных вкладок */
                 padding: 8px 15px;
                 border: 1px solid #444;
                 border-bottom-color: #2b2b2b; /* same as pane color */
@@ -58,8 +61,9 @@ class DatabaseViewer(QMainWindow):
                 border-top-right-radius: 4px;
             }
             QTabBar::tab:selected {
-                background: #2b2b2b;
-                border-bottom-color: #2b2b2b;
+                background: #505050; /* Светлее фон для выбранной вкладки */
+                color: #f0f0f0; /* Светлый текст для выбранной вкладки */
+                border-bottom-color: #505050; /* same as selected tab color */
             }
             QTabBar::tab:hover {
                 background: #505050;
@@ -169,7 +173,7 @@ class DatabaseViewer(QMainWindow):
 
         self.history_view = QTableView()
         self.history_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
-        self.history_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.history_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.history_view.setAlternatingRowColors(False)
         self.history_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         history_layout.addWidget(self.history_view)
@@ -189,7 +193,7 @@ class DatabaseViewer(QMainWindow):
 
         self.memory_view = QTableView()
         self.memory_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
-        self.memory_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.memory_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.memory_view.setAlternatingRowColors(False)
         self.memory_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         memory_layout.addWidget(self.memory_view)
@@ -213,13 +217,40 @@ class DatabaseViewer(QMainWindow):
 
         # Настройка колонок (вызываем после select(), чтобы получить метаданные колонок)
         self._setup_columns(self.history_view, self.history_model,
-                            {"id": "ID", "role": "Роль", "content": "Содержимое", "timestamp": "Время"})
+                            {"id": "ID", "session_id": "ID Сессии", "role": "Роль", "character_name": "Персонаж", "timestamp": "Время", "content": "Содержимое"})
         self._setup_columns(self.memory_view, self.memory_model,
-                            {"id": "ID", "key": "Ключ", "value": "Значение", "timestamp": "Время"})
+                            {"id": "ID", "role": "Роль", "value": "Значение", "priority": "Приоритет", "timestamp": "Время"})
 
         # Делегат для форматирования времени
         self.history_view.setItemDelegateForColumn(self.history_model.fieldIndex("timestamp"), DateTimeDelegate(self))
         self.memory_view.setItemDelegateForColumn(self.memory_model.fieldIndex("timestamp"), DateTimeDelegate(self))
+        
+        # Делегат для форматирования текста с тегами в столбце "Содержимое" истории
+        content_index = self.history_model.fieldIndex('content')
+        if content_index >= 0:
+            self.history_view.setItemDelegateForColumn(content_index, ChatTagDelegate(self, self))
+
+        # Делегат для отображения роли в истории
+        role_index_history = self.history_model.fieldIndex('role')
+        if role_index_history >= 0:
+            self.history_view.setItemDelegateForColumn(role_index_history, RoleDelegate(self))
+
+        # Установка ширины столбца "Содержимое" в истории после отображения окна
+        QTimer.singleShot(0, self._adjust_history_content_column_width)
+
+    def _adjust_history_content_column_width(self):
+        """Устанавливает ширину столбца 'Содержимое' в истории на 70% от ширины таблицы."""
+        content_index = self.history_model.fieldIndex('content')
+        if content_index >= 0:
+            total_width = self.history_view.width()
+            if total_width > 0:
+                self.history_view.setColumnWidth(content_index, int(total_width * 0.7))
+                # Устанавливаем режим растягивания для остальных колонок, чтобы они заполнили оставшееся пространство
+                header = self.history_view.horizontalHeader()
+                for i in range(self.history_model.columnCount()):
+                    if i != content_index:
+                        header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+
 
     def _setup_columns(self, view: QTableView, model: QSqlTableModel, column_map: Dict[str, str]):
         """Настраивает видимые колонки, их заголовки и ширину."""
@@ -235,11 +266,13 @@ class DatabaseViewer(QMainWindow):
                 view.showColumn(col_index)
         
         view.resizeColumnsToContents()
+        
         # Убедимся, что колонка 'content' или 'value' растягивается
         if 'content' in column_map:
             content_index = model.fieldIndex('content')
             if content_index >= 0:
                 view.horizontalHeader().setSectionResizeMode(content_index, QHeaderView.ResizeMode.Stretch)
+                # Ширина будет установлена в _adjust_history_content_column_width
         elif 'value' in column_map:
             value_index = model.fieldIndex('value')
             if value_index >= 0:
@@ -284,6 +317,25 @@ class DatabaseViewer(QMainWindow):
         layout.addLayout(button_layout)
 
         dialog.exec()
+
+
+class RoleDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        model = index.model()
+        row = index.row()
+        
+        role_value = model.data(index, Qt.ItemDataRole.DisplayRole)
+        character_name_index = model.index(row, model.fieldIndex("character_name"))
+        character_name = model.data(character_name_index, Qt.ItemDataRole.DisplayRole)
+
+        if role_value == "assistant" and character_name:
+            option.text = character_name
+        else:
+            option.text = role_value
+        
+        # Для переноса текста в роли, если она длинная
+        option.displayAlignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
 
 
 class DateTimeDelegate(QStyledItemDelegate):
