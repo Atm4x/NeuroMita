@@ -18,10 +18,15 @@ class SettingsController:
     def __init__(self, config_path):
         self.config_path = config_path
         self.event_bus = get_event_bus()
-        self._subscribe_to_events()
         self.settings = SettingsManager(self.config_path)
         
+        if self.settings.get("GAME_CONNECTED") is None:
+            self.settings.set("GAME_CONNECTED", False)
+            self.settings.save_settings()
+            logger.info("Инициализирован флаг GAME_CONNECTED = False")
 
+        self._subscribe_to_events()
+        
     def _subscribe_to_events(self):
         self.event_bus.subscribe(Events.Settings.GET_SETTINGS, self._on_get_settings, weak=False)
         self.event_bus.subscribe(Events.Settings.GET_SETTING, self._on_get_setting, weak=False)
@@ -135,6 +140,7 @@ class SettingsController:
             "ENABLE_CAMERA_CAPTURE",
             "ENABLE_SCREEN_ANALYSIS",
             "MIC_ACTIVE",
+			"GAME_CONNECTED",
         ]
 
         custom_vars: Dict[str, Any] = {

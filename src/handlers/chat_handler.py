@@ -685,13 +685,10 @@ class ChatModel:
                     else:
                         tools_payload = self.tool_manager.get_tools_payload("openai")
                 
-                formatted_messages = combined_messages
-                if preset_settings['make_request'] and preset_settings['gemini_case']:
-                    formatted_messages = self._format_messages_for_gemini(combined_messages)
-                
+                # Передаем сообщения как есть - форматирование происходит в provider
                 req = LLMRequest(
                     model=effective_model,
-                    messages=formatted_messages,
+                    messages=combined_messages,
                     api_key=preset_settings['api_key'],
                     api_url=preset_settings['api_url'],
                     make_request=preset_settings['make_request'],
@@ -706,7 +703,6 @@ class ChatModel:
                     extra=params,
                     tool_manager=self.tool_manager
                 )
-
                 
                 logger.notify(f"req: {json.dumps(preset_settings)}")
                 
@@ -805,24 +801,6 @@ class ChatModel:
         logger.info(f"Custom Request: {preset_settings['make_request']}")
         if preset_settings['make_request']:
             logger.info(f"  Gemini Case: {preset_settings['gemini_case']}")
-
-    def _format_messages_for_gemini(self, combined_messages):
-        formatted_messages = []
-        for i, msg in enumerate(combined_messages):
-            if msg["role"] == "system":
-                formatted_messages.append({"role": "user", "content": f"[System Instruction]: {msg['content']}"})
-            elif msg["role"] == "assistant":
-                formatted_messages.append({"role": "model", "content": msg['content']})
-            else:  # user
-                formatted_messages.append(msg)
-        return formatted_messages
-
-    def change_last_message_to_user_for_gemini(self, api_model, combined_messages):
-        if combined_messages and ("gemini" in api_model.lower() or "gemma" in api_model.lower()) and \
-                combined_messages[-1]["role"] in {"system","model","assistant"}:
-            logger.info(f"Adjusting last message for {api_model}: system -> user with [SYSTEM INFO] prefix.")
-            combined_messages[-1]["role"] = "user"
-            combined_messages[-1]["content"] = f"[SYSTEM INFO] {combined_messages[-1]['content']}"
 
     def try_print_error(self, completion_or_error):
         logger.warning("Attempting to print error details from API response/error object.")
@@ -1154,22 +1132,6 @@ class ChatModel:
         return cost
 
     #endregion
-
-
-    def _format_multimodal_content_for_gemini(self, message_content):
-        """Форматирует содержимое сообщения для Gemini API, поддерживая текст и изображения."""
-        parts = []
-        if isinstance(message_content, list):
-            for item in message_content:
-                if item["type"] == "text":
-                    parts.append({"text": item["text"]})
-                elif item["type"] == "image_url":
-                    # Gemini API ожидает base64-кодированные изображения
-                    parts.append(
-                        {"inline_data": {"mime_type": "image/jpeg", "data": item["image_url"]["url"].split(',')[1]}})
-        else:  # Если content - это просто строка (старый формат)
-            parts.append({"text": message_content})
-        return parts
 
     def get_room_name(self, room_id):  # This seems generally useful, kept.
         room_names = {

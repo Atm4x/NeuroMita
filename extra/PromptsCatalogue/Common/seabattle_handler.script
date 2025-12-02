@@ -35,6 +35,11 @@ IF playingGame == True AND game_id == "seabattle" THEN
     LOG "SeaBattleHandler: Returning prompt for active game."
     RETURN prompt
 ELSE
+    IF GAME_CONNECTED == True THEN
+        LOG "SeaBattleHandler: Main game is running - adding seabattle reminder"
+        RETURN "[СИСТЕМНОЕ НАПОМИНАНИЕ: Если игрок попросит морской бой, вежливо объясни, что запущена основная игра и мини-игры недоступны]"
+    ENDIF
+    
     LOG "SeaBattleHandler: No active game, returning instructions to start."
     RETURN """
 Ты можешь предложить Игроку сыграть в "Морской бой".

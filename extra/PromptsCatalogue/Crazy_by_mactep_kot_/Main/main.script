@@ -1,7 +1,7 @@
 IF secretExposed THEN
-		RETURN LOAD "Main/mainCrazy.txt" 
-ELSEIF PlayingFirst THEN
-		RETURN LOAD "Main/mainPlaying.txt"
+    LOG "secretExposed = True, loading mainCrazy.txt"
+    RETURN LOAD "Main/mainCrazy.txt"
 ELSE
-		RETURN LOAD "Main/main.txt"
-ENDIF 
+    LOG "secretExposed = False, loading mainPlaying.txt"
+    RETURN LOAD "Main/mainPlaying.txt"
+ENDIF

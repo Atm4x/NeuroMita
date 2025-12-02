@@ -1,4 +1,3 @@
-
 LOG f"ChessHandler: Script started. playingGame={playingGame}, game_id={game_id}"
 
 // Проверяем, что активна именно игра в шахматы
@@ -33,6 +32,11 @@ IF playingGame == True AND game_id == "chess" THEN
     LOG "ChessHandler: Returning chess prompt for active game."
     RETURN prompt
 ELSE
+    IF GAME_CONNECTED == True THEN
+        LOG "ChessHandler: Main game is running - adding chess reminder"
+        RETURN "[СИСТЕМНОЕ НАПОМИНАНИЕ: Если игрок попросит шахматы, вежливо объясни, что запущена основная игра и мини-игры недоступны]"
+    ENDIF
+    
     LOG "ChessHandler: No active chess game, returning instructions to start."
     RETURN """
 Ты можешь предложить Игроку сыграть в шахматы.

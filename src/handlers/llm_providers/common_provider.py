@@ -48,25 +48,28 @@ class CommonProvider(BaseProvider):
             return None
         if req.stream:
             return self._handle_common_stream(response, req.stream_cb)
+        try:
+            resp_json = response.json()
+            message = resp_json.get("choices", [{}])[0].get("message", {}) or {}
+            tool_calls = message.get("tool_calls") or []
 
-        resp_json = response.json()
-        message = resp_json.get("choices", [{}])[0].get("message", {}) or {}
-        tool_calls = message.get("tool_calls") or []
+            # Только если реально есть вызовы инструментов и есть tool_manager
+            if tool_calls and req.tool_manager:
+                from tools.manager import mk_tool_call_msg, mk_tool_resp_msg
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    args = json.loads(call["function"]["arguments"])
+                    tool_result = req.tool_manager.run(name, args)
+                    req.messages.append(mk_tool_call_msg(name, args))
+                    req.messages.append(mk_tool_resp_msg(name, tool_result))
+                req.depth += 1
+                return self.generate_request_common(req)
 
-        # Только если реально есть вызовы инструментов и есть tool_manager
-        if tool_calls and req.tool_manager:
-            from tools.manager import mk_tool_call_msg, mk_tool_resp_msg
-            for call in tool_calls:
-                name = call["function"]["name"]
-                args = json.loads(call["function"]["arguments"])
-                tool_result = req.tool_manager.run(name, args)
-                req.messages.append(mk_tool_call_msg(name, args))
-                req.messages.append(mk_tool_resp_msg(name, tool_result))
-            req.depth += 1
-            return self.generate_request_common(req)
-
-        # Иначе просто возвращаем текст
-        return (message.get("content") or "").strip()
+            # Иначе просто возвращаем текст
+            return (message.get("content") or "").strip()
+        except Exception as ex:
+            logger.error(f"Произошла ошибка: {ex}") 
+        return ""
 
     def _handle_common_stream(self, response, stream_callback: callable = None) -> str:
         full_response_parts = []
