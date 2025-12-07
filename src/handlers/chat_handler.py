@@ -292,32 +292,58 @@ class ChatModel:
     #     except Exception as e:
     #         logger.error(f"Error loading crazy_prehistory.json: {e}")
     #         return []
-    
+
     def generate_response(
-        self,
-        user_input : str,
-        system_input : str = "",
-        image_data : list[bytes] | None = None,
-        stream_callback: callable = None,
-        message_id: int | None = None
+            self,
+            user_input: str,
+            system_input: str = "",
+            image_data: list[bytes] | None = None,
+            stream_callback: callable = None,
+            message_id: int | None = None
     ):
         if image_data is None:
             image_data = []
 
         self.check_change_current_character()
 
-        history_data           = self.current_character.history_manager.load_history()
-        llm_messages_history   = history_data.get("messages", [])
+        # --- DETECT MISTRAL / STRICT MODE ---
+        # Проверяем, является ли текущая модель Mistral/Mixtral.
+        # Если вы используете пресеты персонажей, эта проверка берет глобальную модель,
+        # но в большинстве случаев этого достаточно.
+        current_model_lower = str(self.api_model).lower()
+        is_mistral_mode = "mistral" in current_model_lower or "mixtral" in current_model_lower
 
+        # Если нужно принудительно включить/выключить через настройки:
+        # is_mistral_mode = is_mistral_mode or self.settings.get("FORCE_MISTRAL_MODE", False)
+
+        if is_mistral_mode:
+            logger.info("Detected Mistral model: Activating strict message ordering (merging system prompts).")
+        # ------------------------------------
+
+        history_data = self.current_character.history_manager.load_history()
+        llm_messages_history = history_data.get("messages", [])
+
+        # Буфер для текста системных сообщений (используется только если is_mistral_mode = True)
+        mistral_system_buffer = []
+
+        # 1. System Info from Event Bus (добавление в историю или буфер)
         if self.infos_to_add_to_history:
-            llm_messages_history.extend(self.infos_to_add_to_history)
+            if is_mistral_mode:
+                # В режиме Mistral собираем текст
+                for item in self.infos_to_add_to_history:
+                    content = item.get("content", "") if isinstance(item, dict) else str(item)
+                    mistral_system_buffer.append(f"[System Info]: {content}")
+            else:
+                # Обычный режим: добавляем как сообщения
+                llm_messages_history.extend(self.infos_to_add_to_history)
+
             self.infos_to_add_to_history.clear()
 
-        self.current_character.set_variable("GAME_DISTANCE",self.distance)
-        self.current_character.set_variable("GAME_ROOM_PLAYER",self.get_room_name(self.roomPlayer))
-        self.current_character.set_variable("GAME_ROOM_MITA",self.get_room_name(self.roomMita))
-        self.current_character.set_variable("GAME_NEAR_OBJECTS",self.nearObjects)
-        self.current_character.set_variable("GAME_ACTUAL_INFO",self.actualInfo)
+        self.current_character.set_variable("GAME_DISTANCE", self.distance)
+        self.current_character.set_variable("GAME_ROOM_PLAYER", self.get_room_name(self.roomPlayer))
+        self.current_character.set_variable("GAME_ROOM_MITA", self.get_room_name(self.roomMita))
+        self.current_character.set_variable("GAME_NEAR_OBJECTS", self.nearObjects)
+        self.current_character.set_variable("GAME_ACTUAL_INFO", self.actualInfo)
 
         game_state_prompt_content: Optional[str] = None
         if self.current_character.get_variable("playingGame", False):
@@ -330,17 +356,12 @@ class ChatModel:
 
         combined_messages = []
 
-        separate_prompts =  bool(self.settings.get("SEPARATE_PROMPTS", True))
+        separate_prompts = bool(self.settings.get("SEPARATE_PROMPTS", True))
         messages = self.current_character.get_full_system_setup_for_llm(separate_prompts)
         combined_messages.extend(messages)
 
         if game_state_prompt_content:
             combined_messages.append({"role": "system", "content": game_state_prompt_content})
-
-        # prehistory = self.load_prehistory()
-        # if prehistory:
-        #     combined_messages.extend(prehistory)
-        #     logger.info(f"Added {len(prehistory)} prehistory messages to combined messages")
 
         llm_messages_history = self.process_history_compression(llm_messages_history)
 
@@ -352,36 +373,62 @@ class ChatModel:
             llm_messages_history_limited = llm_messages_history[-8:]
 
         if missed_messages and bool(self.settings.get("SAVE_MISSED_HISTORY", True)):
-            logger.info(f"Сохраняю {len(missed_messages)} пропущенных сообщений для персонажа {self.current_character.char_id}.")
+            logger.info(
+                f"Сохраняю {len(missed_messages)} пропущенных сообщений для персонажа {self.current_character.char_id}.")
             self.current_character.history_manager.save_missed_history(missed_messages)
 
         if self.image_quality_reduction_enabled:
             llm_messages_history_limited = self._apply_history_image_quality_reduction(llm_messages_history_limited)
 
-        # ВАЖНО: system infos — это строки -> оборачиваем в {role, content}
+        # 2. Event System Infos (добавление в историю или буфер)
         event_system_infos = self.current_character.get_system_infos()
         if event_system_infos:
-            llm_messages_history_limited.extend(
-                [{"role": "system", "content": s} if isinstance(s, str) else s for s in event_system_infos]
-            )
+            if is_mistral_mode:
+                for s in event_system_infos:
+                    content = s if isinstance(s, str) else s.get("content", "")
+                    mistral_system_buffer.append(f"[Event Info]: {content}")
+            else:
+                llm_messages_history_limited.extend(
+                    [{"role": "system", "content": s} if isinstance(s, str) else s for s in event_system_infos]
+                )
 
         combined_messages.extend(llm_messages_history_limited)
 
+        # 3. Current State (Время/Дата)
         current_time = datetime.datetime.now()
-        current_state_message = {
-            "role": "system", 
-            "content": f"[Current State]\nDate: {current_time.strftime('%Y-%m-%d')}\nTime: {current_time.strftime('%H:%M:%S')}\nDay of week: {current_time.strftime('%A')}"
-        }
-        combined_messages.append(current_state_message)
+        current_state_content = f"[Current State]\nDate: {current_time.strftime('%Y-%m-%d')}\nTime: {current_time.strftime('%H:%M:%S')}\nDay of week: {current_time.strftime('%A')}"
 
+        if is_mistral_mode:
+            mistral_system_buffer.append(current_state_content)
+        else:
+            combined_messages.append({"role": "system", "content": current_state_content})
+
+        # 4. System Input (дополнительный контекст)
         if system_input:
-            combined_messages.append({"role": "system", "content": system_input})
+            if is_mistral_mode:
+                mistral_system_buffer.append(f"[System Context]: {system_input}")
+            else:
+                combined_messages.append({"role": "system", "content": system_input})
 
-        user_message_for_history = None
+        # --- Формирование сообщения пользователя ---
+
+        final_user_text = user_input
+
+        # Если режим Mistral, приклеиваем все накопленные системные сообщения к тексту пользователя
+        if is_mistral_mode and mistral_system_buffer:
+            full_context_prefix = "\n\n".join(mistral_system_buffer)
+            if final_user_text:
+                final_user_text = f"{full_context_prefix}\n\n{final_user_text}"
+            else:
+                final_user_text = full_context_prefix  # Если пользователь молчит, отправляем контекст
+
+        user_message_llm = None  # То, что полетит в API
+        user_message_history = None  # То, что сохранится в историю (чистое)
         user_content_chunks = []
 
-        if user_input:
-            user_content_chunks.append({"type": "text", "text": user_input})
+        # Собираем чанки (текст + картинки)
+        if final_user_text:
+            user_content_chunks.append({"type": "text", "text": final_user_text})
 
         for img_bytes in image_data:
             user_content_chunks.append({
@@ -390,12 +437,36 @@ class ChatModel:
             })
 
         if user_content_chunks:
-            user_message_for_history = {"role": "user", "content": user_content_chunks}
-            combined_messages.append(user_message_for_history)
+            user_message_llm = {"role": "user", "content": user_content_chunks}
+            combined_messages.append(user_message_llm)
 
-        if user_message_for_history:
-            user_message_for_history["time"] = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
-            llm_messages_history_limited.append(user_message_for_history)
+        # Логика сохранения в историю (разделяем "грязный" запрос и "чистую" историю)
+        if user_message_llm:
+            if is_mistral_mode:
+                # В режиме Mistral создаем копию для истории с ОРИГИНАЛЬНЫМ текстом (user_input),
+                # чтобы не сохранять технические логи (время, system info) в память персонажа навсегда.
+                clean_chunks = []
+                if user_input:
+                    clean_chunks.append({"type": "text", "text": user_input})
+                # Добавляем картинки, если были
+                for chunk in user_content_chunks:
+                    if chunk.get("type") == "image_url":
+                        clean_chunks.append(chunk)
+
+                # Если в clean_chunks что-то есть (или был ввод, или были картинки)
+                if clean_chunks:
+                    user_message_history = {"role": "user", "content": clean_chunks}
+                else:
+                    # Если был только системный контекст без ввода и картинок, в историю можно ничего не писать,
+                    # либо (опционально) сохранить контекст. Обычно лучше не писать.
+                    user_message_history = None
+            else:
+                # В обычном режиме то, что отправили, то и сохраняем
+                user_message_history = user_message_llm
+
+            if user_message_history:
+                user_message_history["time"] = datetime.datetime.now().strftime("%d.%m.%Y_%H.%M")
+                llm_messages_history_limited.append(user_message_history)
 
         char_provider = self.get_character_provider()
         preset_id = None
@@ -470,7 +541,6 @@ class ChatModel:
             logger.error(f"Error during LLM response generation or processing: {e}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {'error': str(e)})
             return f"Ошибка: {e}"
-
     def process_history_compression(self,llm_messages_history):
         """Сжимает старые воспоминания"""
 
