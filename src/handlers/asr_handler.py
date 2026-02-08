@@ -116,6 +116,8 @@ class SpeechRecognition:
     VAD_SILENCE_TIMEOUT_SEC = 0.15
     VAD_PRE_BUFFER_DURATION_SEC = 0.3
 
+    _runtime_params_lock = RLock()
+
     FAILED_AUDIO_DIR = "FailedAudios"
 
     _text_lock = Lock()
@@ -141,6 +143,74 @@ class SpeechRecognition:
         "whisper": WhisperRecognizer,
         "whisper_onnx": WhisperOnnxRecognizer,
     }
+
+    @staticmethod
+    def get_runtime_params() -> dict:
+        with SpeechRecognition._runtime_params_lock:
+            return {
+                "VOSK_SAMPLE_RATE": int(SpeechRecognition.VOSK_SAMPLE_RATE),
+                "CHUNK_SIZE": int(SpeechRecognition.CHUNK_SIZE),
+                "VAD_THRESHOLD": float(SpeechRecognition.VAD_THRESHOLD),
+                "VAD_SILENCE_TIMEOUT_SEC": float(SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC),
+                "VAD_PRE_BUFFER_DURATION_SEC": float(SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC),
+            }
+
+    @staticmethod
+    def apply_runtime_params(params: dict) -> None:
+        params = params or {}
+
+        def _to_int(v, default: int) -> int:
+            try:
+                return int(v)
+            except Exception:
+                return int(default)
+
+        def _to_float(v, default: float) -> float:
+            try:
+                return float(v)
+            except Exception:
+                return float(default)
+
+        def _clamp(v, lo, hi):
+            try:
+                if v < lo:
+                    return lo
+                if v > hi:
+                    return hi
+            except Exception:
+                return lo
+            return v
+
+        with SpeechRecognition._runtime_params_lock:
+            if "VOSK_SAMPLE_RATE" in params:
+                v = _to_int(params.get("VOSK_SAMPLE_RATE"), SpeechRecognition.VOSK_SAMPLE_RATE)
+                SpeechRecognition.VOSK_SAMPLE_RATE = int(_clamp(v, 8000, 48000))
+
+            if "CHUNK_SIZE" in params:
+                v = _to_int(params.get("CHUNK_SIZE"), SpeechRecognition.CHUNK_SIZE)
+                SpeechRecognition.CHUNK_SIZE = int(_clamp(v, 128, 8192))
+
+            if "VAD_THRESHOLD" in params:
+                v = _to_float(params.get("VAD_THRESHOLD"), SpeechRecognition.VAD_THRESHOLD)
+                SpeechRecognition.VAD_THRESHOLD = float(_clamp(v, 0.0, 1.0))
+
+            if "VAD_SILENCE_TIMEOUT_SEC" in params:
+                v = _to_float(params.get("VAD_SILENCE_TIMEOUT_SEC"), SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC)
+                SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(_clamp(v, 0.0, 10.0))
+
+            if "VAD_PRE_BUFFER_DURATION_SEC" in params:
+                v = _to_float(params.get("VAD_PRE_BUFFER_DURATION_SEC"), SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC)
+                SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC = float(_clamp(v, 0.0, 10.0))
+
+    @staticmethod
+    def _emit_params_changed(source: Optional[str] = None) -> None:
+        try:
+            get_event_bus().emit(
+                Events.Speech.ASR_PARAMS_CHANGED,
+                {"params": SpeechRecognition.get_runtime_params(), "source": source or "runtime"},
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _init_pip():
@@ -344,6 +414,7 @@ class SpeechRecognition:
                 SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(settings["silence_duration"])
         except Exception:
             pass
+        # если движок меняет VAD runtime-параметры — обновим UI
 
     @staticmethod
     def check_model_installed(recognizer_type: Optional[str] = None, settings: Optional[dict] = None) -> bool:
@@ -542,3 +613,45 @@ class SpeechRecognition:
 
 
 register_asr_install_events()
+
+
+_ASR_RUNTIME_EVENTS_REGISTERED = False
+
+
+def _on_asr_params_request_event(event: Event):
+    data = event.data if isinstance(event.data, dict) else {}
+    SpeechRecognition._emit_params_changed(source=data.get("source") or "request")
+
+
+def _on_set_asr_runtime_params_event(event: Event):
+    data = event.data if isinstance(event.data, dict) else {}
+    params = data.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
+    # разрешаем плоский payload (на всякий)
+    for k in (
+        "VOSK_SAMPLE_RATE",
+        "CHUNK_SIZE",
+        "VAD_THRESHOLD",
+        "VAD_SILENCE_TIMEOUT_SEC",
+        "VAD_PRE_BUFFER_DURATION_SEC",
+    ):
+        if k in data and k not in params:
+            params[k] = data.get(k)
+
+    SpeechRecognition.apply_runtime_params(params)
+    SpeechRecognition._emit_params_changed(source=data.get("source") or "ui")
+
+
+def register_asr_runtime_params_events() -> None:
+    global _ASR_RUNTIME_EVENTS_REGISTERED
+    if _ASR_RUNTIME_EVENTS_REGISTERED:
+        return
+    eb = get_event_bus()
+    eb.subscribe(Events.Speech.ASR_PARAMS_REQUEST, _on_asr_params_request_event, weak=False)
+    eb.subscribe(Events.Speech.SET_ASR_RUNTIME_PARAMS, _on_set_asr_runtime_params_event, weak=False)
+    _ASR_RUNTIME_EVENTS_REGISTERED = True
+
+
+register_asr_runtime_params_events()

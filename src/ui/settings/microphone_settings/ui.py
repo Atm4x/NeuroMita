@@ -2,7 +2,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QComboBox,
-    QPushButton, QSizePolicy, QCheckBox
+    QPushButton, QSizePolicy, QCheckBox, QSpinBox, QDoubleSpinBox
 )
 import qtawesome as qta
 
@@ -102,5 +102,41 @@ def build_microphone_settings_ui(self, parent_layout):
     # 5) Статус (как раньше) — под кнопками
     self.asr_init_status = QLabel("—")
     root_lay.addWidget(make_row(_("Статус", "Status"), self.asr_init_status, label_w))
+
+    # 6) Параметры распознавания (VAD/Audio)
+    params_title = QLabel(_("Параметры распознавания", "Recognition parameters"))
+    params_title.setObjectName("SettingsSubHeader")
+    root_lay.addSpacing(8)
+    root_lay.addWidget(params_title)
+
+    self.asr_sample_rate_spinbox = QSpinBox()
+    self.asr_sample_rate_spinbox.setRange(8000, 48000)
+    self.asr_sample_rate_spinbox.setSingleStep(1000)
+    root_lay.addWidget(make_row(_("Частота дискретизации", "Sample rate"), self.asr_sample_rate_spinbox, label_w))
+
+    self.asr_chunk_size_spinbox = QSpinBox()
+    self.asr_chunk_size_spinbox.setRange(128, 8192)
+    self.asr_chunk_size_spinbox.setSingleStep(64)
+    root_lay.addWidget(make_row(_("Размер чанка", "Chunk size"), self.asr_chunk_size_spinbox, label_w))
+
+    self.asr_vad_threshold_spinbox = QDoubleSpinBox()
+    self.asr_vad_threshold_spinbox.setRange(0.0, 1.0)
+    self.asr_vad_threshold_spinbox.setDecimals(3)
+    self.asr_vad_threshold_spinbox.setSingleStep(0.05)
+    root_lay.addWidget(make_row(_("Порог VAD", "VAD threshold"), self.asr_vad_threshold_spinbox, label_w))
+
+    self.asr_silence_timeout_spinbox = QDoubleSpinBox()
+    self.asr_silence_timeout_spinbox.setRange(0.0, 10.0)
+    self.asr_silence_timeout_spinbox.setDecimals(3)
+    self.asr_silence_timeout_spinbox.setSingleStep(0.05)
+    root_lay.addWidget(make_row(_("Таймаут тишины (сек)", "Silence timeout (sec)"),
+                                self.asr_silence_timeout_spinbox, label_w))
+
+    self.asr_pre_buffer_spinbox = QDoubleSpinBox()
+    self.asr_pre_buffer_spinbox.setRange(0.0, 10.0)
+    self.asr_pre_buffer_spinbox.setDecimals(3)
+    self.asr_pre_buffer_spinbox.setSingleStep(0.05)
+    root_lay.addWidget(make_row(_("Предбуфер (сек)", "Pre-buffer (sec)"), self.asr_pre_buffer_spinbox, label_w))
+
 
     parent_layout.addWidget(root)
