@@ -29,7 +29,7 @@ def make_row(label_text: str, field_widget: QWidget, label_w: int) -> QWidget:
 
 
 def build_microphone_settings_ui(self, parent_layout):
-    create_section_header(parent_layout, _("Настройки микрофона", "Microphone Settings"))
+    create_section_header(parent_layout, t("ui.settings.microphone_settings.microphone_settings"))
 
     overlay_w = getattr(self, "SETTINGS_PANEL_WIDTH", 400)
     label_w = max(90, min(120, int(overlay_w * 0.3)))
@@ -41,7 +41,7 @@ def build_microphone_settings_ui(self, parent_layout):
     root_lay.setSpacing(6)
 
     # 1) Кнопка в глоссарий
-    self.asr_manage_button = QPushButton(_("Каталог ASR моделей", "ASR Model Catalogue"))
+    self.asr_manage_button = QPushButton(t("ui.settings.microphone_settings.asr_model_catalogue"))
     self.asr_manage_button.setObjectName("SecondaryButton")
     self.asr_manage_button.setIcon(qta.icon("fa5s.list", color="#ffffff"))
     self.asr_manage_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -55,17 +55,17 @@ def build_microphone_settings_ui(self, parent_layout):
 
     self.recognizer_combobox = QComboBox()
     self.recognizer_combobox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    self.recognizer_combobox.setToolTip(_("Установленные модели распознавания", "Installed speech recognition models"))
+    self.recognizer_combobox.setToolTip(t("ui.settings.microphone_settings.installed_models"))
     eng_h.addWidget(self.recognizer_combobox, 1)
 
     self.asr_refresh_button = QPushButton()
     self.asr_refresh_button.setObjectName("SecondaryButton")
     self.asr_refresh_button.setIcon(qta.icon("fa5s.sync", color="#ffffff"))
-    self.asr_refresh_button.setToolTip(_("Обновить список моделей", "Refresh model list"))
+    self.asr_refresh_button.setToolTip(t("ui.settings.microphone_settings.refresh_model_list"))
     self.asr_refresh_button.setFixedSize(28, 26)
     eng_h.addWidget(self.asr_refresh_button, 0)
 
-    root_lay.addWidget(make_row(_("Модель", "Model"), engine_field, label_w))
+    root_lay.addWidget(make_row(t("ui.settings.microphone_settings.model"), engine_field, label_w))
 
     # 3) Текущий микрофон + refresh
     mic_field = QWidget()
@@ -82,25 +82,25 @@ def build_microphone_settings_ui(self, parent_layout):
     self.mic_refresh_button = QPushButton()
     self.mic_refresh_button.setObjectName("SecondaryButton")
     self.mic_refresh_button.setIcon(qta.icon("fa5s.sync", color="#ffffff"))
-    self.mic_refresh_button.setToolTip(_("Обновить список микрофонов", "Refresh microphone list"))
+    self.mic_refresh_button.setToolTip(t("ui.settings.microphone_settings.refresh_microphone_list"))
     self.mic_refresh_button.setFixedSize(28, 26)
     mic_h.addWidget(self.mic_refresh_button, 0)
 
-    root_lay.addWidget(make_row(_("Микрофон", "Microphone"), mic_field, label_w))
+    root_lay.addWidget(make_row(t("ui.settings.microphone_settings.microphone"), mic_field, label_w))
 
     # 4) Управление
     self.mic_active_checkbox = QCheckBox("")
     self.mic_active_checkbox.setChecked(bool(self.settings.get("MIC_ACTIVE")))
-    self.mic_active_checkbox.setToolTip(_("Включить/выключить распознавание", "Enable/disable recognition"))
-    root_lay.addWidget(make_row(_("Микрофон активен", "Microphone active"), self.mic_active_checkbox, label_w))
+    self.mic_active_checkbox.setToolTip(t("ui.settings.microphone_settings.enable_disable_recognition"))
+    root_lay.addWidget(make_row(t("ui.settings.microphone_settings.microphone_active"), self.mic_active_checkbox, label_w))
 
     self.mic_instant_checkbox = QCheckBox("")
     self.mic_instant_checkbox.setChecked(bool(self.settings.get("MIC_INSTANT_SENT")))
-    self.mic_instant_checkbox.setToolTip(_("Мгновенная отправка распознанного текста", "Send recognized text immediately"))
-    root_lay.addWidget(make_row(_("Мгновенная отправка", "Instant send"), self.mic_instant_checkbox, label_w))
+    self.mic_instant_checkbox.setToolTip(t("ui.settings.microphone_settings.send_immediately"))
+    root_lay.addWidget(make_row(t("ui.settings.microphone_settings.instant_send"), self.mic_instant_checkbox, label_w))
 
     # 5) Статус (как раньше) — под кнопками
     self.asr_init_status = QLabel("—")
-    root_lay.addWidget(make_row(_("Статус", "Status"), self.asr_init_status, label_w))
+    root_lay.addWidget(make_row(t("ui.settings.microphone_settings.status"), self.asr_init_status, label_w))
 
     parent_layout.addWidget(root)

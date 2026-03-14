@@ -56,7 +56,7 @@ class AsrEventsController(BaseController):
         mic_active = bool(self._settings_cache.get("MIC_ACTIVE", False))
         if mic_active:
             self._asr_initializing = True
-            self._emit_indicator("loading", _("Инициализация ASR...", "Initializing ASR..."))
+            self._emit_indicator("loading", t("controllers.gui.asr_events.initializing"))
             self._sync_indicator(force=True)
         else:
             self._emit_indicator(None, None)
@@ -71,7 +71,7 @@ class AsrEventsController(BaseController):
             try:
                 self.view.asr_set_pill.emit({
                     "label": self.view.asr_init_status,
-                    "text": _("Инициализация...", "Initializing..."),
+                    "text": t("controllers.gui.asr_events.initializing_short"),
                     "kind": "progress"
                 })
             except Exception as e:
@@ -98,7 +98,7 @@ class AsrEventsController(BaseController):
             try:
                 self.view.asr_set_pill.emit({
                     "label": self.view.asr_init_status,
-                    "text": _("Готово", "Ready"),
+                    "text": t("controllers.gui.asr_events.ready"),
                     "kind": "ok"
                 })
             except Exception as e:
@@ -152,7 +152,7 @@ class AsrEventsController(BaseController):
         self._asr_installing = True
         self._install_engine = str(model)
         self._install_progress = 0
-        self._install_status = _("Подготовка...", "Preparing...")
+        self._install_status = t("controllers.gui.asr_events.preparing")
 
         self._emit_install_progress({
             "model": str(model),
@@ -357,7 +357,7 @@ class AsrEventsController(BaseController):
             p = self._install_progress
             st = self._install_status or ""
             eng = self._install_engine or engine
-            msg = _("Установка ASR: ", "Installing ASR: ") + str(eng)
+            msg = t("controllers.gui.asr_events.installing_asr") + str(eng)
             if isinstance(p, int):
                 msg += f" ({p}%)"
             if st:
@@ -371,25 +371,25 @@ class AsrEventsController(BaseController):
 
         installed = self._get_installed_cached(engine)
         if installed is None:
-            self._emit_indicator("loading", _("Проверка ASR модели...", "Checking ASR model...") + f" {engine}")
+            self._emit_indicator("loading", t("controllers.gui.asr_events.checking_asr_model") + f" {engine}")
             self._request_installed_check(engine)
             return
 
         if engine and not installed:
-            self._emit_indicator("red", _("ASR модель не установлена: ", "ASR model not installed: ") + engine)
+            self._emit_indicator("red", t("controllers.gui.asr_events.asr_not_installed") + engine)
             return
 
         if self._asr_initializing:
-            self._emit_indicator("loading", _("Инициализация ASR...", "Initializing ASR..."))
+            self._emit_indicator("loading", t("controllers.gui.asr_events.initializing"))
             return
 
         ready = self._get_ready_cached()
         if ready is None:
-            self._emit_indicator("loading", _("Проверка статуса ASR...", "Checking ASR status..."))
+            self._emit_indicator("loading", t("controllers.gui.asr_events.checking_asr_status"))
             self._request_ready_check()
             return
 
         if ready:
-            self._emit_indicator("green", _("ASR готов", "ASR ready"))
+            self._emit_indicator("green", t("controllers.gui.asr_events.asr_ready"))
         else:
-            self._emit_indicator("red", _("ASR не готов", "ASR not ready"))
+            self._emit_indicator("red", t("controllers.gui.asr_events.asr_not_ready"))

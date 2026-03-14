@@ -31,8 +31,111 @@
       }
     }
   },
+  "ui": {
+    "settings": {
+      "settings_panel": {
+        "general": "Общие",
+        "api": "API",
+        "models": "Модели",
+        "voice": "Озвучка",
+        "microphone": "Микрофон",
+        "characters": "Персонажи",
+        "screen": "Экран",
+        "game": "Игра",
+        "debug": "Отладка",
+        "news": "Новости"
+      },
+      "chat_panel": {
+        "clear": "Очистить",
+        "load_from_history": "Взять из истории",
+        "open_user_guide": "Открыть руководство пользователя",
+        "tokens_cost": "Токены: 0/0 | Стоимость: 0.00 ₽",
+        "attach_images": "Прикрепить изображения",
+        "take_screenshot": "Сделать скриншот экрана",
+        "send_message": "Отправить сообщение",
+        "select_images": "Выберите изображения",
+        "image_files": "Файлы изображений (*.png *.jpg *.jpeg *.bmp *.gif)",
+        "error": "Ошибка",
+        "failed_to_capture_screen": "Не удалось захватить экран. Убедитесь, что анализ экрана включен в настройках."
+      },
+      "microphone_settings": {
+        "microphone_settings": "Настройки микрофона",
+        "asr_model_catalogue": "Каталог ASR моделей",
+        "installed_models": "Установленные модели распознавания",
+        "refresh_model_list": "Обновить список моделей",
+        "model": "Модель",
+        "microphone": "Микрофон",
+        "refresh_microphone_list": "Обновить список микрофонов",
+        "enable_disable_recognition": "Включить/выключить распознавание",
+        "microphone_active": "Микрофон активен",
+        "send_immediately": "Мгновенная отправка распознанного текста",
+        "instant_send": "Мгновенная отправка",
+        "status": "Статус"
+      },
+      "api_settings": {
+        "api_presets": "API пресеты",
+        "add_preset": "Добавить пресет",
+        "remove_preset": "Удалить пресет",
+        "move_up": "Переместить вверх",
+        "move_down": "Переместить вниз",
+        "template": "Шаблон:",
+        "api_url": "Ссылка API",
+        "model": "Модель",
+        "api_key": "API Ключ",
+        "show_hide_key": "Показать/скрыть ключ",
+        "reserve_keys": "Резервные ключи",
+        "protocol_configuration": "Конфигурация протокола",
+        "protocol": "Протокол",
+        "configure_pipeline": "Настроить pipeline",
+        "test_connection": "Тест подключения",
+        "cancel": "Отменить",
+        "save": "Сохранить",
+        "warning": "Предупреждение",
+        "select_preset_template": "Выберите пресет или шаблон для тестирования",
+        "testing": "Тестирование...",
+        "success": "Успешно",
+        "unknown_error": "Неизвестная ошибка",
+        "test_result": "Результат тестирования",
+        "connection_error": "Ошибка подключения",
+        "test_error": "Ошибка тестирования"
+      }
+    }
+  },
   "controllers": {
     "gui": {
+      "asr_events": {
+        "initializing": "Инициализация ASR...",
+        "initializing_short": "Инициализация...",
+        "ready": "Готово",
+        "preparing": "Подготовка...",
+        "installing_asr": "Установка ASR: ",
+        "checking_asr_model": "Проверка ASR модели...",
+        "asr_not_installed": "ASR модель не установлена: ",
+        "checking_asr_status": "Проверка статуса ASR...",
+        "asr_ready": "ASR готов",
+        "asr_not_ready": "ASR не готов"
+      },
+      "microphone_settings": {
+        "loading": "Загрузка...",
+        "no_microphones": "Микрофоны не найдены",
+        "no_installed_models": "Нет установленных моделей"
+      },
+      "model": {
+        "unknown_character": "Неизвестный персонаж.",
+        "character_not_selected": "Персонаж не выбран.",
+        "failed_to_build_prompt": "Не удалось сформировать промпт.",
+        "current": "Текущий",
+        "text_generation_failed": "Не удалось получить ответ."
+      },
+      "local_voice": {
+        "initializing_model": "Инициализация модели...",
+        "initialization_error_short": "Ошибка инициализации!",
+        "initialization_error": "Ошибка инициализации",
+        "failed_to_initialize": "Не удалось инициализировать модель. Проверьте логи.",
+        "error_short": "Ошибка!",
+        "error": "Ошибка",
+        "critical_init_error": "Критическая ошибка при инициализации модели:"
+      },
       "voiceover": {
         "telegram_connect": "Подключиться к Telegram",
         "connecting": "Подключение...",

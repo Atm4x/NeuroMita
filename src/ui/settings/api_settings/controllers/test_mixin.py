@@ -18,13 +18,13 @@ class TestMixin:
         if not self.current_preset_id and not base_id:
             QMessageBox.warning(
                 v,
-                _("Предупреждение", "Warning"),
-                _("Выберите пресет или шаблон для тестирования", "Select a preset or template to test"),
+                t("ui.settings.api_settings.warning"),
+                t("ui.settings.api_settings.select_preset_template"),
             )
             return
 
         v.test_button.setEnabled(False)
-        v.test_button.setText(_("Тестирование...", "Testing..."))
+        v.test_button.setText(t("ui.settings.api_settings.testing"))
 
         self.event_bus.emit(Events.ApiPresets.TEST_CONNECTION, {
             "id": self.current_preset_id,
@@ -47,10 +47,10 @@ class TestMixin:
     def _process_test_result(self, data: dict):
         v = self.view
         v.test_button.setEnabled(True)
-        v.test_button.setText(_("Тест подключения", "Test connection"))
+        v.test_button.setText(t("ui.settings.api_settings.test_connection"))
 
         success = bool(data.get("success"))
-        msg = str(data.get("message") or (_("Успешно", "Success") if success else _("Неизвестная ошибка", "Unknown error")))
+        msg = str(data.get("message") or (t("ui.settings.api_settings.success") if success else t("ui.settings.api_settings.unknown_error")))
         models = data.get("models") or []
         if not isinstance(models, list):
             models = []
@@ -82,17 +82,17 @@ class TestMixin:
                             pass
                 return
             except Exception:
-                QMessageBox.information(v, _("Результат тестирования", "Test Result"), msg + "\n\n" + "\n".join(cleaned))
+                QMessageBox.information(v, t("ui.settings.api_settings.test_result"), msg + "\n\n" + "\n".join(cleaned))
                 return
 
         if success:
-            QMessageBox.information(v, _("Результат тестирования", "Test Result"), msg)
+            QMessageBox.information(v, t("ui.settings.api_settings.test_result"), msg)
         else:
-            QMessageBox.warning(v, _("Ошибка подключения", "Connection Error"), msg)
+            QMessageBox.warning(v, t("ui.settings.api_settings.connection_error"), msg)
 
     def _process_test_failed(self, data: dict):
         v = self.view
         v.test_button.setEnabled(True)
-        v.test_button.setText(_("Тест подключения", "Test connection"))
-        msg = str(data.get("message") or _("Неизвестная ошибка", "Unknown error"))
-        QMessageBox.warning(v, _("Ошибка тестирования", "Test Error"), msg)
+        v.test_button.setText(t("ui.settings.api_settings.test_connection"))
+        msg = str(data.get("message") or t("ui.settings.api_settings.unknown_error"))
+        QMessageBox.warning(v, t("ui.settings.api_settings.test_error"), msg)

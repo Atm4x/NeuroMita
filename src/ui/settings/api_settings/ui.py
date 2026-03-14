@@ -24,7 +24,7 @@ def build_api_settings_ui(self, parent_layout):
     main_layout.setContentsMargins(0, 0, 0, 0)
     main_layout.setSpacing(8)
 
-    create_section_header(main_layout, _("API пресеты", "API presets"))
+    create_section_header(main_layout, t("ui.settings.api_settings.api_presets"))
 
     separator = QFrame()
     separator.setFrameShape(QFrame.Shape.HLine)
@@ -53,14 +53,14 @@ def build_api_settings_ui(self, parent_layout):
     self.add_preset_btn = QPushButton()
     self.add_preset_btn.setObjectName("AddPresetButton")
     self.add_preset_btn.setIcon(qta.icon('fa5s.plus', color='#e6e6e6'))
-    self.add_preset_btn.setToolTip(_("Добавить пресет", "Add preset"))
+    self.add_preset_btn.setToolTip(t("ui.settings.api_settings.add_preset"))
     self.add_preset_btn.setFixedSize(28, 28)
     self.add_preset_btn.setIconSize(QSize(14, 14))
 
     self.remove_preset_btn = QPushButton()
     self.remove_preset_btn.setObjectName("RemovePresetButton")
     self.remove_preset_btn.setIcon(qta.icon('fa5s.minus', color='#e6e6e6'))
-    self.remove_preset_btn.setToolTip(_("Удалить пресет", "Remove preset"))
+    self.remove_preset_btn.setToolTip(t("ui.settings.api_settings.remove_preset"))
     self.remove_preset_btn.setEnabled(False)
     self.remove_preset_btn.setFixedSize(28, 28)
     self.remove_preset_btn.setIconSize(QSize(14, 14))
@@ -68,7 +68,7 @@ def build_api_settings_ui(self, parent_layout):
     self.move_up_btn = QPushButton()
     self.move_up_btn.setObjectName("MoveUpButton")
     self.move_up_btn.setIcon(qta.icon('fa5s.arrow-up', color='#e6e6e6'))
-    self.move_up_btn.setToolTip(_("Переместить вверх", "Move up"))
+    self.move_up_btn.setToolTip(t("ui.settings.api_settings.move_up"))
     self.move_up_btn.setEnabled(False)
     self.move_up_btn.setFixedSize(28, 28)
     self.move_up_btn.setIconSize(QSize(14, 14))
@@ -76,7 +76,7 @@ def build_api_settings_ui(self, parent_layout):
     self.move_down_btn = QPushButton()
     self.move_down_btn.setObjectName("MoveDownButton")
     self.move_down_btn.setIcon(qta.icon('fa5s.arrow-down', color='#e6e6e6'))
-    self.move_down_btn.setToolTip(_("Переместить вниз", "Move down"))
+    self.move_down_btn.setToolTip(t("ui.settings.api_settings.move_down"))
     self.move_down_btn.setEnabled(False)
     self.move_down_btn.setFixedSize(28, 28)
     self.move_down_btn.setIconSize(QSize(14, 14))
@@ -106,7 +106,7 @@ def build_api_settings_ui(self, parent_layout):
 
     # Template row
     template_layout = QHBoxLayout()
-    template_label = QLabel(_("Шаблон:", "Template:"))
+    template_label = QLabel(t("ui.settings.api_settings.template"))
     self.template_combo = QComboBox()
     self.template_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     self.template_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -137,31 +137,31 @@ def build_api_settings_ui(self, parent_layout):
     self.key_help_label.setVisible(False)
 
     api_container_layout.addWidget(self.url_help_label)
-    self.api_url_row = LabeledLineEditRow(_('Ссылка API', 'API URL'))
+    self.api_url_row = LabeledLineEditRow(t('ui.settings.api_settings.api_url'))
     api_container_layout.addWidget(self.api_url_row)
 
     api_container_layout.addWidget(self.model_help_label)
-    self.api_model_row = LabeledLineEditRow(_('Модель', 'Model'))
+    self.api_model_row = LabeledLineEditRow(t('ui.settings.api_settings.model'))
     api_container_layout.addWidget(self.api_model_row)
 
     api_container_layout.addWidget(self.key_help_label)
-    self.api_key_row = LabeledLineEditRow(_('API Ключ', 'API Key'), password=True)
+    self.api_key_row = LabeledLineEditRow(t('ui.settings.api_settings.api_key'), password=True)
     api_container_layout.addWidget(self.api_key_row)
 
     self.key_visibility_button = QToolButton()
     self.key_visibility_button.setIcon(qta.icon('fa5s.eye'))
-    self.key_visibility_button.setToolTip(_("Показать/скрыть ключ", "Show/hide key"))
+    self.key_visibility_button.setToolTip(t("ui.settings.api_settings.show_hide_key"))
     self.key_visibility_button.setFixedSize(28, 28)
     self.api_key_row.layout().addWidget(self.key_visibility_button, 0, Qt.AlignmentFlag.AlignRight)
 
-    self.reserve_keys_row = LabeledTextEditRow(_('Резервные ключи', 'Reserve keys'))
+    self.reserve_keys_row = LabeledTextEditRow(t('ui.settings.api_settings.reserve_keys'))
     api_container_layout.addWidget(self.reserve_keys_row)
 
     # --- Collapsible protocol configuration section (UNDER inputs) ---
-    self.protocol_section = CollapsibleSection(_("Конфигурация протокола", "Protocol configuration"), self, icon_name="fa5s.sliders-h")
+    self.protocol_section = CollapsibleSection(t("ui.settings.api_settings.protocol_configuration"), self, icon_name="fa5s.sliders-h")
     api_container_layout.addWidget(self.protocol_section)
 
-    self.protocol_row = LabeledComboRow(_("Протокол", "Protocol"))
+    self.protocol_row = LabeledComboRow(t("ui.settings.api_settings.protocol"))
     self.protocol_section.add_widget(self.protocol_row)
 
     self.protocol_info_label = QLabel("")
@@ -176,24 +176,24 @@ def build_api_settings_ui(self, parent_layout):
     self.protocol_transforms_view.setMaximumHeight(110)
     self.protocol_section.add_widget(self.protocol_transforms_view)
 
-    self.configure_pipeline_btn = QPushButton(_("Настроить pipeline", "Configure pipeline"))
+    self.configure_pipeline_btn = QPushButton(t("ui.settings.api_settings.configure_pipeline"))
     self.configure_pipeline_btn.setIcon(qta.icon('fa5s.sliders-h', color='#3498db'))
     self.protocol_section.add_widget(self.configure_pipeline_btn)
 
     # buttons
-    self.test_button = QPushButton(_("Тест подключения", "Test connection"))
+    self.test_button = QPushButton(t("ui.settings.api_settings.test_connection"))
     self.test_button.setIcon(qta.icon('fa5s.satellite', color='#3498db'))
     api_container_layout.addWidget(self.test_button)
 
     btns = QHBoxLayout()
     btns.setSpacing(10)
 
-    self.cancel_button = QPushButton(_("Отменить", "Cancel"))
+    self.cancel_button = QPushButton(t("ui.settings.api_settings.cancel"))
     self.cancel_button.setObjectName("CancelButton")
     self.cancel_button.setIcon(qta.icon('fa5s.undo', color='#ffffff'))
     self.cancel_button.setVisible(False)
 
-    self.save_preset_button = QPushButton(_("Сохранить", "Save"))
+    self.save_preset_button = QPushButton(t("ui.settings.api_settings.save"))
     self.save_preset_button.setObjectName("SecondaryButton")
     self.save_preset_button.setIcon(qta.icon('fa5s.save', color='#ffffff'))
     self.save_preset_button.setEnabled(False)

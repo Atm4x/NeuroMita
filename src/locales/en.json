@@ -31,8 +31,111 @@
       }
     }
   },
+  "ui": {
+    "settings": {
+      "settings_panel": {
+        "general": "General",
+        "api": "API",
+        "models": "Models",
+        "voice": "Voice",
+        "microphone": "Microphone",
+        "characters": "Characters",
+        "screen": "Screen",
+        "game": "Game",
+        "debug": "Debug",
+        "news": "News"
+      },
+      "chat_panel": {
+        "clear": "Clear",
+        "load_from_history": "Load from history",
+        "open_user_guide": "Open user guide",
+        "tokens_cost": "Tokens: 0/0 | Cost: 0.00 ₽",
+        "attach_images": "Attach images",
+        "take_screenshot": "Take screenshot",
+        "send_message": "Send message",
+        "select_images": "Select Images",
+        "image_files": "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)",
+        "error": "Error",
+        "failed_to_capture_screen": "Failed to capture the screen. Make sure screen analysis is enabled in settings."
+      },
+      "microphone_settings": {
+        "microphone_settings": "Microphone Settings",
+        "asr_model_catalogue": "ASR Model Catalogue",
+        "installed_models": "Installed speech recognition models",
+        "refresh_model_list": "Refresh model list",
+        "model": "Model",
+        "microphone": "Microphone",
+        "refresh_microphone_list": "Refresh microphone list",
+        "enable_disable_recognition": "Enable/disable recognition",
+        "microphone_active": "Microphone active",
+        "send_immediately": "Send recognized text immediately",
+        "instant_send": "Instant send",
+        "status": "Status"
+      },
+      "api_settings": {
+        "api_presets": "API presets",
+        "add_preset": "Add preset",
+        "remove_preset": "Remove preset",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "template": "Template:",
+        "api_url": "API URL",
+        "model": "Model",
+        "api_key": "API Key",
+        "show_hide_key": "Show/hide key",
+        "reserve_keys": "Reserve keys",
+        "protocol_configuration": "Protocol configuration",
+        "protocol": "Protocol",
+        "configure_pipeline": "Configure pipeline",
+        "test_connection": "Test connection",
+        "cancel": "Cancel",
+        "save": "Save",
+        "warning": "Warning",
+        "select_preset_template": "Select a preset or template to test",
+        "testing": "Testing...",
+        "success": "Success",
+        "unknown_error": "Unknown error",
+        "test_result": "Test Result",
+        "connection_error": "Connection Error",
+        "test_error": "Test Error"
+      }
+    }
+  },
   "controllers": {
     "gui": {
+      "asr_events": {
+        "initializing": "Initializing ASR...",
+        "initializing_short": "Initializing...",
+        "ready": "Ready",
+        "preparing": "Preparing...",
+        "installing_asr": "Installing ASR: ",
+        "checking_asr_model": "Checking ASR model...",
+        "asr_not_installed": "ASR model not installed: ",
+        "checking_asr_status": "Checking ASR status...",
+        "asr_ready": "ASR ready",
+        "asr_not_ready": "ASR not ready"
+      },
+      "microphone_settings": {
+        "loading": "Loading...",
+        "no_microphones": "No microphones found",
+        "no_installed_models": "No installed models"
+      },
+      "model": {
+        "unknown_character": "Unknown character.",
+        "character_not_selected": "Character not selected.",
+        "failed_to_build_prompt": "Failed to build prompt.",
+        "current": "Current",
+        "text_generation_failed": "Text generation failed."
+      },
+      "local_voice": {
+        "initializing_model": "Initializing model...",
+        "initialization_error_short": "Initialization error!",
+        "initialization_error": "Initialization error",
+        "failed_to_initialize": "Failed to initialize model. Check logs.",
+        "error_short": "Error!",
+        "error": "Error",
+        "critical_init_error": "Critical init error:"
+      },
       "voiceover": {
         "telegram_connect": "Connect Telegram",
         "connecting": "Connecting...",

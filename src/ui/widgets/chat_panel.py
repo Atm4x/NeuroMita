@@ -23,11 +23,11 @@ def setup_chat_panel(gui, main_layout):
     
     top_panel_layout = QHBoxLayout()
     
-    gui.clear_chat_button = QPushButton(_("Очистить", "Clear"))
+    gui.clear_chat_button = QPushButton(t("ui.widgets.chat_panel.clear"))
     gui.clear_chat_button.clicked.connect(gui.clear_chat_display)
     gui.clear_chat_button.setMaximumHeight(30)
     
-    gui.load_history_button = QPushButton(_("Взять из истории", "Load from history"))
+    gui.load_history_button = QPushButton(t("ui.widgets.chat_panel.load_from_history"))
     gui.load_history_button.clicked.connect(gui.load_chat_history)
     gui.load_history_button.setMaximumHeight(30)
     
@@ -36,7 +36,7 @@ def setup_chat_panel(gui, main_layout):
     gui.guide_button.clicked.connect(gui._show_guide)
     gui.guide_button.setMaximumHeight(30)
     gui.guide_button.setFixedWidth(30)
-    gui.guide_button.setToolTip(_("Открыть руководство пользователя", "Open user guide"))
+    gui.guide_button.setToolTip(t("ui.widgets.chat_panel.open_user_guide"))
     
     
     top_panel_layout.addWidget(gui.clear_chat_button)
@@ -65,7 +65,7 @@ def setup_chat_panel(gui, main_layout):
     input_frame.setStyleSheet(get_stylesheet())
     input_layout = QVBoxLayout(input_frame)
     
-    gui.token_count_label = QLabel(_("Токены: 0/0 | Стоимость: 0.00 ₽", "Tokens: 0/0 | Cost: 0.00 ₽"))
+    gui.token_count_label = QLabel(t("ui.widgets.chat_panel.tokens_cost"))
     gui.token_count_label.setStyleSheet("font-size: 10px;")
     input_layout.addWidget(gui.token_count_label)
     
@@ -109,14 +109,14 @@ def setup_chat_panel(gui, main_layout):
     gui.attach_button.clicked.connect(lambda: attach_images(gui))
     gui.attach_button.setFixedSize(20, 20)
     gui.attach_button.setCursor(Qt.CursorShape.PointingHandCursor)
-    gui.attach_button.setToolTip(_("Прикрепить изображения", "Attach images"))
+    gui.attach_button.setToolTip(t("ui.widgets.chat_panel.attach_images"))
     
     gui.send_screen_button = QPushButton(qta.icon('fa6s.camera', color='#b0b0b0', scale_factor=0.7), '')
     gui.send_screen_button.setObjectName("ChatIconMini")
     gui.send_screen_button.clicked.connect(lambda: send_screen_capture(gui))
     gui.send_screen_button.setFixedSize(20, 20)
     gui.send_screen_button.setCursor(Qt.CursorShape.PointingHandCursor)
-    gui.send_screen_button.setToolTip(_("Сделать скриншот экрана", "Take screenshot"))
+    gui.send_screen_button.setToolTip(t("ui.widgets.chat_panel.take_screenshot"))
     
     button_layout_inner.addWidget(gui.attach_button)
     button_layout_inner.addWidget(gui.send_screen_button)
@@ -128,7 +128,7 @@ def setup_chat_panel(gui, main_layout):
     gui.send_button.clicked.connect(gui.send_message)
     gui.send_button.setFixedSize(28, 28)
     gui.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
-    gui.send_button.setToolTip(_("Отправить сообщение", "Send message"))
+    gui.send_button.setToolTip(t("ui.widgets.chat_panel.send_message"))
     
     send_container = QWidget()
     send_container.setStyleSheet("background-color: transparent; border: none;")
@@ -321,9 +321,9 @@ def clipboard_image_to_controller(gui) -> bool:
 def attach_images(gui):
     file_paths, __ = QFileDialog.getOpenFileNames(
         gui,
-        _("Выберите изображения", "Select Images"),
+        t("ui.widgets.chat_panel.select_images"),
         "",
-        _("Файлы изображений (*.png *.jpg *.jpeg *.bmp *.gif)", "Image Files (*.png *.jpg *.jpeg *.bmp *.gif)")
+        t("ui.widgets.chat_panel.image_files")
     )
     if file_paths:
         for file_path in file_paths:
@@ -353,9 +353,8 @@ def send_screen_capture(gui):
     frames = gui.event_bus.emit_and_wait(Events.Capture.CAPTURE_SCREEN, {'limit': 1}, timeout=0.5)
     if not frames or not frames[0]:
         from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(gui, _("Ошибка", "Error"),
-                            _("Не удалось захватить экран. Убедитесь, что анализ экрана включен в настройках.",
-                              "Failed to capture the screen. Make sure screen analysis is enabled in settings."))
+        QMessageBox.warning(gui, t("ui.widgets.chat_panel.error"),
+                            t("ui.widgets.chat_panel.failed_to_capture_screen"))
         return
     for frame_data in frames[0]:
         gui.staged_image_data.append(frame_data)

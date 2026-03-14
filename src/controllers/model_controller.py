@@ -592,7 +592,7 @@ class ModelController:
             if char is None:
                 logger.error(f"GENERATE_RESPONSE: неизвестный character_id='{character_id_override}' (нет фолбэка на current).")
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": _("Неизвестный персонаж.", "Unknown character.")
+                    "error": t("controllers.model.unknown_character")
                 })
                 return None
         else:
@@ -601,7 +601,7 @@ class ModelController:
         if not char:
             logger.error("Генерация невозможна: персонаж не выбран.")
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Персонаж не выбран.", "Character not selected.")
+                "error": t("controllers.model.character_not_selected")
             })
             return None
 
@@ -683,14 +683,14 @@ class ModelController:
         except Exception as e:
             logger.error(f"Ошибка при BUILD_PROMPT: {e}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
+                "error": t("controllers.model.failed_to_build_prompt")
             })
             return None
 
         if not prompt_res or not isinstance(prompt_res[0], dict):
             logger.error("BUILD_PROMPT не вернул валидный результат")
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
+                "error": t("controllers.model.failed_to_build_prompt")
             })
             return None
 
@@ -704,7 +704,7 @@ class ModelController:
 
         def _is_current_label(label: str | None) -> bool:
             s = str(label or "").strip()
-            return s in ("", "Current", "Текущий", _("Текущий", "Current"))
+            return s in ("", "Current", "Текущий", t("controllers.model.current"))
 
         def _resolve_label_to_preset_id(label: str | None) -> Optional[int]:
             if label is None or _is_current_label(label):
@@ -729,9 +729,9 @@ class ModelController:
             lvl = int(getattr(policy, "react_level", None) or 1)
 
             if lvl == 2:
-                label = str(self.settings.get("REACT_PROVIDER_L2", self.settings.get("REACT_PROVIDER", _("Текущий", "Current"))))
+                label = str(self.settings.get("REACT_PROVIDER_L2", self.settings.get("REACT_PROVIDER", t("controllers.model.current"))))
             else:
-                label = str(self.settings.get("REACT_PROVIDER_L1", self.settings.get("REACT_PROVIDER", _("Текущий", "Current"))))
+                label = str(self.settings.get("REACT_PROVIDER_L1", self.settings.get("REACT_PROVIDER", t("controllers.model.current"))))
 
             preset_id = _resolve_label_to_preset_id(label)
             if preset_id is None:
@@ -752,7 +752,7 @@ class ModelController:
 
             if not raw_text:
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": _("Не удалось получить ответ.", "Text generation failed.")
+                    "error": t("controllers.model.text_generation_failed")
                 })
                 return None
 

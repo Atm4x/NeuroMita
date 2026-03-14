@@ -22,16 +22,16 @@ def setup_settings_panel(gui, main_layout):
     gui.settings_buttons = {}
 
     settings_categories = [
-        ("fa6s.gear", _("Общие", "General"), "general"),
-        ("fa6s.plug", _("API", "API"), "api"),
-        ("fa6s.robot", _("Модели", "Models"), "models"),
-        ("fa6s.volume-high", _("Озвучка", "Voice"), "voice"),
-        ("fa6s.microphone", _("Микрофон", "Microphone"), "microphone"),
-        ("fa6s.user", _("Персонажи", "Characters"), "characters"),
-        ("fa6s.display", _("Экран", "Screen"), "screen"),
-        ("fa5s.gamepad", _("Игра", "Game"), "game"),
-        ("fa6s.bug", _("Отладка", "Debug"), "debug"),
-        ("fa6s.newspaper", _("Новости", "News"), "news"),
+        ("fa6s.gear", t("ui.widgets.settings_panel.general"), "general"),
+        ("fa6s.plug", t("ui.widgets.settings_panel.api"), "api"),
+        ("fa6s.robot", t("ui.widgets.settings_panel.models"), "models"),
+        ("fa6s.volume-high", t("ui.widgets.settings_panel.voice"), "voice"),
+        ("fa6s.microphone", t("ui.widgets.settings_panel.microphone"), "microphone"),
+        ("fa6s.user", t("ui.widgets.settings_panel.characters"), "characters"),
+        ("fa6s.display", t("ui.widgets.settings_panel.screen"), "screen"),
+        ("fa5s.gamepad", t("ui.widgets.settings_panel.game"), "game"),
+        ("fa6s.bug", t("ui.widgets.settings_panel.debug"), "debug"),
+        ("fa6s.newspaper", t("ui.widgets.settings_panel.news"), "news"),
     ]
 
     for icon_name, tooltip, category in settings_categories:

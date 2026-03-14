@@ -241,7 +241,7 @@ class LocalVoiceController:
     async def _async_init_model(self, model_id: str, progress_callback=None):
         try:
             if progress_callback:
-                progress_callback("status", _("Инициализация модели...", "Initializing model..."))
+                progress_callback("status", t("controllers.local_voice.initializing_model"))
 
             lv = self._get_local_voice()
             if lv is None:
@@ -254,19 +254,19 @@ class LocalVoiceController:
                 self.event_bus.emit(Events.Audio.FINISH_MODEL_LOADING, {"model_id": model_id})
             else:
                 self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {
-                    "status": _("Ошибка инициализации!", "Initialization error!")
+                    "status": t("controllers.local_voice.initialization_error_short")
                 })
                 self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
-                    "title": _("Ошибка инициализации", "Initialization error"),
-                    "message": _("Не удалось инициализировать модель. Проверьте логи.", "Failed to initialize model. Check logs.")
+                    "title": t("controllers.local_voice.initialization_error"),
+                    "message": t("controllers.local_voice.failed_to_initialize")
                 })
                 self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
         except Exception as e:
             logger.error(f"init model failed: {e}", exc_info=True)
-            self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {"status": _("Ошибка!", "Error!")})
+            self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {"status": t("controllers.local_voice.error_short")})
             self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
-                "title": _("Ошибка", "Error"),
-                "message": f"{_('Критическая ошибка при инициализации модели:', 'Critical init error:')} {e}"
+                "title": t("controllers.local_voice.error"),
+                "message": f"{t('controllers.local_voice.critical_init_error')} {e}"
             })
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 

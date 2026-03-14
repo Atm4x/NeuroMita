@@ -163,7 +163,7 @@ class MicrophoneSettingsController(BaseController):
             v.mic_combobox.blockSignals(True)
             try:
                 v.mic_combobox.clear()
-                v.mic_combobox.addItem(_("Загрузка...", "Loading..."))
+                v.mic_combobox.addItem(t("controllers.gui.microphone_settings.loading"))
                 v.mic_combobox.setEnabled(False)
             finally:
                 v.mic_combobox.blockSignals(False)
@@ -175,7 +175,7 @@ class MicrophoneSettingsController(BaseController):
                 if int(getattr(v, "_mic_list_req_id", 0)) != req_id:
                     return
 
-                mic_list = result if isinstance(result, list) and result else [_("Микрофоны не найдены", "No microphones found")]
+                mic_list = result if isinstance(result, list) and result else [t("controllers.gui.microphone_settings.no_microphones")]
 
                 v.mic_combobox.blockSignals(True)
                 try:
@@ -236,7 +236,7 @@ class MicrophoneSettingsController(BaseController):
             try:
                 v.recognizer_combobox.clear()
                 v.recognizer_combobox.setEnabled(False)
-                v.recognizer_combobox.addItem(_("Загрузка...", "Loading..."))
+                v.recognizer_combobox.addItem(t("controllers.gui.microphone_settings.loading"))
             finally:
                 v.recognizer_combobox.blockSignals(False)
 
@@ -277,7 +277,7 @@ class MicrophoneSettingsController(BaseController):
                             self._save_setting("RECOGNIZER_TYPE", v.recognizer_combobox.currentText())
                     else:
                         v.recognizer_combobox.setEnabled(False)
-                        v.recognizer_combobox.addItem(_("Нет установленных моделей", "No installed models"))
+                        v.recognizer_combobox.addItem(t("controllers.gui.microphone_settings.no_installed_models"))
                 finally:
                     v.recognizer_combobox.blockSignals(False)
 
