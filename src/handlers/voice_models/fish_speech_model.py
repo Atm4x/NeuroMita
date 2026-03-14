@@ -27,7 +27,7 @@ class FishSpeechInstallSpec:
 
     @classmethod
     def title(cls, model_id: str) -> str:
-        return _("Установка локальной модели: ", "Installing local model: ") + str(model_id)
+        return t("handlers.voice_models.fish_speech.title") + str(model_id)
 
     @classmethod
     def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
@@ -75,7 +75,7 @@ class FishSpeechInstallSpec:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(new_text)
             except Exception as e:
-                log_cb(_(f"Ошибка записи {path}: {e}", f"Write error {path}: {e}"))
+                log_cb(t("handlers.voice_models.fish_speech.patch_build_py_error", e=e))
 
         build_py_path = os.path.join(libs_path_abs, "triton", "runtime", "build.py")
         if os.path.exists(build_py_path):
@@ -103,12 +103,12 @@ class FishSpeechInstallSpec:
 
                 if source2 != source:
                     _safe_write(build_py_path, source2)
-                    log_cb(_("Патчи применены к triton/runtime/build.py", "Patched triton/runtime/build.py"))
+                    log_cb(t("handlers.voice_models.fish_speech.patch_build_py"))
             except Exception as e:
-                log_cb(_(f"Ошибка патча build.py: {e}", f"Error patching build.py: {e}"))
+                log_cb(t("handlers.voice_models.fish_speech.patch_build_py_error", e=e))
                 log_cb(traceback.format_exc())
         else:
-            log_cb(_("build.py не найден, патч пропущен", "build.py not found, patch skipped"))
+            log_cb(t("handlers.voice_models.fish_speech.build_py_not_found"))
 
         windows_utils_path = os.path.join(libs_path_abs, "triton", "windows_utils.py")
         if os.path.exists(windows_utils_path):
@@ -124,9 +124,9 @@ class FishSpeechInstallSpec:
                 )
                 if old_code in source:
                     _safe_write(windows_utils_path, source.replace(old_code, new_code))
-                    log_cb(_("Патч применён к triton/windows_utils.py", "Patched triton/windows_utils.py"))
+                    log_cb(t("handlers.voice_models.fish_speech.patch_windows_utils"))
             except Exception as e:
-                log_cb(_(f"Ошибка патча windows_utils.py: {e}", f"Error patching windows_utils.py: {e}"))
+                log_cb(t("handlers.voice_models.fish_speech.patch_windows_utils_error", e=e))
                 log_cb(traceback.format_exc())
 
         compiler_path = os.path.join(libs_path_abs, "triton", "backends", "nvidia", "compiler.py")
@@ -138,9 +138,9 @@ class FishSpeechInstallSpec:
                 new_line = 'version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"], creationflags=subprocess.CREATE_NO_WINDOW, stderr=subprocess.PIPE, close_fds=True, stdin=subprocess.DEVNULL).decode("utf-8")'
                 if old_line in source:
                     _safe_write(compiler_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/backends/nvidia/compiler.py", "Patched triton/backends/nvidia/compiler.py"))
+                    log_cb(t("handlers.voice_models.fish_speech.patch_compiler"))
             except Exception as e:
-                log_cb(_(f"Ошибка патча compiler.py: {e}", f"Error patching compiler.py: {e}"))
+                log_cb(t("handlers.voice_models.fish_speech.patch_compiler_error", e=e))
                 log_cb(traceback.format_exc())
 
         cache_py_path = os.path.join(libs_path_abs, "triton", "runtime", "cache.py")
@@ -152,9 +152,9 @@ class FishSpeechInstallSpec:
                 new_line = 'temp_dir = os.path.join(self.cache_dir, f"tmp.pid_{str(pid)[:5]}_{str(rnd_id)[:5]}")'
                 if old_line in source:
                     _safe_write(cache_py_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/runtime/cache.py", "Patched triton/runtime/cache.py"))
+                    log_cb(t("handlers.voice_models.fish_speech.patch_cache"))
             except Exception as e:
-                log_cb(_(f"Ошибка патча cache.py: {e}", f"Error patching cache.py: {e}"))
+                log_cb(t("handlers.voice_models.fish_speech.patch_cache_error", e=e))
                 log_cb(traceback.format_exc())
 
     @classmethod
@@ -230,7 +230,7 @@ class FishSpeechInstallSpec:
             libs_path_abs = cls._libs_path_abs(pip_installer)
             cls._ensure_sys_path(libs_path_abs)
 
-            status(_("Применение патчей Triton...", "Applying Triton patches..."))
+            status(t("handlers.voice_models.fish_speech.patching"))
             cls._apply_triton_patches(libs_path_abs, log)
 
             # Import check with VC redist retry dialog
@@ -249,7 +249,7 @@ class FishSpeechInstallSpec:
                     msg = str(e)
                     log(f"Triton import error: {msg}")
                     if "DLL load failed while importing libtriton" in msg:
-                        status(_("Ошибка загрузки Triton! Проверьте VC++ Redistributable.", "Triton load error! Check VC++ Redistributable."))
+                        status(t("handlers.voice_models.fish_speech.triton_load_error"))
                         if callable(getattr(eb, "emit_and_wait", None)):
                             res = eb.emit_and_wait(Events.Audio.SHOW_VC_REDIST_DIALOG, timeout=6000.0)
                             choice = res[0] if res else "close"
@@ -263,15 +263,15 @@ class FishSpeechInstallSpec:
 
             # Dependencies dialog + optional init.py
             if os.name == "nt" and callable(getattr(eb, "emit_and_wait", None)):
-                status(_("Проверка зависимостей Triton...", "Checking Triton dependencies..."))
+                status(t("handlers.voice_models.fish_speech.triton_deps_check"))
                 deps = cls._probe_triton_deps(libs_path_abs)
                 res = eb.emit_and_wait(Events.Audio.SHOW_TRITON_DIALOG, deps, timeout=6000.0)
                 choice = res[0] if res else "continue"
                 if choice == "skip":
-                    status(_("Инициализация ядра пропущена", "Kernel initialization skipped"))
+                    status(t("handlers.voice_models.fish_speech.kernel_init_skipped"))
                     return True
 
-            status(_("Инициализация ядра Triton...", "Initializing Triton kernel..."))
+            status(t("handlers.voice_models.fish_speech.kernel_initializing"))
             script_path = cls._script_path(pip_installer)
 
             try:
@@ -299,16 +299,16 @@ class FishSpeechInstallSpec:
 
                 ok = (result.returncode == 0 and os.path.exists(os.path.join(temp_dir, "inited.wav")))
                 if ok:
-                    status(_("Инициализация ядра успешно завершена!", "Kernel initialization completed successfully!"))
+                    status(t("handlers.voice_models.fish_speech.kernel_init_success"))
                     return True
 
-                status(_("Ошибка при инициализации ядра", "Error during kernel initialization"))
+                status(t("handlers.voice_models.fish_speech.kernel_init_error"))
                 return False
 
             except Exception as e:
-                log(_(f"Непредвиденная ошибка init.py: {e}", f"Unexpected init.py error: {e}"))
+                log(t("handlers.voice_models.fish_speech.init_py_error", e=e))
                 log(traceback.format_exc())
-                status(_("Ошибка инициализации ядра", "Kernel initialization error"))
+                status(t("handlers.voice_models.fish_speech.kernel_init_failed"))
                 return False
 
         return _fn
@@ -317,14 +317,14 @@ class FishSpeechInstallSpec:
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
         if cls.is_installed(mid, ctx):
-            return InstallPlan(actions=[], already_installed=True, already_installed_status=_("Уже установлено", "Already installed"))
+            return InstallPlan(actions=[], already_installed=True, already_installed_status=t("handlers.voice_models.fish_speech.already_installed"))
 
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
         gpu = str((ctx or {}).get("gpu_vendor") or "")
 
         if gpu != "NVIDIA" and not allow_unsupported:
             return InstallPlan(
-                actions=[InstallAction(type="call", description=_("Требуется NVIDIA GPU", "NVIDIA GPU required"), progress=5, fn=lambda **_k: False)],
+                actions=[InstallAction(type="call", description=t("handlers.voice_models.fish_speech.gpu_required"), progress=5, fn=lambda **_k: False)],
                 already_installed=False,
             )
 
@@ -335,7 +335,7 @@ class FishSpeechInstallSpec:
         actions.append(
             InstallAction(
                 type="pip",
-                description=_("Установка Fish Speech...", "Installing Fish Speech..."),
+                description=t("handlers.voice_models.fish_speech.installation"),
                 progress=30,
                 packages=["fish-speech-lib", "librosa==0.9.1"],
             )
@@ -345,7 +345,7 @@ class FishSpeechInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка Triton...", "Installing Triton..."),
+                    description=t("handlers.voice_models.fish_speech.triton_installation"),
                     progress=55,
                     packages=["triton-windows<3.4"],
                     extra_args=["--upgrade"],
@@ -354,7 +354,7 @@ class FishSpeechInstallSpec:
             actions.append(
                 InstallAction(
                     type="call",
-                    description=_("Патчи/инициализация Triton...", "Patching/initializing Triton..."),
+                    description=t("handlers.voice_models.fish_speech.triton_patching"),
                     progress=75,
                     fn=cls._ensure_triton_ready_call(mid),
                 )
@@ -364,7 +364,7 @@ class FishSpeechInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка Edge/RVC компонента...", "Installing Edge/RVC component..."),
+                    description=t("handlers.voice_models.fish_speech.rvc_installation"),
                     progress=90,
                     packages=["tts-with-rvc"],
                 )
@@ -373,13 +373,13 @@ class FishSpeechInstallSpec:
         actions.append(
             InstallAction(
                 type="call",
-                description=_("Проверка установки...", "Final check..."),
+                description=t("handlers.voice_models.fish_speech.final_check"),
                 progress=99,
                 fn=lambda **_k: cls.is_installed(mid, ctx),
             )
         )
 
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
+        return InstallPlan(actions=actions, ok_status=t("handlers.voice_models.fish_speech.done"))
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
@@ -388,17 +388,17 @@ class FishSpeechInstallSpec:
         if mid == "medium":
             return InstallPlan(
                 actions=[
-                    pip_uninstall_action(["fish-speech-lib"], description=_("Удаление fish-speech-lib...", "Uninstalling fish-speech-lib..."), progress=20)
+                    pip_uninstall_action(["fish-speech-lib"], description=t("handlers.voice_models.fish_speech.uninstall_lib"), progress=20)
                 ],
-                ok_status=_("Удалено", "Uninstalled"),
+                ok_status=t("handlers.voice_models.fish_speech.uninstalled"),
             )
 
         if mid in ("medium+", "medium+low"):
             return InstallPlan(
                 actions=[
-                    pip_uninstall_action(["triton-windows"], description=_("Удаление Triton...", "Uninstalling Triton..."), progress=20)
+                    pip_uninstall_action(["triton-windows"], description=t("handlers.voice_models.fish_speech.uninstall_triton"), progress=20)
                 ],
-                ok_status=_("Удалено", "Uninstalled"),
+                ok_status=t("handlers.voice_models.fish_speech.uninstalled"),
             )
 
         return InstallPlan(actions=[InstallAction(type="call", description="Failed", progress=1, fn=lambda **_k: False)])
@@ -422,36 +422,33 @@ class FishSpeechModel(IVoiceModel):
             "gpu_vendor": ["NVIDIA"],
             "size_gb": 5,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
-            "intents": [_("Качество", "Quality"), _("Сбалансировано", "Balanced")],
-            "description": _(
-                "Генерация речи хорошего качества. Требует больше ресурсов, чем быстрые модели.",
-                "Speech generation with good quality. Requires more resources than fast models."
-            ),
+            "intents": [t("handlers.voice_models.fish_speech.models.medium.intent_quality"), t("handlers.voice_models.fish_speech.models.medium.intent_balanced")],
+            "description": t("handlers.voice_models.fish_speech.models.medium.description"),
             "settings": [
-                {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
+                {"key": "device", "label": t("handlers.voice_models.fish_speech.models.medium.device_label"), "type": "combobox",
                  "options": {"values": ["cuda", "cpu", "mps"], "default": "cuda"},
-                 "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
-                {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium.device_help")},
+                {"key": "half", "label": t("handlers.voice_models.fish_speech.models.medium.half_label"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "False"},
-                 "help": _("FP16 для экономии VRAM и ускорения (если поддерживается).", "FP16 for VRAM saving and speed (if supported).")},
-                {"key": "temperature", "label": _("Температура", "Temperature"), "type": "entry", "options": {"default": "0.7"},
-                 "help": _("Случайность сэмплирования (>0): выше — разнообразнее, но нестабильнее.", "Sampling randomness (>0): higher — more diverse, less stable.")},
-                {"key": "top_p", "label": _("Top-P", "Top-P"), "type": "entry", "options": {"default": "0.7"},
-                 "help": _("Ядерное сэмплирование (0..1): ограничивает выбор наиболее вероятными токенами.", "Nucleus sampling (0..1): keep only most probable tokens.")},
-                {"key": "repetition_penalty", "label": _("Штраф повторений", "Repetition Penalty"), "type": "entry", "options": {"default": "1.2"},
-                 "help": _(">1 уменьшает зацикливание на повторах.", ">1 reduces looping on repeats.")},
-                {"key": "chunk_length", "label": _("Размер чанка (~символов)", "Chunk Size (~chars)"), "type": "entry", "options": {"default": "200"},
-                 "help": _("Сколько текста обрабатывается за раз (влияет на память).", "How much text is processed at once (affects memory).")},
-                {"key": "max_new_tokens", "label": _("Макс. токены", "Max Tokens"), "type": "entry", "options": {"default": "1024"},
-                 "help": _("Ограничение длины генерируемой последовательности.", "Limit of generated sequence length.")},
-                {"key": "compile_model", "label": _("Компиляция модели", "Compile Model"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium.half_help")},
+                {"key": "temperature", "label": t("handlers.voice_models.fish_speech.models.medium.temperature_label"), "type": "entry", "options": {"default": "0.7"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.temperature_help")},
+                {"key": "top_p", "label": t("handlers.voice_models.fish_speech.models.medium.top_p_label"), "type": "entry", "options": {"default": "0.7"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.top_p_help")},
+                {"key": "repetition_penalty", "label": t("handlers.voice_models.fish_speech.models.medium.repetition_penalty_label"), "type": "entry", "options": {"default": "1.2"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.repetition_penalty_help")},
+                {"key": "chunk_length", "label": t("handlers.voice_models.fish_speech.models.medium.chunk_length_label"), "type": "entry", "options": {"default": "200"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.chunk_length_help")},
+                {"key": "max_new_tokens", "label": t("handlers.voice_models.fish_speech.models.medium.max_tokens_label"), "type": "entry", "options": {"default": "1024"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.max_tokens_help")},
+                {"key": "compile_model", "label": t("handlers.voice_models.fish_speech.models.medium.compile_label"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "False"},
                  "locked": True,
-                 "help": _("torch.compile() ускоряет на GPU после первого запуска.", "torch.compile() speeds up on GPU after warmup.")},
-                {"key": "seed", "label": _("Seed", "Seed"), "type": "entry", "options": {"default": "0"},
-                 "help": _("Инициализация генератора случайности.", "Random seed.")},
-                {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
-                 "help": _("Итоговая громкость.", "Final loudness.")}
+                 "help": t("handlers.voice_models.fish_speech.models.medium.compile_help")},
+                {"key": "seed", "label": t("handlers.voice_models.fish_speech.models.medium.seed_label"), "type": "entry", "options": {"default": "0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.seed_help")},
+                {"key": "volume", "label": t("handlers.voice_models.fish_speech.models.medium.volume_label"), "type": "entry", "options": {"default": "1.0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium.volume_help")}
             ]
         },
         {
@@ -462,37 +459,34 @@ class FishSpeechModel(IVoiceModel):
             "size_gb": 10,
             "rtx30plus": True,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
-            "intents": [_("Качество", "Quality"), _("RTX 30+/40+", "RTX 30+/40+")],
-            "description": _(
-                "Версия Fish Speech, скомпилированная под GPU. Требует больше места и современную NVIDIA.",
-                "Fish Speech version compiled for GPU. Needs more disk space and a modern NVIDIA GPU."
-            ),
+            "intents": [t("handlers.voice_models.fish_speech.models.medium_plus.intent_quality"), t("handlers.voice_models.fish_speech.models.medium_plus.intent_rtx")],
+            "description": t("handlers.voice_models.fish_speech.models.medium_plus.description"),
             "settings": [
-                {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
+                {"key": "device", "label": t("handlers.voice_models.fish_speech.models.medium_plus.device_label"), "type": "combobox",
                  "options": {"values": ["cuda", "cpu", "mps"], "default": "cuda"},
-                 "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
-                {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.device_help")},
+                {"key": "half", "label": t("handlers.voice_models.fish_speech.models.medium_plus.half_label"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},
                  "locked": True,
-                 "help": _("FP16 принудительно, параметр заблокирован для совместимости.", "FP16 enforced; parameter locked for compatibility.")},
-                {"key": "temperature", "label": _("Температура", "Temperature"), "type": "entry", "options": {"default": "0.7"},
-                 "help": _("Случайность сэмплирования (>0): выше — разнообразнее, но нестабильнее.", "Sampling randomness (>0): higher — more diverse, less stable.")},
-                {"key": "top_p", "label": _("Top-P", "Top-P"), "type": "entry", "options": {"default": "0.8"},
-                 "help": _("Ядерное сэмплирование (0..1): ограничивает выбор наиболее вероятными токенами.", "Nucleus sampling (0..1): keep only most probable tokens.")},
-                {"key": "repetition_penalty", "label": _("Штраф повторений", "Repetition Penalty"), "type": "entry", "options": {"default": "1.1"},
-                 "help": _(">1 уменьшает зацикливание на повторах.", ">1 reduces looping on repeats.")},
-                {"key": "chunk_length", "label": _("Размер чанка (~символов)", "Chunk Size (~chars)"), "type": "entry", "options": {"default": "200"},
-                 "help": _("Сколько текста обрабатывается за раз (влияет на память).", "How much text is processed at once (affects memory).")},
-                {"key": "max_new_tokens", "label": _("Макс. токены", "Max Tokens"), "type": "entry", "options": {"default": "1024"},
-                 "help": _("Ограничение длины генерируемой последовательности.", "Limit of generated sequence length.")},
-                {"key": "compile_model", "label": _("Компиляция модели", "Compile Model"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.half_help")},
+                {"key": "temperature", "label": t("handlers.voice_models.fish_speech.models.medium_plus.temperature_label"), "type": "entry", "options": {"default": "0.7"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.temperature_help")},
+                {"key": "top_p", "label": t("handlers.voice_models.fish_speech.models.medium_plus.top_p_label"), "type": "entry", "options": {"default": "0.8"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.top_p_help")},
+                {"key": "repetition_penalty", "label": t("handlers.voice_models.fish_speech.models.medium_plus.repetition_penalty_label"), "type": "entry", "options": {"default": "1.1"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.repetition_penalty_help")},
+                {"key": "chunk_length", "label": t("handlers.voice_models.fish_speech.models.medium_plus.chunk_length_label"), "type": "entry", "options": {"default": "200"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.chunk_length_help")},
+                {"key": "max_new_tokens", "label": t("handlers.voice_models.fish_speech.models.medium_plus.max_tokens_label"), "type": "entry", "options": {"default": "1024"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.max_tokens_help")},
+                {"key": "compile_model", "label": t("handlers.voice_models.fish_speech.models.medium_plus.compile_label"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "True"},
                  "locked": True,
-                 "help": _("torch.compile() включён и заблокирован для ускорения.", "torch.compile() enabled and locked for speed.")},
-                {"key": "seed", "label": _("Seed", "Seed"), "type": "entry", "options": {"default": "0"},
-                 "help": _("Инициализация генератора случайности.", "Random seed.")},
-                {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
-                 "help": _("Итоговая громкость.", "Final loudness.")}
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.compile_help")},
+                {"key": "seed", "label": t("handlers.voice_models.fish_speech.models.medium_plus.seed_label"), "type": "entry", "options": {"default": "0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.seed_help")},
+                {"key": "volume", "label": t("handlers.voice_models.fish_speech.models.medium_plus.volume_label"), "type": "entry", "options": {"default": "1.0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus.volume_help")}
             ]
         },
         {
@@ -503,58 +497,55 @@ class FishSpeechModel(IVoiceModel):
             "size_gb": 15,
             "rtx30plus": True,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
-            "intents": [_("Качество", "Quality"), _("Конверсия голоса", "Voice conversion")],
-            "description": _(
-                "Комбинация Fish Speech+ и RVC для высококачественного изменения тембра.",
-                "Combination of Fish Speech+ and RVC for high‑quality timbre conversion."
-            ),
+            "intents": [t("handlers.voice_models.fish_speech.models.medium_plus_low.intent_quality"), t("handlers.voice_models.fish_speech.models.medium_plus_low.intent_voice_conversion")],
+            "description": t("handlers.voice_models.fish_speech.models.medium_plus_low.description"),
             "settings": [
-                {"key": "fsprvc_fsp_device", "label": _("[FSP] Устройство", "[FSP] Device"), "type": "combobox",
+                {"key": "fsprvc_fsp_device", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_device_label"), "type": "combobox",
                  "options": {"values": ["cuda", "cpu", "mps"], "default": "cuda"},
-                 "help": _("Устройство для части Fish Speech+.", "Device for Fish Speech+ part.")},
-                {"key": "fsprvc_fsp_half", "label": _("[FSP] Half-precision", "[FSP] Half-precision"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_device_help")},
+                {"key": "fsprvc_fsp_half", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_half_label"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},
                  "locked": True,
-                 "help": _("FP16 для ускорения; параметр заблокирован.", "FP16 for speed; parameter locked.")},
-                {"key": "fsprvc_fsp_temperature", "label": _("[FSP] Температура", "[FSP] Temperature"), "type": "entry", "options": {"default": "0.7"},
-                 "help": _("Случайность генерации в части Fish Speech+.", "Sampling randomness in Fish Speech+ part.")},
-                {"key": "fsprvc_fsp_top_p", "label": _("[FSP] Top-P", "[FSP] Top-P"), "type": "entry", "options": {"default": "0.7"},
-                 "help": _("Нуклеус‑сэмплинг для Fish Speech+.", "Nucleus sampling for Fish Speech+.")},
-                {"key": "fsprvc_fsp_repetition_penalty", "label": _("[FSP] Штраф повторений", "[FSP] Repetition Penalty"), "type": "entry", "options": {"default": "1.2"},
-                 "help": _("Снижает повторения в тексте.", "Reduces repetitions.")},
-                {"key": "fsprvc_fsp_chunk_length", "label": _("[FSP] Размер чанка (слов)", "[FSP] Chunk Size (words)"), "type": "entry", "options": {"default": "200"},
-                 "help": _("Размер порции текста для Fish Speech+.", "Chunk size for Fish Speech+.")},
-                {"key": "fsprvc_fsp_max_tokens", "label": _("[FSP] Макс. токены", "[FSP] Max Tokens"), "type": "entry", "options": {"default": "1024"},
-                 "help": _("Ограничение длины генерации.", "Generation length limit.")},
-                {"key": "compile_model", "label": _("Компиляция модели", "Compile Model"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_half_help")},
+                {"key": "fsprvc_fsp_temperature", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_temperature_label"), "type": "entry", "options": {"default": "0.7"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_temperature_help")},
+                {"key": "fsprvc_fsp_top_p", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_top_p_label"), "type": "entry", "options": {"default": "0.7"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_top_p_help")},
+                {"key": "fsprvc_fsp_repetition_penalty", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_repetition_penalty_label"), "type": "entry", "options": {"default": "1.2"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_repetition_penalty_help")},
+                {"key": "fsprvc_fsp_chunk_length", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_chunk_length_label"), "type": "entry", "options": {"default": "200"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_chunk_length_help")},
+                {"key": "fsprvc_fsp_max_tokens", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_max_tokens_label"), "type": "entry", "options": {"default": "1024"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_max_tokens_help")},
+                {"key": "compile_model", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.compile_label"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "False"},
                  "locked": True,
-                 "help": _("torch.compile() ускоряет на GPU после первого запуска.", "torch.compile() speeds up on GPU after warmup.")},
-                {"key": "fsprvc_fsp_seed", "label": _("[FSP] Seed", "[FSP] Seed"), "type": "entry", "options": {"default": "0"},
-                 "help": _("Сид генерации для Fish Speech+.", "Seed value for Fish Speech+.")},
-                {"key": "fsprvc_rvc_device", "label": _("[RVC] Устройство", "[RVC] Device"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.compile_help")},
+                {"key": "fsprvc_fsp_seed", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_seed_label"), "type": "entry", "options": {"default": "0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.fsp_seed_help")},
+                {"key": "fsprvc_rvc_device", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_device_label"), "type": "combobox",
                  "options": {"values": ["cuda:0", "cpu", "mps:0", "dml"], "default_nvidia": "cuda:0", "default_amd": "dml"},
-                 "help": _("Устройство для части RVC.", "Device for RVC part.")},
-                {"key": "fsprvc_is_half", "label": _("[RVC] Half-precision", "[RVC] Half-precision"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_device_help")},
+                {"key": "fsprvc_is_half", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_half_label"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False"},
-                 "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
-                {"key": "fsprvc_f0method", "label": _("[RVC] Метод F0", "[RVC] F0 Method"), "type": "combobox",
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_half_help")},
+                {"key": "fsprvc_f0method", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_f0method_label"), "type": "combobox",
                  "options": {"values": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_nvidia": "rmvpe", "default_amd": "dio"},
-                 "help": _("Алгоритм извлечения высоты тона.", "Pitch extraction algorithm.")},
-                {"key": "fsprvc_rvc_pitch", "label": _("[RVC] Высота голоса (пт)", "[RVC] Pitch (semitones)"), "type": "entry", "options": {"default": "0"},
-                 "help": _("Смещение высоты в полутонах.", "Pitch shift in semitones.")},
-                {"key": "fsprvc_use_index_file", "label": _("[RVC] Исп. .index файл", "[RVC] Use .index file"), "type": "checkbutton", "options": {"default": True},
-                 "help": _("Улучшает совпадение тембра.", "Improves timbre matching.")},
-                {"key": "fsprvc_index_rate", "label": _("[RVC] Соотн. индекса", "[RVC] Index Rate"), "type": "entry", "options": {"default": "0.75"},
-                 "help": _("Степень влияния .index (0..1).", "How much .index affects result (0..1).")},
-                {"key": "fsprvc_protect", "label": _("[RVC] Защита согласных", "[RVC] Consonant Protection"), "type": "entry", "options": {"default": "0.33"},
-                 "help": _("Защита глухих согласных (0..0.5).", "Protect voiceless consonants (0..0.5).")},
-                {"key": "fsprvc_filter_radius", "label": _("[RVC] Радиус фильтра F0", "[RVC] F0 Filter Radius"), "type": "entry", "options": {"default": "3"},
-                 "help": _("Сглаживание кривой F0 (рекоменд. ≥3).", "Smooth F0 curve (recommended ≥3).")},
-                {"key": "fsprvc_rvc_rms_mix_rate", "label": _("[RVC] Смешивание RMS", "[RVC] RMS Mixing"), "type": "entry", "options": {"default": "0.5"},
-                 "help": _("Смешивание громкости исходника и RVC (0..1).", "Mix source loudness and RVC result (0..1).")},
-                {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
-                 "help": _("Итоговая громкость.", "Final loudness.")}
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_f0method_help")},
+                {"key": "fsprvc_rvc_pitch", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_pitch_label"), "type": "entry", "options": {"default": "0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_pitch_help")},
+                {"key": "fsprvc_use_index_file", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_index_file_label"), "type": "checkbutton", "options": {"default": True},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_index_file_help")},
+                {"key": "fsprvc_index_rate", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_index_rate_label"), "type": "entry", "options": {"default": "0.75"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_index_rate_help")},
+                {"key": "fsprvc_protect", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_protect_label"), "type": "entry", "options": {"default": "0.33"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_protect_help")},
+                {"key": "fsprvc_filter_radius", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_filter_radius_label"), "type": "entry", "options": {"default": "3"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_filter_radius_help")},
+                {"key": "fsprvc_rvc_rms_mix_rate", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_rms_mix_label"), "type": "entry", "options": {"default": "0.5"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.rvc_rms_mix_help")},
+                {"key": "volume", "label": t("handlers.voice_models.fish_speech.models.medium_plus_low.volume_label"), "type": "entry", "options": {"default": "1.0"},
+                 "help": t("handlers.voice_models.fish_speech.models.medium_plus_low.volume_help")}
             ]
         }
     ]

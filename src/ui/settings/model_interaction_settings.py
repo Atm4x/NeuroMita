@@ -3,135 +3,124 @@ from utils.translation_manager import t
 from core.events import get_event_bus, Events
 
 def setup_model_interaction_controls(self, parent):
-    create_section_header(parent, _("Настройки взаимодействия с моделью", "Model Interaction Settings"))
+    create_section_header(parent, t("ui.settings.model_interaction.title"))
     
     general_config = [
-        {'label': _('Настройки сообщений', 'Message settings'), 'type': 'subsection'},
-        {'label': _('Промты раздельно', 'Separated prompts'), 'key': 'SEPARATE_PROMPTS',
+        {'label': t('ui.settings.model_interaction.message_settings'), 'type': 'subsection'},
+        {'label': t('ui.settings.model_interaction.separated_prompts'), 'key': 'SEPARATE_PROMPTS',
          'type': 'checkbutton', 'default_checkbutton': True},
 
-        {'label': _('Лимит сообщений', 'Message limit'), 'key': 'MODEL_MESSAGE_LIMIT',
+        {'label': t('ui.settings.model_interaction.message_limit'), 'key': 'MODEL_MESSAGE_LIMIT',
          'type': 'entry', 'default': 40,
-         'tooltip': _('Сколько сообщений будет помнить мита', 'How much messages Mita will remember')},
-        {'label': _('Сохранять утерянную историю ', 'Save lost history'),
+         'tooltip': t('ui.settings.model_interaction.message_limit_help')},
+        {'label': t('ui.settings.model_interaction.save_lost_history'),
          'key': 'GPT4FREE_LAST_ATTEMPT', 'type': 'checkbutton', 'default_checkbutton': False},
-        {'label': _('Сохранять утерянную память ', 'Save lost memory'),
+        {'label': t('ui.settings.model_interaction.save_lost_memory'),
          'key': 'SAVE_MISSED_MEMORY', 'type': 'checkbutton', 'default_checkbutton': False},
 
-        {'label': _('Кол-во попыток', 'Attempt count'), 'key': 'MODEL_MESSAGE_ATTEMPTS_COUNT',
+        {'label': t('ui.settings.model_interaction.attempt_count'), 'key': 'MODEL_MESSAGE_ATTEMPTS_COUNT',
          'type': 'entry', 'default': 3},
-        {'label': _('Время между попытками', 'time between attempts'),
+        {'label': t('ui.settings.model_interaction.attempt_time'),
          'key': 'MODEL_MESSAGE_ATTEMPTS_TIME', 'type': 'entry', 'default': 0.20},
-        {'label': _('Включить стриминговую передачу', 'Enable Streaming'), 'key': 'ENABLE_STREAMING',
+        {'label': t('ui.settings.model_interaction.enable_streaming'), 'key': 'ENABLE_STREAMING',
          'type': 'checkbutton',
          'default_checkbutton': False},
-        {'label': _('Использовать gpt4free последней попыткой ', 'Use gpt4free as last attempt'),
+        {'label': t('ui.settings.model_interaction.gpt4free_last'),
          'key': 'GPT4FREE_LAST_ATTEMPT', 'type': 'checkbutton', 'default_checkbutton': False},
 
         {'type': 'end'},
 
-        {'label': _('Настройки ожидания', 'Waiting settings'), 'type': 'subsection'},
-        {'label': _('Время ожидания текста (сек)', 'Text waiting time (sec)'),
+        {'label': t('ui.settings.model_interaction.waiting_settings'), 'type': 'subsection'},
+        {'label': t('ui.settings.model_interaction.text_wait_time'),
          'key': 'TEXT_WAIT_TIME', 'type': 'entry', 'default': 40,
-         'tooltip': _('время ожидания ответа', 'response waiting time')},
-        {'label': _('Время ожидания звука (сек)', 'Voice waiting time (sec)'),
+         'tooltip': t('ui.settings.model_interaction.text_wait_time_help')},
+        {'label': t('ui.settings.model_interaction.voice_wait_time'),
          'key': 'VOICE_WAIT_TIME', 'type': 'entry', 'default': 40,
-         'tooltip': _('время ожидания озвучки', 'voice generation waiting time')},
+         'tooltip': t('ui.settings.model_interaction.voice_wait_time_help')},
 
         {'type': 'end'},
 
-        {'label': _('Настройки генерации текста', 'Text Generation Settings'), 'type': 'subsection'},
+        {'label': t('ui.settings.model_interaction.text_generation'), 'type': 'subsection'},
 
-        {'label': _('Макс. токенов в ответе', 'Max response tokens'),
+        {'label': t('ui.settings.model_interaction.max_response_tokens'),
         'key': 'MODEL_MAX_RESPONSE_TOKENS',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_MAX_RESPONSE_TOKENS',
         'toggle_default': self.settings.get('USE_MODEL_MAX_RESPONSE_TOKENS', True),
         'default': 2500,
         'validation': self.validate_positive_integer,
-        'tooltip': _('Максимальное количество токенов в ответе модели',
-                    'Maximum number of tokens in the model response')},
+        'tooltip': t('ui.settings.model_interaction.max_response_tokens_help')},
 
-        {'label': _('Температура', 'Temperature'), 'key': 'MODEL_TEMPERATURE',
+        {'label': t('ui.settings.model_interaction.temperature'), 'key': 'MODEL_TEMPERATURE',
          'type': 'entry', 'default': 1.0, 'validation': self.validate_float_0_to_2,
-         'tooltip': _('Креативность ответа (0.0 = строго, 2.0 = очень творчески)',
-                      'Creativity of response (0.0 = strict, 2.0 = very creative)')},
+         'tooltip': t('ui.settings.model_interaction.temperature_help')},
 
-        {'label': _('Top-K', 'Top-K'),
+        {'label': t('ui.settings.model_interaction.top_k'),
         'key': 'MODEL_TOP_K',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_TOP_K',
         'toggle_default': self.settings.get('USE_MODEL_TOP_K', True),
         'default': 0,
         'validation': self.validate_positive_integer_or_zero,
-        'tooltip': _('Ограничивает выбор токенов K наиболее вероятными (0 = отключено)',
-                    'Limits token selection to K most likely (0 = disabled)')},
+        'tooltip': t('ui.settings.model_interaction.top_k_help')},
 
-        {'label': _('Top-P', 'Top-P'),
+        {'label': t('ui.settings.model_interaction.top_p'),
         'key': 'MODEL_TOP_P',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_TOP_P',
         'toggle_default': self.settings.get('USE_MODEL_TOP_P', True),
         'default': 1.0,
         'validation': self.validate_float_0_to_1,
-        'tooltip': _('Ограничивает выбор токенов по кумулятивной вероятности (0.0-1.0)',
-                    'Limits token selection by cumulative probability (0.0-1.0)')},
+        'tooltip': t('ui.settings.model_interaction.top_p_help')},
 
-        {'label': _('Бюджет размышлений', 'Thinking budget'),
+        {'label': t('ui.settings.model_interaction.thinking_budget'),
         'key': 'MODEL_THINKING_BUDGET',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_THINKING_BUDGET',
         'toggle_default': self.settings.get('USE_MODEL_THINKING_BUDGET', False),
         'default': 0.0,
         'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Параметр, влияющий на глубину "размышлений" модели (зависит от модели)',
-                    'Parameter influencing the depth of model "thoughts" (model-dependent)')},
+        'tooltip': t('ui.settings.model_interaction.thinking_budget_help')},
 
-        {'label': _('Штраф присутствия', 'Presence penalty'),
+        {'label': t('ui.settings.model_interaction.presence_penalty'),
         'key': 'MODEL_PRESENCE_PENALTY',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_PRESENCE_PENALTY',
         'toggle_default': self.settings.get('USE_MODEL_PRESENCE_PENALTY', False),
         'default': 0.0,
         'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Штраф за использование новых токенов (-2.0 = поощрять новые, 2.0 = сильно штрафовать)',
-                    'Penalty for using new tokens (-2.0 = encourage new, 2.0 = strongly penalize)')},
+        'tooltip': t('ui.settings.model_interaction.presence_penalty_help')},
 
-        {'label': _('Штраф частоты', 'Frequency penalty'),
+        {'label': t('ui.settings.model_interaction.frequency_penalty'),
         'key': 'MODEL_FREQUENCY_PENALTY',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_FREQUENCY_PENALTY',
         'toggle_default': self.settings.get('USE_MODEL_FREQUENCY_PENALTY', False),
         'default': 0.0,
         'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Штраф за частоту использования токенов (-2.0 = поощрять повторение, 2.0 = сильно штрафовать)',
-                    'Penalty for the frequency of token usage (-2.0 = encourage repetition, 2.0 = strongly penalize)')},
+        'tooltip': t('ui.settings.model_interaction.frequency_penalty_help')},
 
-        {'label': _('Лог вероятности', 'Log probability'),
+        {'label': t('ui.settings.model_interaction.log_probability'),
         'key': 'MODEL_LOG_PROBABILITY',
         'type': 'entry',
         'toggle_key': 'USE_MODEL_LOG_PROBABILITY',
         'toggle_default': self.settings.get('USE_MODEL_LOG_PROBABILITY', False),
         'default': 0.0,
         'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Параметр, влияющий на логарифмическую вероятность выбора токенов (-2.0 = поощрять, 2.0 = штрафовать)',
-                    'Parameter influencing the logarithmic probability of token selection (-2.0 = encourage, 2.0 = penalize)')},
+        'tooltip': t('ui.settings.model_interaction.log_probability_help')},
 
-        {'label': _('Вызов инструментов', 'Tools use'),
+        {'label': t('ui.settings.model_interaction.tools_use'),
          'key': 'TOOLS_ON',
          'type': 'checkbutton',
          'default_checkbutton': False,
-         'tooltip': _(
-             'Позволяет использовать инструменты такие как поиск в сети',
-             'Allow using tools like seacrh')},
-        {'label': _("Режим инструментов","Tools mode"), 'key': 'TOOLS_MODE', 'type': 'combobox',
+         'tooltip': t('ui.settings.model_interaction.tools_use_help')},
+        {'label': t("ui.settings.model_interaction.tools_mode"), 'key': 'TOOLS_MODE', 'type': 'combobox',
          'options': ["native", "legacy"], 'default': "native", "depends_on": "TOOLS_ON",
-         'tooltip': _('Native - использует вшитые возможности модели, legacy - добавляет промпт и ловит вызов вручную',
-                    'Native - using buit-in tools, legacy - using own prompts and handler')},
+         'tooltip': t('ui.settings.model_interaction.tools_mode_help')},
 
-        {'label': _('GOOGLE API KEY'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
+        {'label': t('ui.settings.model_interaction.tools_use'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
+        {'label': t('ui.settings.model_interaction.tools_use'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
 
         {'type': 'end'},
@@ -140,14 +129,14 @@ def setup_model_interaction_controls(self, parent):
     create_settings_section(
         self,
         parent,
-        _("Параметры генерации", "Generation Parameters"),
+        t("ui.settings.model_interaction.text_generation"),
         general_config,
         icon_name='fa5s.cogs'
     )
 
     event_bus = get_event_bus()
     presets_meta = event_bus.emit_and_wait(Events.ApiPresets.GET_PRESET_LIST, timeout=1.0)
-    hc_provider_names = [_('Текущий', 'Current')]
+    hc_provider_names = [t('ui.settings.model_interaction.current')]
     if presets_meta and presets_meta[0]:
         all_presets = presets_meta[0].get('custom', [])
         for preset in all_presets:

@@ -27,7 +27,7 @@ class EdgeTTSRVCInstallSpec:
 
     @classmethod
     def title(cls, model_id: str) -> str:
-        return _("Установка локальной модели: ", "Installing local model: ") + str(model_id)
+        return t("handlers.voice_models.edge_tts_rvc.title") + str(model_id)
 
     @classmethod
     def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
@@ -73,7 +73,7 @@ class EdgeTTSRVCInstallSpec:
 
             config_path = os.path.join(libs_path_abs, "fairseq", "dataclass", "configs.py")
             if not os.path.exists(config_path):
-                log(_("fairseq/dataclass/configs.py не найден — патч пропущен", "fairseq/dataclass/configs.py not found — patch skipped"))
+                log(t("handlers.voice_models.edge_tts_rvc.fairseq_not_found"))
                 return True
 
             try:
@@ -85,12 +85,12 @@ class EdgeTTSRVCInstallSpec:
                 if patched != source:
                     with open(config_path, "w", encoding="utf-8") as f:
                         f.write(patched)
-                    log(_("Патч успешно применен к configs.py", "Patch successfully applied to configs.py"))
+                    log(t("handlers.voice_models.edge_tts_rvc.patch_applied"))
                 else:
-                    log(_("Патч configs.py уже применен или не требуется", "configs.py patch already applied or not needed"))
+                    log(t("handlers.voice_models.edge_tts_rvc.patch_already_applied"))
                 return True
             except Exception as e:
-                log(_(f"Ошибка при патче configs.py: {e}", f"Error patching configs.py: {e}"))
+                log(t("handlers.voice_models.edge_tts_rvc.patch_error", e=e))
                 log(traceback.format_exc())
                 return False
 
@@ -100,7 +100,7 @@ class EdgeTTSRVCInstallSpec:
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
         if cls.is_installed(mid, ctx):
-            return InstallPlan(actions=[], already_installed=True, already_installed_status=_("Уже установлено", "Already installed"))
+            return InstallPlan(actions=[], already_installed=True, already_installed_status=t("handlers.voice_models.edge_tts_rvc.already_installed"))
 
         gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
         actions: list[InstallAction] = []
@@ -112,7 +112,7 @@ class EdgeTTSRVCInstallSpec:
         actions.append(
             InstallAction(
                 type="pip",
-                description=_("Установка зависимостей...", "Installing dependencies..."),
+                description=t("handlers.voice_models.edge_tts_rvc.installing_deps"),
                 progress=35,
                 packages=["omegaconf"],
             )
@@ -122,7 +122,7 @@ class EdgeTTSRVCInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка библиотеки silero...", "Installing silero library..."),
+                    description=t("handlers.voice_models.edge_tts_rvc.installing_silero"),
                     progress=45,
                     packages=["silero"],
                 )
@@ -132,7 +132,7 @@ class EdgeTTSRVCInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка tts-with-rvc (AMD/DirectML)...", "Installing tts-with-rvc (AMD/DirectML)..."),
+                    description=t("handlers.voice_models.edge_tts_rvc.installing_rvc_amd"),
                     progress=70,
                     packages=["tts-with-rvc-onnx[dml]"],
                 )
@@ -141,7 +141,7 @@ class EdgeTTSRVCInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка tts-with-rvc (NVIDIA)...", "Installing tts-with-rvc (NVIDIA)..."),
+                    description=t("handlers.voice_models.edge_tts_rvc.installing_rvc_nvidia"),
                     progress=70,
                     packages=["tts-with-rvc"],
                 )
@@ -150,7 +150,7 @@ class EdgeTTSRVCInstallSpec:
         actions.append(
             InstallAction(
                 type="call",
-                description=_("Применение патчей...", "Applying patches..."),
+                description=t("handlers.voice_models.edge_tts_rvc.final_check"),
                 progress=90,
                 fn=cls._patch_fairseq_configs_call(),
             )
@@ -159,13 +159,13 @@ class EdgeTTSRVCInstallSpec:
         actions.append(
             InstallAction(
                 type="call",
-                description=_("Проверка установки...", "Final check..."),
+                description=t("handlers.voice_models.edge_tts_rvc.final_check"),
                 progress=99,
                 fn=lambda **_k: cls.is_installed(mid, ctx),
             )
         )
 
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
+        return InstallPlan(actions=actions, ok_status=t("handlers.voice_models.edge_tts_rvc.done"))
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
@@ -175,22 +175,22 @@ class EdgeTTSRVCInstallSpec:
                 actions=[
                     pip_uninstall_action(
                         ["tts-with-rvc-onnx"],
-                        description=_("Удаление tts-with-rvc-onnx...", "Uninstalling tts-with-rvc-onnx..."),
+                        description=t("handlers.voice_models.edge_tts_rvc.final_check"),
                         progress=20,
                     )
                 ],
-                ok_status=_("Удалено", "Uninstalled"),
+                ok_status=t("handlers.voice_models.edge_tts_rvc.uninstalled"),
             )
 
         return InstallPlan(
             actions=[
                 pip_uninstall_action(
                     ["tts-with-rvc"],
-                    description=_("Удаление tts-with-rvc...", "Uninstalling tts-with-rvc..."),
+                    description=t("handlers.voice_models.edge_tts_rvc.final_check"),
                     progress=20,
                 )
             ],
-            ok_status=_("Удалено", "Uninstalled"),
+            ok_status=t("handlers.voice_models.edge_tts_rvc.uninstalled"),
         )
 
 
