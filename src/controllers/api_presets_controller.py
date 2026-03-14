@@ -881,7 +881,7 @@ class ApiPresetsController:
             self.event_bus.emit(Events.ApiPresets.TEST_FAILED, {
                 "id": preset_id,
                 "error": "no_test_url",
-                "message": _("URL для тестирования не найден", "Test URL not found"),
+                "message": t("controllers.api_presets.test_url_not_found"),
             })
             return
 

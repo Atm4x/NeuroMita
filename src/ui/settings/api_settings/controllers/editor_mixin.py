@@ -346,7 +346,7 @@ class EditorMixin:
             if not isinstance(new_id, int):
                 QMessageBox.warning(
                     v,
-                    _("Ошибка", "Error"),
+                    t("common.error"),
                     _("Не удалось создать пресет. Проверь логи (SAVE_CUSTOM_PRESET).",
                     "Failed to create preset. Check logs (SAVE_CUSTOM_PRESET).")
                 )

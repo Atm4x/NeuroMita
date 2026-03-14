@@ -50,7 +50,7 @@
 #                 self._update_status_gui(_("Отмена...", "Cancelling..."))
 #             if self._download_window:
 #                 for widget in self._download_window.winfo_children():
-#                     if isinstance(widget, tk.Button) and _("Отменить", "Cancel") in widget.cget("text"):
+#                     if isinstance(widget, tk.Button) and t("common.cancel") in widget.cget("text"):
 #                         self._download_window.after(0, lambda w=widget: w.config(state=tk.DISABLED))
 
 #     def _update_status_gui(self, message):
@@ -291,7 +291,7 @@
 #         self._download_window.grab_set()
 #         self._download_window.protocol("WM_DELETE_WINDOW", self._request_cancel_internal)
 
-#         self._status_var = tk.StringVar(value=_("Подготовка...", "Preparing..."))
+#         self._status_var = tk.StringVar(value=t("common.preparing"))
 #         status_label = tk.Label(self._download_window, textvariable=self._status_var,
 #                                 font=("Arial", 11), bg="#3a3a3a", fg="#ffffff",
 #                                 wraplength=430, justify=tk.CENTER)
@@ -302,7 +302,7 @@
 #         self._progress_bar.pack(pady=10, padx=20)
 #         self._progress_bar.start(10)
 
-#         cancel_button = tk.Button(self._download_window, text=_("Отменить", "Cancel"),
+#         cancel_button = tk.Button(self._download_window, text=t("common.cancel"),
 #                                   command=self._request_cancel_internal, bg="#ff6347", fg="#ffffff",
 #                                   activebackground="#e55337", activeforeground="#ffffff",
 #                                   relief=tk.FLAT, bd=0, padx=10, pady=5, font=("Arial", 10))

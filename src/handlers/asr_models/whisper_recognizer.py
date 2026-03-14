@@ -29,8 +29,8 @@ class WhisperRecognizer(SpeechRecognizerInterface):
             "languages": ["Multilingual"],
             "gpu_vendor": ["NVIDIA", "CPU"],
             "tags": [
-                _("Офлайн", "Offline"),
-                _("Локально", "Local"),
+                t("handlers.asr_models.offline"),
+                t("handlers.asr_models.local"),
             ],
             "links": [
                 {"label": "faster-whisper (PyPI)", "url": "https://pypi.org/project/faster-whisper/"}
@@ -126,39 +126,39 @@ class WhisperRecognizer(SpeechRecognizerInterface):
         if gpu == "NVIDIA" and device in ("auto", "cuda"):
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
+                "description": t("handlers.asr_models.installing_pytorch_cuda"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
             })
         else:
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
+                "description": t("handlers.asr_models.installing_pytorch_cpu"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": None
             })
 
         steps.append({
             "progress": 40,
-            "description": _("Установка Silero VAD...", "Installing Silero VAD..."),
+            "description": t("handlers.asr_models.installing_silero_vad"),
             "packages": ["silero-vad"],
             "extra_args": None
         })
         steps.append({
             "progress": 55,
-            "description": _("Установка sounddevice...", "Installing sounddevice..."),
+            "description": t("handlers.asr_models.installing_sounddevice"),
             "packages": ["sounddevice"],
             "extra_args": None
         })
         steps.append({
             "progress": 60,
-            "description": _("Установка numpy...", "Installing numpy..."),
+            "description": t("handlers.asr_models.installing_numpy"),
             "packages": ["numpy"],
             "extra_args": None
         })
         steps.append({
             "progress": 70,
-            "description": _("Установка faster-whisper...", "Installing faster-whisper..."),
+            "description": t("handlers.asr_models.installing_faster_whisper"),
             "packages": ["faster-whisper"],
             "extra_args": None
         })

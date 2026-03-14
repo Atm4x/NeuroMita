@@ -37,7 +37,7 @@ class ModelsLoadedDialog(QDialog):
         btn_row = QHBoxLayout()
         self.btn_use = QPushButton(_("Выбрать", "Use selected"))
         self.btn_copy = QPushButton(_("Копировать всё", "Copy all"))
-        self.btn_close = QPushButton(_("Закрыть", "Close"))
+        self.btn_close = QPushButton(t("common.close"))
         btn_row.addWidget(self.btn_use)
         btn_row.addWidget(self.btn_copy)
         btn_row.addStretch(1)

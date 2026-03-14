@@ -39,9 +39,9 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
             "languages": ["Russian"],
             "gpu_vendor": ["AMD", "CPU"],
             "tags": [
-                _("ONNX", "ONNX"),
-                _("Отдельный процесс", "Separate process"),
-                _("CPU/DirectML", "CPU/DirectML"),
+                t("handlers.asr_models.onnx"),
+                t("handlers.asr_models.separate_process"),
+                t("handlers.asr_models.cpu_directml"),
             ],
             "links": []
         }
@@ -161,43 +161,43 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
         # torch CPU достаточно (onnx inference всё равно в ORT; torch нужен для preprocessor/экспорта)
         steps.append({
             "progress": 10,
-            "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
+            "description": t("handlers.asr_models.installing_pytorch_cpu"),
             "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
             "extra_args": None
         })
 
         steps.append({
             "progress": 30,
-            "description": _("Установка зависимостей GigaAM...", "Installing GigaAM deps..."),
+            "description": t("handlers.asr_models.installing_gigaam_deps"),
             "packages": ["hydra-core", "sentencepiece", "omegaconf"],
             "extra_args": None
         })
 
         steps.append({
             "progress": 55,
-            "description": _("Установка Silero VAD...", "Installing Silero VAD..."),
+            "description": t("handlers.asr_models.installing_silero_vad"),
             "packages": ["silero-vad"],
             "extra_args": None
         })
         steps.append({
             "progress": 60,
-            "description": _("Установка sounddevice...", "Installing sounddevice..."),
+            "description": t("handlers.asr_models.installing_sounddevice"),
             "packages": ["sounddevice"],
             "extra_args": None
         })
         steps.append({
             "progress": 65,
-            "description": _("Установка numpy...", "Installing numpy..."),
+            "description": t("handlers.asr_models.installing_numpy"),
             "packages": ["numpy"],
             "extra_args": None
         })
 
         # ONNX runtime (+ directml при необходимости)
         pkgs = ["onnx", "onnxruntime"]
-        desc = _("Установка ONNX Runtime...", "Installing ONNX Runtime...")
+        desc = t("handlers.asr_models.installing_onnx_runtime")
         if (device in ("auto", "dml")) and gpu != "NVIDIA":
             pkgs.append("onnxruntime-directml")
-            desc = _("Установка ONNX Runtime + DirectML...", "Installing ONNX Runtime + DirectML...")
+            desc = t("handlers.asr_models.installing_onnx_runtime_directml")
         steps.append({
             "progress": 75,
             "description": desc,

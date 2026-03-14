@@ -23,7 +23,7 @@ class GoogleRecognizer(SpeechRecognizerInterface):
             "languages": ["Russian", "English"],
             "gpu_vendor": ["CPU"],
             "tags": [
-                _("Онлайн", "Online"),
+                t("handlers.asr_models.online"),
             ],
             "description": _(
                 "Онлайн-распознавание через SpeechRecognition (Google Web Speech API). "
@@ -60,7 +60,7 @@ class GoogleRecognizer(SpeechRecognizerInterface):
         return [
             {
                 "progress": 20,
-                "description": _("Установка SpeechRecognition...", "Installing SpeechRecognition..."),
+                "description": t("handlers.asr_models.installing_speech_recognition"),
                 "packages": ["SpeechRecognition"],
                 "extra_args": None
             },

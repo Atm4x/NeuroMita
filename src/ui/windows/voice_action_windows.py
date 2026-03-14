@@ -544,7 +544,7 @@ class VCRedistWarningDialog(QDialog):
         
         button_layout.addStretch()
         
-        close_button = QPushButton(_("Закрыть", "Close"))
+        close_button = QPushButton(t("common.close"))
         close_button.clicked.connect(lambda: self._set_choice_and_accept('close'))
         button_layout.addWidget(close_button)
         

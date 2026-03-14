@@ -2,23 +2,16 @@
 
 from utils.gpu_utils import check_gpu_provider
 from utils.pip_installer import PipInstaller
+from utils.translation_manager import t
 import sys, os
 
 current_gpu = check_gpu_provider()
 
 from managers.settings_manager import SettingsManager
 
-script_dir = os.path.dirname(sys.executable)  
+script_dir = os.path.dirname(sys.executable)
 checkpoints_dir = os.path.join(script_dir, "checkpoints")
 os.makedirs(checkpoints_dir, exist_ok=True)
-
-def getTranslationVariant(ru_str, en_str=""):
-    lang = SettingsManager.get("LANGUAGE", "RU")
-    if en_str and lang == "EN":
-        return en_str
-    return ru_str
-
-_ = getTranslationVariant
 
 from main_logger import logger
 
@@ -42,13 +35,13 @@ except ImportError:
     if current_gpu in ["NVIDIA"]:
         success = pip_installer.install_package(
                 ["torch==2.7.1", "torchaudio==2.7.1"],
-                description=_("Установка PyTorch с поддержкой CUDA 12.8...", "Installing PyTorch with CUDA 12.8 support..."),
+                description=t("handlers.embedding.installing_pytorch_cuda"),
                 extra_args=["--index-url", "https://download.pytorch.org/whl/cu128"]
             )
     else:
         success = pip_installer.install_package(
                 ["torch==2.7.1", "torchaudio==2.7.1"],
-                description=_("Установка PyTorch CPU", "Installing PyTorch CPU"),
+                description=t("handlers.embedding.installing_pytorch_cpu"),
             )
     if not success:
         raise Exception("Не удалось установить torch+cuda12.8")

@@ -163,6 +163,9 @@
       "user_entry_not_found": "ChatController: view или user_entry не найден!",
       "event_received": "ChatController: получено событие CLEAR_USER_INPUT_UI"
     },
+    "api_presets": {
+      "test_url_not_found": "URL для тестирования не найден"
+    },
     "status": {
       "character_default": "Мита",
       "unknown_error": "Неизвестная ошибка"
@@ -220,7 +223,20 @@
     "asr": {
       "unknown_model": "unknown",
       "installed": "установлено",
-      "available": "доступно"
+      "available": "доступно",
+      "installing_model": "Установка ASR модели: ",
+      "preparing": "Подготовка...",
+      "installing_silero_vad": "Установка Silero VAD..."
+    },
+    "camera": {
+      "installing_opencv": "Установка библиотеки OpenCV (cv2)..."
+    },
+    "screen": {
+      "installing_pillow": "Установка библиотеки Pillow (PIL)..."
+    },
+    "embedding": {
+      "installing_pytorch_cuda": "Установка PyTorch с поддержкой CUDA 12.8...",
+      "installing_pytorch_cpu": "Установка PyTorch CPU"
     },
     "models_downloader": {
       "parsing_url": "Анализ URL...",

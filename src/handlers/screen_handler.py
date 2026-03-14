@@ -11,16 +11,7 @@ from win32 import win32gui
 import sys
 import os
 from utils.pip_installer import PipInstaller
-
-# Функция для перевода
-def getTranslationVariant(ru_str, en_str=""):
-    from managers.settings_manager import SettingsManager
-    lang = SettingsManager.get("LANGUAGE", "RU")
-    if en_str and lang == "EN":
-        return en_str
-    return ru_str
-
-_ = getTranslationVariant
+from utils.translation_manager import t
 
 class ScreenCapture:
     def __init__(self):
@@ -71,7 +62,7 @@ class ScreenCapture:
             
             success = self._pip_installer.install_package(
                 "Pillow",
-                description=_("Установка библиотеки Pillow (PIL)...", "Installing Pillow (PIL) library...")
+                description=t("handlers.screen.installing_pillow")
             )
             
             if not success:

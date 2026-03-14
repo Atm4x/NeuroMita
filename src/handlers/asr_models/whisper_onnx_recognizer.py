@@ -40,8 +40,8 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
             "languages": ["Multilingual"],
             "gpu_vendor": ["NVIDIA", "AMD"],
             "tags": [
-                _("Локально", "Local"),
-                _("ONNX", "ONNX"),
+                t("handlers.asr_models.local"),
+                t("handlers.asr_models.onnx"),
             ],
             "links": [
                 {
@@ -166,14 +166,14 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
         if gpu == "NVIDIA" and device in ("auto", "cuda"):
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
+                "description": t("handlers.asr_models.installing_pytorch_cuda"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
             })
         else:
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
+                "description": t("handlers.asr_models.installing_pytorch_cpu"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": None
             })
@@ -184,7 +184,7 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
 
         steps.append({
             "progress": 65,
-            "description": _("Установка зависимостей ASR...", "Installing ASR dependencies..."),
+            "description": t("handlers.asr_models.installing_asr_deps"),
             "packages": [
                 "numpy",
                 "sounddevice",
@@ -196,7 +196,7 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
         })
         steps.append({
             "progress": 80,
-            "description": _("Установка optimum (onnxruntime)...", "Installing optimum (onnxruntime)..."),
+            "description": t("handlers.asr_models.installing_optimum"),
             "packages": ["optimum[onnxruntime]"],
             "extra_args": None
         })

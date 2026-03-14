@@ -6,16 +6,7 @@ from main_logger import logger
 import sys
 import os
 from utils.pip_installer import PipInstaller
-
-# Функция для перевода
-def getTranslationVariant(ru_str, en_str=""):
-    from managers.settings_manager import SettingsManager
-    lang = SettingsManager.get("LANGUAGE", "RU")
-    if en_str and lang == "EN":
-        return en_str
-    return ru_str
-
-_ = getTranslationVariant
+from utils.translation_manager import t
 
 class CameraCapture:
     def __init__(self):
@@ -65,7 +56,7 @@ class CameraCapture:
             
             success = self._pip_installer.install_package(
                 "opencv-python",
-                description=_("Установка библиотеки OpenCV (cv2)...", "Installing OpenCV (cv2) library...")
+                description=t("handlers.camera.installing_opencv")
             )
             
             if not success:

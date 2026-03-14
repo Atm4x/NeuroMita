@@ -79,8 +79,8 @@ def _on_install_asr_model_event(event: Event):
         "kind": "asr",
         "item_id": str(engine),
         "task_id": f"asr:{engine}",
-        "title": _("Установка ASR модели: ", "Installing ASR model: ") + str(engine),
-        "initial_status": _("Подготовка...", "Preparing..."),
+        "title": t("handlers.asr.installing_model") + str(engine),
+        "initial_status": t("handlers.asr.preparing"),
         "timeout_sec": float(timeout_sec),
         "meta": {
             "kind": "asr",
@@ -400,7 +400,7 @@ class SpeechRecognition:
                 except ImportError:
                     SpeechRecognition._init_pip()
                     SpeechRecognition._pip_installer.install_package(
-                        ["silero-vad"], description=_("Установка Silero VAD...", "Installing Silero VAD...")
+                        ["silero-vad"], description=t("handlers.asr.installing_silero_vad")
                     )
                     from silero_vad import load_silero_vad
                 SpeechRecognition._silero_vad_loader = load_silero_vad

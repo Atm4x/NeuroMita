@@ -33,8 +33,8 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
             "languages": ["Russian"],
             "gpu_vendor": ["NVIDIA", "CPU"],
             "tags": [
-                _("Локально", "Local"),
-                _("Без отдельного процесса", "No separate process"),
+                t("handlers.asr_models.local"),
+                t("handlers.asr_models.no_separate_process"),
             ],
             "links": []
         }
@@ -165,40 +165,40 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
         if gpu == "NVIDIA" and device in ("auto", "cuda"):
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
+                "description": t("handlers.asr_models.installing_pytorch_cuda"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
             })
         else:
             steps.append({
                 "progress": 10,
-                "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
+                "description": t("handlers.asr_models.installing_pytorch_cpu"),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
                 "extra_args": None
             })
 
         steps.append({
             "progress": 30,
-            "description": _("Установка зависимостей...", "Installing deps..."),
+            "description": t("handlers.asr_models.installing_deps"),
             "packages": ["hydra-core", "sentencepiece", "omegaconf"],
             "extra_args": None
         })
 
         steps.append({
             "progress": 55,
-            "description": _("Установка Silero VAD...", "Installing Silero VAD..."),
+            "description": t("handlers.asr_models.installing_silero_vad"),
             "packages": ["silero-vad"],
             "extra_args": None
         })
         steps.append({
             "progress": 60,
-            "description": _("Установка sounddevice...", "Installing sounddevice..."),
+            "description": t("handlers.asr_models.installing_sounddevice"),
             "packages": ["sounddevice"],
             "extra_args": None
         })
         steps.append({
             "progress": 65,
-            "description": _("Установка numpy...", "Installing numpy..."),
+            "description": t("handlers.asr_models.installing_numpy"),
             "packages": ["numpy"],
             "extra_args": None
         })
