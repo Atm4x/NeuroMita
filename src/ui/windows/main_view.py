@@ -131,7 +131,7 @@ class ChatGUI(QMainWindow):
         self.attach_button = None
         self.send_screen_button = None
 
-        self.setWindowTitle(_("Чат с NeuroMita", "NeuroMita Chat"))
+        self.setWindowTitle(t("ui.windows.main_view.title"))
         self.setWindowIcon(QIcon('Icon.png'))
 
         self.staged_image_data = []
@@ -290,7 +290,7 @@ class ChatGUI(QMainWindow):
 
     def _factory_voice_models_dialog(self, parent, payload: dict):
         dialog = QDialog(parent)
-        dialog.setWindowTitle(_("Управление локальными моделями", "Manage Local Models"))
+        dialog.setWindowTitle(t("ui.windows.main_view.manage_models"))
         dialog.setModal(False)
         dialog.resize(875, 800)
 
@@ -302,7 +302,7 @@ class ChatGUI(QMainWindow):
     
     def _factory_asr_glossary_dialog(self, parent, payload: dict):
         dialog = QDialog(parent)
-        dialog.setWindowTitle(_("ASR модели", "ASR Models"))
+        dialog.setWindowTitle(t("ui.windows.main_view.asr_models"))
         dialog.setModal(False)
         dialog.resize(900, 650)
         lay = QVBoxLayout(dialog)
@@ -431,7 +431,7 @@ class ChatGUI(QMainWindow):
         self.settings_animation.start()
 
     def _create_debug_section(self, parent, layout):
-        debug_label = QLabel(_('Отладочная информация', 'Debug Information'))
+        debug_label = QLabel(t('ui.windows.main_view.debug_info'))
         debug_label.setObjectName('SeparatorLabel')
         layout.addWidget(debug_label)
         
@@ -606,15 +606,14 @@ class ChatGUI(QMainWindow):
             cost = self.event_bus.emit_and_wait(Events.Model.CALCULATE_COST, timeout=0.5)
             cost = cost[0] if cost else 0.0
             self.token_count_label.setText(
-                _("Токены: {}/{} (Макс. токены: {}) | Ориент. стоимость: {:.4f} ₽",
-                  "Tokens: {}/{} (Max tokens: {}) | Approx. cost: {:.4f} ₽").format(
+                t("ui.windows.main_view.tokens_info").format(
                     current_context_tokens, max_model_tokens, max_model_tokens, cost
                 )
             )
             self.token_count_label.setVisible(True)
         else:
             self.token_count_label.setVisible(False)
-            self.token_count_label.setText(_("Токены: Токенизатор недоступен", "Tokens: Tokenizer not available"))
+            self.token_count_label.setText(t("ui.windows.main_view.tokens_unavailable"))
         self.update_debug_info()
 
     def update_chat_font_size(self, font_size):
@@ -670,9 +669,9 @@ class ChatGUI(QMainWindow):
                 "url": f"data:image/jpeg;base64,{base64.b64encode(img).decode('utf-8')}"}} for img in all_image_data]
 
             if not user_input:
-                label = _("<Изображения>", "<Images>")
+                label = t("ui.windows.main_view.images")
                 if staged_image_data and not current_image_data and not (image_data or []):
-                    label = _("<Прикрепленные изображения>", "<Attached Images>")
+                    label = t("ui.windows.main_view.attached_images")
                 elif (current_image_data or (image_data or [])) and not staged_image_data:
                     label = _("<Изображение экрана>", "<Screen Image>")
 
@@ -729,10 +728,10 @@ class ChatGUI(QMainWindow):
             response = requests.get('https://raw.githubusercontent.com/VinerX/NeuroMita/main/NEWS.md', timeout=500)
             if response.status_code == 200:
                 return response.text
-            return _('Не удалось загрузить новости', 'Failed to load news')
+            return t('ui.windows.main_view.failed_to_load_news')
         except Exception as e:
             logger.info(f"Ошибка при получении новостей: {e}")
-            return _('Ошибка при загрузке новостей', 'Error loading news')
+            return t('ui.windows.main_view.error_loading_news')
 
     def closeEvent(self, event):
         self.event_bus.emit(Events.Capture.STOP_SCREEN_CAPTURE)
@@ -818,18 +817,17 @@ class ChatGUI(QMainWindow):
         self.event_bus.emit(Events.GUI.HIDE_MITA_STATUS)
 
     def _on_reload_prompts_success(self):
-        QMessageBox.information(self, _("Успешно", "Success"), 
-            _("Промпты успешно скачаны и перезагружены.", "Prompts successfully downloaded and reloaded."))
+        QMessageBox.information(self, t("ui.windows.main_view.success"),
+            t("ui.windows.main_view.prompts_reloaded"))
     
     def _on_reload_prompts_failed(self, data: dict):
         error = data.get('error', 'Unknown error')
         if error == "Event loop not running":
-            QMessageBox.critical(self, _("Ошибка", "Error"), 
-                _("Не удалось запустить асинхронную загрузку промптов.", "Failed to start asynchronous prompt download."))
+            QMessageBox.critical(self, t("ui.windows.main_view.error"),
+                t("ui.windows.main_view.async_load_failed"))
         else:
-            QMessageBox.critical(self, _("Ошибка", "Error"), 
-                _("Не удалось скачать промпты с GitHub. Проверьте подключение к интернету.", 
-                  "Failed to download prompts from GitHub. Check your internet connection."))
+            QMessageBox.critical(self, t("ui.windows.main_view.error"),
+                t("ui.windows.main_view.github_download_failed"))
     
     def _show_loading_popup(self, message):
         self.event_bus.emit(Events.GUI.SHOW_LOADING_POPUP, {"message": message})
@@ -839,7 +837,7 @@ class ChatGUI(QMainWindow):
         if not hasattr(self, 'loading_popup'):
             from PyQt6.QtWidgets import QProgressDialog
             self.loading_popup = QProgressDialog(message, None, 0, 0, self)
-            self.loading_popup.setWindowTitle(_("Загрузка", "Loading"))
+            self.loading_popup.setWindowTitle(t("ui.windows.main_view.loading"))
             self.loading_popup.setModal(True)
             self.loading_popup.setCancelButton(None)
             self.loading_popup.setMinimumDuration(0)
@@ -878,7 +876,7 @@ class ChatGUI(QMainWindow):
             self.loading_status_label.setText(status)
 
     def _debug_wrapper(self, parent_layout):
-        debug_label = QLabel(_('Отладочная информация', 'Debug Information'))
+        debug_label = QLabel(t('ui.windows.main_view.debug_info'))
         debug_label.setObjectName('SeparatorLabel')
         parent_layout.addWidget(debug_label)
         self.debug_window = QTextEdit()
@@ -1017,25 +1015,24 @@ class ChatGUI(QMainWindow):
         if hasattr(self, 'g4f_version_entry') and self.g4f_version_entry:
             target_version = self.g4f_version_entry.text().strip()
             if not target_version:
-                QMessageBox.critical(self, _("Ошибка", "Error"),
+                QMessageBox.critical(self, t("ui.windows.main_view.error"),
                     _("Пожалуйста, введите версию g4f или 'latest'.", "Please enter a g4f version or 'latest'."))
                 return
         else:
             logger.error("Виджет entry для версии g4f не найден.")
-            QMessageBox.critical(self, _("Ошибка", "Error"),
-                _("Не найден элемент интерфейса для ввода версии.", "UI element for version input not found."))
+            QMessageBox.critical(self, t("ui.windows.main_view.error"),
+                t("ui.windows.main_view.ui_element_not_found"))
             return
 
         success = self.event_bus.emit_and_wait(Events.Model.SCHEDULE_G4F_UPDATE, {'version': target_version}, timeout=1.0)
         if success and success[0]:
-            QMessageBox.information(self, _("Запланировано", "Scheduled"),
+            QMessageBox.information(self, t("ui.windows.main_view.scheduled"),
                 _("Версия g4f '{version}' будет установлена/обновлена при следующем запуске программы.",
                   "g4f version '{version}' will be installed/updated the next time the program starts.").format(
                     version=target_version))
         else:
-            QMessageBox.critical(self, _("Ошибка сохранения", "Save Error"),
-                _("Не удалось сохранить настройки для обновления. Пожалуйста, проверьте логи.",
-                  "Failed to save settings for the update. Please check the logs."))
+            QMessageBox.critical(self, t("ui.windows.main_view.save_error"),
+                t("ui.windows.main_view.save_settings_failed"))
 
     # ===== Совместимость: рендер сообщений (обёртки к message_renderer) =====
     def _insert_message_slot(self, role, content, insert_at_start, message_time):
@@ -1134,12 +1131,12 @@ class ChatGUI(QMainWindow):
 
     def _on_asr_install_finished(self, data: dict):
         if hasattr(self, 'install_model_button'):
-            self.install_model_button.setText(_("Установлено!", "Installed!"))
+            self.install_model_button.setText(t("ui.windows.main_view.installed"))
             self.install_model_button.setEnabled(True)
 
     def _on_asr_install_failed(self, data: dict):
         if hasattr(self, 'install_model_button'):
-            self.install_model_button.setText(_("Ошибка установки", "Installation failed"))
+            self.install_model_button.setText(t("ui.windows.main_view.installation_failed"))
             self.install_model_button.setEnabled(True)
 
     # ===== Совместимость: упрощённая вставка диалога =====

@@ -83,7 +83,7 @@ class VoiceInstallationWindow(QDialog):
         layout.addWidget(title_label)
 
         info_layout = QHBoxLayout()
-        self.status_label = QLabel(initial_status or _("Подготовка...", "Preparing..."))
+        self.status_label = QLabel(initial_status or t("ui.windows.voice_action_windows.preparing"))
         self.status_label.setFont(QFont("Segoe UI", 9))
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         info_layout.addWidget(self.status_label, 2)
@@ -97,7 +97,7 @@ class VoiceInstallationWindow(QDialog):
         self.eta_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         info_layout.addWidget(self.eta_label, 0)
 
-        self.elapsed_label = QLabel(_("Прошло 00:00", "Elapsed 00:00"))
+        self.elapsed_label = QLabel(t("ui.windows.voice_action_windows.elapsed_default"))
         self.elapsed_label.setFont(QFont("Segoe UI", 9))
         self.elapsed_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         info_layout.addWidget(self.elapsed_label, 0)
@@ -115,22 +115,22 @@ class VoiceInstallationWindow(QDialog):
         layout.addWidget(self.log_text, 1)
 
         actions_layout = QHBoxLayout()
-        copy_btn = QPushButton(_("Копировать лог", "Copy Log"))
+        copy_btn = QPushButton(t("ui.windows.voice_action_windows.copy_log"))
         copy_btn.clicked.connect(self._copy_log)
         actions_layout.addWidget(copy_btn)
 
-        save_btn = QPushButton(_("Сохранить лог...", "Save Log..."))
+        save_btn = QPushButton(t("ui.windows.voice_action_windows.save_log"))
         save_btn.clicked.connect(self._save_log)
         actions_layout.addWidget(save_btn)
 
-        clear_btn = QPushButton(_("Очистить", "Clear"))
-        clear_btn.setToolTip(_("Очищает только экран, полный лог сохраняется", "Clears screen only, full log remains"))
+        clear_btn = QPushButton(t("ui.windows.voice_action_windows.clear"))
+        clear_btn.setToolTip(t("ui.windows.voice_action_windows.clear_help"))
         clear_btn.clicked.connect(self._clear_log_screen_only)
         actions_layout.addWidget(clear_btn)
 
         actions_layout.addStretch()
 
-        close_btn = QPushButton(_("Закрыть", "Close"))
+        close_btn = QPushButton(t("ui.windows.voice_action_windows.close"))
         close_btn.clicked.connect(self.close)
         actions_layout.addWidget(close_btn)
         layout.addLayout(actions_layout)
@@ -163,7 +163,7 @@ class VoiceInstallationWindow(QDialog):
         m, s = divmod(secs, 60)
         h, m = divmod(m, 60)
         text = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-        self.elapsed_label.setText(_("Прошло ", "Elapsed ") + text)
+        self.elapsed_label.setText(t("ui.windows.voice_action_windows.elapsed") + text)
 
     def _recalc_max_blocks_and_refresh(self):
         fm = self.log_text.fontMetrics()
@@ -249,7 +249,7 @@ class VoiceInstallationWindow(QDialog):
         QGuiApplication.clipboard().setText("\n".join(self._full_log_lines) or "")
 
     def _save_log(self):
-        fname, _ = QFileDialog.getSaveFileName(self, _("Сохранить лог", "Save Log"), "install_log.txt", "Text Files (*.txt)")
+        fname, _ = QFileDialog.getSaveFileName(self, t("ui.windows.voice_action_windows.save_log_action"), "install_log.txt", "Text Files (*.txt)")
         if fname:
             try:
                 with open(fname, "w", encoding="utf-8") as f:
@@ -332,7 +332,7 @@ class VoiceActionWindow(QDialog):
         layout.addWidget(title_label)
 
         info_layout = QHBoxLayout()
-        self.status_label = QLabel(initial_status or _("Подготовка...", "Preparing..."))
+        self.status_label = QLabel(initial_status or t("ui.windows.voice_action_windows.preparing"))
         self.status_label.setFont(QFont("Segoe UI", 9))
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         info_layout.addWidget(self.status_label, 2)
@@ -341,7 +341,7 @@ class VoiceActionWindow(QDialog):
         self.eta_label.setFont(QFont("Segoe UI", 9))
         info_layout.addWidget(self.eta_label, 0)
 
-        self.elapsed_label = QLabel(_("Прошло 00:00", "Elapsed 00:00"))
+        self.elapsed_label = QLabel(t("ui.windows.voice_action_windows.elapsed_default"))
         self.elapsed_label.setFont(QFont("Segoe UI", 9))
         info_layout.addWidget(self.elapsed_label, 0)
 
@@ -353,22 +353,22 @@ class VoiceActionWindow(QDialog):
         layout.addWidget(self.log_text, 1)
 
         actions_layout = QHBoxLayout()
-        copy_btn = QPushButton(_("Копировать лог", "Copy Log"))
+        copy_btn = QPushButton(t("ui.windows.voice_action_windows.copy_log"))
         copy_btn.clicked.connect(self._copy_log)
         actions_layout.addWidget(copy_btn)
 
-        save_btn = QPushButton(_("Сохранить лог...", "Save Log..."))
+        save_btn = QPushButton(t("ui.windows.voice_action_windows.save_log"))
         save_btn.clicked.connect(self._save_log)
         actions_layout.addWidget(save_btn)
 
-        clear_btn = QPushButton(_("Очистить", "Clear"))
-        clear_btn.setToolTip(_("Очищает только экран, полный лог сохраняется", "Clears screen only, full log remains"))
+        clear_btn = QPushButton(t("ui.windows.voice_action_windows.clear"))
+        clear_btn.setToolTip(t("ui.windows.voice_action_windows.clear_help"))
         clear_btn.clicked.connect(self._clear_log_screen_only)
         actions_layout.addWidget(clear_btn)
 
         actions_layout.addStretch()
 
-        close_btn = QPushButton(_("Закрыть", "Close"))
+        close_btn = QPushButton(t("ui.windows.voice_action_windows.close"))
         close_btn.clicked.connect(self.close)
         actions_layout.addWidget(close_btn)
         layout.addLayout(actions_layout)
@@ -393,7 +393,7 @@ class VoiceActionWindow(QDialog):
         m, s = divmod(secs, 60)
         h, m = divmod(m, 60)
         text = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-        self.elapsed_label.setText(_("Прошло ", "Elapsed ") + text)
+        self.elapsed_label.setText(t("ui.windows.voice_action_windows.elapsed") + text)
 
     def _recalc_max_blocks_and_refresh(self):
         fm = self.log_text.fontMetrics()
@@ -467,7 +467,7 @@ class VoiceActionWindow(QDialog):
         QGuiApplication.clipboard().setText("\n".join(self._full_log_lines) or "")
 
     def _save_log(self):
-        fname, _ = QFileDialog.getSaveFileName(self, _("Сохранить лог", "Save Log"), "action_log.txt", "Text Files (*.txt)")
+        fname, _ = QFileDialog.getSaveFileName(self, t("ui.windows.voice_action_windows.save_log_action"), "action_log.txt", "Text Files (*.txt)")
         if fname:
             try:
                 with open(fname, "w", encoding="utf-8") as f:
@@ -494,7 +494,7 @@ class VoiceActionWindow(QDialog):
 class VCRedistWarningDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(_("⚠️ Ошибка загрузки Triton", "⚠️ Triton Load Error"))
+        self.setWindowTitle(t("ui.windows.voice_action_windows.triton_error"))
         self.setModal(True)
         self.setMinimumSize(500, 250)
         
@@ -517,7 +517,7 @@ class VCRedistWarningDialog(QDialog):
         
         layout = QVBoxLayout(self)
         
-        title_label = QLabel(_("Ошибка импорта Triton (DLL Load Failed)", "Triton Import Error (DLL Load Failed)"))
+        title_label = QLabel(t("ui.windows.voice_action_windows.triton_import_error"))
         title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         title_label.setStyleSheet("color: orange;")
         layout.addWidget(title_label)
@@ -538,7 +538,7 @@ class VCRedistWarningDialog(QDialog):
         
         button_layout = QHBoxLayout()
         
-        docs_button = QPushButton(_("Документация", "Documentation"))
+        docs_button = QPushButton(t("ui.windows.voice_action_windows.documentation"))
         docs_button.clicked.connect(self._on_docs_clicked)
         button_layout.addWidget(docs_button)
         
@@ -548,7 +548,7 @@ class VCRedistWarningDialog(QDialog):
         close_button.clicked.connect(lambda: self._set_choice_and_accept('close'))
         button_layout.addWidget(close_button)
         
-        retry_button = QPushButton(_("Попробовать снова", "Retry"))
+        retry_button = QPushButton(t("ui.windows.voice_action_windows.retry"))
         retry_button.setObjectName("RetryButton")
         retry_button.clicked.connect(lambda: self._set_choice_and_accept('retry'))
         button_layout.addWidget(retry_button)
@@ -570,7 +570,7 @@ class VCRedistWarningDialog(QDialog):
 class TritonDependenciesDialog(QDialog):
     def __init__(self, parent=None, dependencies_status=None):
         super().__init__(parent)
-        self.setWindowTitle(_("⚠️ Зависимости Triton", "⚠️ Triton Dependencies"))
+        self.setWindowTitle(t("ui.windows.voice_action_windows.triton_dependencies"))
         self.setModal(True)
         self.setMinimumSize(700, 350)
         
@@ -594,7 +594,7 @@ class TritonDependenciesDialog(QDialog):
         
         layout = QVBoxLayout(self)
         
-        title_label = QLabel(_("Статус зависимостей Triton:", "Triton Dependency Status:"))
+        title_label = QLabel(t("ui.windows.voice_action_windows.triton_status"))
         title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         layout.addWidget(title_label)
         
@@ -602,8 +602,7 @@ class TritonDependenciesDialog(QDialog):
         self._update_status_display()
         layout.addLayout(self.status_layout)
         
-        self.warning_label = QLabel(_("⚠️ Модели Fish Speech+ / + RVC требуют всех компонентов!", 
-                                     "⚠️ Models Fish Speech+ / + RVC require all components!"))
+        self.warning_label = QLabel(t("ui.windows.voice_action_windows.fish_speech_requires_all"))
         self.warning_label.setStyleSheet("color: orange; font-weight: bold;")
         cuda_found = self.dependencies_status.get('cuda_found', False)
         winsdk_found = self.dependencies_status.get('winsdk_found', False)
@@ -627,21 +626,21 @@ class TritonDependenciesDialog(QDialog):
         
         button_layout = QHBoxLayout()
         
-        docs_button = QPushButton(_("Открыть документацию", "Open Documentation"))
+        docs_button = QPushButton(t("ui.windows.voice_action_windows.open_documentation"))
         docs_button.clicked.connect(self._on_docs_clicked)
         button_layout.addWidget(docs_button)
         
-        refresh_button = QPushButton(_("Обновить статус", "Refresh Status"))
+        refresh_button = QPushButton(t("ui.windows.voice_action_windows.refresh_status"))
         refresh_button.clicked.connect(self._on_refresh_status)
         button_layout.addWidget(refresh_button)
         
         button_layout.addStretch()
         
-        skip_button = QPushButton(_("Пропустить инициализацию", "Skip Initialization"))
+        skip_button = QPushButton(t("ui.windows.voice_action_windows.skip_initialization"))
         skip_button.clicked.connect(lambda: self._set_choice_and_accept('skip'))
         button_layout.addWidget(skip_button)
         
-        continue_button = QPushButton(_("Продолжить инициализацию", "Continue Initialization"))
+        continue_button = QPushButton(t("ui.windows.voice_action_windows.continue_initialization"))
         continue_button.setObjectName("ContinueButton")
         continue_button.clicked.connect(lambda: self._set_choice_and_accept('continue'))
         button_layout.addWidget(continue_button)
@@ -669,7 +668,7 @@ class TritonDependenciesDialog(QDialog):
             label.setFont(QFont("Segoe UI", 9))
             item_layout.addWidget(label)
             
-            status_text = _("Найден", "Found") if found else _("Не найден", "Not Found")
+            status_text = t("ui.windows.voice_action_windows.found") if found else t("ui.windows.voice_action_windows.not_found")
             status_color = "#4CAF50" if found else "#F44336"
             status_label = QLabel(status_text)
             status_label.setFont(QFont("Segoe UI", 9))

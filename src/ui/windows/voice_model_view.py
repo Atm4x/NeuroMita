@@ -72,7 +72,7 @@ class ModelDetailView(QWidget):
         # Languages (прячем, если пусто)
         self.langs_row = QHBoxLayout()
         self.langs_row.setSpacing(6)
-        self.langs_title = QLabel(_("Языки:", "Languages:"))
+        self.langs_title = QLabel(t("ui.windows.voice_model_view.languages"))
         self.langs_title.setObjectName("Subtle")
         self.langs_row.addWidget(self.langs_title)
         self.langs_container = QHBoxLayout()
@@ -95,10 +95,10 @@ class ModelDetailView(QWidget):
         # Кнопки
         act = QHBoxLayout()
         act.setContentsMargins(0, 4, 0, 0)
-        self.btn_uninstall = QPushButton(_("Удалить", "Uninstall"))
+        self.btn_uninstall = QPushButton(t("ui.windows.voice_model_view.uninstall"))
         self.btn_uninstall.setObjectName("DangerButton")
         self.btn_uninstall.clicked.connect(self._on_uninstall)
-        self.btn_install = QPushButton(_("Установить", "Install"))
+        self.btn_install = QPushButton(t("ui.windows.voice_model_view.install"))
         self.btn_install.setObjectName("SecondaryButton")
         self.btn_install.clicked.connect(self._on_install)
         act.addStretch()
@@ -119,8 +119,7 @@ class ModelDetailView(QWidget):
         main.addWidget(self.settings_scroll, 1)
 
         self.placeholder_settings = QLabel(
-            _("Модель не установлена.\nНажмите «Установить», чтобы открыть настройки.",
-            "Model is not installed.\nClick “Install” to open settings.")
+            t(“ui.windows.voice_model_view.not_installed”)
         )
         self.placeholder_settings.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder_settings.setWordWrap(True)
@@ -197,10 +196,10 @@ class ModelDetailView(QWidget):
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
 
         can_install = True
-        install_text = _("Установить", "Install")
+        install_text = t("ui.windows.voice_model_view.install")
         if is_amd_user and not is_amd_supported and not allow_unsupported:
             can_install = False
-            install_text = _("Несовместимо с AMD", "Incompatible with AMD")
+            install_text = t("ui.windows.voice_model_view.incompatible_amd")
 
         self.btn_install.setText(install_text)
         self.btn_install.setEnabled(can_install)
@@ -330,8 +329,7 @@ class ModelDetailView(QWidget):
         installed = model_id in self.installed_models
         if not installed:
             self.placeholder_settings = QLabel(
-                _("Модель не установлена.\nНажмите «Установить», чтобы открыть настройки.",
-                  "Model is not installed.\nClick “Install” to open settings.")
+                t(“ui.windows.voice_model_view.not_installed”)
             )
             self.placeholder_settings.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.placeholder_settings.setWordWrap(True)
@@ -474,9 +472,9 @@ class ModelDetailView(QWidget):
         is_amd_supported = ("AMD" in supported)
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
         if is_amd_user and not is_amd_supported and allow_unsupported:
-            self.warning_label.setText(_("Может не работать на AMD!", "May not work on AMD!"))
+            self.warning_label.setText(t("ui.windows.voice_model_view.may_not_work_amd"))
         elif is_amd_user and not is_amd_supported and not allow_unsupported:
-            self.warning_label.setText(_("Несовместимо с AMD.", "Incompatible with AMD."))
+            self.warning_label.setText(t("ui.windows.voice_model_view.incompatible_amd_short"))
         else:
             self.warning_label.setText("")
 
@@ -661,7 +659,7 @@ class VoiceModelSettingsView(QWidget):
     def __init__(self, auto_initialize: bool = True):
         super().__init__()
 
-        self.setWindowTitle(_("Настройки и Установка Локальных Моделей", "Settings and Installation of Local Models"))
+        self.setWindowTitle(t("ui.windows.voice_model_view.title"))
         self.setMinimumSize(900, 650)
         self.resize(1100, 720)
 
@@ -749,7 +747,7 @@ class VoiceModelSettingsView(QWidget):
         d_l = QVBoxLayout(desc_frame)
         d_l.setContentsMargins(10, 6, 10, 6)
 
-        desc_title = QLabel(_("Подсказка", "Hint"))
+        desc_title = QLabel(t("ui.windows.voice_model_view.hint"))
         desc_title.setStyleSheet("font-weight: bold; font-size: 9pt;")
         d_l.addWidget(desc_title)
 
@@ -781,7 +779,7 @@ class VoiceModelSettingsView(QWidget):
         left_l.setSpacing(6)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText(_("Поиск моделей...", "Search models..."))
+        self.search.setPlaceholderText(t("ui.windows.voice_model_view.search_models"))
         self.search.textChanged.connect(self._apply_filter)
         left_l.addWidget(self.search)
 
@@ -814,7 +812,7 @@ class VoiceModelSettingsView(QWidget):
         self.splitter.setSizes([300, 800])
 
         t_l.addWidget(self.splitter, 1)
-        self.tabs.addTab(self.tab_models, _("Модели", "Models"))
+        self.tabs.addTab(self.tab_models, t("ui.windows.voice_model_view.models"))
 
         # Tab: Dependencies
         self.tab_deps = QWidget()
@@ -822,7 +820,7 @@ class VoiceModelSettingsView(QWidget):
         dl.setContentsMargins(10, 10, 10, 10)
         dl.setSpacing(8)
 
-        deps_title = QLabel(_("Системные Зависимости", "System Dependencies"))
+        deps_title = QLabel(t("ui.windows.voice_model_view.system_dependencies"))
         deps_title.setObjectName("TitleLabel")
         dl.addWidget(deps_title)
 
@@ -832,15 +830,15 @@ class VoiceModelSettingsView(QWidget):
         self._build_dependencies_panel(self.deps_container)
 
         dl.addStretch()
-        self.tabs.addTab(self.tab_deps, _("Зависимости", "Dependencies"))
+        self.tabs.addTab(self.tab_deps, t("ui.windows.voice_model_view.dependencies"))
 
         # Bottom buttons
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
         bottom.addStretch()
-        btn_close = QPushButton(_("Закрыть", "Close"))
+        btn_close = QPushButton(t("ui.windows.voice_model_view.close"))
         btn_close.clicked.connect(self._on_close_clicked)
-        self.btn_save = QPushButton(_("Сохранить", "Save"))
+        self.btn_save = QPushButton(t("ui.windows.voice_model_view.save"))
         self.btn_save.setObjectName("PrimaryButton")
         self.btn_save.clicked.connect(self._on_save_clicked)
         bottom.addWidget(btn_close)
@@ -903,14 +901,14 @@ class VoiceModelSettingsView(QWidget):
             row = QHBoxLayout()
             row.setSpacing(16)
             for text, ok in [
-                (_("CUDA Toolkit:", "CUDA Toolkit:"), st.get("cuda_found", False)),
-                (_("Windows SDK:", "Windows SDK:"), st.get("winsdk_found", False)),
-                (_("MSVC:", "MSVC:"), st.get("msvc_found", False))
+                (t("ui.windows.voice_model_view.cuda_toolkit"), st.get("cuda_found", False)),
+                (t("ui.windows.voice_model_view.windows_sdk"), st.get("winsdk_found", False)),
+                (t("ui.windows.voice_model_view.msvc"), st.get("msvc_found", False))
             ]:
                 sub = QHBoxLayout()
                 sub.setSpacing(6)
                 lab = QLabel(text)
-                val = QLabel(_("Найден", "Found") if ok else _("Не найден", "Not Found"))
+                val = QLabel(t("ui.windows.voice_model_view.found") if ok else t("ui.windows.voice_model_view.not_found"))
                 val.setStyleSheet(f"color: {'lightgreen' if ok else '#FF6A6A'};")
                 sub.addWidget(lab)
                 sub.addWidget(val)
@@ -920,11 +918,10 @@ class VoiceModelSettingsView(QWidget):
 
             if not (st.get("cuda_found") and st.get("winsdk_found") and st.get("msvc_found")):
                 warn = QHBoxLayout()
-                wlab = QLabel(_("⚠️ Для моделей Fish Speech+ / +RVC могут потребоваться все компоненты.",
-                                "⚠️ Fish Speech+ / +RVC models may require all components."))
+                wlab = QLabel(t("ui.windows.voice_model_view.fish_speech_warning"))
                 wlab.setStyleSheet("color: orange; font-weight: bold;")
                 warn.addWidget(wlab)
-                link = QLabel(_("[Документация]", "[Documentation]"))
+                link = QLabel(t("ui.windows.voice_model_view.documentation"))
                 link.setObjectName("Link")
                 link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 link.mousePressEvent = lambda e: self.event_bus.emit(Events.VoiceModel.OPEN_DOC, "installation_guide.html")
@@ -932,13 +929,11 @@ class VoiceModelSettingsView(QWidget):
                 warn.addStretch()
                 layout.addLayout(warn)
         elif not st.get("triton_installed", False):
-            warn = QLabel(_("Triton не установлен (нужен для Fish Speech+ / +RVC).",
-                            "Triton not installed (required for Fish Speech+ / +RVC)."))
+            warn = QLabel(t("ui.windows.voice_model_view.triton_not_installed"))
             warn.setStyleSheet("color: orange;")
             layout.addWidget(warn)
         else:
-            info = QLabel(_("Проверка зависимостей Triton доступна только в Windows.",
-                            "Triton dependency check is only available on Windows."))
+            info = QLabel(t("ui.windows.voice_model_view.triton_check_windows_only"))
             info.setObjectName("Subtle")
             layout.addWidget(info)
 
@@ -1065,7 +1060,7 @@ class VoiceModelSettingsView(QWidget):
 
     # ---------- Install/Uninstall UI state ----------
     def _on_install_started(self, model_id):
-        self.detail.set_button_text(_("Загрузка...", "Downloading..."))
+        self.detail.set_button_text(t("ui.windows.voice_model_view.downloading"))
         self.detail.set_button_enabled(False)
 
     def _on_install_finished(self, data):
@@ -1074,7 +1069,7 @@ class VoiceModelSettingsView(QWidget):
         self._on_selection_changed()
 
     def _on_uninstall_started(self, model_id):
-        self.detail.set_button_text(_("Удаление...", "Uninstalling..."))
+        self.detail.set_button_text(t("ui.windows.voice_model_view.uninstalling"))
         self.detail.set_button_enabled(False)
 
     def _on_uninstall_finished(self, data):
@@ -1243,7 +1238,7 @@ class VoiceModelSettingsView(QWidget):
             return
         n = len(self._dirty_keys)
         self.btn_save.setEnabled(n > 0)
-        self.btn_save.setText(_("Сохранить", "Save") + (f" ({n})" if n > 0 else ""))
+        self.btn_save.setText(t("ui.windows.voice_model_view.save") + (f" ({n})" if n > 0 else ""))
 
     def _on_current_setting_changed(self, key: str):
         self._recompute_dirty()
