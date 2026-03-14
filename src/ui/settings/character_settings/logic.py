@@ -78,7 +78,7 @@ def wire_character_settings_logic(self):
     self.character_combobox.blockSignals(False)
 
     presets_meta = event_bus.emit_and_wait(Events.ApiPresets.GET_PRESET_LIST, timeout=1.0)
-    provider_names = [_("Текущий", "Current")]
+    provider_names = [t("ui.settings.character_settings.logic.current")]
     if presets_meta and presets_meta[0]:
         all_presets = presets_meta[0].get('custom', [])
         for preset in all_presets:
@@ -208,13 +208,13 @@ def change_character_actions(gui, character_id=None):
 
     if hasattr(gui, 'char_provider_combobox'):
         provider_key = f"CHAR_PROVIDER_{selected_character}"
-        current_provider = gui.settings.get(provider_key, _("Текущий", "Current"))
+        current_provider = gui.settings.get(provider_key, t("ui.settings.character_settings.logic.current"))
         gui.char_provider_combobox.blockSignals(True)
         gui.char_provider_combobox.setCurrentText(current_provider)
         gui.char_provider_combobox.blockSignals(False)
 
     if not selected_character:
-        QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран.", "No character selected."))
+        QMessageBox.warning(gui, t("ui.settings.character_settings.logic.warning"), t("ui.settings.character_settings.logic.no_character_selected"))
         _clear_prompt_info_fields(gui)
         return
 
@@ -255,8 +255,8 @@ def apply_prompt_set(gui, force_apply=True):
     if force_apply:
         reply = QMessageBox.question(
             gui,
-            _("Подтверждение", "Confirmation"),
-            _("Применить набор промптов?", "Apply prompt set?"),
+            t("ui.settings.character_settings.logic.confirmation"),
+            t("ui.settings.character_settings.logic.apply_prompt_set"),
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
         )
         if reply == QMessageBox.StandardButton.Cancel:
@@ -269,8 +269,8 @@ def apply_prompt_set(gui, force_apply=True):
     event_bus.emit(Events.Character.RELOAD_DATA)
 
     if force_apply:
-        QMessageBox.information(gui, _("Успех", "Success"),
-                                _("Набор промптов применён.", "Prompt set applied."))
+        QMessageBox.information(gui, t("ui.settings.character_settings.logic.success_confirm"),
+                                t("ui.settings.character_settings.logic.prompt_set_applied"))
 
 
 def open_folder(path):
@@ -288,14 +288,14 @@ def open_character_folder(gui):
 
     character_id = profile.get("character_id") if isinstance(profile, dict) else None
     if not character_id:
-        QMessageBox.information(gui, _("Информация", "Information"),
-                                _("Персонаж не выбран или его имя недоступно.", "No character selected or its name is not available."))
+        QMessageBox.information(gui, t("ui.settings.character_settings.logic.information"),
+                                t("ui.settings.character_settings.logic.no_character_available"))
         return
 
     options = list_prompt_sets("Prompts", character_id)
     if not options:
-        QMessageBox.warning(gui, _("Внимание", "Warning"),
-                            _("Не найден ни один набор промптов для персонажа.", "No prompt sets found for character."))
+        QMessageBox.warning(gui, t("ui.settings.character_settings.logic.warning"),
+                            t("ui.settings.character_settings.logic.no_prompt_sets_found"))
         return
 
     key = _prompt_set_key(character_id)
@@ -307,8 +307,8 @@ def open_character_folder(gui):
     if os.path.exists(folder_path):
         open_folder(folder_path)
     else:
-        QMessageBox.warning(gui, _("Внимание", "Warning"),
-                            _("Папка набора не найдена: ", "Prompt set folder not found: ") + folder_path)
+        QMessageBox.warning(gui, t("ui.settings.character_settings.logic.warning"),
+                            t("ui.settings.character_settings.logic.confirm_delete") + folder_path)
 
 
 def open_character_history_folder(gui):
@@ -322,11 +322,11 @@ def open_character_history_folder(gui):
         if os.path.exists(history_folder_path):
             open_folder(history_folder_path)
         else:
-            QMessageBox.warning(gui, _("Внимание", "Warning"),
-                                _("Папка истории персонажа не найдена: ", "Character history folder not found: ") + history_folder_path)
+            QMessageBox.warning(gui, t("ui.settings.character_settings.logic.warning"),
+                                t("ui.settings.character_settings.logic.confirm_delete") + history_folder_path)
     else:
-        QMessageBox.information(gui, _("Информация", "Information"),
-                                _("Персонаж не выбран или его имя недоступно.", "No character selected or its name is not available."))
+        QMessageBox.information(gui, t("ui.settings.character_settings.logic.information"),
+                                t("ui.settings.character_settings.logic.no_character_available"))
 
 
 def clear_history(gui):
@@ -334,11 +334,10 @@ def clear_history(gui):
     current_profile_res = event_bus.emit_and_wait(Events.Character.GET_CURRENT_PROFILE, timeout=1.0)
     profile = current_profile_res[0] if current_profile_res else {}
     char_id = profile.get("character_id") if isinstance(profile, dict) else None
-    char_name_for_text = char_id or _("(не выбран)", "(not selected)")
+    char_name_for_text = char_id or "(not selected)"
 
-    title = _("Подтверждение удаления", "Confirm deletion")
-    text = _("Очистить историю для персонажа '{name}'? Это действие нельзя отменить.",
-             "Clear history for character '{name}'? This action cannot be undone.").format(name=char_name_for_text)
+    title = t("ui.settings.character_settings.logic.confirm_delete")
+    text = t("ui.settings.character_settings.logic.delete_history_confirm").format(name=char_name_for_text)
     reply = QMessageBox.question(gui, title, text,
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
     if reply != QMessageBox.StandardButton.Yes:
@@ -352,9 +351,8 @@ def clear_history(gui):
 
 
 def clear_history_all(gui):
-    title = _("Подтвердите удаление всех историй", "Confirm deleting all histories")
-    text = _("Это удалит историю всех персонажей без возможности восстановления. Продолжить?",
-             "This will delete the history of all characters and cannot be undone. Continue?")
+    title = t("ui.settings.character_settings.logic.confirm_delete_all")
+    text = t("ui.settings.character_settings.logic.delete_all_histories_confirm")
     reply = QMessageBox.question(gui, title, text,
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
     if reply != QMessageBox.StandardButton.Yes:
@@ -371,7 +369,7 @@ def clear_history_all(gui):
 def save_character_provider(gui, provider: str):
     selected_character = gui.character_combobox.currentText() if hasattr(gui, 'character_combobox') else None
     if not selected_character:
-        QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран.", "No character selected."))
+        QMessageBox.warning(gui, t("ui.settings.character_settings.logic.warning"), t("ui.settings.character_settings.logic.no_character_selected"))
         return
     provider_key = f"CHAR_PROVIDER_{selected_character}"
     gui.settings.set(provider_key, provider)

@@ -68,7 +68,7 @@ class AsrGlossaryView(QWidget):
         self._models: list[dict] = []
         self._current_engine: str | None = None
 
-        self.setWindowTitle(_("ASR Модели", "ASR Models"))
+        self.setWindowTitle(t("ui.windows.asr_glossary.asr_models"))
         self.setStyleSheet(get_asr_stylesheet())
         self.setMinimumSize(820, 560)
 
@@ -117,14 +117,14 @@ class AsrGlossaryView(QWidget):
 
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchBox")
-        self.search_box.setPlaceholderText(_("Поиск...", "Search..."))
+        self.search_box.setPlaceholderText(t("ui.windows.asr_glossary.search"))
         self.search_box.textChanged.connect(self._apply_filter)
         search_row.addWidget(self.search_box, 1)
 
         self.btn_refresh_list = QPushButton()
         self.btn_refresh_list.setObjectName("SecondaryButton")
         self.btn_refresh_list.setFixedSize(32, 28)
-        self.btn_refresh_list.setToolTip(_("Обновить", "Refresh"))
+        self.btn_refresh_list.setToolTip(t("ui.windows.asr_glossary.refresh"))
         if qta:
             try:
                 self.btn_refresh_list.setIcon(qta.icon("fa5s.sync", color="#ffffff"))
@@ -193,7 +193,7 @@ class AsrGlossaryView(QWidget):
         self.lbl_progress.setWordWrap(True)
         action_row.addWidget(self.lbl_progress, 1)
 
-        self.btn_install = QPushButton(_("Установить", "Install"))
+        self.btn_install = QPushButton(t("ui.windows.asr_glossary.install"))
         self.btn_install.setObjectName("InstallButton")
         self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_install.setVisible(False)
@@ -237,7 +237,7 @@ class AsrGlossaryView(QWidget):
         self.settings_scroll.setWidget(self.settings_holder)
         l.addWidget(self.settings_scroll, 1)
 
-        self.detail_tabs.addTab(tab, _("Настройки", "Settings"))
+        self.detail_tabs.addTab(tab, t("ui.windows.asr_glossary.settings_tab"))
 
     def _build_tab_deps(self):
         tab = QWidget()
@@ -257,7 +257,7 @@ class AsrGlossaryView(QWidget):
         self.deps_scroll.setWidget(self.deps_holder)
         l.addWidget(self.deps_scroll, 1)
 
-        self.deps_tab_index = self.detail_tabs.addTab(tab, _("Зависимости", "Dependencies"))
+        self.deps_tab_index = self.detail_tabs.addTab(tab, t("ui.windows.asr_glossary.dependencies_tab"))
 
         self._deps_badge = QLabel("0")
         self._deps_badge.setObjectName("DepsBadge")
@@ -368,10 +368,10 @@ class AsrGlossaryView(QWidget):
 
         self.chip_status.setVisible(True)
         if installed:
-            self.chip_status.setText(_("Установлено", "Installed"))
+            self.chip_status.setText(t("ui.windows.asr_glossary.status_installed"))
             self.chip_status.setObjectName("ChipOk")
         else:
-            self.chip_status.setText(_("Доступно", "Available"))
+            self.chip_status.setText(t("ui.windows.asr_glossary.status_available"))
             self.chip_status.setObjectName("ChipInfo")
         self.chip_status.style().unpolish(self.chip_status)
         self.chip_status.style().polish(self.chip_status)
@@ -379,7 +379,7 @@ class AsrGlossaryView(QWidget):
         self._render_tags(data)
 
         self.lbl_desc.setText(
-            str(data.get("description") or data.get("desc") or _("Описание отсутствует.", "No description."))
+            str(data.get("description") or data.get("desc") or t("ui.windows.asr_glossary.no_description"))
         )
 
         self._render_settings(engine_id, installed)
@@ -430,7 +430,7 @@ class AsrGlossaryView(QWidget):
                     tags.append(self._make_tag(str(p)))
 
         if not tags:
-            self.tags_row.addWidget(self._make_chip(_("Нет тегов", "No tags"), "info"))
+            self.tags_row.addWidget(self._make_chip(t("ui.windows.asr_glossary.no_tags"), "info"))
             self.tags_row.addStretch()
             return
 
@@ -443,29 +443,28 @@ class AsrGlossaryView(QWidget):
 
         if not installed:
             placeholder = QLabel(
-                _("Модель не установлена.\nНажмите «Установить», чтобы начать загрузку.",
-                  "Model is not installed.\nClick “Install” to start downloading.")
+                t(“ui.windows.asr_glossary.model_not_installed”)
             )
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setWordWrap(True)
-            placeholder.setObjectName("Subtle")
+            placeholder.setObjectName(“Subtle”)
             self.settings_layout.addWidget(placeholder)
             self.settings_layout.addStretch()
             return
 
         schema_res = self.event_bus.emit_and_wait(
-            Events.Speech.GET_RECOGNIZER_SETTINGS_SCHEMA, {"engine": engine_id}, timeout=1.0
+            Events.Speech.GET_RECOGNIZER_SETTINGS_SCHEMA, {“engine”: engine_id}, timeout=1.0
         )
         schema = schema_res[0] if schema_res else []
 
         vals_res = self.event_bus.emit_and_wait(
-            Events.Speech.GET_RECOGNIZER_SETTINGS, {"engine": engine_id}, timeout=1.0
+            Events.Speech.GET_RECOGNIZER_SETTINGS, {“engine”: engine_id}, timeout=1.0
         )
         values = vals_res[0] if vals_res else {}
 
         if not schema:
-            lbl = QLabel(_("Нет настроек для этой модели.", "No settings for this model."))
-            lbl.setObjectName("Subtle")
+            lbl = QLabel(t(“ui.windows.asr_glossary.no_settings”))
+            lbl.setObjectName(“Subtle”)
             self.settings_layout.addWidget(lbl)
             self.settings_layout.addStretch()
             return
@@ -475,7 +474,7 @@ class AsrGlossaryView(QWidget):
             if not key:
                 continue
 
-            label_txt = _(field.get("label_ru", key), field.get("label_en", key))
+            label_txt = field.get("label_en", key)  # Use English label directly from field data
             ftype = field.get("type", "entry")
             val = values.get(key, field.get("default"))
 
@@ -548,7 +547,7 @@ class AsrGlossaryView(QWidget):
         self._set_deps_badge(total=total, ok=(total == 0 or len(missing) == 0))
 
         if total == 0:
-            lbl = QLabel(_("Для этой модели не предоставлен список зависимостей.", "This model provides no dependency list."))
+            lbl = QLabel(t("ui.windows.asr_glossary.no_dependency_list"))
             lbl.setObjectName("Subtle")
             lbl.setWordWrap(True)
             self.deps_layout.addWidget(lbl)
@@ -582,7 +581,7 @@ class AsrGlossaryView(QWidget):
             name = QLabel(dep_id)
             hl.addWidget(name, 1, Qt.AlignmentFlag.AlignVCenter)
 
-            state = self._make_chip(_("OK", "OK"), "ok") if ok else self._make_chip(_("Отсутствует", "Missing"), "warn")
+            state = self._make_chip(t("ui.windows.asr_glossary.ok_status"), "ok") if ok else self._make_chip(t("ui.windows.asr_glossary.missing_status"), "warn")
             hl.addWidget(state, 0, Qt.AlignmentFlag.AlignVCenter)
 
             self.deps_layout.addWidget(row)
@@ -608,7 +607,7 @@ class AsrGlossaryView(QWidget):
         self.btn_install.setEnabled(False)
         self.lbl_progress.setVisible(True)
         self.lbl_progress.setObjectName("Subtle")
-        self.lbl_progress.setText(_("Подготовка...", "Preparing..."))
+        self.lbl_progress.setText(t("ui.windows.asr_glossary.preparing"))
         self.request_install.emit(self._current_engine)
 
     def _on_install_progress_internal(self, data: dict):
@@ -627,7 +626,7 @@ class AsrGlossaryView(QWidget):
             return
         self.lbl_progress.setVisible(True)
         self.lbl_progress.setObjectName("ChipOk")
-        self.lbl_progress.setText(_("Успешно установлено", "Installed successfully"))
+        self.lbl_progress.setText(t("ui.windows.asr_glossary.installed_success"))
         self.lbl_progress.style().unpolish(self.lbl_progress)
         self.lbl_progress.style().polish(self.lbl_progress)
         QTimer.singleShot(250, self.refresh)
@@ -638,7 +637,7 @@ class AsrGlossaryView(QWidget):
         err = str(data.get("error", "") or "")
         self.lbl_progress.setVisible(True)
         self.lbl_progress.setObjectName("ChipWarn")
-        self.lbl_progress.setText((_("Ошибка: ", "Error: ") + err) if err else _("Ошибка установки", "Install failed"))
+        self.lbl_progress.setText((t("ui.windows.asr_glossary.install_error") + err) if err else t("ui.windows.asr_glossary.install_failed"))
         self.lbl_progress.style().unpolish(self.lbl_progress)
         self.lbl_progress.style().polish(self.lbl_progress)
         self.btn_install.setEnabled(True)

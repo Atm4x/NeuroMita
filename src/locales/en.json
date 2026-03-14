@@ -32,6 +32,29 @@
     }
   },
   "controllers": {
+    "gui": {
+      "voiceover": {
+        "telegram_connect": "Connect Telegram",
+        "connecting": "Connecting...",
+        "connected": "Connected",
+        "info": "Information",
+        "model_not_installed": "Model is not installed.",
+        "error": "Error",
+        "failed_to_activate": "Failed to activate model",
+        "success": "Success",
+        "model_initialized": "Model {} initialized successfully!",
+        "init_failed": "Model initialized, but failed to activate it.",
+        "icon_connecting_tg": "Connecting to Telegram...",
+        "icon_tg_connected": "Telegram connected",
+        "icon_tg_not_connected": "Telegram not connected",
+        "icon_no_model_selected": "Local voiceover: model not selected",
+        "icon_initializing": "Initializing model...",
+        "icon_model_not_installed": "Model not installed",
+        "icon_model_ready": "Model ready",
+        "icon_initialization_required": "Initialization required",
+        "models_folder_not_found": "Failed to find models folder. Initialization cancelled."
+      }
+    },
     "chat": {
       "view_not_found": "ChatController: view not found!",
       "user_entry_not_found": "ChatController: view or user_entry not found!",
@@ -91,6 +114,42 @@
     "translation_loaded": "Translations loaded"
   },
   "handlers": {
+    "asr": {
+      "unknown_model": "unknown",
+      "installed": "installed",
+      "available": "available"
+    },
+    "models_downloader": {
+      "parsing_url": "Parsing URL...",
+      "invalid_url": "Invalid Pixeldrain list URL.",
+      "requesting_file_info": "Requesting file info...",
+      "timeout_file_info": "Timeout requesting file info.",
+      "network_error_info": "Network error requesting info",
+      "pixeldrain_api_error": "Pixeldrain API error",
+      "no_error_message": "No error message",
+      "file_list_empty": "File list is empty.",
+      "item_number_invalid": "Invalid item number in URL (must be > 0).",
+      "item_exceeds_count": "Specified item number ({num}) exceeds file count ({count}) in the list.",
+      "file_id_missing": "Missing file ID or name in API response.",
+      "file_found": "File found:",
+      "downloading": "Downloading:",
+      "downloaded": "Downloaded",
+      "download_complete": "Download complete.",
+      "extracting": "Extracting:",
+      "extraction_complete": "Extraction complete.",
+      "download_error": "Network error during download",
+      "file_error": "Error downloading or writing file",
+      "extraction_error": "Extraction error",
+      "operation_cancelled": "Operation cancelled by user.",
+      "cancelling": "Cancelling...",
+      "error": "Error",
+      "done": "Done!",
+      "download_title": "Download",
+      "download_process": "A download process is already running in the background.",
+      "download_window_title": "Downloading Models",
+      "preparing": "Preparing...",
+      "cancel_button": "Cancel"
+    },
     "voice_models": {
       "f5_tts": {
         "title": "Installing local model: ",
@@ -372,7 +431,56 @@
     "chat": {
       "screen_image": "<Screen Image>"
     },
+    "dialogs": {
+      "voiceover": {
+        "info": "Information",
+        "model_not_installed": "Model is not installed.",
+        "error": "Error",
+        "failed_to_activate": "Failed to activate model",
+        "success": "Success",
+        "model_initialized": "Model {} initialized successfully!",
+        "init_failed": "Model initialized, but failed to activate it.",
+        "models_folder_not_found": "Failed to find models folder. Initialization cancelled.",
+        "initializing": "Initializing model..."
+      }
+    },
     "settings": {
+      "character_settings": {
+        "logic": {
+          "current": "Current",
+          "warning": "Warning",
+          "no_character_selected": "No character selected.",
+          "information": "Information",
+          "no_character_available": "No character selected or its name is not available.",
+          "no_prompt_sets_found": "No prompt sets found for character.",
+          "confirmation": "Confirmation",
+          "apply_prompt_set": "Apply prompt set?",
+          "success_confirm": "Success",
+          "prompt_set_applied": "Prompt set applied.",
+          "confirm_delete": "Confirm deletion",
+          "delete_history_confirm": "Clear history for character '{name}'? This action cannot be undone.",
+          "confirm_delete_all": "Confirm deleting all histories",
+          "delete_all_histories_confirm": "This will delete the history of all characters and cannot be undone. Continue?"
+        },
+        "ui": {
+          "characters_settings": "Characters Settings",
+          "characters": "Characters",
+          "prompt_set": "Prompt set",
+          "provider_for_character": "Provider for character",
+          "character_management": "Character management",
+          "reload": "Reload",
+          "open_prompt_set_folder": "Open prompt set folder",
+          "history_folder": "History folder",
+          "set_information": "Set information",
+          "author": "Author:",
+          "version": "Version:",
+          "description": "Description:",
+          "history_cleanup": "History & cleanup",
+          "clear_history": "Clear history",
+          "clear_all_histories": "Clear all histories"
+        }
+      }
+    },
       "model_interaction": {
         "title": "Model Interaction Settings",
         "message_settings": "Message settings",
@@ -477,6 +585,29 @@
       }
     },
     "windows": {
+      "asr_glossary": {
+        "asr_models": "ASR Models",
+        "search": "Search...",
+        "refresh": "Refresh",
+        "install": "Install",
+        "info": "Information",
+        "status_installed": "Installed",
+        "status_available": "Available",
+        "description_missing": "No description.",
+        "no_description": "No description.",
+        "model_not_installed": "Model is not installed.\nClick \"Install\" to start downloading.",
+        "settings_tab": "Settings",
+        "dependencies_tab": "Dependencies",
+        "no_settings": "No settings for this model.",
+        "no_dependency_list": "This model provides no dependency list.",
+        "ok_status": "OK",
+        "missing_status": "Missing",
+        "no_tags": "No tags",
+        "preparing": "Preparing...",
+        "installed_success": "Installed successfully",
+        "install_failed": "Install failed",
+        "install_error": "Error: "
+      },
       "main_view": {
         "title": "NeuroMita Chat",
         "manage_models": "Manage Local Models",

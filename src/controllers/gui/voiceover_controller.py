@@ -165,21 +165,21 @@ class VoiceoverGuiController(BaseController):
 
         if not active:
             btn.setEnabled(False)
-            btn.setText(_("Подключиться к Telegram", "Connect Telegram"))
+            btn.setText(t("controllers.gui.voiceover.telegram_connect"))
             return
 
         if self._tg_connecting:
             btn.setEnabled(False)
-            btn.setText(_("Подключение...", "Connecting..."))
+            btn.setText(t("controllers.gui.voiceover.connecting"))
             return
 
         if self._tg_connected is True:
             btn.setEnabled(False)
-            btn.setText(_("Подключено", "Connected"))
+            btn.setText(t("controllers.gui.voiceover.connected"))
             return
 
         btn.setEnabled(True)
-        btn.setText(_("Подключиться к Telegram", "Connect Telegram"))
+        btn.setText(t("controllers.gui.voiceover.telegram_connect"))
 
     def _maybe_autoconnect_tg(self):
         use_voice = self._effective_use_voice()
@@ -222,12 +222,12 @@ class VoiceoverGuiController(BaseController):
             if not self._check_installed(model_id):
                 self._sync_local_warning_icon()
                 self._emit_voice_icon_state()
-                QMessageBox.information(self.view, _("Информация", "Info"), _("Модель не установлена.", "Model is not installed."))
+                QMessageBox.information(self.view, t("controllers.gui.voiceover.info"), t("controllers.gui.voiceover.model_not_installed"))
                 return
 
             if self._check_initialized(model_id):
                 if not self._select_model(model_id):
-                    QMessageBox.critical(self.view, _("Ошибка", "Error"), _("Не удалось активировать модель", "Failed to activate model"))
+                    QMessageBox.critical(self.view, t("controllers.gui.voiceover.error"), t("controllers.gui.voiceover.failed_to_activate"))
                 self._set_combobox_by_model_id(model_id)
                 self._sync_local_warning_icon()
                 self._emit_voice_icon_state()
@@ -270,13 +270,13 @@ class VoiceoverGuiController(BaseController):
             if had_dialog and model_id:
                 if ok:
                     self.event_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
-                        "title": _("Успешно", "Success"),
-                        "message": _("Модель {} успешно инициализирована!", "Model {} initialized successfully!").format(model_id)
+                        "title": t("controllers.gui.voiceover.success"),
+                        "message": t("controllers.gui.voiceover.model_initialized").format(model_id)
                     })
                 else:
                     self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
-                        "title": _("Ошибка", "Error"),
-                        "message": _("Модель инициализировалась, но не удалось активировать её.", "Model initialized, but failed to activate it.")
+                        "title": t("controllers.gui.voiceover.error"),
+                        "message": t("controllers.gui.voiceover.init_failed")
                     })
 
         self._ui(apply)
@@ -356,7 +356,7 @@ class VoiceoverGuiController(BaseController):
                 self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                     "category": "voice",
                     "state": "loading",
-                    "tooltip": _("Подключение к Telegram...", "Connecting to Telegram..."),
+                    "tooltip": t("controllers.gui.voiceover.icon_connecting_tg"),
                 })
                 return
 
@@ -364,14 +364,14 @@ class VoiceoverGuiController(BaseController):
                 self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                     "category": "voice",
                     "state": "green",
-                    "tooltip": _("Telegram подключен", "Telegram connected"),
+                    "tooltip": t("controllers.gui.voiceover.icon_tg_connected"),
                 })
                 return
 
             self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                 "category": "voice",
                 "state": "red",
-                "tooltip": _("Telegram не подключен", "Telegram not connected"),
+                "tooltip": t("controllers.gui.voiceover.icon_tg_not_connected"),
             })
             return
 
@@ -384,7 +384,7 @@ class VoiceoverGuiController(BaseController):
             self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                 "category": "voice",
                 "state": "red",
-                "tooltip": _("Локальная озвучка: модель не выбрана", "Local voiceover: model not selected"),
+                "tooltip": t("controllers.gui.voiceover.icon_no_model_selected"),
             })
             return
 
@@ -392,7 +392,7 @@ class VoiceoverGuiController(BaseController):
             self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                 "category": "voice",
                 "state": "loading",
-                "tooltip": _("Инициализация модели...", "Initializing model..."),
+                "tooltip": t("controllers.gui.voiceover.icon_initializing"),
             })
             return
 
@@ -400,7 +400,7 @@ class VoiceoverGuiController(BaseController):
             self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
                 "category": "voice",
                 "state": "red",
-                "tooltip": _("Модель не установлена", "Model not installed"),
+                "tooltip": t("controllers.gui.voiceover.icon_model_not_installed"),
             })
             return
 
@@ -408,7 +408,7 @@ class VoiceoverGuiController(BaseController):
         self.event_bus.emit(Events.GUI.SET_SETTINGS_ICON_INDICATOR, {
             "category": "voice",
             "state": "green" if initialized else "red",
-            "tooltip": _("Модель готова", "Model ready") if initialized else _("Требуется инициализация", "Initialization required"),
+            "tooltip": t("controllers.gui.voiceover.icon_model_ready") if initialized else t("controllers.gui.voiceover.icon_initialization_required"),
         })
 
     # ---------- local warning icon ----------
@@ -554,9 +554,8 @@ class VoiceoverGuiController(BaseController):
             return
 
         if not os.path.exists("models"):
-            QMessageBox.critical(self.view, _("Ошибка", "Error"),
-                                 _("Не найдена папка models. Инициализация отменена.",
-                                   "Failed to find models folder. Initialization cancelled."))
+            QMessageBox.critical(self.view, t("controllers.gui.voiceover.error"),
+                                 t("controllers.gui.voiceover.models_folder_not_found"))
             return
 
         self._loading_model_id = model_id
@@ -568,7 +567,7 @@ class VoiceoverGuiController(BaseController):
             lambda: self._user_cancel_loading()
         )
         self._loading_dialog.show()
-        self._set_loading_status(_("Инициализация модели...", "Initializing model..."))
+        self._set_loading_status(t("controllers.gui.voiceover.icon_initializing"))
 
     def _user_cancel_loading(self):
         self._close_loading_dialog()

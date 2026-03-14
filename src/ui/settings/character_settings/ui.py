@@ -52,7 +52,7 @@ def build_character_settings_ui(self, parent_layout):
     container_lay.setContentsMargins(0, 0, right_pad, 0)
     container_lay.setSpacing(6)
 
-    create_section_header(container_lay, _("Настройки персонажей", "Characters Settings"))
+    create_section_header(container_lay, t("ui.settings.character_settings.ui.characters_settings"))
 
     overlay_w = getattr(self, "SETTINGS_PANEL_WIDTH", 400)
     label_w = max(90, min(120, int(overlay_w * 0.3)))
@@ -71,7 +71,7 @@ def build_character_settings_ui(self, parent_layout):
     self.character_combobox = QComboBox()
     self.character_combobox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     ch_h.addWidget(self.character_combobox, 1)
-    lay.addWidget(_make_row(_("Персонажи", "Characters"), character_field, label_w))
+    lay.addWidget(_make_row(t("ui.settings.character_settings.ui.characters"), character_field, label_w))
 
     prompt_field = QWidget()
     pr_h = QHBoxLayout(prompt_field)
@@ -81,7 +81,7 @@ def build_character_settings_ui(self, parent_layout):
     self.prompt_pack_combobox = QComboBox()
     self.prompt_pack_combobox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     pr_h.addWidget(self.prompt_pack_combobox, 1)
-    lay.addWidget(_make_row(_("Набор промптов", "Prompt set"), prompt_field, label_w))
+    lay.addWidget(_make_row(t("ui.settings.character_settings.ui.prompt_set"), prompt_field, label_w))
 
     provider_field = QWidget()
     pv_h = QHBoxLayout(provider_field)
@@ -91,13 +91,13 @@ def build_character_settings_ui(self, parent_layout):
     self.char_provider_combobox = QComboBox()
     self.char_provider_combobox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     pv_h.addWidget(self.char_provider_combobox, 1)
-    lay.addWidget(_make_row(_("Провайдер для персонажа", "Provider for character"), provider_field, label_w))
+    lay.addWidget(_make_row(t("ui.settings.character_settings.ui.provider_for_character"), provider_field, label_w))
 
-    sub_title1 = QLabel(_("Управление персонажем", "Character management"))
+    sub_title1 = QLabel(t("ui.settings.character_settings.ui.character_management"))
     sub_title1.setStyleSheet("font-weight: 600;")
     lay.addWidget(sub_title1)
 
-    self.btn_reload_character_data = QPushButton(_("Перезагрузить", "Reload"))
+    self.btn_reload_character_data = QPushButton(t("ui.settings.character_settings.ui.reload"))
     self.btn_reload_character_data.setObjectName("SecondaryButton")
     self.btn_reload_character_data.setIcon(qta.icon('fa5s.sync', color='#ffffff'))
     self.btn_reload_character_data.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -108,12 +108,12 @@ def build_character_settings_ui(self, parent_layout):
     mg_h.setContentsMargins(0, 0, 0, 0)
     mg_h.setSpacing(6)
 
-    self.btn_open_character_folder = QPushButton(_("Открыть папку набора", "Open prompt set folder"))
+    self.btn_open_character_folder = QPushButton(t("ui.settings.character_settings.ui.open_prompt_set_folder"))
     self.btn_open_character_folder.setObjectName("SecondaryButton")
     self.btn_open_character_folder.setIcon(qta.icon('fa5s.folder-open', color='#ffffff'))
     mg_h.addWidget(self.btn_open_character_folder, 1)
 
-    self.btn_open_history_folder = QPushButton(_("Папку истории", "History folder"))
+    self.btn_open_history_folder = QPushButton(t("ui.settings.character_settings.ui.history_folder"))
     self.btn_open_history_folder.setObjectName("SecondaryButton")
     self.btn_open_history_folder.setIcon(qta.icon('fa5s.clock', color='#ffffff'))
     mg_h.addWidget(self.btn_open_history_folder, 1)
@@ -121,8 +121,8 @@ def build_character_settings_ui(self, parent_layout):
     lay.addWidget(mgmt_row)
 
     lay.addSpacing(6)
-    
-    self.prompt_info_section = InnerCollapsibleSection(_("Информация о наборе", "Set information"), parent=self)
+
+    self.prompt_info_section = InnerCollapsibleSection(t("ui.settings.character_settings.ui.set_information"), parent=self)
     lay.addWidget(self.prompt_info_section)
 
     try:
@@ -140,13 +140,13 @@ def build_character_settings_ui(self, parent_layout):
     self.prompt_info_labels = {}
 
     self.prompt_info_section.add_widget(
-        _make_row(_("Автор:", "Author:"), _make_info_value_label(self, "author"), label_w)
+        _make_row(t("ui.settings.character_settings.ui.author"), _make_info_value_label(self, "author"), label_w)
     )
     self.prompt_info_section.add_widget(
-        _make_row(_("Версия:", "Version:"), _make_info_value_label(self, "version"), label_w)
+        _make_row(t("ui.settings.character_settings.ui.version"), _make_info_value_label(self, "version"), label_w)
     )
 
-    desc_title = QLabel(_("Описание:", "Description:"))
+    desc_title = QLabel(t("ui.settings.character_settings.ui.description"))
     desc_title.setStyleSheet("font-weight: 600;")
     self.prompt_info_section.add_widget(desc_title)
 
@@ -155,7 +155,7 @@ def build_character_settings_ui(self, parent_layout):
 
     lay.addSpacing(6)
 
-    self.history_section = InnerCollapsibleSection(_("История и очистка", "History & cleanup"), parent=self)
+    self.history_section = InnerCollapsibleSection(t("ui.settings.character_settings.ui.history_cleanup"), parent=self)
     lay.addWidget(self.history_section)
 
     try:
@@ -188,12 +188,12 @@ def build_character_settings_ui(self, parent_layout):
         btn.style().polish(btn)
         btn.update()
 
-    self.btn_clear_history = QPushButton(_("Очистить историю", "Clear history"))
+    self.btn_clear_history = QPushButton(t("ui.settings.character_settings.ui.clear_history"))
     self.btn_clear_history.setIcon(qta.icon('fa5s.trash', color='#ffffff'))
     _mark_danger_hover(self.btn_clear_history)
     hr_h.addWidget(self.btn_clear_history, 1)
 
-    self.btn_clear_all_histories = QPushButton(_("Очистить все истории", "Clear all histories"))
+    self.btn_clear_all_histories = QPushButton(t("ui.settings.character_settings.ui.clear_all_histories"))
     self.btn_clear_all_histories.setIcon(qta.icon('fa5s.trash-alt', color='#ffffff'))
     _mark_danger_hover(self.btn_clear_all_histories)
     hr_h.addWidget(self.btn_clear_all_histories, 1)
