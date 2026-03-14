@@ -673,7 +673,7 @@ class ChatGUI(QMainWindow):
                 if staged_image_data and not current_image_data and not (image_data or []):
                     label = t("ui.windows.main_view.attached_images")
                 elif (current_image_data or (image_data or [])) and not staged_image_data:
-                    label = _("<Изображение экрана>", "<Screen Image>")
+                    label = t("ui.windows.main_view.screen_image")
 
                 image_content_for_display.insert(0, {"type": "text", "content": label + "\n"})
 
@@ -1016,7 +1016,7 @@ class ChatGUI(QMainWindow):
             target_version = self.g4f_version_entry.text().strip()
             if not target_version:
                 QMessageBox.critical(self, t("ui.windows.main_view.error"),
-                    _("Пожалуйста, введите версию g4f или 'latest'.", "Please enter a g4f version or 'latest'."))
+                    t("ui.windows.main_view.enter_g4f_version"))
                 return
         else:
             logger.error("Виджет entry для версии g4f не найден.")
@@ -1027,8 +1027,7 @@ class ChatGUI(QMainWindow):
         success = self.event_bus.emit_and_wait(Events.Model.SCHEDULE_G4F_UPDATE, {'version': target_version}, timeout=1.0)
         if success and success[0]:
             QMessageBox.information(self, t("ui.windows.main_view.scheduled"),
-                _("Версия g4f '{version}' будет установлена/обновлена при следующем запуске программы.",
-                  "g4f version '{version}' will be installed/updated the next time the program starts.").format(
+                t("ui.windows.main_view.g4f_update_scheduled").format(
                     version=target_version))
         else:
             QMessageBox.critical(self, t("ui.windows.main_view.save_error"),

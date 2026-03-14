@@ -191,116 +191,92 @@ def setup_model_interaction_controls(self, parent):
             'type': 'checkbutton',
             'default_checkbutton': False,
             'tooltip': t('ui.settings.model_interaction.use_react_help')
-                'Отключение полностью блокирует вызовы модели для react.',
-                'Enable generation of reactions to player actions (react tasks). '
-                'Disabling completely blocks model calls for react.'
-            )
         },
         {
-            'label': _('Использовать реакции L1 (тихие)', 'Enable react L1 (silent)'),
+            'label': t('ui.settings.model_interaction.react_l1_enabled'),
             'key': 'REACT_L1_ENABLED',
             'type': 'checkbutton',
             'default_checkbutton': True,
             'depends_on': 'REACT_ENABLED',
-            'tooltip': _(
-                'Тихие реакции: мимика/поза/действия без ответа текстом.',
-                'Silent reactions: face/pose/actions without text answer.'
-            )
+            'tooltip': t('ui.settings.model_interaction.react_l1_enabled_help')
         },
         {
-            'label': _('Провайдер для реакций L1', 'Provider for react L1'),
+            'label': t('ui.settings.model_interaction.react_l1_provider'),
             'key': 'REACT_PROVIDER_L1',
             'type': 'combobox',
             'options': react_provider_names,
-            'default': _('Текущий', 'Current'),
+            'default': t('ui.settings.model_interaction.current_provider'),
             'depends_on': 'REACT_L1_ENABLED',
-            'tooltip': _(
-                'Какой API-пресет использовать для тихих react-сообщений (L1).',
-                'Which API preset to use for silent react messages (L1).'
-            )
+            'tooltip': t('ui.settings.model_interaction.react_l1_provider_help')
         },
         {
-            'label': _('Использовать реакции L2 (с ответом)', 'Enable react L2 (with answer)'),
+            'label': t('ui.settings.model_interaction.react_l2_enabled'),
             'key': 'REACT_L2_ENABLED',
             'type': 'checkbutton',
             'default_checkbutton': False,
             'depends_on': 'REACT_ENABLED',
-            'tooltip': _(
-                'Реакции с полноценным ответом: текст + озвучка, запись в историю.',
-                'Answer reactions: text + voiceover, saved to history.'
-            )
+            'tooltip': t('ui.settings.model_interaction.react_l2_enabled_help')
         },
         {
-            'label': _('Провайдер для реакций L2', 'Provider for react L2'),
+            'label': t('ui.settings.model_interaction.react_l2_provider'),
             'key': 'REACT_PROVIDER_L2',
             'type': 'combobox',
             'options': react_provider_names,
-            'default': _('Текущий', 'Current'),
+            'default': t('ui.settings.model_interaction.current_provider'),
             'depends_on': 'REACT_L2_ENABLED',
-            'tooltip': _(
-                'Какой API-пресет использовать для react-ответов (L2).',
-                'Which API preset to use for answer-react messages (L2).'
-            )
+            'tooltip': t('ui.settings.model_interaction.react_l2_provider_help')
         },
     ]
 
     create_settings_section(
         self,
         parent,
-        _("Настройки реакций", "React settings"),
+        t("ui.settings.model_interaction.react_settings"),
         react_settings_config
     )
 
     token_settings_config = [
-        {'label': _('Показывать информацию о токенах', 'Show Token Info'), 'key': 'SHOW_TOKEN_INFO',
+        {'label': t('ui.settings.model_interaction.show_token_info'), 'key': 'SHOW_TOKEN_INFO',
          'type': 'checkbutton', 'default_checkbutton': True,
-         'tooltip': _('Отображать количество токенов и ориентировочную стоимость в интерфейсе чата.',
-                      'Display token count and approximate cost in the chat interface.')},
-        {'label': _('Стоимость токена (вход, ₽)', 'Token Cost (input, ₽)'), 'key': 'TOKEN_COST_INPUT', 'depends_on': 'SHOW_TOKEN_INFO',
+         'tooltip': t('ui.settings.model_interaction.show_token_info_help')},
+        {'label': t('ui.settings.model_interaction.token_cost_input'), 'key': 'TOKEN_COST_INPUT', 'depends_on': 'SHOW_TOKEN_INFO',
          'type': 'entry', 'default': 0.000001, 'validation': self.validate_float_positive_or_zero,
-         'tooltip': _('Стоимость одного токена для входных данных (например, 0.000001 ₽ за токен).',
-                      'Cost of one token for input data (e.g., 0.000001 ₽ per token).')},
-        {'label': _('Стоимость токена (выход, ₽)', 'Token Cost (output, ₽)'), 'key': 'TOKEN_COST_OUTPUT', 'depends_on': 'SHOW_TOKEN_INFO',
+         'tooltip': t('ui.settings.model_interaction.token_cost_input_help')},
+        {'label': t('ui.settings.model_interaction.token_cost_output'), 'key': 'TOKEN_COST_OUTPUT', 'depends_on': 'SHOW_TOKEN_INFO',
          'type': 'entry', 'default': 0.000002, 'validation': self.validate_float_positive_or_zero,
-         'tooltip': _('Стоимость одного токена для выходных данных (например, 0.000002 ₽ за токен).',
-                      'Cost of one token for output data (e.g., 0.000002 ₽ per token).')},
-        {'label': _('Максимальное количество токенов модели', 'Max Model Tokens'), 'key': 'MAX_MODEL_TOKENS', 'depends_on': 'SHOW_TOKEN_INFO',
+         'tooltip': t('ui.settings.model_interaction.token_cost_output_help')},
+        {'label': t('ui.settings.model_interaction.max_model_tokens'), 'key': 'MAX_MODEL_TOKENS', 'depends_on': 'SHOW_TOKEN_INFO',
          'type': 'entry', 'default': 32000, 'validation': self.validate_positive_integer,
-         'tooltip': _('Максимальное количество токенов, которое может обработать модель.',
-                      'Maximum number of tokens the model can process.')},
+         'tooltip': t('ui.settings.model_interaction.max_model_tokens_help')},
     ]
 
     create_settings_section(self, parent,
-                           _("Настройки токенов", "Token Settings"),
+                           t("ui.settings.model_interaction.token_settings"),
                            token_settings_config)
 
     command_processing_config = [
-        {'label': _('Использовать обработку команд', 'Use command processing'), 'key': 'USE_COMMAND_REPLACER',
+        {'label': t('ui.settings.model_interaction.use_command_processing'), 'key': 'USE_COMMAND_REPLACER',
          'type': 'checkbutton',
-         'default_checkbutton': False, 'tooltip': _('Включает замену команд в ответе модели на основе схожести.',
-                                                    'Enables replacing commands in the model response based on similarity.')},
-        {'label': _('Мин. порог схожести', 'Min similarity threshold'), 'key': 'MIN_SIMILARITY_THRESHOLD',
-         'type': 'entry', 
+         'default_checkbutton': False, 'tooltip': t('ui.settings.model_interaction.use_command_processing_help')},
+        {'label': t('ui.settings.model_interaction.min_similarity_threshold'), 'key': 'MIN_SIMILARITY_THRESHOLD',
+         'type': 'entry',
          'depends_on': 'USE_COMMAND_REPLACER', 'hide_when_disabled': True,
-         'default': 0.40, 
-         'validation': self.validate_float_0_to_1, 
-         'tooltip': _('Минимальный порог схожести для замены команды (0.0-1.0).',
-                      'Minimum similarity threshold for command replacement (0.0-1.0).')},
-        {'label': _('Порог смены категории', 'Category switch threshold'), 'key': 'CATEGORY_SWITCH_THRESHOLD',
+         'default': 0.40,
+         'validation': self.validate_float_0_to_1,
+         'tooltip': t('ui.settings.model_interaction.min_similarity_threshold_help')},
+        {'label': t('ui.settings.model_interaction.category_switch_threshold'), 'key': 'CATEGORY_SWITCH_THRESHOLD',
          'type': 'entry',
          'depends_on': 'USE_COMMAND_REPLACER', 'hide_when_disabled': True,
          'default': 0.18,
-         'validation': self.validate_float_0_to_1, 
-         'tooltip': _('Дополнительный порог для переключения на другую категорию команд (0.0-1.0).',
-                      'Additional threshold for switching to a different command category (0.0-1.0).')},
-        {'label': _('Пропускать параметры с запятой', 'Skip comma parameters'), 'key': 'SKIP_COMMA_PARAMETERS',
-         'type': 'checkbutton', 
+         'validation': self.validate_float_0_to_1,
+         'tooltip': t('ui.settings.model_interaction.category_switch_threshold_help')},
+        {'label': t('ui.settings.model_interaction.skip_comma_parameters'), 'key': 'SKIP_COMMA_PARAMETERS',
+         'type': 'checkbutton',
          'depends_on': 'USE_COMMAND_REPLACER', 'hide_when_disabled': True,
-         'default_checkbutton': True, 
-         'tooltip': _('Пропускать параметры, содержащие запятую, при замене.',
-                                                   'Skip parameters containing commas during replacement.')},
+         'default_checkbutton': True,
+         'tooltip': t('ui.settings.model_interaction.skip_comma_parameters_help')},
     ]
 
     create_settings_section(self, parent,
-                           _("Обработка команд", "Command Processing"),
+                           t("ui.settings.model_interaction.command_processing"),
                            command_processing_config)

@@ -35,6 +35,15 @@
     }
   },
   "ui": {
+    "windows": {
+      "main_view": {
+        "screen_image": "<Screen Image>",
+        "error": "Error",
+        "scheduled": "Scheduled",
+        "enter_g4f_version": "Please enter a g4f version or 'latest'.",
+        "g4f_update_scheduled": "g4f version '{version}' will be installed/updated the next time the program starts."
+      }
+    },
     "settings": {
       "settings_panel": {
         "general": "General",
@@ -100,7 +109,19 @@
         "unknown_error": "Unknown error",
         "test_result": "Test Result",
         "connection_error": "Connection Error",
-        "test_error": "Test Error"
+        "test_error": "Test Error",
+        "documentation": "Documentation",
+        "models_list": "Models list",
+        "get_api_key": "Get API key",
+        "not_available": "Not available",
+        "pipeline_template_only": "Pipeline can be configured only for presets without a template.",
+        "new_preset": "New preset",
+        "preset_name": "Preset name:",
+        "failed_to_create_preset": "Failed to create preset. Check logs (SAVE_CUSTOM_PRESET).",
+        "unsaved_changes": "Unsaved changes",
+        "unsaved_changes_delete_preset": "There are unsaved changes. Delete preset?",
+        "delete_preset": "Delete preset",
+        "delete_selected_preset": "Delete selected preset?"
       }
     }
   },
@@ -655,7 +676,51 @@
         "tools_use_help": "Allow using tools like seacrh",
         "tools_mode": "Tools mode",
         "tools_mode_help": "Native - using buit-in tools, legacy - using own prompts and handler",
-        "current": "Current"
+        "current": "Current",
+        "react_settings": "React settings",
+        "token_settings": "Token Settings",
+        "command_processing": "Command Processing",
+        "compress_on_limit": "Compress history on limit",
+        "compress_on_limit_help": "Automatically compress chat history when message limit is reached",
+        "periodic_compression": "Periodic history compression",
+        "periodic_compression_help": "Compress history after a certain number of messages",
+        "compression_interval": "Compression interval (message count)",
+        "compression_interval_help": "Number of messages before compressing history",
+        "compression_prompt_template": "Compression prompt template",
+        "compression_prompt_template_help": "Path to the file with the prompt for history compression",
+        "compression_percent": "Compression percent (%)",
+        "compression_percent_help": "Target history size percentage after compression (0.0-1.0)",
+        "compression_output_target": "Compression output target",
+        "compression_output_target_help": "Where to save compressed history: in history or memory",
+        "compression_provider": "API preset for compression",
+        "history_compression": "History Compression",
+        "use_react": "Use reactions",
+        "use_react_help": "Enable generation of reactions to player actions (react tasks). Disabling completely blocks model calls for react.",
+        "react_l1_enabled": "Enable react L1 (silent)",
+        "react_l1_enabled_help": "Silent reactions: face/pose/actions without text answer.",
+        "react_l1_provider": "Provider for react L1",
+        "react_l1_provider_help": "Which API preset to use for silent react messages (L1).",
+        "react_l2_enabled": "Enable react L2 (with answer)",
+        "react_l2_enabled_help": "Answer reactions: text + voiceover, saved to history.",
+        "react_l2_provider": "Provider for react L2",
+        "react_l2_provider_help": "Which API preset to use for answer-react messages (L2).",
+        "current_provider": "Current",
+        "show_token_info": "Show Token Info",
+        "show_token_info_help": "Display token count and approximate cost in the chat interface.",
+        "token_cost_input": "Token Cost (input, ₽)",
+        "token_cost_input_help": "Cost of one token for input data (e.g., 0.000001 ₽ per token).",
+        "token_cost_output": "Token Cost (output, ₽)",
+        "token_cost_output_help": "Cost of one token for output data (e.g., 0.000002 ₽ per token).",
+        "max_model_tokens": "Max Model Tokens",
+        "max_model_tokens_help": "Maximum number of tokens the model can process.",
+        "use_command_processing": "Use command processing",
+        "use_command_processing_help": "Enables replacing commands in the model response based on similarity.",
+        "min_similarity_threshold": "Min similarity threshold",
+        "min_similarity_threshold_help": "Minimum similarity threshold for command replacement (0.0-1.0).",
+        "category_switch_threshold": "Category switch threshold",
+        "category_switch_threshold_help": "Additional threshold for switching to a different command category (0.0-1.0).",
+        "skip_comma_parameters": "Skip comma parameters",
+        "skip_comma_parameters_help": "Skip parameters containing commas during replacement."
       },
       "game_settings": {
         "title": "Game Settings",

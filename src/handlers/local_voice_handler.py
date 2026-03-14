@@ -6,7 +6,8 @@ from typing import Dict, Optional, Any, List
 
 import ffmpeg
 from main_logger import logger
-from utils.translation_manager import t, get_character_voice_paths
+from utils.translation_manager import t
+from utils import get_character_voice_paths
 from utils.gpu_utils import check_gpu_provider
 
 from handlers.voice_models.base_model import IVoiceModel

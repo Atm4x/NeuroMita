@@ -37,7 +37,12 @@
   "ui": {
     "windows": {
       "main_view": {
-        "title": "Чат с NeuroMita"
+        "title": "Чат с NeuroMita",
+        "screen_image": "<Изображение экрана>",
+        "error": "Ошибка",
+        "scheduled": "Запланировано",
+        "enter_g4f_version": "Пожалуйста, введите версию g4f или 'latest'.",
+        "g4f_update_scheduled": "Версия g4f '{version}' будет установлена/обновлена при следующем запуске программы."
       }
     },
     "settings": {
@@ -105,7 +110,19 @@
         "unknown_error": "Неизвестная ошибка",
         "test_result": "Результат тестирования",
         "connection_error": "Ошибка подключения",
-        "test_error": "Ошибка тестирования"
+        "test_error": "Ошибка тестирования",
+        "documentation": "Документация",
+        "models_list": "Список моделей",
+        "get_api_key": "Получить API ключ",
+        "not_available": "Недоступно",
+        "pipeline_template_only": "Pipeline можно настраивать только для пресетов без шаблона.",
+        "new_preset": "Новый пресет",
+        "preset_name": "Название пресета:",
+        "failed_to_create_preset": "Не удалось создать пресет. Проверь логи (SAVE_CUSTOM_PRESET).",
+        "unsaved_changes": "Несохраненные изменения",
+        "unsaved_changes_delete_preset": "Есть несохраненные изменения. Удалить пресет?",
+        "delete_preset": "Удалить пресет",
+        "delete_selected_preset": "Удалить выбранный пресет?"
       }
     }
   },
@@ -655,7 +672,51 @@
         "tools_use_help": "Позволяет использовать инструменты такие как поиск в сети",
         "tools_mode": "Режим инструментов",
         "tools_mode_help": "Native - использует вшитые возможности модели, legacy - добавляет промпт и ловит вызов вручную",
-        "current": "Текущий"
+        "current": "Текущий",
+        "react_settings": "Настройки реакций",
+        "token_settings": "Настройки токенов",
+        "command_processing": "Обработка команд",
+        "compress_on_limit": "Сжимать историю при достижении лимита",
+        "compress_on_limit_help": "Автоматически сжимать историю диалога при достижении лимита сообщений",
+        "periodic_compression": "Периодическое сжатие истории",
+        "periodic_compression_help": "Сжимать историю через определённое количество сообщений",
+        "compression_interval": "Интервал сжатия (количество сообщений)",
+        "compression_interval_help": "Через сколько сообщений сжимать историю",
+        "compression_prompt_template": "Шаблон промпта сжатия",
+        "compression_prompt_template_help": "Путь к файлу с промптом для сжатия истории",
+        "compression_percent": "Процент сжатия (%)",
+        "compression_percent_help": "Целевой процент размера истории после сжатия (0.0-1.0)",
+        "compression_output_target": "Целевой выход сжатия",
+        "compression_output_target_help": "Куда сохранять сжатую историю: в историю или память",
+        "compression_provider": "API-пресет для сжатия",
+        "history_compression": "Сжатие истории",
+        "use_react": "Использовать реакции",
+        "use_react_help": "Включить генерацию реакций на действия игрока (реакции). Отключение полностью блокирует вызовы модели для react.",
+        "react_l1_enabled": "Использовать реакции L1 (тихие)",
+        "react_l1_enabled_help": "Тихие реакции: мимика/поза/действия без ответа текстом.",
+        "react_l1_provider": "Провайдер для реакций L1",
+        "react_l1_provider_help": "Какой API-пресет использовать для тихих react-сообщений (L1).",
+        "react_l2_enabled": "Использовать реакции L2 (с ответом)",
+        "react_l2_enabled_help": "Реакции с полноценным ответом: текст + озвучка, запись в историю.",
+        "react_l2_provider": "Провайдер для реакций L2",
+        "react_l2_provider_help": "Какой API-пресет использовать для react-ответов (L2).",
+        "current_provider": "Текущий",
+        "show_token_info": "Показывать информацию о токенах",
+        "show_token_info_help": "Отображать количество токенов и ориентировочную стоимость в интерфейсе чата.",
+        "token_cost_input": "Стоимость токена (вход, ₽)",
+        "token_cost_input_help": "Стоимость одного токена для входных данных (например, 0.000001 ₽ за токен).",
+        "token_cost_output": "Стоимость токена (выход, ₽)",
+        "token_cost_output_help": "Стоимость одного токена для выходных данных (например, 0.000002 ₽ за токен).",
+        "max_model_tokens": "Максимальное количество токенов модели",
+        "max_model_tokens_help": "Максимальное количество токенов, которое может обработать модель.",
+        "use_command_processing": "Использовать обработку команд",
+        "use_command_processing_help": "Включает замену команд в ответе модели на основе схожести.",
+        "min_similarity_threshold": "Мин. порог схожести",
+        "min_similarity_threshold_help": "Минимальный порог схожести для замены команды (0.0-1.0).",
+        "category_switch_threshold": "Порог смены категории",
+        "category_switch_threshold_help": "Дополнительный порог для переключения на другую категорию команд (0.0-1.0).",
+        "skip_comma_parameters": "Пропускать параметры с запятой",
+        "skip_comma_parameters_help": "Пропускать параметры, содержащие запятую, при замене."
       },
       "game_settings": {
         "title": "Настройки игры",

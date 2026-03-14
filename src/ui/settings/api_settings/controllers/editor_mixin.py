@@ -316,7 +316,7 @@ class EditorMixin:
     def _add_custom_preset_async(self) -> None:
         logger.info("[API UI] add preset clicked")
         v = self.view
-        name, ok = QInputDialog.getText(v, _("Новый пресет", "New preset"), _("Название пресета:", "Preset name:"))
+        name, ok = QInputDialog.getText(v, t("ui.settings.api.new_preset"), t("ui.settings.api.preset_name"))
         if not ok or not str(name or "").strip():
             logger.info("[API UI] add preset cancelled/empty")
             return
@@ -347,8 +347,7 @@ class EditorMixin:
                 QMessageBox.warning(
                     v,
                     t("common.error"),
-                    _("Не удалось создать пресет. Проверь логи (SAVE_CUSTOM_PRESET).",
-                    "Failed to create preset. Check logs (SAVE_CUSTOM_PRESET).")
+                    t("ui.settings.api.failed_to_create_preset")
                 )
                 return
             self.reload_presets_async()
@@ -364,16 +363,16 @@ class EditorMixin:
 
         if cur_item.has_changes:
             reply = QMessageBox.question(
-                v, _("Несохраненные изменения", "Unsaved changes"),
-                _("Есть несохраненные изменения. Удалить пресет?", "There are unsaved changes. Delete preset?"),
+                v, t("ui.settings.api.unsaved_changes"),
+                t("ui.settings.api.unsaved_changes_delete_preset"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
         reply = QMessageBox.question(
-            v, _("Удалить пресет", "Delete preset"),
-            _("Удалить выбранный пресет?", "Delete selected preset?"),
+            v, t("ui.settings.api.delete_preset"),
+            t("ui.settings.api.delete_selected_preset"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply != QMessageBox.StandardButton.Yes:

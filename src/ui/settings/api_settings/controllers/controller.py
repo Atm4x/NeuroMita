@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 from core.events import get_event_bus, Events
 from main_logger import logger
+from utils.translation_manager import t
 from ui.settings.api_settings.widgets import CustomPresetListItem
 from .bus_async import bus_call_async
 from .protocols_mixin import ProtocolsMixin
@@ -189,9 +190,8 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         if base is not None:
             QMessageBox.information(
                 v,
-                _("Недоступно", "Not available"),
-                _("Pipeline можно настраивать только для пресетов без шаблона.",
-                  "Pipeline can be configured only for presets without a template."),
+                t("ui.settings.api.not_available"),
+                t("ui.settings.api.pipeline_template_only"),
             )
             return
 
