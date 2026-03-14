@@ -31,12 +31,12 @@ class PresetsMixin:
             v = self.view
             Item = self._item_cls()
             if Item is None:
-                v.provider_label.setText(_("Ошибка UI: не удалось загрузить виджет списка пресетов", "UI error: failed to load presets list widget"))
+                v.provider_label.setText(t("ui.settings.api.error_loading_presets_widget"))
                 return
 
             if not meta:
                 # Most likely: ApiPresetsController not running / no subscribers / exception in controller
-                v.provider_label.setText(_("Пресеты не загрузились (нет ответа от контроллера API Presets).", "Presets not loaded (no response from API Presets controller)."))
+                v.provider_label.setText(t("ui.settings.api.presets_not_loaded"))
                 v.api_settings_container.setVisible(False)
                 v.custom_presets_list.clear()
                 self.custom_presets_list_items.clear()
@@ -53,7 +53,7 @@ class PresetsMixin:
             # templates combo
             v.template_combo.blockSignals(True)
             v.template_combo.clear()
-            v.template_combo.addItem(_("Без шаблона", "No template"), None)
+            v.template_combo.addItem(t("ui.settings.api.no_template"), None)
             for p in builtin:
                 v.template_combo.addItem(getattr(p, "name", ""), getattr(p, "id", None))
             v.template_combo.blockSignals(False)
@@ -120,8 +120,8 @@ class PresetsMixin:
             if prev_item.has_changes:
                 from PyQt6.QtWidgets import QMessageBox
                 reply = QMessageBox.question(
-                    v, _("Несохраненные изменения", "Unsaved changes"),
-                    _("Сохранить изменения?", "Save changes?"),
+                    v, t("ui.settings.api.unsaved_changes"),
+                    t("ui.settings.api.save_changes"),
                     QMessageBox.StandardButton.Yes |
                     QMessageBox.StandardButton.No |
                     QMessageBox.StandardButton.Cancel

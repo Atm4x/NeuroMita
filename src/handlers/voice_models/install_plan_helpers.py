@@ -11,14 +11,14 @@ def torch_install_action(ctx: dict, *, progress: int = 10) -> InstallAction:
     if gpu == "NVIDIA":
         return InstallAction(
             type="pip",
-            description=_("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
+            description=t("handlers.embedding.installing_pytorch_cuda"),
             progress=int(progress),
             packages=["torch==2.7.1", "torchaudio==2.7.1"],
             extra_args=["--index-url", "https://download.pytorch.org/whl/cu128"],
         )
     return InstallAction(
         type="pip",
-        description=_("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
+        description=t("handlers.embedding.installing_pytorch_cpu"),
         progress=int(progress),
         packages=["torch==2.7.1", "torchaudio==2.7.1"],
         extra_args=None,

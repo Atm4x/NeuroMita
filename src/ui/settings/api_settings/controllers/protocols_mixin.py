@@ -69,23 +69,23 @@ class ProtocolsMixin:
 
         from utils.translation_manager import t
         v.protocol_info_label.setText(
-            f"{_('Dialect', 'Dialect')}: {dialect} | "
-            f"{_('Provider', 'Provider')}: {provider}"
-            + (f" | {_('Caps', 'Caps')}: {caps_s}" if caps_s else "")
+            f"{t('ui.settings.api.dialect')}: {dialect} | "
+            f"{t('ui.settings.api.provider')}: {provider}"
+            + (f" | {t('ui.settings.api.caps')}: {caps_s}" if caps_s else "")
         )
 
         lines: list[str] = []
         if isinstance(transforms, list):
-            for t in transforms:
-                if isinstance(t, dict):
-                    tid = str(t.get("id") or "").strip()
-                    params = t.get("params")
+            for t_item in transforms:
+                if isinstance(t_item, dict):
+                    tid = str(t_item.get("id") or "").strip()
+                    params = t_item.get("params")
                     lines.append(f"- {tid}" + (f"  params={params}" if params else ""))
                 else:
-                    lines.append(f"- {str(t)}")
+                    lines.append(f"- {str(t_item)}")
 
         v.protocol_transforms_view.setPlainText(
-            "\n".join(lines) if lines else _("(нет transforms)", "(no transforms)")
+            "\n".join(lines) if lines else t("ui.settings.api.no_transforms")
         )
 
     def _on_protocol_changed(self, *_: Any) -> None:

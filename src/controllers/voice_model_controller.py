@@ -47,10 +47,7 @@ class VoiceModelController:
 
         self.model_descriptions: dict[str, str] = {}
         self.setting_descriptions: dict[str, str] = {}
-        self.default_description_text = _(
-            "Наведите курсор на элемент интерфейса для получения описания.",
-            "Hover over an interface element to get a description."
-        )
+        self.default_description_text = t("controllers.voice_model.default_description")
 
         self.detected_gpu_vendor = check_gpu_provider()
         self.detected_cuda_devices = get_cuda_devices()
@@ -215,7 +212,7 @@ class VoiceModelController:
                 with open(self.settings_values_file, "r", encoding="utf-8") as f:
                     saved_values = json.load(f)
         except Exception as e:
-            logger.info(f"{_('Ошибка загрузки сохраненных значений из', 'Error loading saved values from')} {self.settings_values_file}: {e}")
+            logger.info(f"{t('controllers.voice_model.error_loading_values')} {self.settings_values_file}: {e}")
             saved_values = {}
 
         merged_model_structure = copy.deepcopy(adapted_default_structure)
@@ -400,7 +397,7 @@ class VoiceModelController:
                 "kind": "voice",
                 "item_id": mid,
                 "task_id": f"voice:uninstall:{mid}",
-                "title": _("Удаление локальной модели: ", "Uninstalling local model: ") + mid,
+                "title": t("controllers.voice_model.uninstall_title") + mid,
                 "initial_status": t("common.preparing"),
                 "timeout_sec": float(timeout_sec or 3600.0),
                 "meta": {"kind": "voice", "item_id": mid, "op": "uninstall"},

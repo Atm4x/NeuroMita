@@ -5,7 +5,10 @@
     "error": "Ошибка",
     "info": "Информация",
     "warning": "Предупреждение",
-    "confirm": "Подтвердить"
+    "confirm": "Подтвердить",
+    "close": "Закрыть",
+    "please_wait": "Пожалуйста, подождите",
+    "initializing": "Инициализация"
   },
   "dialogs": {
     "ffmpeg": {
@@ -32,6 +35,11 @@
     }
   },
   "ui": {
+    "windows": {
+      "main_view": {
+        "title": "Чат с NeuroMita"
+      }
+    },
     "settings": {
       "settings_panel": {
         "general": "Общие",
@@ -190,6 +198,9 @@
       "hide_loading_popup": "ViewEventController: получено событие hide_loading_popup, транслируем в view"
     },
     "voice_model": {
+      "default_description": "Наведите курсор на элемент интерфейса для получения описания.",
+      "error_loading_values": "Ошибка загрузки сохраненных значений из",
+      "uninstall_title": "Удаление локальной модели: ",
       "backend_not_initialized": "VoiceModelGuiController: backend VoiceModelController не инициализирован.",
       "gpu_not_defined": "не определена",
       "settings_save_error": "Ошибка сохранения настроек локальных моделей: {e}",
@@ -548,7 +559,10 @@
   },
   "ui": {
     "chat": {
-      "screen_image": "<Изображение экрана>"
+      "screen_image": "<Изображение экрана>",
+      "error_loading_image": "<Ошибка загрузки изображения>",
+      "user_label": "Вы: ",
+      "system_label": "Система: "
     },
     "dialogs": {
       "voiceover": {
@@ -561,6 +575,9 @@
         "init_failed": "Модель инициализировалась, но не удалось активировать её.",
         "models_folder_not_found": "Не найдена папка models. Инициализация отменена.",
         "initializing": "Инициализация модели..."
+      },
+      "model_loading": {
+        "title": "Инициализация модели"
       }
     },
     "settings": {

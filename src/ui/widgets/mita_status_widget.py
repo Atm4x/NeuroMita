@@ -239,7 +239,7 @@ class MitaStatusWidget(QWidget):
         # Скрываем иконку
         self.icon_label.hide()
         
-        self.status_label.setText(_(f"{character_name} думает...", f"{character_name} is thinking..."))
+        self.status_label.setText(t("ui.widgets.mita_status.thinking").format(name=character_name))
         self.dots_widget.show()
         self.dots_widget.start_animation()
         
@@ -251,7 +251,9 @@ class MitaStatusWidget(QWidget):
         self.fade_animation.setEndValue(1.0)
         self.fade_animation.start()
         
-    def show_error(self, error_message=_("Произошла ошибка", "Error occurred")):
+    def show_error(self, error_message=None):
+        if error_message is None:
+            error_message = t("ui.widgets.mita_status.error")
         if hasattr(self, 'pulse_anim'):
             self.pulse_anim.stop()
         self.set_pulse_intensity(0.0)
@@ -288,7 +290,9 @@ class MitaStatusWidget(QWidget):
         
         QTimer.singleShot(5000, self.hide_animated)
         
-    def show_success(self, message=_("Готово", "success")):
+    def show_success(self, message=None):
+        if message is None:
+            message = t("ui.widgets.mita_status.success")
         if hasattr(self, 'pulse_anim'):
             self.pulse_anim.stop()
         self.set_pulse_intensity(0.0)

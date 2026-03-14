@@ -182,5 +182,5 @@ def process_image_for_chat(gui, has_image_content, item, processed_content_parts
         has_image_content = True
     except Exception as e:
         logger.error(f"Ошибка при декодировании или обработке изображения: {e}")
-        processed_content_parts.append({"type": "text", "content": _("<Ошибка загрузки изображения>", "<Image load error>")})
+        processed_content_parts.append({"type": "text", "content": t("ui.chat.error_loading_image")})
     return has_image_content

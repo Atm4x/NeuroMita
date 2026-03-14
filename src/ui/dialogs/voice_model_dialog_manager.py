@@ -32,7 +32,7 @@ def handle_voice_model_dialog(gui, data):
             gui._voice_model_dialog = None
         
         dialog = QDialog(gui)
-        dialog.setWindowTitle(_("Управление локальными моделями", "Manage Local Models"))
+        dialog.setWindowTitle(t("ui.windows.main_view.manage_models"))
         dialog.setModal(False)
         dialog.resize(875, 800)
         

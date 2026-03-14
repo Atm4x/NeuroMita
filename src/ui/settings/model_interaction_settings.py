@@ -141,63 +141,56 @@ def setup_model_interaction_controls(self, parent):
         all_presets = presets_meta[0].get('custom', [])
         for preset in all_presets:
             hc_provider_names.append(preset.name)
-    react_provider_names = [_('Текущий', 'Current')]
+    react_provider_names = [t('ui.settings.model_interaction.current')]
     if presets_meta and presets_meta[0]:
         all_presets = presets_meta[0].get('custom', [])
         for preset in all_presets:
             react_provider_names.append(preset.name)
 
     history_compression_config = [
-        {'label': _('Сжимать историю при достижении лимита', 'Compress history on limit'),
+        {'label': t('ui.settings.model_interaction.compress_on_limit'),
          'key': 'ENABLE_HISTORY_COMPRESSION_ON_LIMIT', 'type': 'checkbutton',
          'default_checkbutton': False,
-         'tooltip': _('Включить автоматическое сжатие истории чата, когда количество сообщений превышает лимит.',
-                      'Enable automatic chat history compression when message count exceeds a limit.')},
-        {'label': _('Периодическое сжатие истории', 'Periodic history compression'),
+         'tooltip': t('ui.settings.model_interaction.compress_on_limit_help')},
+        {'label': t('ui.settings.model_interaction.periodic_compression'),
          'key': 'ENABLE_HISTORY_COMPRESSION_PERIODIC', 'type': 'checkbutton',
          'default_checkbutton': False,
-         'tooltip': _('Включить автоматическое сжатие истории чата через заданные интервалы.',
-                      'Enable automatic chat history compression at specified intervals.')},
-        {'label': _('Интервал периодического сжатия (сообщения)', 'Periodic compression interval (messages)'),
+         'tooltip': t('ui.settings.model_interaction.periodic_compression_help')},
+        {'label': t('ui.settings.model_interaction.compression_interval'),
          'key': 'HISTORY_COMPRESSION_PERIODIC_INTERVAL', 'type': 'entry',
          'default': 20, 'validation': self.validate_positive_integer,
-         'tooltip': _('Количество сообщений, после которых будет произведено периодическое сжатие истории.',
-                      'Number of messages after which periodic history compression will occur.')},
-        {'label': _('Шаблон промпта для сжатия', 'Compression prompt template'),
+         'tooltip': t('ui.settings.model_interaction.compression_interval_help')},
+        {'label': t('ui.settings.model_interaction.compression_prompt_template'),
          'key': 'HISTORY_COMPRESSION_PROMPT_TEMPLATE', 'type': 'entry',
          'default': "Prompts/System/compression_prompt.txt",
-         'tooltip': _('Путь к файлу шаблона промпта, используемого для сжатия истории.',
-                      'Path to the prompt template file used for history compression.')},
-        {'label': _('Процент для сжатия', 'Percent to compress'),
+         'tooltip': t('ui.settings.model_interaction.compression_prompt_template_help')},
+        {'label': t('ui.settings.model_interaction.compression_percent'),
          'key': 'HISTORY_COMPRESSION_MIN_PERCENT_TO_COMPRESS', 'type': 'entry',
          'default': 0.85, 'validation': self.validate_float_0_1,
-         'tooltip': _('Минимальное количество сообщений в истории, необходимое для запуска процесса сжатия.',
-                      'Minimum number of messages in history required to trigger compression.')},
-        {'label': _('Цель вывода сжатой истории', 'Compressed history output target'),
+         'tooltip': t('ui.settings.model_interaction.compression_percent_help')},
+        {'label': t('ui.settings.model_interaction.compression_output_target'),
          'key': 'HISTORY_COMPRESSION_OUTPUT_TARGET', 'type': 'combobox',
          'options': ['history','memory'],
          'default': "history",
-         'tooltip': _('Куда помещать результат сжатия истории (например, "memory", "summary_message").',
-                      'Where to place the compressed history output (e.g., "memory", "summary_message").')},
-        {'label': _('Провайдер для сжатия', 'Provider for compression'),
+         'tooltip': t('ui.settings.model_interaction.compression_output_target_help')},
+        {'label': t('ui.settings.model_interaction.compression_provider'),
          'key': 'HC_PROVIDER',
          'type': 'combobox',
          'options': hc_provider_names,
-         'default': _('Текущий', 'Current')},
+         'default': t('ui.settings.model_interaction.current')},
     ]
-    
+
     create_settings_section(self, parent,
-                           _("Сжатие истории", "History Compression"),
+                           t("ui.settings.model_interaction.history_compression"),
                            history_compression_config)
-    
+
     react_settings_config = [
         {
-            'label': _('Использовать реакции (react)', 'Use react events'),
+            'label': t('ui.settings.model_interaction.use_react'),
             'key': 'REACT_ENABLED',
             'type': 'checkbutton',
             'default_checkbutton': False,
-            'tooltip': _(
-                'Включить генерацию реакций на действия игрока (react-задачи). '
+            'tooltip': t('ui.settings.model_interaction.use_react_help')
                 'Отключение полностью блокирует вызовы модели для react.',
                 'Enable generation of reactions to player actions (react tasks). '
                 'Disabling completely blocks model calls for react.'

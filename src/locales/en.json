@@ -5,7 +5,10 @@
     "error": "Error",
     "info": "Information",
     "warning": "Warning",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "close": "Close",
+    "please_wait": "Please wait",
+    "initializing": "Initializing"
   },
   "dialogs": {
     "ffmpeg": {
@@ -190,6 +193,9 @@
       "hide_loading_popup": "ViewEventController: received event hide_loading_popup, translating to view"
     },
     "voice_model": {
+      "default_description": "Hover over an interface element to get a description.",
+      "error_loading_values": "Error loading saved values from",
+      "uninstall_title": "Uninstalling local model: ",
       "backend_not_initialized": "VoiceModelGuiController: backend VoiceModelController not initialized.",
       "gpu_not_defined": "not defined",
       "settings_save_error": "Error saving local model settings: {e}",
@@ -547,8 +553,16 @@
     }
   },
   "ui": {
+    "windows": {
+      "main_view": {
+        "title": "NeuroMita Chat"
+      }
+    },
     "chat": {
-      "screen_image": "<Screen Image>"
+      "screen_image": "<Screen Image>",
+      "error_loading_image": "<Image load error>",
+      "user_label": "You: ",
+      "system_label": "System: "
     },
     "dialogs": {
       "voiceover": {
@@ -561,6 +575,9 @@
         "init_failed": "Model initialized, but failed to activate it.",
         "models_folder_not_found": "Failed to find models folder. Initialization cancelled.",
         "initializing": "Initializing model..."
+      },
+      "model_loading": {
+        "title": "Initializing model"
       }
     },
     "settings": {

@@ -22,7 +22,7 @@ class ProtocolPipelineDialog(QDialog):
         current_transforms: List[Dict[str, Any]],
     ):
         super().__init__(parent)
-        self.setWindowTitle(_("Pipeline transforms", "Pipeline transforms"))
+        self.setWindowTitle(t("ui.settings.api.pipeline_transforms"))
         self.setModal(True)
 
         self._available = [str(x) for x in (available_transform_ids or []) if str(x).strip()]
@@ -31,13 +31,12 @@ class ProtocolPipelineDialog(QDialog):
 
         lay = QVBoxLayout(self)
 
-        lay.addWidget(QLabel(_("Соберите порядок transforms для протокола (overrides на уровне пресета).",
-                               "Build transform order for protocol (preset-level overrides).")))
+        lay.addWidget(QLabel(t("ui.settings.api.pipeline_info")))
 
         top = QHBoxLayout()
         self.combo = QComboBox()
         self.combo.addItems(self._available)
-        btn_add = QPushButton(_("Добавить", "Add"))
+        btn_add = QPushButton(t("ui.settings.api.add"))
         top.addWidget(self.combo, 1)
         top.addWidget(btn_add)
         lay.addLayout(top)
@@ -48,8 +47,8 @@ class ProtocolPipelineDialog(QDialog):
         btns_row = QHBoxLayout()
         btn_up = QPushButton("↑")
         btn_down = QPushButton("↓")
-        btn_remove = QPushButton(_("Удалить", "Remove"))
-        btn_reset = QPushButton(_("Сбросить к базовому", "Reset to base"))
+        btn_remove = QPushButton(t("ui.settings.api.remove"))
+        btn_reset = QPushButton(t("ui.settings.api.reset_to_base"))
         btns_row.addWidget(btn_up)
         btns_row.addWidget(btn_down)
         btns_row.addWidget(btn_remove)

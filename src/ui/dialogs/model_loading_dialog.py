@@ -10,7 +10,7 @@ def create_model_loading_dialog(parent, model_name, cancel_callback):
     
     layout = QVBoxLayout(dialog)
     
-    title_label = QLabel(_("Инициализация модели", "Initializing model") + f" {model_name}")
+    title_label = QLabel(t("ui.dialogs.model_loading.title") + f" {model_name}")
     title_label.setStyleSheet("font-size: 12px; font-weight: bold;")
     title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     layout.addWidget(title_label)

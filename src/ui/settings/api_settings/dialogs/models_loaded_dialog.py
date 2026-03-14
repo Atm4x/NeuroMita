@@ -14,7 +14,7 @@ class ModelsLoadedDialog(QDialog):
     def __init__(self, parent, *, models: List[str], message: str = ""):
         super().__init__(parent)
         self.setModal(True)
-        self.setWindowTitle(_("Загруженные модели", "Loaded models"))
+        self.setWindowTitle(t("ui.settings.api.loaded_models"))
 
         self._selected: str = ""
         self._models = [str(m).strip() for m in (models or []) if str(m).strip()]
@@ -27,7 +27,7 @@ class ModelsLoadedDialog(QDialog):
             lay.addWidget(lab)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText(_("Поиск...", "Search..."))
+        self.search.setPlaceholderText(t("ui.settings.api.search"))
         lay.addWidget(self.search)
 
         self.list = QListWidget()
@@ -35,8 +35,8 @@ class ModelsLoadedDialog(QDialog):
         lay.addWidget(self.list, 1)
 
         btn_row = QHBoxLayout()
-        self.btn_use = QPushButton(_("Выбрать", "Use selected"))
-        self.btn_copy = QPushButton(_("Копировать всё", "Copy all"))
+        self.btn_use = QPushButton(t("ui.settings.api.use_selected"))
+        self.btn_copy = QPushButton(t("ui.settings.api.copy_all"))
         self.btn_close = QPushButton(t("common.close"))
         btn_row.addWidget(self.btn_use)
         btn_row.addWidget(self.btn_copy)
