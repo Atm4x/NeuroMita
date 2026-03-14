@@ -106,6 +106,20 @@ class SpeechController:
         SpeechRecognition.set_recognizer_type(engine)
         SpeechRecognition.apply_settings(engine, self._asr_settings["models"].get(engine, {}))
 
+        try:
+            if "VOSK_SAMPLE_RATE" in self.settings:
+                SpeechRecognition.VOSK_SAMPLE_RATE = int(self.settings.get("VOSK_SAMPLE_RATE"))
+            if "CHUNK_SIZE" in self.settings:
+                SpeechRecognition.CHUNK_SIZE = int(self.settings.get("CHUNK_SIZE"))
+            if "VAD_THRESHOLD" in self.settings:
+                SpeechRecognition.VAD_THRESHOLD = float(self.settings.get("VAD_THRESHOLD"))
+            if "VAD_SILENCE_TIMEOUT_SEC" in self.settings:
+                SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(self.settings.get("VAD_SILENCE_TIMEOUT_SEC"))
+            if "VAD_PRE_BUFFER_DURATION_SEC" in self.settings:
+                SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC = float(self.settings.get("VAD_PRE_BUFFER_DURATION_SEC"))
+        except Exception:
+            pass
+
         self.device_id = self.settings.get("NM_MICROPHONE_ID", 0)
         self.selected_microphone = self.settings.get("NM_MICROPHONE_NAME", "")
 
@@ -170,6 +184,36 @@ class SpeechController:
         elif key == "SILENCE_DURATION":
             try:
                 SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(value)
+            except Exception:
+                pass
+
+        elif key == "VOSK_SAMPLE_RATE":
+            try:
+                SpeechRecognition.VOSK_SAMPLE_RATE = int(value)
+            except Exception:
+                pass
+
+        elif key == "CHUNK_SIZE":
+            try:
+                SpeechRecognition.CHUNK_SIZE = int(value)
+            except Exception:
+                pass
+
+        elif key == "VAD_THRESHOLD":
+            try:
+                SpeechRecognition.VAD_THRESHOLD = float(value)
+            except Exception:
+                pass
+
+        elif key == "VAD_SILENCE_TIMEOUT_SEC":
+            try:
+                SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(value)
+            except Exception:
+                pass
+
+        elif key == "VAD_PRE_BUFFER_DURATION_SEC":
+            try:
+                SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC = float(value)
             except Exception:
                 pass
 

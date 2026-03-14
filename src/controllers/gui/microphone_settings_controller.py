@@ -24,7 +24,7 @@ class MicrophoneSettingsController(BaseController):
 
         self._ui(self._bind_if_ready)
 
-    def _widgets_signature(self) -> tuple[int, int, int, int, int, int] | None:
+    def _widgets_signature(self) -> tuple | None:
         v = self.view
         if not v:
             return None
@@ -35,6 +35,7 @@ class MicrophoneSettingsController(BaseController):
             "asr_refresh_button",
             "mic_active_checkbox",
             "mic_instant_checkbox",
+            "vad_apply_button",
         )
         for n in need:
             if not hasattr(v, n):
@@ -46,6 +47,7 @@ class MicrophoneSettingsController(BaseController):
             id(getattr(v, "asr_refresh_button")),
             id(getattr(v, "mic_active_checkbox")),
             id(getattr(v, "mic_instant_checkbox")),
+            id(getattr(v, "vad_apply_button")),
         )
 
     def _bind_if_ready(self):
@@ -88,6 +90,9 @@ class MicrophoneSettingsController(BaseController):
         if hasattr(v, "asr_manage_button") and v.asr_manage_button:
             safe_disconnect(v.asr_manage_button.clicked, self._open_asr_glossary)
             v.asr_manage_button.clicked.connect(self._open_asr_glossary)
+
+        safe_disconnect(v.vad_apply_button.clicked, self._on_apply_vad_params)
+        v.vad_apply_button.clicked.connect(self._on_apply_vad_params)
 
         self.refresh_microphones()
         self.refresh_engines()
@@ -396,6 +401,20 @@ class MicrophoneSettingsController(BaseController):
         self._reset_init_status()
         self._save_setting("RECOGNIZER_TYPE", eng)
         self._apply_asr_install_status(eng)
+
+    def _on_apply_vad_params(self):
+        v = self.view
+        if not v:
+            return
+        params = {
+            "VOSK_SAMPLE_RATE": int(v.vad_sample_rate_spinbox.value()),
+            "CHUNK_SIZE": int(v.vad_chunk_size_spinbox.value()),
+            "VAD_THRESHOLD": float(v.vad_threshold_spinbox.value()),
+            "VAD_SILENCE_TIMEOUT_SEC": float(v.vad_silence_timeout_spinbox.value()),
+            "VAD_PRE_BUFFER_DURATION_SEC": float(v.vad_pre_buffer_spinbox.value()),
+        }
+        for key, value in params.items():
+            self._save_setting(key, value)
 
     def _on_active_toggled(self, state: int):
         self._save_setting("MIC_ACTIVE", bool(state))

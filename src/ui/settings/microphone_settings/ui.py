@@ -2,7 +2,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QComboBox,
-    QPushButton, QSizePolicy, QCheckBox
+    QPushButton, QSizePolicy, QCheckBox, QSpinBox, QDoubleSpinBox
 )
 import qtawesome as qta
 
@@ -102,5 +102,51 @@ def build_microphone_settings_ui(self, parent_layout):
     # 5) Статус (как раньше) — под кнопками
     self.asr_init_status = QLabel("—")
     root_lay.addWidget(make_row(_("Статус", "Status"), self.asr_init_status, label_w))
+
+    # 6) Параметры VAD / ASR
+    create_section_header(root_lay, _("Параметры распознавания", "Recognition Parameters"))
+
+    self.vad_sample_rate_spinbox = QSpinBox()
+    self.vad_sample_rate_spinbox.setRange(8000, 48000)
+    self.vad_sample_rate_spinbox.setSingleStep(1000)
+    self.vad_sample_rate_spinbox.setValue(int(self.settings.get("VOSK_SAMPLE_RATE", 16000)))
+    self.vad_sample_rate_spinbox.setToolTip(_("Частота дискретизации (Гц)", "Sample rate (Hz)"))
+    root_lay.addWidget(make_row(_("Sample Rate", "Sample Rate"), self.vad_sample_rate_spinbox, label_w))
+
+    self.vad_chunk_size_spinbox = QSpinBox()
+    self.vad_chunk_size_spinbox.setRange(128, 4096)
+    self.vad_chunk_size_spinbox.setSingleStep(128)
+    self.vad_chunk_size_spinbox.setValue(int(self.settings.get("CHUNK_SIZE", 512)))
+    self.vad_chunk_size_spinbox.setToolTip(_("Размер чанка аудио", "Audio chunk size"))
+    root_lay.addWidget(make_row(_("Chunk Size", "Chunk Size"), self.vad_chunk_size_spinbox, label_w))
+
+    self.vad_threshold_spinbox = QDoubleSpinBox()
+    self.vad_threshold_spinbox.setRange(0.0, 1.0)
+    self.vad_threshold_spinbox.setSingleStep(0.05)
+    self.vad_threshold_spinbox.setDecimals(2)
+    self.vad_threshold_spinbox.setValue(float(self.settings.get("VAD_THRESHOLD", 0.5)))
+    self.vad_threshold_spinbox.setToolTip(_("Порог срабатывания VAD (0.0–1.0)", "VAD activation threshold (0.0–1.0)"))
+    root_lay.addWidget(make_row(_("VAD Threshold", "VAD Threshold"), self.vad_threshold_spinbox, label_w))
+
+    self.vad_silence_timeout_spinbox = QDoubleSpinBox()
+    self.vad_silence_timeout_spinbox.setRange(0.0, 5.0)
+    self.vad_silence_timeout_spinbox.setSingleStep(0.05)
+    self.vad_silence_timeout_spinbox.setDecimals(2)
+    self.vad_silence_timeout_spinbox.setValue(float(self.settings.get("VAD_SILENCE_TIMEOUT_SEC", 0.15)))
+    self.vad_silence_timeout_spinbox.setToolTip(_("Тайм-аут тишины (сек)", "Silence timeout (sec)"))
+    root_lay.addWidget(make_row(_("Silence Timeout", "Silence Timeout"), self.vad_silence_timeout_spinbox, label_w))
+
+    self.vad_pre_buffer_spinbox = QDoubleSpinBox()
+    self.vad_pre_buffer_spinbox.setRange(0.0, 5.0)
+    self.vad_pre_buffer_spinbox.setSingleStep(0.05)
+    self.vad_pre_buffer_spinbox.setDecimals(2)
+    self.vad_pre_buffer_spinbox.setValue(float(self.settings.get("VAD_PRE_BUFFER_DURATION_SEC", 0.3)))
+    self.vad_pre_buffer_spinbox.setToolTip(_("Длительность пре-буфера (сек)", "Pre-buffer duration (sec)"))
+    root_lay.addWidget(make_row(_("Pre-buffer", "Pre-buffer"), self.vad_pre_buffer_spinbox, label_w))
+
+    self.vad_apply_button = QPushButton(_("Применить", "Apply"))
+    self.vad_apply_button.setObjectName("SecondaryButton")
+    self.vad_apply_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    root_lay.addWidget(self.vad_apply_button)
 
     parent_layout.addWidget(root)
