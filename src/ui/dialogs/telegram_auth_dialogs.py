@@ -1,17 +1,17 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
 from PyQt6.QtCore import Qt
 from core.events import Events
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 import asyncio
 
 def show_tg_code_dialog(parent, code_future, event_bus):
     dialog = QDialog(parent)
-    dialog.setWindowTitle(_("Подтверждение Telegram", "Telegram Verification"))
+    dialog.setWindowTitle(t("dialogs.telegram.code.title"))
     dialog.setFixedSize(300, 150)
     dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
     layout = QVBoxLayout(dialog)
-    label = QLabel(_("Введите код подтверждения:", "Enter verification code:"))
+    label = QLabel(t("dialogs.telegram.code.label"))
     label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     layout.addWidget(label)
 
@@ -29,15 +29,15 @@ def show_tg_code_dialog(parent, code_future, event_bus):
                     loop[0].call_soon_threadsafe(code_future.set_result, code)
             dialog.accept()
         else:
-            QMessageBox.critical(dialog, _("Ошибка", "Error"), _("Введите код подтверждения", "Please enter the verification code"))
+            QMessageBox.critical(dialog, t("common.error"), t("dialogs.telegram.code.error"))
 
     def on_reject():
         if code_future and not code_future.done():
             loop = event_bus.emit_and_wait(Events.Core.GET_EVENT_LOOP, timeout=1.0)
             if loop and loop[0] and loop[0].is_running():
-                loop[0].call_soon_threadsafe(code_future.set_exception, asyncio.CancelledError(_("Ввод кода отменен", "Code entry cancelled")))
+                loop[0].call_soon_threadsafe(code_future.set_exception, asyncio.CancelledError(t("dialogs.telegram.code.cancelled")))
 
-    btn = QPushButton(_("Подтвердить", "Confirm"))
+    btn = QPushButton(t("dialogs.telegram.code.confirm_btn"))
     btn.clicked.connect(submit_code)
     layout.addWidget(btn)
     code_entry.returnPressed.connect(submit_code)
@@ -47,12 +47,12 @@ def show_tg_code_dialog(parent, code_future, event_bus):
 
 def show_tg_password_dialog(parent, password_future, event_bus):
     dialog = QDialog(parent)
-    dialog.setWindowTitle(_("Двухфакторная аутентификация", "Two-Factor Authentication"))
+    dialog.setWindowTitle(t("dialogs.telegram.password.title"))
     dialog.setFixedSize(300, 150)
     dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
     layout = QVBoxLayout(dialog)
-    label = QLabel(_("Введите пароль:", "Enter password:"))
+    label = QLabel(t("dialogs.telegram.password.label"))
     label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     layout.addWidget(label)
 
@@ -70,15 +70,15 @@ def show_tg_password_dialog(parent, password_future, event_bus):
                     loop[0].call_soon_threadsafe(password_future.set_result, pwd)
             dialog.accept()
         else:
-            QMessageBox.critical(dialog, _("Ошибка", "Error"), _("Введите пароль", "Please enter the password"))
+            QMessageBox.critical(dialog, t("common.error"), t("dialogs.telegram.password.error"))
 
     def on_reject():
         if password_future and not password_future.done():
             loop = event_bus.emit_and_wait(Events.Core.GET_EVENT_LOOP, timeout=1.0)
             if loop and loop[0] and loop[0].is_running():
-                loop[0].call_soon_threadsafe(password_future.set_exception, asyncio.CancelledError(_("Ввод пароля отменен", "Password entry cancelled")))
+                loop[0].call_soon_threadsafe(password_future.set_exception, asyncio.CancelledError(t("dialogs.telegram.password.cancelled")))
 
-    btn = QPushButton(_("Подтвердить", "Confirm"))
+    btn = QPushButton(t("dialogs.telegram.password.confirm_btn"))
     btn.clicked.connect(submit_password)
     layout.addWidget(btn)
     password_entry.returnPressed.connect(submit_password)

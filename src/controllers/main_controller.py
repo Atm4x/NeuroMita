@@ -25,6 +25,7 @@ from controllers.protocols_controller import ProtocolsController
 from main_logger import logger
 from utils.ffmpeg_installer import install_ffmpeg
 from utils.pip_installer import PipInstaller
+from utils.translation_manager import TranslationManager
 from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
 from controllers.server_controller import ServerController
@@ -56,6 +57,14 @@ class MainController:
         except Exception as e:
             logger.info("Не удалось удачно получить из системных переменных все данные", e)
             self.settings = SettingsController("Settings/settings.json").settings
+
+        # Initialize translation system after settings are loaded
+        try:
+            language = self.settings.get("LANGUAGE", "RU")
+            TranslationManager.initialize(language)
+            logger.notify(f"TranslationManager инициализирован (язык: {language})")
+        except Exception as e:
+            logger.error(f"Не удалось инициализировать TranslationManager: {e}", exc_info=True)
 
         try:
             self.pip_installer = PipInstaller(

@@ -390,6 +390,7 @@ class Events:
         LOOP_READY = "loop_ready"
         RUN_IN_LOOP = "run_in_loop"
         SETTING_CHANGED = "setting_changed"
+        LANGUAGE_CHANGED = "language_changed"
 
     class GUI:
         """События, предназначенные для GuiController и его суб-контроллеров"""

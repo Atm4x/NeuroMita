@@ -3,7 +3,7 @@
 from main_logger import logger
 from core.events import Events, Event
 from .base_controller import BaseController
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 from ui.windows.voice_model_view import VoiceModelSettingsView
 
@@ -90,7 +90,7 @@ class VoiceModelGuiController(BaseController):
 
         backend = self._backend()
         if backend is None:
-            logger.error(_("VoiceModelGuiController: backend VoiceModelController не инициализирован.", "VoiceModelGuiController: backend VoiceModelController not initialized."))
+            logger.error(t("controllers.voice_model.backend_not_initialized"))
             return
 
         try:
@@ -101,21 +101,14 @@ class VoiceModelGuiController(BaseController):
             model_data = None
 
         if model_data and model_data.get("rtx30plus", False) and not backend.is_gpu_rtx30_or_40():
-            gpu_info = backend.gpu_name if getattr(backend, "gpu_name", None) else _("не определена", "not defined")
+            gpu_info = backend.gpu_name if getattr(backend, "gpu_name", None) else t("controllers.voice_model.gpu_not_defined")
             if getattr(backend, "detected_gpu_vendor", None) and backend.detected_gpu_vendor != "NVIDIA":
                 gpu_info = f"{backend.detected_gpu_vendor} GPU"
 
             model_name = model_data.get("name", model_id)
-            message = _(
-                f"Эта модель ('{model_name}') оптимизирована для NVIDIA RTX 30xx/40xx.\n\n"
-                f"Ваша видеокарта ({gpu_info}) может не обеспечить достаточной производительности.\n\n"
-                "Продолжить установку?",
-                f"This model ('{model_name}') is optimized for NVIDIA RTX 30xx/40xx.\n\n"
-                f"Your GPU ({gpu_info}) may be insufficient.\n\n"
-                "Continue installation?"
-            )
+            message = t("controllers.voice_model.model_warning_message", model_name=model_name, gpu_info=gpu_info)
 
-            proceed = self._ask_question_in_vm_view(_("Предупреждение", "Warning"), message)
+            proceed = self._ask_question_in_vm_view(t("controllers.voice_model.model_warning_title"), message)
             if not proceed:
                 return
 
@@ -133,7 +126,7 @@ class VoiceModelGuiController(BaseController):
 
         backend = self._backend()
         if backend is None:
-            logger.error(_("VoiceModelGuiController: backend VoiceModelController не инициализирован.", "VoiceModelGuiController: backend VoiceModelController not initialized."))
+            logger.error(t("controllers.voice_model.backend_not_initialized"))
             return
 
         try:
@@ -154,27 +147,15 @@ class VoiceModelGuiController(BaseController):
             self.event_bus.emit(
                 Events.GUI.SHOW_ERROR_MESSAGE,
                 {
-                    "title": _("Модель Активна", "Model Active"),
-                    "message": _(
-                        f"Модель '{model_name}' сейчас используется или инициализирована.\n\n"
-                        "Пожалуйста, перезапустите приложение полностью, чтобы освободить ресурсы, "
-                        "прежде чем удалять эту модель.",
-                        f"Model '{model_name}' is currently in use or initialized.\n\n"
-                        "Please restart the application completely to free resources "
-                        "before uninstalling this model."
-                    )
+                    "title": t("controllers.voice_model.model_active_title"),
+                    "message": t("controllers.voice_model.model_active_message", model_name=model_name)
                 }
             )
             return
 
-        message = _(
-            f"Вы уверены, что хотите удалить модель '{model_name}'?\n\n"
-            "Это действие необратимо!",
-            f"Are you sure you want to uninstall the model '{model_name}'?\n\n"
-            "This action is irreversible!"
-        )
+        message = t("controllers.voice_model.confirm_uninstall_message", model_name=model_name)
 
-        confirmed = self._ask_question_in_vm_view(_("Подтверждение Удаления", "Confirm Uninstallation"), message)
+        confirmed = self._ask_question_in_vm_view(t("controllers.voice_model.confirm_uninstall_title"), message)
         if not confirmed:
             return
 
@@ -223,7 +204,7 @@ class VoiceModelGuiController(BaseController):
         try:
             backend.save_settings_values(values)
         except Exception as e:
-            logger.error(_("Ошибка сохранения настроек локальных моделей: {e}", "Error saving local model settings: {e}").format(e=e), exc_info=True)
+            logger.error(t("controllers.voice_model.settings_save_error", e=e), exc_info=True)
 
         self._after_models_changed()
         QTimer.singleShot(0, self._vm_view.refresh_all)

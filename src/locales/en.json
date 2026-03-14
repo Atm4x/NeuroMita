@@ -1,0 +1,93 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "error": "Error",
+    "info": "Information",
+    "warning": "Warning",
+    "confirm": "Confirm"
+  },
+  "dialogs": {
+    "ffmpeg": {
+      "title": "FFmpeg",
+      "installing": "FFmpeg is being installed...\nPlease wait.",
+      "error_title": "FFmpeg Installation Error",
+      "error_message": "Failed to automatically install FFmpeg.\n\nIt is necessary for some program functions (for example, audio processing).\n\nPlease download FFmpeg manually from the official website:\nhttps://ffmpeg.org/download.html\n\nExtract the archive and place the 'ffmpeg.exe' file in the program folder:\n{path}"
+    },
+    "telegram": {
+      "code": {
+        "title": "Telegram Verification",
+        "label": "Enter verification code:",
+        "error": "Please enter the verification code",
+        "cancelled": "Code entry cancelled",
+        "confirm_btn": "Confirm"
+      },
+      "password": {
+        "title": "Two-Factor Authentication",
+        "label": "Enter password:",
+        "error": "Please enter the password",
+        "cancelled": "Password entry cancelled",
+        "confirm_btn": "Confirm"
+      }
+    }
+  },
+  "controllers": {
+    "chat": {
+      "view_not_found": "ChatController: view not found!",
+      "user_entry_not_found": "ChatController: view or user_entry not found!",
+      "event_received": "ChatController: received CLEAR_USER_INPUT_UI event"
+    },
+    "status": {
+      "character_default": "Mita",
+      "unknown_error": "Unknown error"
+    },
+    "settings": {
+      "audio_bot_info_title": "Information",
+      "audio_bot_info_message": "VinerX: Our friends from CrazyMitaAIbot provide free voice acting directly from their PCs. If you have time, check them out on Telegram and say thanks!)",
+      "font_size_changed": "Chat font size changed to: {font_size}",
+      "font_size_invalid": "Invalid value for font size: {value}",
+      "font_size_error": "Error changing chat font size: {e}",
+      "settings_changed": "Setting '{key}' changed to: {value}. Chat history reloaded."
+    },
+    "view_event": {
+      "history_loaded": "ViewEventController: received ghost event history_loaded, translating to view",
+      "more_history_loaded": "ViewEventController: received ghost event more_history_loaded, translating to view",
+      "model_initialized": "ViewEventController: received event model_initialized, translating to view",
+      "model_init_cancelled": "ViewEventController: received event model_init_cancelled, translating to view",
+      "model_init_failed": "ViewEventController: received event model_init_failed, translating to view",
+      "reload_prompts_success": "ViewEventController: received event reload_prompts_success, translating to view",
+      "reload_prompts_failed": "ViewEventController: received event reload_prompts_failed, translating to view",
+      "display_loading_popup": "ViewEventController: received event display_loading_popup, translating to view",
+      "hide_loading_popup": "ViewEventController: received event hide_loading_popup, translating to view"
+    },
+    "voice_model": {
+      "backend_not_initialized": "VoiceModelGuiController: backend VoiceModelController not initialized.",
+      "gpu_not_defined": "not defined",
+      "settings_save_error": "Error saving local model settings: {e}",
+      "model_warning_title": "Warning",
+      "model_warning_message": "This model ('{model_name}') is optimized for NVIDIA RTX 30xx/40xx.\n\nYour GPU ({gpu_info}) may be insufficient.\n\nContinue installation?",
+      "model_active_title": "Model Active",
+      "model_active_message": "Model '{model_name}' is currently in use or initialized.\n\nPlease restart the application completely to free resources before uninstalling this model.",
+      "confirm_uninstall_title": "Confirm Uninstallation",
+      "confirm_uninstall_message": "Are you sure you want to uninstall the model '{model_name}'?\n\nThis action is irreversible!"
+    },
+    "window_manager": {
+      "window_manager_not_found": "WindowManagerController: window_manager not found in view.",
+      "show_window_without_id": "WindowManagerController: SHOW_WINDOW without window_id."
+    },
+    "system": {
+      "view_not_found": "SystemController: view not found!",
+      "update_debug_info": "SystemController: received UPDATE_DEBUG_INFO event",
+      "check_ffmpeg": "SystemController: received CHECK_AND_INSTALL_FFMPEG event"
+    }
+  },
+  "errors": {
+    "view_not_found": "View not found!",
+    "backend_not_initialized": "Backend not initialized.",
+    "window_manager_not_found": "window_manager not found in view."
+  },
+  "debug": {
+    "gpu_info_checking": "Checking GPU information",
+    "translation_loaded": "Translations loaded"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Отмена",
+    "error": "Ошибка",
+    "info": "Информация",
+    "warning": "Предупреждение",
+    "confirm": "Подтвердить"
+  },
+  "dialogs": {
+    "ffmpeg": {
+      "title": "FFmpeg",
+      "installing": "Идет установка FFmpeg...\nПожалуйста, подождите.",
+      "error_title": "Ошибка установки FFmpeg",
+      "error_message": "Не удалось автоматически установить FFmpeg.\n\nОн необходим для некоторых функций программы (например, обработки аудио).\n\nПожалуйста, скачайте FFmpeg вручную с официального сайта:\nhttps://ffmpeg.org/download.html\n\nРаспакуйте архив и поместите файл 'ffmpeg.exe' в папку программы:\n{path}"
+    },
+    "telegram": {
+      "code": {
+        "title": "Подтверждение Telegram",
+        "label": "Введите код подтверждения:",
+        "error": "Введите код подтверждения",
+        "cancelled": "Ввод кода отменен",
+        "confirm_btn": "Подтвердить"
+      },
+      "password": {
+        "title": "Двухфакторная аутентификация",
+        "label": "Введите пароль:",
+        "error": "Введите пароль",
+        "cancelled": "Ввод пароля отменен",
+        "confirm_btn": "Подтвердить"
+      }
+    }
+  },
+  "controllers": {
+    "chat": {
+      "view_not_found": "ChatController: view не найден!",
+      "user_entry_not_found": "ChatController: view или user_entry не найден!",
+      "event_received": "ChatController: получено событие CLEAR_USER_INPUT_UI"
+    },
+    "status": {
+      "character_default": "Мита",
+      "unknown_error": "Неизвестная ошибка"
+    },
+    "settings": {
+      "audio_bot_info_title": "Информация",
+      "audio_bot_info_message": "VinerX: наши товарищи из CrazyMitaAIbot предоставляет озвучку бесплатно буквально со своих пк, будет время - загляните к ним в тг, скажите спасибо)",
+      "font_size_changed": "Размер шрифта чата изменен на: {font_size}",
+      "font_size_invalid": "Неверное значение для размера шрифта: {value}",
+      "font_size_error": "Ошибка при изменении размера шрифта: {e}",
+      "settings_changed": "Настройка '{key}' изменена на: {value}. История чата перезагружена."
+    },
+    "view_event": {
+      "history_loaded": "ViewEventController: получено ghost событие history_loaded, транслируем в view",
+      "more_history_loaded": "ViewEventController: получено ghost событие more_history_loaded, транслируем в view",
+      "model_initialized": "ViewEventController: получено событие model_initialized, транслируем в view",
+      "model_init_cancelled": "ViewEventController: получено событие model_init_cancelled, транслируем в view",
+      "model_init_failed": "ViewEventController: получено событие model_init_failed, транслируем в view",
+      "reload_prompts_success": "ViewEventController: получено событие reload_prompts_success, транслируем в view",
+      "reload_prompts_failed": "ViewEventController: получено событие reload_prompts_failed, транслируем в view",
+      "display_loading_popup": "ViewEventController: получено событие display_loading_popup, транслируем в view",
+      "hide_loading_popup": "ViewEventController: получено событие hide_loading_popup, транслируем в view"
+    },
+    "voice_model": {
+      "backend_not_initialized": "VoiceModelGuiController: backend VoiceModelController не инициализирован.",
+      "gpu_not_defined": "не определена",
+      "settings_save_error": "Ошибка сохранения настроек локальных моделей: {e}",
+      "model_warning_title": "Предупреждение",
+      "model_warning_message": "Эта модель ('{model_name}') оптимизирована для NVIDIA RTX 30xx/40xx.\n\nВаша видеокарта ({gpu_info}) может не обеспечить достаточной производительности.\n\nПродолжить установку?",
+      "model_active_title": "Модель Активна",
+      "model_active_message": "Модель '{model_name}' сейчас используется или инициализирована.\n\nПожалуйста, перезапустите приложение полностью, чтобы освободить ресурсы, прежде чем удалять эту модель.",
+      "confirm_uninstall_title": "Подтверждение Удаления",
+      "confirm_uninstall_message": "Вы уверены, что хотите удалить модель '{model_name}'?\n\nЭто действие необратимо!"
+    },
+    "window_manager": {
+      "window_manager_not_found": "WindowManagerController: window_manager не найден в view.",
+      "show_window_without_id": "WindowManagerController: SHOW_WINDOW без window_id."
+    },
+    "system": {
+      "view_not_found": "SystemController: view не найден!",
+      "update_debug_info": "SystemController: получено событие UPDATE_DEBUG_INFO",
+      "check_ffmpeg": "SystemController: получено событие CHECK_AND_INSTALL_FFMPEG"
+    }
+  },
+  "errors": {
+    "view_not_found": "View не найден!",
+    "backend_not_initialized": "Backend не инициализирован.",
+    "window_manager_not_found": "window_manager не найден в view."
+  },
+  "debug": {
+    "gpu_info_checking": "Проверка GPU информации",
+    "translation_loaded": "Переводы загружены"
+  }
+}
