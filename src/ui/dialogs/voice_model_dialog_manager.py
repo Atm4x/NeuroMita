@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout
-from utils import _
+from utils.translation_manager import t
 from main_logger import logger
 
 def handle_voice_model_dialog(gui, data):

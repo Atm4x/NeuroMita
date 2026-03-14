@@ -9,7 +9,7 @@ import qtawesome as qta
 
 from ui.gui_templates import create_section_header
 from managers.settings_manager import InnerCollapsibleSection
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 
 def _make_row(label_text: str, field_widget: QWidget, label_w: int) -> QWidget:

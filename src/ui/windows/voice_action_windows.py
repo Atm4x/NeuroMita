@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QTime
 from PyQt6.QtGui import QFont, QTextCursor, QGuiApplication
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 import re
 from html import escape as html_escape

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from utils import _
+from utils.translation_manager import t
 
 
 class ProtocolPipelineDialog(QDialog):

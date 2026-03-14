@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 import qtawesome as qta
 
-from utils import _
+from utils.translation_manager import t
 from .widgets import (
     ProviderDelegate,
     LabeledLineEditRow,

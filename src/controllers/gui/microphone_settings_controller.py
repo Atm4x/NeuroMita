@@ -8,7 +8,7 @@ from PyQt6.QtGui import QFontMetrics
 
 from core.events import Events, Event
 from main_logger import logger
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from .base_controller import BaseController
 
 

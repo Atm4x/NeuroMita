@@ -9,7 +9,7 @@ from typing import Optional, Any
 import base64
 
 from handlers.chat_handler import ChatModel
-from utils import _
+from utils.translation_manager import t
 from core.events import get_event_bus, Events, Event
 from main_logger import logger
 

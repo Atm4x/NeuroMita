@@ -8,7 +8,7 @@ from dataclasses import dataclass, asdict, field
 from core.events import get_event_bus, Events, Event
 from main_logger import logger
 
-from utils import _
+from utils.translation_manager import t
 import threading
 import requests
 

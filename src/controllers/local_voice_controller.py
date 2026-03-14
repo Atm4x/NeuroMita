@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from utils.gpu_utils import check_gpu_provider
 
 

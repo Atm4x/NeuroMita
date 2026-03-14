@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar, QPushButton
 from PyQt6.QtCore import Qt
-from utils import _
+from utils.translation_manager import t
 
 def create_model_loading_dialog(parent, model_name, cancel_callback):
     dialog = QDialog(parent)

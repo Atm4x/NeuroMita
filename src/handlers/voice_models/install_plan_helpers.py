@@ -3,7 +3,7 @@
 import os
 import shutil
 from core.install_types import InstallAction
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 
 def torch_install_action(ctx: dict, *, progress: int = 10) -> InstallAction:

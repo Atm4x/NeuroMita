@@ -1,7 +1,7 @@
 from typing import List, Dict, Tuple
 import re
 from PyQt6.QtGui import QColor
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 
 class ChatMessageDelegate:

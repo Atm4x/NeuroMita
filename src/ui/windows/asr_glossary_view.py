@@ -14,7 +14,7 @@ except Exception:
     qta = None
 
 from core.events import get_event_bus, Events
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from styles.asr_model_styles import get_asr_stylesheet
 
 

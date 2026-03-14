@@ -6,7 +6,7 @@ from PyQt6.QtCore import QTimer
 
 from core.events import Events
 from main_logger import logger
-from utils import _
+from utils.translation_manager import t
 
 
 class PresetsMixin:

@@ -11,7 +11,7 @@ from typing import Optional, Any, List, Dict
 from .base_model import IVoiceModel
 from main_logger import logger
 
-from utils import getTranslationVariant as _, get_character_voice_paths
+from utils.translation_manager import t, get_character_voice_paths
 
 from core.events import Events, get_event_bus
 from core.install_types import InstallPlan, InstallAction

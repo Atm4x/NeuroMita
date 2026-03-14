@@ -1,5 +1,5 @@
 ﻿from ui.gui_templates import create_settings_section, create_section_header
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 def setup_general_settings_controls(self, parent):
     create_section_header(parent, _("Основные настройки", "General Settings"))

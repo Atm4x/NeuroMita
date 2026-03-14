@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QSize
 from PyQt6.QtGui import QCursor
 
 from styles.voice_model_styles import get_stylesheet
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from core.events import get_event_bus, Events
 from ui.windows.voice_action_windows import VCRedistWarningDialog, TritonDependenciesDialog  # NEW
 

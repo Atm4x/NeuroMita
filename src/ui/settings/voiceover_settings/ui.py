@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy
 )
 from ui.gui_templates import create_setting_widget, create_section_header
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from core.events import get_event_bus, Events
 
 

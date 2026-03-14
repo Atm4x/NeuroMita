@@ -7,7 +7,7 @@ import sounddevice as sd
 from handlers.asr_handler import SpeechRecognition
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 
 class SpeechController:

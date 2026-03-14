@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QApplication
 )
 
-from utils import _
+from utils.translation_manager import t
 
 
 class ModelsLoadedDialog(QDialog):

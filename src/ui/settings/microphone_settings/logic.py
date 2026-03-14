@@ -1,6 +1,6 @@
 import re
 from PyQt6.QtCore import Qt
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from main_logger import logger
 from core.events import get_event_bus, Events
 from styles.main_styles import get_theme

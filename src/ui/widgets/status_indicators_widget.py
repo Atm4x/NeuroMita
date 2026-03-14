@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QCheckBox
 from PyQt6.QtCore import Qt
-from utils import _
+from utils.translation_manager import t
 
 def create_status_indicators(gui, parent_layout):
     status_frame = QWidget()

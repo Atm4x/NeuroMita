@@ -9,7 +9,7 @@ from typing import Any
 from docs import DocsManager
 from main_logger import logger
 from managers.settings_manager import SettingsManager
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 from core.events import get_event_bus, Events, Event
 

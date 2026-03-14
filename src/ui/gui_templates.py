@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt
 
 from main_logger import logger
 from managers.settings_manager import CollapsibleSection, InnerCollapsibleSection
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=None):
     root = CollapsibleSection(title, gui, icon_name=icon_name)

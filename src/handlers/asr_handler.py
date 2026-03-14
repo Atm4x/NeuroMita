@@ -7,7 +7,7 @@ from typing import Optional, List, Dict
 from main_logger import logger
 
 from utils.pip_installer import PipInstaller
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from handlers.asr_models.google_recognizer import GoogleRecognizer
 from handlers.asr_models.gigaam_recognizer import GigaAMRecognizer

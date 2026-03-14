@@ -1,5 +1,5 @@
 from ui.gui_templates import create_settings_section, create_section_header
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from main_logger import logger
 
 def get_camera_list():

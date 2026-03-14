@@ -10,7 +10,7 @@ import numpy as np
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from core.install_requirements import InstallRequirement, check_requirements
 
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from utils.gpu_utils import check_gpu_provider
 
 

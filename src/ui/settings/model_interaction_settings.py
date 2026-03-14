@@ -1,5 +1,5 @@
 from ui.gui_templates import create_settings_section, create_section_header
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from core.events import get_event_bus, Events
 
 def setup_model_interaction_controls(self, parent):

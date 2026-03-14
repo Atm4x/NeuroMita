@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QMessageBox
 
-from utils import _
+from utils.translation_manager import t
 from core.events import Events
 from ui.settings.api_settings.dialogs.models_loaded_dialog import ModelsLoadedDialog
 

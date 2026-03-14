@@ -1,7 +1,7 @@
 import io
 import base64
 from PyQt6.QtGui import QTextCursor, QColor, QImage, QFont, QPalette
-from utils import _
+from utils.translation_manager import t
 from main_logger import logger
 from ui.chat.chat_delegate import ChatMessageDelegate
 

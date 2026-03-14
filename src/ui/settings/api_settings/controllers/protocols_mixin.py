@@ -67,7 +67,7 @@ class ProtocolsMixin:
         if isinstance(caps, dict) and caps:
             caps_s = ", ".join([f"{k}={v}" for k, v in caps.items()])
 
-        from utils import _
+        from utils.translation_manager import t
         v.protocol_info_label.setText(
             f"{_('Dialect', 'Dialect')}: {dialect} | "
             f"{_('Provider', 'Provider')}: {provider}"

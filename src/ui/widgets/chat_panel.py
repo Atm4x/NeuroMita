@@ -11,7 +11,7 @@ from ui.widgets.mita_status_widget import MitaStatusWidget
 from ui.widgets.image_preview_widget import ImagePreviewBar
 from ui.widgets.image_viewer_widget import ImageViewerWidget
 from ui.widgets.status_indicators_widget import create_status_indicators_inline
-from utils import _
+from utils.translation_manager import t
 from core.events import Events
 from main_logger import logger
 

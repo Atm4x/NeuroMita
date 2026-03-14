@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QMessageBox, QInputDialog
 from ui.settings.api_settings.widgets import CustomPresetListItem
 import qtawesome as qta
 
-from utils import _
+from utils.translation_manager import t
 from core.events import Events
 from main_logger import logger
 from .state import PresetSnapshot

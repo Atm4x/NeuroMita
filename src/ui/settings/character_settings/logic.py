@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore import QUrl, Qt
 from PyQt6.QtGui import QDesktopServices
 
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 from main_logger import logger
 from core.events import get_event_bus, Events
 from managers.prompt_catalogue_manager import list_prompt_sets, read_info_json

@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtCore import Qt
 from ui.widgets.settings_overlay_widget import SettingsOverlay
 from ui.widgets.settings_icon_button import SettingsIconButton
-from utils import _
+from utils.translation_manager import t
 
 
 def setup_settings_panel(gui, main_layout):

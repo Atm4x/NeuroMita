@@ -10,7 +10,7 @@ from core.events import Events, Event
 from .base_controller import BaseController
 
 from ui.dialogs.model_loading_dialog import create_model_loading_dialog
-from utils import getTranslationVariant as _
+from utils.translation_manager import t
 
 
 class VoiceoverGuiController(BaseController):

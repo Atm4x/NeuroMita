@@ -2,7 +2,7 @@ import qtawesome as qta
 from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize, pyqtProperty, QSequentialAnimationGroup
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QGraphicsOpacityEffect
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
-from utils import _
+from utils.translation_manager import t
 
 class AnimatedDots(QWidget):
     """Виджет с анимированными точками (как в мессенджерах)"""
