@@ -92,6 +92,20 @@
   },
   "handlers": {
     "voice_models": {
+      "f5_tts": {
+        "title": "Установка локальной модели: ",
+        "already_installed": "Уже установлено",
+        "installation": "Установка F5-TTS...",
+        "optional_installation": "Установка RUAccent (опционально)...",
+        "preparing_folders": "Подготовка папок...",
+        "downloading_weights": "Загрузка весов F5-TTS...",
+        "rvc_installation": "Установка Edge/RVC компонента...",
+        "final_check": "Проверка установки...",
+        "done": "Готово",
+        "uninstall_components": "Удаление компонентов...",
+        "removing_model_files": "Удаление файлов модели...",
+        "uninstalled": "Удалено"
+      },
       "fish_speech": {
         "title": "Установка локальной модели: ",
         "already_installed": "Уже установлено",
@@ -237,6 +251,9 @@
     }
   },
   "ui": {
+    "chat": {
+      "screen_image": "<Изображение экрана>"
+    },
     "settings": {
       "model_interaction": {
         "title": "Настройки взаимодействия с моделью",

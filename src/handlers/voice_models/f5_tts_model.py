@@ -21,7 +21,7 @@ class F5TTSInstallSpec:
 
     @classmethod
     def title(cls, model_id: str) -> str:
-        return _("Установка локальной модели: ", "Installing local model: ") + str(model_id)
+        return t("handlers.voice_models.f5_tts.title") + str(model_id)
 
     @classmethod
     def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
@@ -49,7 +49,7 @@ class F5TTSInstallSpec:
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
         if cls.is_installed(mid, ctx):
-            return InstallPlan(actions=[], already_installed=True, already_installed_status=_("Уже установлено", "Already installed"))
+            return InstallPlan(actions=[], already_installed=True, already_installed_status=t("handlers.voice_models.f5_tts.already_installed"))
 
         model_dir = os.path.join("checkpoints", "F5-TTS")
         ckpt_dest = os.path.join(model_dir, "model.safetensors")
@@ -61,7 +61,7 @@ class F5TTSInstallSpec:
         actions.append(
             InstallAction(
                 type="pip",
-                description=_("Установка F5-TTS...", "Installing F5-TTS..."),
+                description=t("handlers.voice_models.f5_tts.installation"),
                 progress=30,
                 packages=["f5-tts", "cached_path", "google-api-core", "numpy==1.26.0", "librosa==0.9.1", "numba==0.60.0"],
             )
@@ -70,7 +70,7 @@ class F5TTSInstallSpec:
         actions.append(
             InstallAction(
                 type="pip",
-                description=_("Установка RUAccent (опционально)...", "Installing RUAccent (optional)..."),
+                description=t("handlers.voice_models.f5_tts.optional_installation"),
                 progress=40,
                 packages=["ruaccent"],
             )
@@ -79,7 +79,7 @@ class F5TTSInstallSpec:
         actions.append(
             InstallAction(
                 type="call",
-                description=_("Подготовка папок...", "Preparing folders..."),
+                description=t("handlers.voice_models.f5_tts.preparing_folders"),
                 progress=50,
                 fn=lambda **_k: (os.makedirs(model_dir, exist_ok=True) or True),
             )
@@ -88,7 +88,7 @@ class F5TTSInstallSpec:
         actions.append(
             InstallAction(
                 type="download_http",
-                description=_("Загрузка весов F5-TTS...", "Downloading F5-TTS weights..."),
+                description=t("handlers.voice_models.f5_tts.downloading_weights"),
                 progress=60,
                 progress_to=90,
                 files=[
@@ -110,7 +110,7 @@ class F5TTSInstallSpec:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description=_("Установка Edge/RVC компонента...", "Installing Edge/RVC component..."),
+                    description=t("handlers.voice_models.f5_tts.rvc_installation"),
                     progress=92,
                     packages=["tts-with-rvc"],
                 )
@@ -119,13 +119,13 @@ class F5TTSInstallSpec:
         actions.append(
             InstallAction(
                 type="call",
-                description=_("Проверка установки...", "Final check..."),
+                description=t("handlers.voice_models.f5_tts.final_check"),
                 progress=99,
                 fn=lambda **_k: cls.is_installed(mid, ctx),
             )
         )
 
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
+        return InstallPlan(actions=actions, ok_status=t("handlers.voice_models.f5_tts.done"))
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
@@ -136,10 +136,10 @@ class F5TTSInstallSpec:
 
         return InstallPlan(
             actions=[
-                pip_uninstall_action(pkgs, description=_("Удаление компонентов...", "Uninstalling components...")),
-                remove_paths_action([os.path.join("checkpoints", "F5-TTS")], description=_("Удаление файлов модели...", "Removing model files..."), progress=85),
+                pip_uninstall_action(pkgs, description=t("handlers.voice_models.f5_tts.uninstall_components")),
+                remove_paths_action([os.path.join("checkpoints", "F5-TTS")], description=t("handlers.voice_models.f5_tts.removing_model_files"), progress=85),
             ],
-            ok_status=_("Удалено", "Uninstalled"),
+            ok_status=t("handlers.voice_models.f5_tts.uninstalled"),
         )
 
 class F5TTSModel(IVoiceModel):

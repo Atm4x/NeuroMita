@@ -49,7 +49,7 @@ def insert_message(gui, role, content, insert_at_start=False, message_time=""):
         ):
             processed_content_parts.insert(0, {
                 "type": "text",
-                "content": _("<Изображение экрана>", "<Screen Image>") + "\n",
+                "content": t("ui.chat.screen_image") + "\n",
                 "tag": "default"
             })
 

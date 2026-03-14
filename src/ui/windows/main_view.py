@@ -6,7 +6,8 @@ from pathlib import Path
 import os
 from PyQt6.QtCore import QSize
 from styles.main_styles import get_stylesheet
-from utils import _, process_text_to_voice
+from utils import process_text_to_voice
+from utils.translation_manager import t
 from main_logger import logger
 import ui.gui_templates as gui_templates
 from managers.settings_manager import CollapsibleSection

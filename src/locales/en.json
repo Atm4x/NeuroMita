@@ -92,6 +92,20 @@
   },
   "handlers": {
     "voice_models": {
+      "f5_tts": {
+        "title": "Installing local model: ",
+        "already_installed": "Already installed",
+        "installation": "Installing F5-TTS...",
+        "optional_installation": "Installing RUAccent (optional)...",
+        "preparing_folders": "Preparing folders...",
+        "downloading_weights": "Downloading F5-TTS weights...",
+        "rvc_installation": "Installing Edge/RVC component...",
+        "final_check": "Final check...",
+        "done": "Done",
+        "uninstall_components": "Uninstalling components...",
+        "removing_model_files": "Removing model files...",
+        "uninstalled": "Uninstalled"
+      },
       "fish_speech": {
         "title": "Installing local model: ",
         "already_installed": "Already installed",
@@ -237,6 +251,9 @@
     }
   },
   "ui": {
+    "chat": {
+      "screen_image": "<Screen Image>"
+    },
     "settings": {
       "model_interaction": {
         "title": "Model Interaction Settings",
