@@ -1,5 +1,6 @@
 from main_logger import logger
 from core.events import Events, Event
+from utils import getTranslationVariant as _
 from .base_controller import BaseController
 
 class SettingsController(BaseController):
@@ -38,8 +39,8 @@ class SettingsController(BaseController):
         if key == "AUDIO_BOT":
             if isinstance(value, str) and value.startswith("@CrazyMitaAIbot"):
                 self.event_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
-                    "title": "Информация",
-                    "message": "VinerX: наши товарищи из CrazyMitaAIbot предоставляет озвучку бесплатно буквально со своих пк, будет время - загляните к ним в тг, скажите спасибо)"
+                    "title": _("Информация", "Information"),
+                    "message": _("VinerX: наши товарищи из CrazyMitaAIbot предоставляет озвучку бесплатно буквально со своих пк, будет время - загляните к ним в тг, скажите спасибо)", "VinerX: Our friends from CrazyMitaAIbot provide free voice acting directly from their PCs. If you have time, check them out on Telegram and say thanks!)")
                 })
 
         elif key == "CHAT_FONT_SIZE":
@@ -47,15 +48,15 @@ class SettingsController(BaseController):
                 font_size = int(value)
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_FONT_SIZE, {"font_size": font_size})
                 self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
-                logger.info(f"Размер шрифта чата изменен на: {font_size}")
+                logger.info(_("Размер шрифта чата изменен на: {font_size}", "Chat font size changed to: {font_size}").format(font_size=font_size))
             except ValueError:
-                logger.warning(f"Неверное значение для размера шрифта: {value}")
+                logger.warning(_("Неверное значение для размера шрифта: {value}", "Invalid value for font size: {value}").format(value=value))
             except Exception as e:
-                logger.error(f"Ошибка при изменении размера шрифта: {e}")
+                logger.error(_("Ошибка при изменении размера шрифта: {e}", "Error changing chat font size: {e}").format(e=e))
 
         elif key in ["SHOW_CHAT_TIMESTAMPS", "MAX_CHAT_HISTORY_DISPLAY", "HIDE_CHAT_TAGS"]:
             self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
-            logger.info(f"Настройка '{key}' изменена на: {value}. История чата перезагружена.")
+            logger.info(_("Настройка '{key}' изменена на: {value}. История чата перезагружена.", "Setting '{key}' changed to: {value}. Chat history reloaded.").format(key=key, value=value))
 
         elif key == "SHOW_TOKEN_INFO":
             self.event_bus.emit(Events.GUI.UPDATE_TOKEN_COUNT)

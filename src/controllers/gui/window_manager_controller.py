@@ -1,5 +1,6 @@
 ﻿from main_logger import logger
 from core.events import Events, Event
+from utils import getTranslationVariant as _
 from .base_controller import BaseController
 
 
@@ -11,7 +12,7 @@ class WindowManagerController(BaseController):
 
     def _on_show_window(self, event: Event):
         if not self.view or not hasattr(self.view, "window_manager") or self.view.window_manager is None:
-            logger.error("WindowManagerController: window_manager не найден в view.")
+            logger.error(_("WindowManagerController: window_manager не найден в view.", "WindowManagerController: window_manager not found in view."))
             return
 
         data = event.data if isinstance(event.data, dict) else {}
@@ -19,7 +20,7 @@ class WindowManagerController(BaseController):
         payload = data.get("payload", {})
 
         if not window_id:
-            logger.error("WindowManagerController: SHOW_WINDOW без window_id.")
+            logger.error(_("WindowManagerController: SHOW_WINDOW без window_id.", "WindowManagerController: SHOW_WINDOW without window_id."))
             return
 
         if payload is None or not isinstance(payload, dict):

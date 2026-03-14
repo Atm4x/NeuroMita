@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QTimer
 from main_logger import logger
 from core.events import Events, Event
+from utils import getTranslationVariant as _
 from .base_controller import BaseController
 
 
@@ -23,32 +24,32 @@ class ChatController(BaseController):
         if self.view and self.view.user_entry:
             self.view.user_entry.clear()
         else:
-            logger.error("ChatController: view или user_entry не найден!")
+            logger.error(_("ChatController: view или user_entry не найден!", "ChatController: view or user_entry not found!"))
 
     def stream_callback_handler(self, chunk: str):
         logger.debug(f"ChatController: stream_callback_handler: {chunk[:50]}...")
         if self.view:
             self.view.append_stream_chunk_signal.emit(chunk)
         else:
-            logger.error("ChatController: view не найден!")
+            logger.error(_("ChatController: view не найден!", "ChatController: view not found!"))
 
     def prepare_stream(self):
         logger.info("ChatController: prepare_stream")
         if self.view:
             self.view.prepare_stream_signal.emit()
         else:
-            logger.error("ChatController: view не найден!")
+            logger.error(_("ChatController: view не найден!", "ChatController: view not found!"))
 
     def finish_stream(self):
         logger.info("ChatController: finish_stream")
         if self.view:
             self.view.finish_stream_signal.emit()
         else:
-            logger.error("ChatController: view не найден!")
+            logger.error(_("ChatController: view не найден!", "ChatController: view not found!"))
 
     def update_chat(self, role, response, is_initial, emotion, speaker_label: str = ""):
         if not self.view:
-            logger.error("ChatController: view не найден!")
+            logger.error(_("ChatController: view не найден!", "ChatController: view not found!"))
             return
 
         payload = response
@@ -65,10 +66,10 @@ class ChatController(BaseController):
         if self.view:
             QTimer.singleShot(0, self.view.update_token_count)
         else:
-            logger.error("ChatController: view не найден!")
+            logger.error(_("ChatController: view не найден!", "ChatController: view not found!"))
 
     def _on_clear_user_input_ui(self, event: Event):
-        logger.debug("ChatController: получено событие CLEAR_USER_INPUT_UI")
+        logger.debug(_("ChatController: получено событие CLEAR_USER_INPUT_UI", "ChatController: received CLEAR_USER_INPUT_UI event"))
         self.clear_user_input()
 
     def _on_update_chat_ui(self, event: Event):

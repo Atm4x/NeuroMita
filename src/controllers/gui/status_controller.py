@@ -1,5 +1,6 @@
 from main_logger import logger
 from core.events import Events, Event
+from utils import getTranslationVariant as _
 from .base_controller import BaseController
 
 
@@ -77,7 +78,7 @@ class StatusController(BaseController):
             character_name = event.data.get("character_name")
 
         if not character_name:
-            character_name = "Мита"
+            character_name = _("Мита", "Mita")
 
         self.show_mita_thinking(character_name)
 
@@ -91,5 +92,5 @@ class StatusController(BaseController):
 
     def _on_failed_response(self, event: Event):
         logger.warning(f"StatusController: получено событие ON_FAILED_RESPONSE с данными: {event.data}")
-        error_message = event.data.get('error', 'Неизвестная ошибка') if event.data else 'Неизвестная ошибка'
+        error_message = event.data.get('error', _('Неизвестная ошибка', 'Unknown error')) if event.data else _('Неизвестная ошибка', 'Unknown error')
         self.show_mita_error(error_message)

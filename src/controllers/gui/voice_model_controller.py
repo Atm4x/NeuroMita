@@ -90,7 +90,7 @@ class VoiceModelGuiController(BaseController):
 
         backend = self._backend()
         if backend is None:
-            logger.error("VoiceModelGuiController: backend VoiceModelController не инициализирован.")
+            logger.error(_("VoiceModelGuiController: backend VoiceModelController не инициализирован.", "VoiceModelGuiController: backend VoiceModelController not initialized."))
             return
 
         try:
@@ -101,7 +101,7 @@ class VoiceModelGuiController(BaseController):
             model_data = None
 
         if model_data and model_data.get("rtx30plus", False) and not backend.is_gpu_rtx30_or_40():
-            gpu_info = backend.gpu_name if getattr(backend, "gpu_name", None) else "не определена"
+            gpu_info = backend.gpu_name if getattr(backend, "gpu_name", None) else _("не определена", "not defined")
             if getattr(backend, "detected_gpu_vendor", None) and backend.detected_gpu_vendor != "NVIDIA":
                 gpu_info = f"{backend.detected_gpu_vendor} GPU"
 
@@ -133,7 +133,7 @@ class VoiceModelGuiController(BaseController):
 
         backend = self._backend()
         if backend is None:
-            logger.error("VoiceModelGuiController: backend VoiceModelController не инициализирован.")
+            logger.error(_("VoiceModelGuiController: backend VoiceModelController не инициализирован.", "VoiceModelGuiController: backend VoiceModelController not initialized."))
             return
 
         try:
@@ -223,7 +223,7 @@ class VoiceModelGuiController(BaseController):
         try:
             backend.save_settings_values(values)
         except Exception as e:
-            logger.error(f"Ошибка сохранения настроек локальных моделей: {e}", exc_info=True)
+            logger.error(_("Ошибка сохранения настроек локальных моделей: {e}", "Error saving local model settings: {e}").format(e=e), exc_info=True)
 
         self._after_models_changed()
         QTimer.singleShot(0, self._vm_view.refresh_all)

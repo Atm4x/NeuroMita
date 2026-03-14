@@ -3,6 +3,7 @@ from pathlib import Path
 from PyQt6.QtCore import QTimer
 from main_logger import logger
 from core.events import Events, Event
+from utils import getTranslationVariant as _
 from utils.ffmpeg_installer import install_ffmpeg
 from .base_controller import BaseController
 
@@ -21,7 +22,7 @@ class SystemController(BaseController):
         if self.view:
             self.view.update_debug_signal.emit()
         else:
-            logger.error("SystemController: view не найден!")
+            logger.error(_("SystemController: view не найден!", "SystemController: view not found!"))
             
     def check_and_install_ffmpeg(self):
         logger.info("SystemController: check_and_install_ffmpeg")
@@ -53,11 +54,11 @@ class SystemController(BaseController):
             QTimer.singleShot(0, self.view._show_ffmpeg_error_popup)
             
     def _on_update_debug_info(self, event: Event):
-        logger.debug("SystemController: получено событие UPDATE_DEBUG_INFO")
+        logger.debug(_("SystemController: получено событие UPDATE_DEBUG_INFO", "SystemController: received UPDATE_DEBUG_INFO event"))
         self.update_debug()
         
     def _on_check_and_install_ffmpeg(self, event: Event):
-        logger.debug("SystemController: получено событие CHECK_AND_INSTALL_FFMPEG")
+        logger.debug(_("SystemController: получено событие CHECK_AND_INSTALL_FFMPEG", "SystemController: received CHECK_AND_INSTALL_FFMPEG event"))
         self.check_and_install_ffmpeg()
         
     def _on_get_gui_window_id(self, event: Event):
