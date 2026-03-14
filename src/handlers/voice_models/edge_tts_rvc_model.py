@@ -214,14 +214,11 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             "gpu_vendor": ["NVIDIA", "AMD"],
             "size_gb": 3,
             "languages": ["Russian", "English"],
-            "intents": [_("Быстро", "Fast"), _("Низкие требования", "Low reqs")],
-            "description": _(
-                "Быстрая модель: Edge-TTS генерирует речь, RVC преобразует тембр. Низкие требования.",
-                "Fast pipeline: Edge-TTS generates speech, RVC converts timbre. Low requirements."
-            ),
+            "intents": [t("handlers.voice_models.edge_tts_rvc.models.low.low_intent_fast"), t("handlers.voice_models.edge_tts_rvc.models.low.low_intent_low_reqs")],
+            "description": t("handlers.voice_models.edge_tts_rvc.models.low.low_description"),
             "settings": [
                 {
-                    "key": "device", "label": _("Устройство RVC", "RVC Device"), "type": "combobox",
+                    "key": "device", "label": t("handlers.voice_models.edge_tts_rvc.models.low.device_label"), "type": "combobox",
                     "options": {
                         "values_nvidia": ["dml", "cuda:0", "cpu"],
                         "default_nvidia": "cuda:0",
@@ -230,22 +227,16 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                         "values_other": ["cpu", "mps:0"],
                         "default_other": "cpu"
                     },
-                    "help": _(
-                        "Устройство для части RVC: 'cuda:0' — первая NVIDIA; 'dml' — DirectML (AMD/Intel); 'cpu' — процессор; 'mps:0' — Apple.",
-                        "Compute device for RVC: 'cuda:0' — first NVIDIA; 'dml' — DirectML (AMD/Intel); 'cpu' — CPU; 'mps:0' — Apple."
-                    )
+                    "help": t("handlers.voice_models.edge_tts_rvc.models.low.device_help")
                 },
                 {
-                    "key": "is_half", "label": _("Half-precision RVC", "Half-precision RVC"),
+                    "key": "is_half", "label": t("handlers.voice_models.edge_tts_rvc.models.low.is_half_label"),
                     "type": "combobox",
                     "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False", "default_other": "False"},
-                    "help": _(
-                        "Половинная точность (float16) для ускорения и экономии VRAM на совместимых GPU.",
-                        "Half precision (float16) for speed and VRAM saving on compatible GPUs."
-                    )
+                    "help": t("handlers.voice_models.edge_tts_rvc.models.low.is_half_help")
                 },
                 {
-                    "key": "f0method", "label": _("Метод F0 (RVC)", "F0 Method (RVC)"),
+                    "key": "f0method", "label": t("handlers.voice_models.edge_tts_rvc.models.low.f0method_label"),
                     "type": "combobox",
                     "options": {
                         "values_nvidia": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"],
@@ -255,35 +246,32 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                         "values_other": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"],
                         "default_other": "pm"
                     },
-                    "help": _(
-                        "Алгоритм извлечения F0 (высоты тона): rmvpe/crepe — точнее, pm/harvest — быстрее.",
-                        "F0 extraction algorithm: rmvpe/crepe — more accurate, pm/harvest — faster."
-                    )
+                    "help": t("handlers.voice_models.edge_tts_rvc.models.low.f0method_help")
                 },
-                {"key": "pitch", "label": _("Высота голоса RVC (пт)", "RVC Pitch (semitones)"),
+                {"key": "pitch", "label": t("handlers.voice_models.edge_tts_rvc.models.low.pitch_label"),
                  "type": "entry", "options": {"default": "6"},
-                 "help": _("Смещение высоты в полутонах. 0 — без изменений.", "Pitch shift in semitones. 0 — no change.")},
-                {"key": "use_index_file", "label": _("Исп. .index файл (RVC)", "Use .index file (RVC)"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.pitch_help")},
+                {"key": "use_index_file", "label": t("handlers.voice_models.edge_tts_rvc.models.low.use_index_file_label"),
                  "type": "checkbutton", "options": {"default": True},
-                 "help": _("Использовать .index для лучшего совпадения тембра.", "Use .index to better match voice timbre.")},
-                {"key": "index_rate", "label": _("Соотношение индекса RVC", "RVC Index Rate"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.use_index_file_help")},
+                {"key": "index_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low.index_rate_label"),
                  "type": "entry", "options": {"default": "0.75"},
-                 "help": _("Степень влияния .index (0..1).", "How much .index affects result (0..1).")},
-                {"key": "protect", "label": _("Защита согласных (RVC)", "Consonant Protection (RVC)"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.index_rate_help")},
+                {"key": "protect", "label": t("handlers.voice_models.edge_tts_rvc.models.low.protect_label"),
                  "type": "entry", "options": {"default": "0.33"},
-                 "help": _("Защищает глухие согласные от искажения тоном (0..0.5).", "Protect voiceless consonants from pitch distortion (0..0.5).")},
-                {"key": "tts_rate", "label": _("Скорость TTS (%)", "TTS Speed (%)"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.protect_help")},
+                {"key": "tts_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low.tts_rate_label"),
                  "type": "entry", "options": {"default": "0"},
-                 "help": _("Скорость базового Edge-TTS в процентах.", "Base Edge-TTS speed in percent.")},
-                {"key": "filter_radius", "label": _("Радиус фильтра F0 (RVC)", "F0 Filter Radius (RVC)"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.tts_rate_help")},
+                {"key": "filter_radius", "label": t("handlers.voice_models.edge_tts_rvc.models.low.filter_radius_label"),
                  "type": "entry", "options": {"default": "3"},
-                 "help": _("Сглаживание кривой F0 (рекоменд. ≥3).", "Smooth F0 curve (recommended ≥3).")},
-                {"key": "rms_mix_rate", "label": _("Смешивание RMS (RVC)", "RMS Mixing (RVC)"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.filter_radius_help")},
+                {"key": "rms_mix_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low.rms_mix_rate_label"),
                  "type": "entry", "options": {"default": "0.5"},
-                 "help": _("Смешивание громкости исходника и RVC (0..1).", "Mix source loudness and RVC result (0..1).")},
-                {"key": "volume", "label": _("Громкость (volume)", "Volume"),
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.rms_mix_rate_help")},
+                {"key": "volume", "label": t("handlers.voice_models.edge_tts_rvc.models.low.volume_label"),
                  "type": "entry", "options": {"default": "1.0"},
-                 "help": _("Итоговая громкость.", "Final loudness.")}
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low.volume_help")}
             ]
         },
         {
@@ -294,13 +282,10 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             "gpu_vendor": ["NVIDIA", "AMD"],
             "size_gb": 3,
             "languages": ["Russian", "English"],
-            "intents": [_("Быстро", "Fast"), _("Локальный синтез", "Offline synth")],
-            "description": _(
-                "Silero генерирует речь офлайн, RVC меняет тембр. Требования схожи с Edge-TTS + RVC.",
-                "Silero generates speech offline, RVC converts timbre. Requirements similar to Edge-TTS + RVC."
-            ),
+            "intents": [t("handlers.voice_models.edge_tts_rvc.models.low_plus.low_plus_intent_fast"), t("handlers.voice_models.edge_tts_rvc.models.low_plus.low_plus_intent_offline")],
+            "description": t("handlers.voice_models.edge_tts_rvc.models.low_plus.low_plus_description"),
             "settings": [
-                {"key": "silero_rvc_device", "label": _("Устройство RVC", "RVC Device"), "type": "combobox",
+                {"key": "silero_rvc_device", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_device_label"), "type": "combobox",
                  "options": {
                      "values_nvidia": ["dml", "cuda:0", "cpu"],
                      "default_nvidia": "cuda:0",
@@ -309,39 +294,39 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                      "values_other": ["cpu", "dml"],
                      "default_other": "cpu"
                  },
-                 "help": _("Устройство для RVC (см. выше).", "RVC device (see above).")},
-                {"key": "silero_device", "label": _("Устройство Silero", "Silero Device"), "type": "combobox",
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_device_help")},
+                {"key": "silero_device", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_device_label"), "type": "combobox",
                  "options": {"values_nvidia": ["cuda", "cpu"], "default_nvidia": "cuda", "values_amd": ["cpu"], "default_amd": "cpu", "values_other": ["cpu"], "default_other": "cpu"},
-                 "help": _("Устройство для Silero (GPU/CPU).", "Device for Silero (GPU/CPU).")},
-                {"key": "silero_rvc_is_half", "label": _("Half-precision RVC", "Half-precision RVC"), "type": "combobox",
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_device_help")},
+                {"key": "silero_rvc_is_half", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_is_half_label"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False", "default_other": "False"},
-                 "help": _("Половинная точность для RVC на совместимых GPU.", "Half precision for RVC on compatible GPUs.")},
-                {"key": "silero_rvc_f0method", "label": _("Метод F0 (RVC)", "F0 Method (RVC)"), "type": "combobox",
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_is_half_help")},
+                {"key": "silero_rvc_f0method", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_f0method_label"), "type": "combobox",
                  "options": {"values_nvidia": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_nvidia": "rmvpe",
                              "values_amd": ["rmvpe", "harvest", "pm", "dio"], "default_amd": "pm",
                              "values_other": ["pm", "rmvpe", "harvest", "dio"], "default_other": "pm"},
-                 "help": _("Выбор алгоритма F0 (точность/скорость).", "Choose F0 method (accuracy/speed).")},
-                {"key": "silero_rvc_pitch", "label": _("Высота голоса RVC (пт)", "RVC Pitch (semitones)"), "type": "entry", "options": {"default": "6"},
-                 "help": _("Смещение высоты в полутонах.", "Pitch shift in semitones.")},
-                {"key": "silero_rvc_use_index_file", "label": _("Исп. .index файл (RVC)", "Use .index file (RVC)"), "type": "checkbutton", "options": {"default": True},
-                 "help": _("Улучшает совпадение тембра.", "Improves timbre matching.")},
-                {"key": "silero_rvc_index_rate", "label": _("Соотношение индекса RVC", "RVC Index Rate"), "type": "entry", "options": {"default": "0.75"},
-                 "help": _("Степень влияния .index (0..1).", "How much .index affects result (0..1).")},
-                {"key": "silero_rvc_protect", "label": _("Защита согласных (RVC)", "Consonant Protection (RVC)"), "type": "entry", "options": {"default": "0.33"},
-                 "help": _("Защита глухих согласных (0..0.5).", "Protect voiceless consonants (0..0.5).")},
-                {"key": "silero_rvc_filter_radius", "label": _("Радиус фильтра F0 (RVC)", "F0 Filter Radius (RVC)"), "type": "entry", "options": {"default": "3"},
-                 "help": _("Сглаживание кривой F0 (рекоменд. ≥3).", "Smooth F0 curve (recommended ≥3).")},
-                {"key": "silero_rvc_rms_mix_rate", "label": _("Смешивание RMS (RVC)", "RMS Mixing (RVC)"), "type": "entry", "options": {"default": "0.5"},
-                 "help": _("Смешивание громкости исходника и RVC (0..1).", "Mix source loudness and RVC result (0..1).")},
-                {"key": "silero_sample_rate", "label": _("Частота Silero", "Silero Sample Rate"), "type": "combobox",
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_f0method_help")},
+                {"key": "silero_rvc_pitch", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_pitch_label"), "type": "entry", "options": {"default": "6"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_pitch_help")},
+                {"key": "silero_rvc_use_index_file", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_use_index_file_label"), "type": "checkbutton", "options": {"default": True},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_use_index_file_help")},
+                {"key": "silero_rvc_index_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_index_rate_label"), "type": "entry", "options": {"default": "0.75"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_index_rate_help")},
+                {"key": "silero_rvc_protect", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_protect_label"), "type": "entry", "options": {"default": "0.33"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_protect_help")},
+                {"key": "silero_rvc_filter_radius", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_filter_radius_label"), "type": "entry", "options": {"default": "3"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_filter_radius_help")},
+                {"key": "silero_rvc_rms_mix_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_rms_mix_rate_label"), "type": "entry", "options": {"default": "0.5"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_rvc_rms_mix_rate_help")},
+                {"key": "silero_sample_rate", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_sample_rate_label"), "type": "combobox",
                  "options": {"values": ["48000", "24000", "16000"], "default": "48000"},
-                 "help": _("Частота дискретизации синтеза Silero.", "Silero synthesis sample rate.")},
-                {"key": "silero_put_accent", "label": _("Акценты Silero", "Silero Accents"), "type": "checkbutton", "options": {"default": True},
-                 "help": _("Авторасстановка ударений.", "Automatic stress placement.")},
-                {"key": "silero_put_yo", "label": _("Буква Ё Silero", "Silero Letter Yo"), "type": "checkbutton", "options": {"default": True},
-                 "help": _("Автозамена 'е' на 'ё' по словарю.", "Auto replace 'e' with 'yo'.")},
-                {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
-                 "help": _("Итоговая громкость.", "Final loudness.")}
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_sample_rate_help")},
+                {"key": "silero_put_accent", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_put_accent_label"), "type": "checkbutton", "options": {"default": True},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_put_accent_help")},
+                {"key": "silero_put_yo", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_put_yo_label"), "type": "checkbutton", "options": {"default": True},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.silero_put_yo_help")},
+                {"key": "volume", "label": t("handlers.voice_models.edge_tts_rvc.models.low_plus.volume_label"), "type": "entry", "options": {"default": "1.0"},
+                 "help": t("handlers.voice_models.edge_tts_rvc.models.low_plus.volume_help")}
             ]
         }
     ]
