@@ -181,11 +181,8 @@ class SpeechController:
 
         if not self._check_model_installed(engine):
             self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
-                'title': _('Требуется установка', 'Installation required'),
-                'message': _(
-                    'ASR-модель не установлена. Установите её через "Каталог ASR моделей".',
-                    'ASR model is not installed. Install it via the "ASR Model Catalogue".'
-                )
+                'title': t('controllers.speech.installation_required'),
+                'message': t('controllers.speech.installation_message')
             })
 
             try:

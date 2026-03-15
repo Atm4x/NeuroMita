@@ -443,28 +443,28 @@ class AsrGlossaryView(QWidget):
 
         if not installed:
             placeholder = QLabel(
-                t(“ui.windows.asr_glossary.model_not_installed”)
+                t("ui.windows.asr_glossary.model_not_installed")
             )
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setWordWrap(True)
-            placeholder.setObjectName(“Subtle”)
+            placeholder.setObjectName("Subtle")
             self.settings_layout.addWidget(placeholder)
             self.settings_layout.addStretch()
             return
 
         schema_res = self.event_bus.emit_and_wait(
-            Events.Speech.GET_RECOGNIZER_SETTINGS_SCHEMA, {“engine”: engine_id}, timeout=1.0
+            Events.Speech.GET_RECOGNIZER_SETTINGS_SCHEMA, {"engine": engine_id}, timeout=1.0
         )
         schema = schema_res[0] if schema_res else []
 
         vals_res = self.event_bus.emit_and_wait(
-            Events.Speech.GET_RECOGNIZER_SETTINGS, {“engine”: engine_id}, timeout=1.0
+            Events.Speech.GET_RECOGNIZER_SETTINGS, {"engine": engine_id}, timeout=1.0
         )
         values = vals_res[0] if vals_res else {}
 
         if not schema:
-            lbl = QLabel(t(“ui.windows.asr_glossary.no_settings”))
-            lbl.setObjectName(“Subtle”)
+            lbl = QLabel(t("ui.windows.asr_glossary.no_settings"))
+            lbl.setObjectName("Subtle")
             self.settings_layout.addWidget(lbl)
             self.settings_layout.addStretch()
             return

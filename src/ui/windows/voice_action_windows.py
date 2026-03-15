@@ -522,14 +522,7 @@ class VCRedistWarningDialog(QDialog):
         title_label.setStyleSheet("color: orange;")
         layout.addWidget(title_label)
         
-        info_text = _(
-            "Не удалось загрузить библиотеку для Triton (возможно, отсутствует VC++ Redistributable).\n"
-            "Установите последнюю версию VC++ Redistributable (x64) с сайта Microsoft\n"
-            "или попробуйте импортировать снова, если вы только что его установили.",
-            "Failed to load the library for Triton (VC++ Redistributable might be missing).\n"
-            "Install the latest VC++ Redistributable (x64) from the Microsoft website\n"
-            "or try importing again if you just installed it."
-        )
+        info_text = t("ui.windows.voice_action_windows.vcredist_info")
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
@@ -610,14 +603,7 @@ class TritonDependenciesDialog(QDialog):
         self.warning_label.setVisible(not (cuda_found and winsdk_found and msvc_found))
         layout.addWidget(self.warning_label)
         
-        info_text = _(
-            "Если компоненты не найдены, установите их согласно документации.\n"
-            "Вы также можете попробовать инициализировать модель вручную,\n"
-            "запустив `init_triton.bat` в корневой папке программы.",
-            "If components are not found, install them according to the documentation.\n"
-            "You can also try initializing the model manually\n"
-            "by running `init_triton.bat` in the program's root folder."
-        )
+        info_text = t("ui.windows.voice_action_windows.triton_deps_info")
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         layout.addWidget(info_label)

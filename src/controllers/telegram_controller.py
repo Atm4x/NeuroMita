@@ -115,7 +115,7 @@ class TelegramController:
             except Exception:
                 pass
 
-        # fallback: спросим у SettingsController “сырые” settings
+        # fallback: спросим у SettingsController "сырые" settings
         try:
             res = self.event_bus.emit_and_wait(Events.Settings.GET_SETTINGS, timeout=0.4)
             raw = res[0] if res else {}

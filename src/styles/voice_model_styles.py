@@ -119,7 +119,7 @@ QLabel#Tag {
     max-height: 20px;
 }
 
-/* Свёрнутый “+N” для длинных списков языков */
+/* Свёрнутый "+N" для длинных списков языков */
 QLabel#TagMore {
     background-color: transparent;
     color: {muted};

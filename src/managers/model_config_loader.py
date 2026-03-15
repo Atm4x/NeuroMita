@@ -56,7 +56,7 @@ class ModelRuntimeConfig:
     max_request_attempts: int = 5
     request_delay: float = 0.20
 
-    # image reduction (используется Prompt/History controller’ами)
+    # image reduction (используется Prompt/History controller'ами)
     image_quality_reduction_enabled: bool = False
     image_quality_reduction_start_index: int = 25
     image_quality_reduction_use_percentage: bool = False
@@ -119,7 +119,7 @@ class ModelConfigLoader:
     """
     Грузит runtime-конфиг из Settings.
 
-    ВАЖНО: тут же закладываем “крючок” для будущих overrides параметров из пресетов.
+    ВАЖНО: тут же закладываем "крючок" для будущих overrides параметров из пресетов.
     Сейчас overrides не реализуем (как ты просил), но точка расширения уже есть.
     """
 

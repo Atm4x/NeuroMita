@@ -25,12 +25,7 @@ class GoogleRecognizer(SpeechRecognizerInterface):
             "tags": [
                 t("handlers.asr_models.online"),
             ],
-            "description": _(
-                "Онлайн-распознавание через SpeechRecognition (Google Web Speech API). "
-                "Без скачивания весов модели, но нужен интернет.",
-                "Online recognition via SpeechRecognition (Google Web Speech API). "
-                "No model weights download, but internet is required.",
-            ),
+            "description": t("handlers.asr.google.description"),
             "links": [
                 {"label": "SpeechRecognition (PyPI)", "url": "https://pypi.org/project/SpeechRecognition/"}
             ],

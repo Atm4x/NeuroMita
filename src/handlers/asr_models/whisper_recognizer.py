@@ -20,12 +20,7 @@ class WhisperRecognizer(SpeechRecognizerInterface):
         {
             "id": "whisper",
             "name": "Whisper Large v3 turbo",
-            "description": _(
-                "Офлайн Whisper через faster-whisper (CTranslate2). Быстро работает на NVIDIA GPU (CUDA), "
-                "на CPU тоже поддерживается. Требует скачивания модели в локальный кэш.",
-                "Offline Whisper via faster-whisper (CTranslate2). Fast on NVIDIA GPU (CUDA), "
-                "CPU is supported as well. Requires downloading the model into local cache."
-            ),
+            "description": t("handlers.asr.whisper.description"),
             "languages": ["Multilingual"],
             "gpu_vendor": ["NVIDIA", "CPU"],
             "tags": [

@@ -119,7 +119,7 @@ class ModelDetailView(QWidget):
         main.addWidget(self.settings_scroll, 1)
 
         self.placeholder_settings = QLabel(
-            t(“ui.windows.voice_model_view.not_installed”)
+            t("ui.windows.voice_model_view.not_installed")
         )
         self.placeholder_settings.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder_settings.setWordWrap(True)
@@ -329,7 +329,7 @@ class ModelDetailView(QWidget):
         installed = model_id in self.installed_models
         if not installed:
             self.placeholder_settings = QLabel(
-                t(“ui.windows.voice_model_view.not_installed”)
+                t("ui.windows.voice_model_view.not_installed")
             )
             self.placeholder_settings.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.placeholder_settings.setWordWrap(True)

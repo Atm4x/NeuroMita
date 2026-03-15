@@ -213,7 +213,7 @@ class PresetsMixin:
             if isinstance(known_models, list) and known_models:
                 v.api_model_list_model.setStringList([str(x) for x in known_models if str(x).strip()])
 
-            v.provider_label.setText(f"{_('Пресет', 'Preset')}: {preset.get('name', '')}")
+            v.provider_label.setText(f"{t('ui.settings.api.presets.preset_label')}: {preset.get('name', '')}")
             v.api_settings_container.setVisible(True)
 
             self.event_bus.emit(Events.Settings.SAVE_SETTING, {"key": "LAST_API_PRESET_ID", "value": int(preset_id)})

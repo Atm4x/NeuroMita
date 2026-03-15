@@ -26,10 +26,7 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
         {
             "id": "gigaam",
             "name": "GigaAM",
-            "description": _(
-                "Офлайн-распознавание речи на базе GigaAM (PyTorch). Работает в текущем процессе.",
-                "Offline speech recognition based on GigaAM (PyTorch). Runs in current process."
-            ),
+            "description": t("handlers.asr.gigaam.description"),
             "languages": ["Russian"],
             "gpu_vendor": ["NVIDIA", "CPU"],
             "tags": [

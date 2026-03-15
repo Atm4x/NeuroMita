@@ -42,7 +42,7 @@ def resolve_local_segmentation_path(model_id: str) -> str:
 def load_segmentation_model(model_id: str) -> Model:
     """
     Loads the segmentation model from a local snapshot.
-    If it doesn’t exist, it first creates (downloads) the snapshot.
+    If it doesn't exist, it first creates (downloads) the snapshot.
     """
     local_path = resolve_local_segmentation_path(model_id=model_id)
 

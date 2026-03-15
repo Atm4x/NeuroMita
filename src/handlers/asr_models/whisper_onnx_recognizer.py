@@ -31,12 +31,7 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
         {
             "id": "whisper_onnx",
             "name": "Whisper Large v3 turbo (ONNX)",
-            "description": _(
-                "Офлайн Whisper в формате ONNX. Работает через onnxruntime, а на AMD/не‑NVIDIA может "
-                "использовать DirectML. Модель и файлы transformers скачиваются локально.",
-                "Offline Whisper in ONNX format. Runs via onnxruntime, and on AMD/non‑NVIDIA can "
-                "use DirectML. Model and transformers files are downloaded locally."
-            ),
+            "description": t("handlers.asr.whisper_onnx.description"),
             "languages": ["Multilingual"],
             "gpu_vendor": ["NVIDIA", "AMD"],
             "tags": [

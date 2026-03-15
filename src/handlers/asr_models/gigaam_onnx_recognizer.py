@@ -30,12 +30,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
         {
             "id": "gigaam_onnx",
             "name": "GigaAM ONNX",
-            "description": _(
-                "Офлайн-распознавание речи на базе GigaAM через ONNXRuntime. "
-                "Запускается в отдельном процессе. Подходит для CPU/DirectML.",
-                "Offline speech recognition based on GigaAM via ONNXRuntime. "
-                "Runs in a separate process. Suitable for CPU/DirectML."
-            ),
+            "description": t("handlers.asr.gigaam_onnx.description"),
             "languages": ["Russian"],
             "gpu_vendor": ["AMD", "CPU"],
             "tags": [
@@ -336,7 +331,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
                         self._event_bus.emit(Events.Speech.ASR_MODEL_INSTALL_PROGRESS, {
                             "model": "gigaam_onnx",
                             "progress": int(max(0, min(99, prog))),
-                            "status": _(f"Загрузка: {pct:.1f}%", f"Downloading: {pct:.1f}%")
+                            "status": t("handlers.asr.gigaam_onnx.downloading").format(pct=pct)
                         })
 
             if os.path.exists(dest):
