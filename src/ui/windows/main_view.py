@@ -406,6 +406,18 @@ class ChatGUI(QMainWindow):
             self.settings_containers[key] = scroll_area
             self.settings_overlay.add_container(scroll_area)
 
+    def reload_settings_containers(self):
+        """Rebuild all settings panels (e.g. after language change)."""
+        # Remove old widgets from stack
+        stack = self.settings_overlay.stack
+        while stack.count():
+            w = stack.widget(0)
+            stack.removeWidget(w)
+            w.deleteLater()
+        self.settings_containers.clear()
+        self.current_settings_category = None
+        self._init_settings_containers()
+
     def show_settings_category(self, category):
         self.settings_animation.stop()
         is_hiding = (self.current_settings_category == category and self.settings_overlay.width() > 0)

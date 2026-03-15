@@ -37,12 +37,15 @@ class SettingsController(BaseController):
             self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
 
         if key == "LANGUAGE":
-            # Language changed, update TranslationManager
+            old_language = TranslationManager.get_current_language()
             TranslationManager.set_language(value)
             self.event_bus.emit(Events.Core.LANGUAGE_CHANGED, {
                 "language": value,
-                "old_language": TranslationManager.get_current_language()
+                "old_language": old_language
             })
+            # Rebuild settings panels with new language
+            if self.view and hasattr(self.view, "reload_settings_containers"):
+                self.view.reload_settings_containers()
 
         if key == "AUDIO_BOT":
             if isinstance(value, str) and value.startswith("@CrazyMitaAIbot"):

@@ -39,7 +39,8 @@ class TranslationManager:
         old_language = cls._current_language
         cls._current_language = language.upper()
 
-        # Load translations for the new language
+        # Force reload when language is explicitly changed
+        cls._translations.pop(cls._current_language, None)
         cls._load_translations(cls._current_language)
 
         # Try to fall back to English if not available
