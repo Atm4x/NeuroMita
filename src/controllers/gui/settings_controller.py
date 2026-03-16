@@ -1,3 +1,4 @@
+from PyQt6.QtCore import QTimer
 from main_logger import logger
 from core.events import Events, Event
 from utils.translation_manager import t, TranslationManager
@@ -43,9 +44,10 @@ class SettingsController(BaseController):
                 "language": value,
                 "old_language": old_language
             })
-            # Rebuild settings panels with new language
+            # Rebuild settings panels with new language (deferred to avoid
+            # destroying widgets while still inside their signal handlers)
             if self.view and hasattr(self.view, "reload_settings_containers"):
-                self.view.reload_settings_containers()
+                QTimer.singleShot(0, self.view.reload_settings_containers)
 
         if key == "AUDIO_BOT":
             if isinstance(value, str) and value.startswith("@CrazyMitaAIbot"):
