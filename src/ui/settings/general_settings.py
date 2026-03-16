@@ -28,6 +28,8 @@ def setup_general_settings_controls(self, parent):
         {'label': t('ui.settings.general.hide_tags'), 'key': 'HIDE_CHAT_TAGS',
          'type': 'checkbutton', 'default_checkbutton': True,
          'tooltip': t('ui.settings.general.hide_tags_help')},
+        {'label': t('ui.settings.general.show_reasoning'), 'key': 'SHOW_THINK_IN_GUI',
+         'type': 'checkbutton', 'default_checkbutton': True}
     ]
 
     create_settings_section(
