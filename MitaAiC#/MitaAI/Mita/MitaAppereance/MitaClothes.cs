@@ -35,6 +35,14 @@ namespace MitaAI
 
 
         }
+        // Direct call (no regex): apply clothes from structured segment
+        public static void ProcessClothesDirect(string clothesCmd)
+        {
+            MelonLogger.Msg($"ProcessClothesDirect: {clothesCmd}");
+            Enum.TryParse<Clothes>(clothesCmd, true, out var form);
+            SetClothes(form);
+        }
+
         public static string ProcessClothes(string response)
         {
             MelonLogger.Msg($"Inside ProcessClothes");

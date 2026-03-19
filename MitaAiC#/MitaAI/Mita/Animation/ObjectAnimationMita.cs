@@ -68,6 +68,31 @@ namespace MitaAI
             return info;
         }
 
+        // Direct call (no regex): apply one interaction from structured segment
+        public static void ProcessInteractionDirect(string interactionName)
+        {
+            try
+            {
+                MelonLogger.Msg($"ProcessInteractionDirect: {interactionName}");
+                if (allOAMs.TryGetValue(interactionName, out var oam))
+                {
+                    if (oam.commonInteractableObject.isTaken(oam.position))
+                    {
+                        CharacterMessages.sendSystemInfo($"Interaction with {oam.name} failed, because it taken by other person");
+                    }
+                    else MitaAnimationModded.EnqueueAnimationCurrent(oam, delayAfter: 0.5f);
+                }
+                else
+                {
+                    MelonLogger.Msg($"ProcessInteractionDirect: interaction '{interactionName}' not found");
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"ProcessInteractionDirect error: {ex}");
+            }
+        }
+
         public static string ProcessInteraction(string response)
         {
             try

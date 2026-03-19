@@ -29,6 +29,163 @@ namespace MitaAI
 
         public static EmotionType currentEmotion = EmotionType.none;
 
+        public static IEnumerator DisplayStructuredResponseCoroutine(int id, characterType characterToSend, List<ResponseSegment> segments, AudioSource audioSource = null, bool voice = true)
+        {
+            while (dialogActive) { yield return null; }
+            dialogActive = true;
+
+            MelonLogger.Msg("DisplayStructuredResponseCoroutine");
+
+            yield return null;
+
+            string patch_to_sound = "";
+
+            if (voice)
+            {
+                float elapsedTime = 0f;
+                float waitingTimer = 0.75f;
+                float lastCallTime = 0f;
+
+                while (string.IsNullOrEmpty(patch_to_sound) && elapsedTime < voiceTimout && NetworkController.connectedToSilero)
+                {
+                    if (DataChange.sound_files.ContainsKey(id))
+                    {
+                        patch_to_sound = DataChange.sound_files[id];
+                        DataChange.sound_files[id] = null;
+                        break;
+                    }
+
+                    if (elapsedTime - lastCallTime >= waitingTimer)
+                    {
+                        List<String> parts = new List<String> { "***" };
+                        MelonCoroutines.Start(ShowDialoguesSequentially(characterToSend, parts, true));
+                        lastCallTime = elapsedTime;
+                    }
+
+                    elapsedTime += 0.1f;
+                    yield return new WaitForSecondsRealtime(0.1f);
+                }
+
+                yield return null;
+
+                if (string.IsNullOrEmpty(patch_to_sound))
+                    MelonLogger.Msg("Timeout reached, patch_to_sound_file is still empty.");
+            }
+
+            AudioClip audioClip = null;
+            if (!string.IsNullOrEmpty(patch_to_sound))
+            {
+                try
+                {
+                    audioClip = NetworkController.LoadAudioClipFromFileAsync(patch_to_sound).Result;
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Error($"Error loading audio file: {ex.Message}");
+                }
+            }
+
+            int totalTextLength = 0;
+            foreach (var seg in segments) totalTextLength += seg.text.Length;
+            float totalDelay = totalTextLength / (float)simbolsPerSecond;
+
+            if (audioSource != null) PlaySound(audioClip, audioSource);
+            else MelonCoroutines.Start(PlayMitaSound(totalDelay, audioClip, totalTextLength));
+
+            InputControl.BlockInputField(true);
+
+            foreach (var segment in segments)
+            {
+                yield return MelonCoroutines.Start(ShowStructuredSegment(characterToSend, segment));
+            }
+
+            if (CommandProcessor.ContinueCounter > 0) CommandProcessor.ContinueCounter--;
+            InputControl.BlockInputField(false);
+
+            dialogActive = false;
+        }
+
+        private static IEnumerator ShowStructuredSegment(characterType characterToSend, ResponseSegment segment)
+        {
+            EmotionType emotion = EmotionType.none;
+
+            try
+            {
+                MelonLogger.Msg("ShowStructuredSegment");
+
+                foreach (var fp in segment.face_params)
+                    MitaFaceAnimationModded.SetFaceStyleDirect(fp);
+
+                foreach (var c in segment.clothes)
+                    MitaClothesModded.ProcessClothesDirect(c);
+
+                foreach (var ef in segment.visual_effects)
+                    PlayerEffectsModded.ProcessPlayerEffectsDirect(ef);
+
+                foreach (var mv in segment.movement_modes)
+                    MitaMovement.SetMovementStyleDirect(characterToSend, mv);
+
+                var animModded = MitaAnimationModded.getMitaAnimationModded(characterToSend);
+                if (animModded != null)
+                    foreach (var anim in segment.animations)
+                        animModded.SetAnimationDirect(anim);
+
+                foreach (var m in segment.music)
+                    AudioControl.ProcessMusicDirect(m);
+
+                if (!string.IsNullOrEmpty(segment.hint))
+                    CommandProcessor.ProcesHintDirect(segment.hint);
+
+                foreach (var ia in segment.interactions)
+                    ObjectAnimationMita.ProcessInteractionDirect(ia);
+
+                emotion = MitaFaceAnimationModded.SetEmotionsDirect(segment.emotions);
+
+                if (segment.commands.Count > 0)
+                    CommandProcessor.ProcessCommands(segment.commands);
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"ShowStructuredSegment effects error: {ex.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(segment.text)) yield break;
+
+            List<string> parts = segment.text.Length > 70 ? SplitText(segment.text, 70) : new List<string> { segment.text };
+
+            bool emotionApplied = false;
+            foreach (string part in parts)
+            {
+                float delay = Math.Clamp(part.Length / (float)simbolsPerSecond, minDialoguePartLen, maxDialoguePartLen);
+
+                GameObject currentDialog = InstantiateDialog();
+                if (currentDialog == null) yield break;
+
+                Dialogue_3DText answer = currentDialog.GetComponent<Dialogue_3DText>();
+                answer.textPrint = part;
+                changeTextColor(currentDialog, characterToSend);
+                answer.timeShow = delay;
+                answer.speaker = MitaCore.Instance.MitaPersonObject;
+
+                if (!emotionApplied && emotion != EmotionType.none)
+                {
+                    answer.emotionFinish = emotion;
+                    currentEmotion = emotion;
+                    emotionApplied = true;
+                }
+
+                addDialogueMemory(answer, MitaCore.Instance.currentCharacter);
+                currentDialog.SetActive(true);
+
+                if (!NetworkController.connectedToSilero) MelonCoroutines.Start(AudioControl.PlayTextAudio(part));
+
+                MelonLogger.Msg($"Structured text: {part}");
+
+                yield return new WaitForSeconds(delay * delayModifier);
+                Utils.DestroyAfterTime(currentDialog, delay * 1.15f + 5f);
+            }
+        }
+
         public static IEnumerator DisplayResponseAndEmotionCoroutine(int id, characterType characterToSend, string response, AudioSource audioSource = null, bool voice = true)
         {
             while (dialogActive) { yield return null; }

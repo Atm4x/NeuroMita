@@ -193,6 +193,13 @@ namespace MitaAI.Mita
         }
 
 
+        // Direct call (no regex): apply music from structured segment
+        public static void ProcessMusicDirect(string musicCmd)
+        {
+            MelonLogger.Msg($"ProcessMusicDirect: {musicCmd}");
+            TurnAudio(musicCmd);
+        }
+
         public static string ProcessMusic(string response)
         {
             MelonLogger.Msg($"Inside ProcessMusic");

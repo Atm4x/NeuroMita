@@ -221,6 +221,7 @@ namespace MitaAI
             bool GM_READ = false;
             bool GM_VOICE = false;
             int id = 0;
+            List<ResponseSegment> segments = null;
             if (responseTask.IsCompleted)
             {
 
@@ -239,6 +240,9 @@ namespace MitaAI
 
                     string new_character = messageData2["character"].GetString();
                     response = messageData2["response"].GetString();
+                    segments = messageData2.ContainsKey("segments")
+                        ? ResponseSegment.ParseList(messageData2["segments"])
+                        : null;
                     bool connectedToSilero = messageData2["silero"].GetBoolean();
 
                     int idSound = messageData2["id_sound"].GetInt32();
@@ -309,18 +313,36 @@ namespace MitaAI
 
             if (response != "")
             {
-                MelonLogger.Msg($"after GetResponseFromPythonSocketAsync char {characterToSend} {GM_READ} {GM_VOICE}");
+                MelonLogger.Msg($"after GetResponseFromPythonSocketAsync char {characterToSend} {GM_READ} {GM_VOICE} structured={segments != null}");
 
-                if (characterToSend.ToString().Contains("Cart")) MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend, response, AudioControl.cartAudioSource));
-                else if (characterToSend == characterType.GameMaster)
+                if (segments != null)
                 {
-
-
-
-                    if (GM_READ) MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend, response, AudioControl.playerAudioSource, GM_VOICE));
-                    else CommandProcessor.ProcessCommands(CommandProcessor.ExtractCommands(response).Item1);
+                    // Structured output path
+                    if (characterToSend.ToString().Contains("Cart"))
+                        MelonCoroutines.Start(DialogueControl.DisplayStructuredResponseCoroutine(id, characterToSend, segments, AudioControl.cartAudioSource));
+                    else if (characterToSend == characterType.GameMaster)
+                    {
+                        if (GM_READ) MelonCoroutines.Start(DialogueControl.DisplayStructuredResponseCoroutine(id, characterToSend, segments, AudioControl.playerAudioSource, GM_VOICE));
+                        else
+                        {
+                            var allCommands = new List<string>();
+                            foreach (var seg in segments) allCommands.AddRange(seg.commands);
+                            CommandProcessor.ProcessCommands(allCommands);
+                        }
+                    }
+                    else MelonCoroutines.Start(DialogueControl.DisplayStructuredResponseCoroutine(id, characterToSend, segments));
                 }
-                else MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend,response));
+                else
+                {
+                    // Legacy tag-based path
+                    if (characterToSend.ToString().Contains("Cart")) MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend, response, AudioControl.cartAudioSource));
+                    else if (characterToSend == characterType.GameMaster)
+                    {
+                        if (GM_READ) MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend, response, AudioControl.playerAudioSource, GM_VOICE));
+                        else CommandProcessor.ProcessCommands(CommandProcessor.ExtractCommands(response).Item1);
+                    }
+                    else MelonCoroutines.Start(DialogueControl.DisplayResponseAndEmotionCoroutine(id, characterToSend, response));
+                }
 
                 if (characterToSend != characterType.GameMaster) CharacterMessages.sendInfoListeners(Utils.CleanFromTags(response), Characters, characterToSend, CharacterControl.extendCharsString(characterToSend));
                 else CharacterMessages.sendInfoListenersFromGm(Utils.CleanFromTags(response), Characters, characterToSend);

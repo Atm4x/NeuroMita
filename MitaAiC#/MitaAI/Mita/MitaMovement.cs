@@ -39,6 +39,49 @@ namespace MitaAI
         public static void setMovementStyle(characterType characterType, MovementStyles style) { movementStyles[characterType] = style; }
        
         
+        // Direct call (no regex): apply movement style from structured segment
+        public static void SetMovementStyleDirect(characterType characterType, string style)
+        {
+            if (string.IsNullOrEmpty(style)) return;
+            try
+            {
+                var Mita = MitaCore.getMitaByEnum(characterType);
+                if (Mita == null) return;
+                var MitaAnimation = MitaAnimationModded.getMitaAnimationModded(characterType);
+                switch (style)
+                {
+                    case "Следовать рядом с игроком":
+                        ObjectAnimationMita.finishWorkingOAM();
+                        movementStyles[characterType] = MovementStyles.walkNear;
+                        MitaAnimation.location34_Communication.ActivationCanWalk(true);
+                        break;
+                    case "Следовать за игроком":
+                        ObjectAnimationMita.finishWorkingOAM();
+                        movementStyles[characterType] = MovementStyles.follow;
+                        MitaAnimation.location34_Communication.ActivationCanWalk(false);
+                        MelonCoroutines.Start(FollowPlayer(MitaAnimation));
+                        MelonCoroutines.Start(LookOnPlayer(MitaAnimation));
+                        break;
+                    case "Стоять на месте":
+                        ObjectAnimationMita.finishWorkingOAM();
+                        MitaSetStaing(characterType);
+                        break;
+                    case "NoClip":
+                        ObjectAnimationMita.finishWorkingOAM();
+                        movementStyles[characterType] = MovementStyles.noclip;
+                        MitaAnimation.location34_Communication.ActivationCanWalk(false);
+                        MelonCoroutines.Start(FollowPlayerNoclip(characterType));
+                        break;
+                    default:
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"SetMovementStyleDirect error: {ex.Message}");
+            }
+        }
+
         public static string FindMovementStyle(characterType characterType,string response)
         {
             // Регулярное выражение для извлечения эмоций
