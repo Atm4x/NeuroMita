@@ -81,6 +81,53 @@ namespace MitaAI.Mita
             }
         }
 
+        // Direct call (no regex): apply emotions list from structured segment
+        public static EmotionType SetEmotionsDirect(List<string> emotions)
+        {
+            EmotionType emotion = EmotionType.none;
+            try
+            {
+                if (emotions.Count > 0)
+                {
+                    Enum.TryParse<EmotionType>(emotions[0], true, out var result);
+                    MitaCore.Instance.Mita.FaceEmotionType(result);
+                    if (emotions.Count > 1)
+                    {
+                        Enum.TryParse<EmotionType>(emotions[1], true, out var result2);
+                        emotion = result2;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"SetEmotionsDirect error: {ex.Message}");
+            }
+            return emotion;
+        }
+
+        // Direct call (no regex): apply face style value from structured segment
+        public static void SetFaceStyleDirect(string faceStyle)
+        {
+            try
+            {
+                if (MitaCore.Instance.Mita == null || MitaCore.Instance.Mita.gameObject == null) return;
+                switch (faceStyle)
+                {
+                    case "Смущаться": MitaCore.Instance.Mita.FaceLayer(1); break;
+                    case "Маска грусти": MitaCore.Instance.Mita.FaceLayer(2); break;
+                    case "LoveEyesOn": setLoveEye(MitaCore.Instance.MitaPersonObject); break;
+                    case "LoveEyesOff": setLoveEye(MitaCore.Instance.MitaPersonObject, false); break;
+                    case "GlassesOn": GlassesObj(MitaCore.Instance.MitaPersonObject, true); break;
+                    case "GlasessOff": GlassesObj(MitaCore.Instance.MitaPersonObject, false); break;
+                    default: try { MitaCore.Instance.Mita.FaceLayer(0); } catch { } break;
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"SetFaceStyleDirect error: {ex}");
+            }
+        }
+
         public static string SetFaceStyle(string response)
         {
 

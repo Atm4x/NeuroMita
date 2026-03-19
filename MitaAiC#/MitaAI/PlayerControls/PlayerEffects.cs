@@ -26,6 +26,75 @@ namespace MitaAI
             turnBlackScreen(true, false);
         }
 
+        // Direct call (no regex): apply one effect from structured segment (format "name,time")
+        public static void ProcessPlayerEffectsDirect(string effectAndTime)
+        {
+            try
+            {
+                string[] parts = effectAndTime.Split(',');
+                string effect;
+                float time;
+                if (parts.Length == 2 && float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out time))
+                {
+                    effect = parts[0];
+                }
+                else
+                {
+                    MelonLogger.Msg($"ProcessPlayerEffectsDirect invalid format: {effectAndTime}");
+                    return;
+                }
+
+                Component effectComponent = null;
+                switch (effect.ToLower())
+                {
+                    case "глитч":
+                        effectComponent = playerEffectsObject.GetComponentByName("Glitch");
+                        break;
+                    case "телемост":
+                        playerEffects.EffectDatamosh(true);
+                        MelonCoroutines.Start(DisableEffectAfterDelay(playerEffects, "EffectDatamosh", time));
+                        break;
+                    case "тв-удар":
+                        playerEffects.EffectClickTelevision();
+                        break;
+                    case "помехи":
+                        effectComponent = playerEffectsObject.GetComponentByName("Noise");
+                        break;
+                    case "негатив":
+                        effectComponent = playerEffectsObject.GetComponentByName("Negative");
+                        break;
+                    case "кровь":
+                        MelonCoroutines.Start(AddRemoveBloodEffect(time));
+                        break;
+                    case "blure":
+                        MelonCoroutines.Start(DisableEffectAfterDelay(playerEffects, "Blure", time));
+                        break;
+                    default:
+                        MelonLogger.Msg($"ProcessPlayerEffectsDirect unknown effect: {effect}");
+                        return;
+                }
+
+                if (effectComponent != null)
+                {
+                    if (effectComponent is MonoBehaviour monoBehaviourComponent)
+                    {
+                        monoBehaviourComponent.enabled = true;
+                        MelonCoroutines.Start(Utils.ToggleComponentAfterTime(monoBehaviourComponent, time));
+                    }
+                    else if (effectComponent is Il2CppObjectBase il2cppComponent)
+                    {
+                        var behaviour = il2cppComponent.TryCast<Behaviour>();
+                        behaviour.enabled = true;
+                        MelonCoroutines.Start(Utils.HandleIl2CppComponent(il2cppComponent, time));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"ProcessPlayerEffectsDirect error: {ex.Message}");
+            }
+        }
+
         public static string ProcessPlayerEffects(string response)
         {
             MelonLogger.Msg("Starting ProcessPlayerEffects...");

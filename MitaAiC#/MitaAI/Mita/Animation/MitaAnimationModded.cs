@@ -238,44 +238,53 @@ namespace MitaAI.Mita
         }
 
 
+        // Direct call (no regex): apply animation from structured segment value
+        public void SetAnimationDirect(string animValue)
+        {
+            if (string.IsNullOrEmpty(animValue)) return;
+            string animName = animValue.Split(',')[0];
+            ApplyAnimation(animName);
+        }
+
         public string setAnimation(string response)
         {
-            // Если запрещено двигаться
-            //ObjectAnimationMita.finishWorkingOAM();
-            //resetToIdleAnimation(false);
-
-            // Регулярное выражение для извлечения эмоций
             string pattern = @"<a>(.*?)</a>";
             Match match = Regex.Match(response, pattern);
 
-            string cleanedResponse = Regex.Replace(response, @"<a>.*?</a>", ""); // Очищаем от всех тегов
+            string cleanedResponse = Regex.Replace(response, @"<a>.*?</a>", "");
 
             string animName = "";
-            string param1 = "";
-            string param2 = "";
-            string param3 = "";
-
-
             if (match.Success)
             {
-                // Если эмоция найдена, устанавливаем её в переменную faceStyle
                 string[] parts = match.Groups[1].Value.Split(',');
-
                 animName = parts[0];
-                param1 = parts.Length > 1 ? parts[1] : "";
-                param2 = parts.Length > 2 ? parts[2] : "";
-                param3 = parts.Length > 3 ? parts[3] : "";
-
             }
             try
             {
-                // Проверка на наличие объекта Mita перед применением эмоции
                 if (MitaCore.Instance.Mita == null || MitaCore.Instance.Mita.gameObject == null)
                 {
                     MelonLogger.Error("Mita object is null or Mita.gameObject is not active.");
-                    return cleanedResponse; // Возвращаем faceStyle и очищенный текст
+                    return cleanedResponse;
                 }
-                // Устанавливаем лицо, если оно найдено
+                ApplyAnimation(animName);
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error($"Problem with Animation: {ex.Message}");
+            }
+
+            return cleanedResponse;
+        }
+
+        private void ApplyAnimation(string animName)
+        {
+            try
+            {
+                if (MitaCore.Instance.Mita == null || MitaCore.Instance.Mita.gameObject == null)
+                {
+                    MelonLogger.Error("Mita object is null or Mita.gameObject is not active.");
+                    return;
+                }
                 switch (animName)
                 {
                     case "Щелчек":
@@ -503,11 +512,8 @@ namespace MitaAI.Mita
             {
                 MelonLogger.Error($"Problem with Animation: {ex.Message}");
             }
-
-            // Возвращаем кортеж: лицо и очищенный текст
-            return cleanedResponse;
         }
-        
+
         // Даже головой не крутит
         private static readonly MovementStyles[] MovementStylesNoMovingAtAll =
         {

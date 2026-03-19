@@ -438,6 +438,12 @@ namespace MitaAI.Mita
             }
         }
 
+        // Direct call (no regex): show hint from structured segment
+        public static void ProcesHintDirect(string hintText)
+        {
+            MitaCore.Instance.playerController.ShowHint(hintText, new Vector2(25, -25));
+        }
+
         // Подсказка слева сверху
         public static string ProcesHint(string response)
         {
