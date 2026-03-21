@@ -1,6 +1,8 @@
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QComboBox, 
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QComboBox,
                              QCheckBox, QPushButton, QTextEdit, QSizePolicy, QFrame)
 from PyQt6.QtCore import Qt
+
+from ui.widgets.cooldown_button import CooldownButton
 
 from main_logger import logger
 from managers.settings_manager import CollapsibleSection, InnerCollapsibleSection
@@ -47,6 +49,7 @@ def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=No
                 hide_when_disabled=cfg.get('hide_when_disabled', False),
                 toggle_key=cfg.get('toggle_key'),
                 toggle_default=cfg.get('toggle_default'),
+                lock_duration=cfg.get('lock_duration', 0.0),
             )
         if w:
             (current_sub or root).add_widget(w)
@@ -216,6 +219,7 @@ def create_setting_widget(
         hide_when_disabled: bool = False,
         toggle_key: str | None = None,
         toggle_default: bool | None = None,
+        lock_duration: float = 0.0,
         **kwargs
 ):
     if setting_key and gui.settings.get(setting_key) is None:
@@ -338,7 +342,10 @@ def create_setting_widget(
         layout.addWidget(widget, 1)
 
     elif widget_type == 'button':
-        widget = QPushButton(label)
+        if lock_duration > 0:
+            widget = CooldownButton(label, lock_duration=lock_duration)
+        else:
+            widget = QPushButton(label)
         if command:
             widget.clicked.connect(command)
         button_layout = QHBoxLayout()
