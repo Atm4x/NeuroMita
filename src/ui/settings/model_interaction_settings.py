@@ -1,6 +1,14 @@
+from PyQt6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
+    QPushButton, QComboBox, QSizePolicy, QLabel,
+)
+from PyQt6.QtCore import QSize, Qt
+import qtawesome as qta
+
 from ui.gui_templates import create_settings_section, create_section_header
 from utils import getTranslationVariant as _
 from core.events import get_event_bus, Events
+from managers.settings_manager import CollapsibleSection
 
 def setup_model_interaction_controls(self, parent):
     create_section_header(parent, _("Настройки взаимодействия с моделью", "Model Interaction Settings"))
@@ -147,16 +155,24 @@ def setup_model_interaction_controls(self, parent):
 
     event_bus = get_event_bus()
     presets_meta = event_bus.emit_and_wait(Events.ApiPresets.GET_PRESET_LIST, timeout=1.0)
+
+    # Collect all presets for dropdowns and backup lists
+    all_custom_presets = []
+    all_builtin_presets = []
+    if presets_meta and presets_meta[0]:
+        all_custom_presets = presets_meta[0].get('custom', []) or []
+        all_builtin_presets = presets_meta[0].get('builtin', []) or []
+
     hc_provider_names = [_('Текущий', 'Current')]
-    if presets_meta and presets_meta[0]:
-        all_presets = presets_meta[0].get('custom', [])
-        for preset in all_presets:
-            hc_provider_names.append(preset.name)
+    for preset in all_custom_presets:
+        hc_provider_names.append(preset.name)
+
     react_provider_names = [_('Текущий', 'Current')]
-    if presets_meta and presets_meta[0]:
-        all_presets = presets_meta[0].get('custom', [])
-        for preset in all_presets:
-            react_provider_names.append(preset.name)
+    for preset in all_custom_presets:
+        react_provider_names.append(preset.name)
+
+    # --- Backup Presets Section ---
+    _build_backup_presets_section(self, parent, all_custom_presets, all_builtin_presets)
 
     history_compression_config = [
         {'label': _('Сжимать историю при достижении лимита', 'Compress history on limit'),
@@ -322,3 +338,186 @@ def setup_model_interaction_controls(self, parent):
     create_settings_section(self, parent,
                            _("Обработка команд", "Command Processing"),
                            command_processing_config)
+
+
+def _build_backup_presets_section(gui, parent_layout, custom_presets, builtin_presets):
+    """
+    Builds a collapsible section with an ordered list of backup presets.
+    Users can add presets from a dropdown, remove them, and reorder with up/down buttons.
+    """
+    section = CollapsibleSection(
+        _("Резервные провайдеры", "Backup Providers"), gui, icon_name="fa5s.shield-alt"
+    )
+    parent_layout.addWidget(section)
+
+    # Description label
+    desc = QLabel(_(
+        "Если основной провайдер не отвечает, система автоматически "
+        "переключится на следующий из списка. Порядок определяет приоритет.",
+        "If the primary provider fails, the system will automatically "
+        "fall back to the next one in the list. Order determines priority."
+    ))
+    desc.setWordWrap(True)
+    desc.setStyleSheet("color: #bfbfbf; font-size: 11px; margin-bottom: 4px;")
+    section.add_widget(desc)
+
+    # All available presets (id -> name mapping)
+    available_presets = {}
+    for p in custom_presets:
+        pid = getattr(p, "id", None)
+        name = getattr(p, "name", "")
+        if isinstance(pid, int) and pid > 0:
+            available_presets[pid] = str(name)
+    for p in builtin_presets:
+        pid = getattr(p, "id", None)
+        name = getattr(p, "name", "")
+        if isinstance(pid, int) and pid > 0:
+            available_presets[pid] = str(name)
+
+    # --- List + buttons ---
+    list_container = QWidget()
+    list_layout = QHBoxLayout(list_container)
+    list_layout.setContentsMargins(0, 0, 0, 0)
+    list_layout.setSpacing(8)
+
+    backup_list = QListWidget()
+    backup_list.setObjectName("BackupPresetsList")
+    backup_list.setFixedHeight(120)
+    backup_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    list_layout.addWidget(backup_list, 1)
+
+    btn_layout = QVBoxLayout()
+    btn_layout.setContentsMargins(0, 0, 0, 0)
+    btn_layout.setSpacing(4)
+
+    move_up_btn = QPushButton()
+    move_up_btn.setIcon(qta.icon('fa5s.arrow-up', color='#e6e6e6'))
+    move_up_btn.setToolTip(_("Вверх", "Move up"))
+    move_up_btn.setFixedSize(28, 28)
+    move_up_btn.setIconSize(QSize(14, 14))
+
+    move_down_btn = QPushButton()
+    move_down_btn.setIcon(qta.icon('fa5s.arrow-down', color='#e6e6e6'))
+    move_down_btn.setToolTip(_("Вниз", "Move down"))
+    move_down_btn.setFixedSize(28, 28)
+    move_down_btn.setIconSize(QSize(14, 14))
+
+    remove_btn = QPushButton()
+    remove_btn.setIcon(qta.icon('fa5s.minus', color='#e6e6e6'))
+    remove_btn.setToolTip(_("Удалить", "Remove"))
+    remove_btn.setFixedSize(28, 28)
+    remove_btn.setIconSize(QSize(14, 14))
+
+    btn_layout.addWidget(move_up_btn)
+    btn_layout.addWidget(move_down_btn)
+    btn_layout.addWidget(remove_btn)
+    btn_layout.addStretch()
+    list_layout.addLayout(btn_layout)
+
+    section.add_widget(list_container)
+
+    # --- Add preset row ---
+    add_row = QWidget()
+    add_layout = QHBoxLayout(add_row)
+    add_layout.setContentsMargins(0, 4, 0, 0)
+    add_layout.setSpacing(6)
+
+    add_combo = QComboBox()
+    add_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    add_combo.addItem(_("Выберите пресет...", "Select preset..."), None)
+    for pid, name in sorted(available_presets.items(), key=lambda x: x[1]):
+        add_combo.addItem(name, pid)
+
+    add_btn = QPushButton()
+    add_btn.setIcon(qta.icon('fa5s.plus', color='#e6e6e6'))
+    add_btn.setToolTip(_("Добавить", "Add"))
+    add_btn.setFixedSize(28, 28)
+    add_btn.setIconSize(QSize(14, 14))
+
+    add_layout.addWidget(add_combo, 1)
+    add_layout.addWidget(add_btn)
+    section.add_widget(add_row)
+
+    # --- Setting key ---
+    setting_key = "BACKUP_PRESET_IDS"
+
+    def _get_current_ids():
+        """Read the ordered list from the list widget."""
+        ids = []
+        for i in range(backup_list.count()):
+            item = backup_list.item(i)
+            pid = item.data(Qt.ItemDataRole.UserRole)
+            if pid is not None:
+                ids.append(int(pid))
+        return ids
+
+    def _save():
+        """Persist the current list to settings."""
+        ids = _get_current_ids()
+        gui.settings[setting_key] = ids
+        from managers.settings_manager import SettingsManager
+        SettingsManager.set(setting_key, ids)
+
+    def _load():
+        """Load saved backup preset IDs into the list widget."""
+        backup_list.clear()
+        saved = gui.settings.get(setting_key, [])
+        if not isinstance(saved, list):
+            saved = []
+        for pid in saved:
+            try:
+                pid = int(pid)
+            except (ValueError, TypeError):
+                continue
+            name = available_presets.get(pid, f"Preset #{pid}")
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, pid)
+            backup_list.addItem(item)
+
+    def _add_preset():
+        pid = add_combo.currentData()
+        if pid is None:
+            return
+        # Don't add duplicates
+        current_ids = _get_current_ids()
+        if int(pid) in current_ids:
+            return
+        name = available_presets.get(int(pid), f"Preset #{pid}")
+        item = QListWidgetItem(name)
+        item.setData(Qt.ItemDataRole.UserRole, int(pid))
+        backup_list.addItem(item)
+        add_combo.setCurrentIndex(0)
+        _save()
+
+    def _remove_preset():
+        row = backup_list.currentRow()
+        if row >= 0:
+            backup_list.takeItem(row)
+            _save()
+
+    def _move_up():
+        row = backup_list.currentRow()
+        if row <= 0:
+            return
+        item = backup_list.takeItem(row)
+        backup_list.insertItem(row - 1, item)
+        backup_list.setCurrentRow(row - 1)
+        _save()
+
+    def _move_down():
+        row = backup_list.currentRow()
+        if row < 0 or row >= backup_list.count() - 1:
+            return
+        item = backup_list.takeItem(row)
+        backup_list.insertItem(row + 1, item)
+        backup_list.setCurrentRow(row + 1)
+        _save()
+
+    # Wire signals
+    add_btn.clicked.connect(_add_preset)
+    remove_btn.clicked.connect(_remove_preset)
+    move_up_btn.clicked.connect(_move_up)
+    move_down_btn.clicked.connect(_move_down)
+
+    # Initial load
+    _load()

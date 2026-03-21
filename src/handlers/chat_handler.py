@@ -158,6 +158,9 @@ class ChatModel:
             req.extra["tool_manager"] = self.tool_manager
             return req
 
+        # Resolve backup preset IDs from settings
+        backup_preset_ids = self._get_backup_preset_ids()
+
         try:
             response_text = self.request_runner.run(
                 messages=combined_messages,
@@ -167,6 +170,7 @@ class ChatModel:
                 max_attempts=max_attempts,
                 retry_delay=retry_delay,
                 request_timeout=request_timeout,
+                backup_preset_ids=backup_preset_ids,
             )
         except Exception as e:
             logger.error(f"Runner failed unexpectedly: {e}", exc_info=True)
@@ -190,7 +194,22 @@ class ChatModel:
             return None, False
 
         return None, False
-    
+
+    def _get_backup_preset_ids(self) -> list:
+        """Get ordered list of backup preset IDs from settings."""
+        raw = self.settings.get("BACKUP_PRESET_IDS", [])
+        if not isinstance(raw, list):
+            return []
+        result = []
+        for x in raw:
+            try:
+                pid = int(x)
+                if pid > 0:
+                    result.append(pid)
+            except (ValueError, TypeError):
+                continue
+        return result
+
     def _log_generation_start(self, preset_id: Optional[int] = None):
         logger.info("Preparing to generate LLM response.")
         preset_settings = self.preset_resolver.resolve(preset_id)
