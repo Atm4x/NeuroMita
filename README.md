@@ -1,9 +1,9 @@
 # НейроМита v0.011
-Мод, в котором вам предстоит общаться с Митами управлямыми нейронными сетями. Сделано на Python и C# MelonMod.
+Мод, в котором вам предстоит общаться с Митами управляемыми нейронными сетями. Сделано на Python и C# MelonMod.
 
 Translation (deepseek) [English readme](docs/README_EN.md)
 
-Внимание, требуются python и c# unity разработчики (начинающие и выше), unity-аниматоры и моделлеры, если что пишите сразу в лс дискорд vinerx!
+Внимание, требуются Python и C# Unity разработчики (начинающие и выше), Unity-аниматоры и моделлеры, если что пишите сразу в ЛС дискорд vinerx!
 
 
 Сервер Мода: https://discord.gg/Tu5MPFxM4P <- Здесь вам помогут)
@@ -15,7 +15,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 ### 0) Мелон лоадер:
 Универсальный инструмент моддинга юнити, могут быть конфликты с модами на bepinEx.
 
-- Либо тут через ставите https://melonwiki.xyz/#/?id=requirements 0.6.6 Версию.
+- Либо тут устанавливаете https://melonwiki.xyz/#/?id=requirements версию 0.6.6.
 - Либо тут ищите https://github.com/LavaGang/MelonLoader напрямую.
 
 Есть файл MelonLoader.Installer.exe?
@@ -24,7 +24,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 
 
 ### 1) Мод
-Мод идет в комплекте а) файлы питона(их ставьте где угодно вместе) и б) файлы c# MitaAI.dll и assetbudle.test непосредственно в папку mods, 
+Мод идет в комплекте а) файлы Python (их ставьте где угодно вместе) и б) файлы C# MitaAI.dll и assetbundle.test непосредственно в папку mods, 
 созданную мелоном (вроде в релизы кинул). Итоговая структура должна выглядеть так:
 
     Miside
@@ -48,8 +48,8 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 В будущих версиях постараемся завезти лаунчер.
 
 
-Релизы, то есть файлы которые нужны обычному игроку. https://github.com/VinerX/NeuroMita/releases
-Актуальная версия: https://github.com/VinerX/NeuroMita/releases/download/v0.011/NeuroMita.0.011.MitaWorld.7z
+Релизы, то есть файлы которые нужны обычному игроку. https://github.com/vinonerx/neuromita/releases
+Актуальная версия: https://github.com/vinonerx/neuromita/releases/download/v0.011/NeuroMita.0.011.MitaWorld.7z
     
 
 
@@ -72,7 +72,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 
    Внимание, чаще всего модели gemini лучше справляются с передачей эмоций, так что обычно интересней играть с ними. Дипсик чуть хуже (но умнее обрабатывает команды), гпт (4о) пресноват.
 
-### Модели для генерации (на 05.05.2025)
+### Модели для генерации (на 24.03.2026)
 
    Внимание, в мире нейронных сетей все очень быстро меняется, и к моменту вашего прочтения какие-то могут устареть, а какие-то не успеть войти в список.
    Следите за новостями в дискорд сервере)
@@ -80,12 +80,12 @@ Translation (deepseek) [English readme](docs/README_EN.md)
  Сейчас пойдут настройки, которые нужно прописать в запущенном приложении exe (чат боте)
    
 ### G4F
-Вариант без ключей, хорош для тестрования, но модели слабее. Если вдруг с ним проблемы на модели по умолчанию, используйте кнопку закачки и перезапустесь.
+Вариант без ключей, хорош для тестирования, но модели слабее. Если вдруг с ним проблемы на модели по умолчанию, используйте кнопку закачки и перезапустесь.
      
 ![img_1.png](assets/img_1.png)
 
  Надо ставить галку на использование (оно будет использоваться вместо основных настроек). 
- Можно менять версии биоблиотеки используя ввод версии и кнопку (нужен перезапуск).
+ Можно менять версии библиотеки используя ввод версии и кнопку (нужен перезапуск).
 
  - модель gemini-1.5-flash (Одна из самых стабильных на 0.4.7.7)
  - модель gpt-4o-mini
@@ -114,7 +114,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 Полный список https://openrouter.ai/models?max_price=0
 
 
-### Ai.iO
+### Ai.io
 Недавно найденный сервис, 500к токенов на модель в день.
 Ссылка https://api.intelligence.io.solutions/api/v1/
     - модель meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
@@ -186,17 +186,17 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 ### Локальная озвучка
 Требуется папка моделей и features.env, которые идут в релизе отдельной папкой. 
 
-- Скачать: https://github.com/VinerX/NeuroMita/releases/download/v0.011/Models.7z
+- Скачать: https://github.com/vinonerx/neuromita/releases/download/v0.011/Models.7z
 - Зеркало: https://drive.google.com/file/d/16S0v7qsVKGwqI1yHU_ScZ94wtZooIZqI/view?usp=drive_link
 
-Внимание, в процессе установок моделей будут закачиваться до файлы - это будет занимать время в первый раз.
+Внимание, в процессе установок моделей будут закачиваться доп. файлы - это будет занимать время в первый раз.
 Также, каждый раз при смене моделей затрачивается время на инициализацию.
 
 1) Включаем озвучку
 2) Выбираем Local, доступно если добавили features.env. Можно в целом загрузить автоматом при наличии файлика, но может быть медленно.
 3) Устаналиваем нужную модель, настраиваем.
 
-Для подробностей по установке моделей [сюда!](https://github.com/VinerX/NeuroMita/blob/main/docs/LocalVoiceInstallation.md)
+Для подробностей по установке моделей [сюда!](https://github.com/vinonerx/neuromita/blob/main/docs/LocalVoiceInstallation.md)
 
 ![img_5.png](assets/img_5.png)
 
@@ -207,7 +207,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 - vlad2830 - работа как по C# части, так и python
 - Nelxi (distrane25) - спасибо за помощь по внедрению голосового ввода на python
 
-За коллосальеую (без преувелечения!) работу по локальной озвучке (а также помощь по python) спасибо:
+За колоссальную (без преувелечения!) работу по локальной озвучке (а также помощь по Python) спасибо:
 - _atm4x
 
 За промпты персонажей спасибо: (им можно и нужно писать по вопросам и о доработкам логики ответа персонажей)
@@ -239,7 +239,7 @@ Translation (deepseek) [English readme](docs/README_EN.md)
 Также спасибо:
 - KASTA 
 
-Поддержать автора (VinerX), можно будет тут https://boosty.to/vinerx
+Поддержать автора (ViNonerX), можно будет тут https://boosty.to/vinerx
 
 Криптой:
 
