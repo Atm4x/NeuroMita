@@ -639,10 +639,12 @@ class ChatController:
                 response_text = payload.get("text") or ""
                 voice_profile = payload.get("voice_profile")
                 structured_data = payload.get("structured")
+                think_text = payload.get("think")
             else:
                 response_text = str(payload)
                 voice_profile = None
                 structured_data = None
+                think_text = None
 
             if not response_text:
                 logger.warning(f"[broadcast] Empty response for '{target_char_id}', skipping.")
@@ -687,6 +689,19 @@ class ChatController:
                 })
 
             if eff_policy.echo_to_ui:
+                if think_text and bool(self.settings.get("SHOW_THINK_IN_GUI", False)):
+                    self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+                        "role": "think",
+                        "response": [
+                            {"type": "meta", "speaker": char_name or ""},
+                            {"type": "text", "text": think_text.strip()},
+                        ],
+                        "is_initial": False,
+                        "emotion": "",
+                        "character_id": target_char_id or "",
+                        "character_name": char_name or "",
+                        "speaker_name": char_name or "",
+                    }, sync=True)
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
                     "role": "assistant",
                     "response": response_text,
@@ -701,17 +716,15 @@ class ChatController:
                 }, sync=True)
 
         combined_text = "\n".join(all_texts)
-        combined_result = self._build_task_result(
-            combined_text, "Player", {"segments": all_segments}, broadcast_targets
-        )
-        if primary_audio_path:
-            combined_result["voiceover_path"] = primary_audio_path
+        # Сегменты уже доставлены через broadcast_segment — в SUCCESS их не кладём,
+        # чтобы ProcessFinalSuccess не показал первого персонажа повторно.
+        final_result = {"response": combined_text, "target": "Player", "targets": broadcast_targets}
 
         if task_uid:
             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                 "uid": task_uid,
                 "status": TaskStatus.SUCCESS,
-                "result": combined_result,
+                "result": final_result,
             })
 
         self.event_bus.emit(Events.GUI.UPDATE_STATUS)
