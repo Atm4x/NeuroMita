@@ -271,6 +271,17 @@ class ChatServerNew:
         except Exception:
             pass
 
+    def schedule_send_to_client(self, client_id: str, payload: Dict[str, Any]) -> None:
+        if not self.can_schedule():
+            return
+        writer = self.active_connections.get(client_id)
+        if not writer:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.send_json(writer, payload), self._loop)
+        except Exception:
+            pass
+
     def schedule_broadcast_json(self, payload: Dict[str, Any]) -> None:
         if not self.can_schedule():
             return

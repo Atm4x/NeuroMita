@@ -660,16 +660,31 @@ class ChatController:
             else:
                 new_segments = [{"text": response_text, "target": target_char_id, "emotion": ""}]
 
+            char_audio_path = ""
             if use_voiceover and isinstance(voice_profile, dict):
                 is_gm = voice_profile.get("character_id") == "GameMaster"
                 if not is_gm or bool(self.settings.get("GM_VOICE", False)):
-                    audio_path = await self._generate_voiceover_path(response_text, voice_profile)
-                    if audio_path:
-                        new_segments[0]["audio_path"] = audio_path
+                    char_audio_path = await self._generate_voiceover_path(response_text, voice_profile) or ""
+                    if char_audio_path:
+                        new_segments[0]["audio_path"] = char_audio_path
                         if idx == 0:
-                            primary_audio_path = audio_path
+                            primary_audio_path = char_audio_path
 
             all_segments.extend(new_segments)
+
+            if task_uid:
+                self.event_bus.emit(Events.Server.SEND_BROADCAST_SEGMENT, {
+                    "task_uid": task_uid,
+                    "payload": {
+                        "type": "broadcast_segment",
+                        "task_uid": task_uid,
+                        "body": {
+                            "character_id": target_char_id,
+                            "segments": new_segments,
+                            "audio_path": char_audio_path,
+                        },
+                    },
+                })
 
             if eff_policy.echo_to_ui:
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {

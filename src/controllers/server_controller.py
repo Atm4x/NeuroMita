@@ -112,6 +112,7 @@ class ServerController:
         eb.subscribe(Events.Server.SEND_TASK_UPDATE, self._on_send_task_update, weak=False)
 
         eb.subscribe(Events.Server.BROADCAST_ASR_TEXT, self._on_broadcast_asr_text, weak=False)
+        eb.subscribe(Events.Server.SEND_BROADCAST_SEGMENT, self._on_send_broadcast_segment, weak=False)
 
     def _unsubscribe_from_events(self):
         if self.event_bus and not self._destroyed:
@@ -411,6 +412,23 @@ class ServerController:
         client_id = str(task.data.get("client_id") or "")
         if client_id and self.server:
             self.server.schedule_send_task_update(client_id, task)
+
+    def _on_send_broadcast_segment(self, event: Event):
+        if not self.server:
+            return
+        data = event.data or {}
+        task_uid = str(data.get("task_uid") or "")
+        payload = data.get("payload")
+        if not task_uid or not payload:
+            return
+        try:
+            task_result = self.event_bus.emit_and_wait(Events.Task.GET_TASK, {"uid": task_uid}, timeout=0.5)
+            task = task_result[0] if task_result else None
+            client_id = str(task.data.get("client_id") or "") if task else ""
+            if client_id:
+                self.server.schedule_send_to_client(client_id, payload)
+        except Exception:
+            pass
 
     def _on_broadcast_asr_text(self, event: Event):
         if not self.server:

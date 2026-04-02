@@ -555,6 +555,7 @@ class Events:
         LOAD_SERVER_SETTINGS = "load_server_settings"
         ECHO_CHAT_MESSAGE_REQUESTED = "echo_chat_message_requested"
         BROADCAST_ASR_TEXT = "broadcast_asr_text"
+        SEND_BROADCAST_SEGMENT = "send_broadcast_segment"
 
     class Telegram:
         """События для взаимодействия с Telegram"""
