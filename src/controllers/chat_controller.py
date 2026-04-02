@@ -294,6 +294,7 @@ class ChatController:
         req_id: str | None = None,
         origin_message_id: str | None = None,
         policy: dict | None = None,
+        broadcast_targets: list[str] | None = None,
     ):
         eff_policy = None
         try:
@@ -373,6 +374,23 @@ class ChatController:
                         except Exception:
                             continue
                 image_data = prepared if prepared else None
+
+            # Broadcast: N LLM calls with same frozen context
+            if broadcast_targets and len(broadcast_targets) >= 2:
+                return await self._broadcast_send_message(
+                    broadcast_targets=broadcast_targets,
+                    user_input=user_input,
+                    system_input=system_input,
+                    raw_image_data=image_data,
+                    task_uid=task_uid,
+                    effective_event_type=effective_event_type,
+                    character_id=character_id,
+                    sender=sender,
+                    participants=participants,
+                    req_id=req_id,
+                    origin_message_id=origin_message_id,
+                    eff_policy=eff_policy,
+                )
 
             response_result = self.event_bus.emit_and_wait(
                 Events.Model.GENERATE_RESPONSE,
@@ -562,6 +580,156 @@ class ChatController:
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": f"Ошибка: {str(e)[:50]}..."})
             return "Произошла ошибка при обработке вашего сообщения."
 
+    async def _broadcast_send_message(
+        self,
+        broadcast_targets: list[str],
+        user_input: str,
+        system_input: str,
+        raw_image_data,
+        task_uid: str | None,
+        effective_event_type: str,
+        character_id: str | None,
+        sender: str,
+        participants: list[str] | None,
+        req_id: str | None,
+        origin_message_id: str | None,
+        eff_policy,
+    ):
+        """Fan out one GENERATE_RESPONSE per target; each next target sees prior replies."""
+        all_segments: list[dict] = []
+        all_texts: list[str] = []
+        conversation_context: list[str] = []
+        primary_audio_path: str = ""
+
+        use_voiceover = bool(self.settings.get("USE_VOICEOVER") and eff_policy.allow_voiceover)
+
+        for idx, target_char_id in enumerate(broadcast_targets):
+            if conversation_context:
+                prior = "\n".join(conversation_context)
+                prefix = f"[Other characters have already replied to the same message:\n{prior}\n]"
+                augmented_system = f"{prefix}\n{system_input}" if system_input else prefix
+            else:
+                augmented_system = system_input
+
+            response_result = self.event_bus.emit_and_wait(
+                Events.Model.GENERATE_RESPONSE,
+                {
+                    "user_input": user_input,
+                    "system_input": augmented_system,
+                    "image_data": raw_image_data,
+                    "stream_callback": None,
+                    "message_id": task_uid,
+                    "event_type": effective_event_type,
+                    "character_id": target_char_id,
+                    "sender": sender,
+                    "participants": participants or [],
+                    "req_id": req_id,
+                    "origin_message_id": origin_message_id,
+                    "policy": eff_policy.to_dict(),
+                },
+                timeout=600.0
+            )
+
+            payload = response_result[0] if response_result else None
+            if not payload:
+                logger.warning(f"[broadcast] No payload for '{target_char_id}', skipping.")
+                continue
+
+            if isinstance(payload, dict):
+                response_text = payload.get("text") or ""
+                voice_profile = payload.get("voice_profile")
+                structured_data = payload.get("structured")
+            else:
+                response_text = str(payload)
+                voice_profile = None
+                structured_data = None
+
+            if not response_text:
+                logger.warning(f"[broadcast] Empty response for '{target_char_id}', skipping.")
+                continue
+
+            char_name = self._resolve_character_name(target_char_id) or target_char_id
+            conversation_context.append(f"{char_name}: {response_text}")
+            all_texts.append(response_text)
+
+            if structured_data and isinstance(structured_data.get("segments"), list):
+                new_segments = structured_data["segments"]
+                for seg in new_segments:
+                    if not seg.get("target"):
+                        seg["target"] = target_char_id
+            else:
+                new_segments = [{"text": response_text, "target": target_char_id, "emotion": ""}]
+
+            if use_voiceover and isinstance(voice_profile, dict):
+                is_gm = voice_profile.get("character_id") == "GameMaster"
+                if not is_gm or bool(self.settings.get("GM_VOICE", False)):
+                    audio_path = await self._generate_voiceover_path(response_text, voice_profile)
+                    if audio_path:
+                        new_segments[0]["audio_path"] = audio_path
+                        if idx == 0:
+                            primary_audio_path = audio_path
+
+            all_segments.extend(new_segments)
+
+            if eff_policy.echo_to_ui:
+                self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+                    "role": "assistant",
+                    "response": response_text,
+                    "is_initial": False,
+                    "emotion": "",
+                    "character_id": target_char_id or "",
+                    "character_name": char_name or "",
+                    "speaker_name": char_name or "",
+                    "target": "Player",
+                    "targets": broadcast_targets,
+                    "structured_data": structured_data,
+                }, sync=True)
+
+        combined_text = "\n".join(all_texts)
+        combined_result = self._build_task_result(
+            combined_text, "Player", {"segments": all_segments}, broadcast_targets
+        )
+        if primary_audio_path:
+            combined_result["voiceover_path"] = primary_audio_path
+
+        if task_uid:
+            self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
+                "uid": task_uid,
+                "status": TaskStatus.SUCCESS,
+                "result": combined_result,
+            })
+
+        self.event_bus.emit(Events.GUI.UPDATE_STATUS)
+        self.event_bus.emit(Events.GUI.UPDATE_DEBUG_INFO)
+        self.event_bus.emit(Events.GUI.UPDATE_TOKEN_COUNT)
+
+        self.llm_processing = False
+        return combined_text if combined_text else None
+
+    async def _generate_voiceover_path(self, text: str, voice_profile: dict) -> str | None:
+        """Emit VOICEOVER_REQUESTED with a future and await the resulting audio file path."""
+        future: asyncio.Future = asyncio.Future()
+
+        speaker = voice_profile.get("silero_command", "")
+        if self.settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
+            speaker = voice_profile.get("miku_tts_name", "Player")
+
+        self.event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
+            "text": text,
+            "speaker": speaker,
+            "task_uid": None,
+            "character_id": voice_profile.get("character_id"),
+            "voice_profile": voice_profile,
+            "future": future,
+        })
+
+        try:
+            await asyncio.wait_for(future, timeout=30.0)
+            return future.result()
+        except Exception as e:
+            logger.warning(f"[broadcast] TTS failed for '{voice_profile.get('character_id')}': {e}")
+            return None
+
     def _on_send_message(self, event: Event):
         data = event.data or {}
         user_input = data.get("user_input", "")
@@ -575,6 +743,7 @@ class ChatController:
         req_id = data.get("req_id")
         origin_message_id = data.get("origin_message_id")
         policy = data.get("policy")
+        broadcast_targets = data.get("targets") or []
 
         if image_data:
             self.event_bus.emit(Events.Capture.UPDATE_LAST_IMAGE_REQUEST_TIME)
@@ -596,6 +765,7 @@ class ChatController:
                     req_id=req_id,
                     origin_message_id=origin_message_id,
                     policy=policy,
+                    broadcast_targets=broadcast_targets,
                 ),
                 loop
             )
@@ -618,6 +788,7 @@ class ChatController:
                     req_id=req_id,
                     origin_message_id=origin_message_id,
                     policy=policy,
+                    broadcast_targets=broadcast_targets,
                 )
             )
 

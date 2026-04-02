@@ -69,6 +69,7 @@ class AudioController:
         data = event.data or {}
         text = data.get("text", "")
         task_uid = data.get("task_uid")
+        result_future: asyncio.Future | None = data.get("future")
 
         character_id = data.get("character_id")
         voice_profile = data.get("voice_profile")
@@ -94,6 +95,8 @@ class AudioController:
             logger.error("Ошибка: Цикл событий не готов.")
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, "Event loop not ready")
+            if result_future and not result_future.done():
+                result_future.set_exception(RuntimeError("Event loop not ready"))
             self.waiting_answer = False
             return
 
@@ -108,7 +111,8 @@ class AudioController:
                         text_for_voice,
                         original_text,
                         speaker,
-                        task_uid
+                        task_uid,
+                        result_future=result_future,
                     )
                 })
 
@@ -120,6 +124,7 @@ class AudioController:
                         task_uid,
                         character_id=character_id,
                         voice_profile=voice_profile,
+                        result_future=result_future,
                     )
                 })
 
@@ -127,6 +132,8 @@ class AudioController:
                 logger.warning(f"Неизвестный метод озвучки: {self.voiceover_method}")
                 if task_uid:
                     self._update_task_failed_voiceover(task_uid, "Unknown voiceover method")
+                if result_future and not result_future.done():
+                    result_future.set_exception(RuntimeError("Unknown voiceover method"))
                 self.waiting_answer = False
                 return
 
@@ -135,25 +142,27 @@ class AudioController:
             logger.error(f"Ошибка при отправке текста на озвучку: {e}")
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, str(e))
+            if result_future and not result_future.done():
+                result_future.set_exception(e)
             self.waiting_answer = False
 
-    async def run_send_and_receive(self, voice_text, original_text, speaker_command, task_uid=None):
+    async def run_send_and_receive(self, voice_text, original_text, speaker_command, task_uid=None, result_future=None):
         logger.info("Попытка получить фразу (Telegram)")
 
-        future = asyncio.Future()
+        tg_future = asyncio.Future()
         logger.notify(f"Отправка на озвучку в Telegram текста: {voice_text[:50]}...")
 
         self.event_bus.emit(Events.Telegram.TELEGRAM_SEND_VOICE_REQUEST, {
             "text": voice_text,
             "speaker_command": speaker_command,
             "id": 0,
-            "future": future,
+            "future": tg_future,
             "task_uid": task_uid
         })
 
         try:
-            await future
-            voiceover_path = future.result()
+            await tg_future
+            voiceover_path = tg_future.result()
             logger.notify(voiceover_path)
 
             if task_uid:
@@ -164,10 +173,14 @@ class AudioController:
                         "voiceover_path": voiceover_path
                     }
                 })
+            if result_future and not result_future.done():
+                result_future.set_result(voiceover_path)
         except Exception as e:
             logger.error(f"Ошибка при получении озвучки через Telegram: {e}")
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, str(e))
+            if result_future and not result_future.done():
+                result_future.set_exception(e)
         finally:
             self.waiting_answer = False
 
@@ -180,6 +193,7 @@ class AudioController:
         task_uid: Optional[str],
         character_id: Optional[str] = None,
         voice_profile: Optional[dict] = None,
+        result_future: Optional[asyncio.Future] = None,
     ):
         future = asyncio.Future()
         self.event_bus.emit(Events.Audio.LOCAL_SEND_VOICE_REQUEST, {
@@ -202,6 +216,8 @@ class AudioController:
                         "voiceover_path": result_path
                     }
                 })
+            if result_future and not result_future.done():
+                result_future.set_result(result_path)
 
             server_res = self.event_bus.emit_and_wait(Events.Server.GET_GAME_CONNECTION, timeout=1.0)
             is_connected = server_res[0] if server_res else False
@@ -221,6 +237,8 @@ class AudioController:
             logger.error(f"Ошибка при выполнении локальной озвучки: {e}")
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, str(e))
+            if result_future and not result_future.done():
+                result_future.set_exception(e)
         finally:
             self.waiting_answer = False
 
