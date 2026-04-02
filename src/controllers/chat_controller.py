@@ -718,7 +718,8 @@ class ChatController:
         combined_text = "\n".join(all_texts)
         # Сегменты уже доставлены через broadcast_segment — в SUCCESS их не кладём,
         # чтобы ProcessFinalSuccess не показал первого персонажа повторно.
-        final_result = {"response": combined_text, "target": "Player", "targets": broadcast_targets}
+        # is_broadcast=True сигнализирует C# не очищать _globalFollowUpQueue.
+        final_result = {"response": combined_text, "target": "Player", "targets": broadcast_targets, "is_broadcast": True}
 
         if task_uid:
             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
