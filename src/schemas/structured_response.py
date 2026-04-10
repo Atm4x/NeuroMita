@@ -302,9 +302,11 @@ class StructuredResponse(BaseModel):
             cf_props = {}
             for p in custom_params:
                 gemini_type = _type_map.get(p.get("type", "string"), "string")
-                cf_props[p["name"]] = {"type": gemini_type, "nullable": True}
-            schema["properties"]["custom_fields"]["properties"] = cf_props
-            schema["properties"]["custom_fields"]["required"] = list(cf_props.keys())
+                cf_props[p["name"]] = {"type": gemini_type}
+            cf_node = schema["properties"]["custom_fields"]
+            cf_node.pop("nullable", None)  # force Gemini to write actual values
+            cf_node["properties"] = cf_props
+            cf_node["required"] = list(cf_props.keys())
         if exclude_fields:
             for f in exclude_fields:
                 schema.get("properties", {}).pop(f, None)
