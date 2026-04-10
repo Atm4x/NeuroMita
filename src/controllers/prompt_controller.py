@@ -168,7 +168,7 @@ class PromptController:
                 mn, mx = p.get("min"), p.get("max")
                 range_str = f" ({mn} to {mx})" if mn is not None and mx is not None else ""
                 field_lines.append(f'    "{name}": <{json_type}{range_str}>,  // {desc}')
-            inline = '  "custom_fields": {\n' + "\n".join(field_lines) + "\n  },\n"
+            inline = '  "custom_fields": [{\n' + "\n".join(field_lines) + "\n  }],\n"
             so_prompt = so_prompt.replace("{CUSTOM_PARAMS_SCHEMA}", inline)
         elif so_prompt:
             so_prompt = so_prompt.replace("{CUSTOM_PARAMS_SCHEMA}", "")

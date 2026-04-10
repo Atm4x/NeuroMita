@@ -1197,6 +1197,23 @@ class ModelController:
         Parses the JSON, applies global fields (behavior, memory),
         processes game tags, and returns the result dict with segments.
         """
+        # custom_fields is sent as array (like entities) so Gemini fills it reliably.
+        # Convert [{...}] → {key: val} before Pydantic parsing.
+        if getattr(char, "custom_params", []):
+            try:
+                import json as _json
+                _raw = _json.loads(visible_raw)
+                cf = _raw.get("custom_fields")
+                if isinstance(cf, list):
+                    merged = {}
+                    for item in cf:
+                        if isinstance(item, dict):
+                            merged.update(item)
+                    _raw["custom_fields"] = merged or None
+                    visible_raw = _json.dumps(_raw)
+            except Exception as _e:
+                logger.warning(f"[ModelController] custom_fields list→dict: {_e}")
+
         try:
             structured = parse_structured_response(visible_raw)
         except StructuredResponseParseError as e:

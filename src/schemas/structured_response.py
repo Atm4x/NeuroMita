@@ -299,14 +299,20 @@ class StructuredResponse(BaseModel):
                 "int": "integer", "bool": "boolean",
                 "str": "string", "string": "string",
             }
-            cf_props = {}
+            item_props = {}
             for p in custom_params:
                 gemini_type = _type_map.get(p.get("type", "string"), "string")
-                cf_props[p["name"]] = {"type": gemini_type}
-            cf_node = schema["properties"]["custom_fields"]
-            cf_node.pop("nullable", None)  # force Gemini to write actual values
-            cf_node["properties"] = cf_props
-            cf_node["required"] = list(cf_props.keys())
+                item_props[p["name"]] = {"type": gemini_type}
+            # Use array of typed objects — same pattern as entities, which works reliably.
+            schema["properties"]["custom_fields"] = {
+                "type": "array",
+                "nullable": True,
+                "items": {
+                    "type": "object",
+                    "required": list(item_props.keys()),
+                    "properties": item_props,
+                },
+            }
         if exclude_fields:
             for f in exclude_fields:
                 schema.get("properties", {}).pop(f, None)
