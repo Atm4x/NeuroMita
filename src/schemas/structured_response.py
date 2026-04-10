@@ -290,8 +290,9 @@ class StructuredResponse(BaseModel):
             }
         except (KeyError, TypeError):
             pass
-        # Patch custom_fields: inject explicit per-param properties so Gemini
-        # doesn't strip keys the model writes into a free-form object.
+        # Patch custom_fields: inject explicit per-param properties + required list
+        # so Gemini is forced to write declared keys (without required, Gemini
+        # treats all properties as optional and returns {}).
         if custom_params and "custom_fields" in schema.get("properties", {}):
             _type_map = {
                 "float": "number", "double": "number",
@@ -303,6 +304,7 @@ class StructuredResponse(BaseModel):
                 gemini_type = _type_map.get(p.get("type", "string"), "string")
                 cf_props[p["name"]] = {"type": gemini_type, "nullable": True}
             schema["properties"]["custom_fields"]["properties"] = cf_props
+            schema["properties"]["custom_fields"]["required"] = list(cf_props.keys())
         if exclude_fields:
             for f in exclude_fields:
                 schema.get("properties", {}).pop(f, None)
