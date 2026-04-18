@@ -108,7 +108,16 @@ class UvSync:
         to_remove = set(extras_map) & (current - desired)
 
         status = True
-        for extra, target_rel in sorted(targets.items()):
+
+        def _install_priority(item):
+            extra_name = item[0]
+            if extra_name == "core":
+                return 0
+            if extra_name.startswith("backend-"):
+                return 1
+            return 2
+
+        for extra, target_rel in sorted(targets.items(), key=_install_priority):
             target_dir = os.path.join(self.base_dir, target_rel)
             lib_dir    = os.path.join(target_dir, ".lib")
             req_file   = os.path.join(lib_dir, "requirements.txt")
@@ -140,6 +149,12 @@ class UvSync:
             if not self._run(install_cmd, f"install {extra}"):
                 status = False
                 break
+            
+            # ДОБАВЛЕНИЕ ПУТИ (Moment 1)
+            if os.path.isdir(sp_dir) and sp_dir not in sys.path:
+                sys.path.insert(0, sp_dir)
+                import importlib
+                importlib.invalidate_caches()
 
         for extra in to_remove:
             target_rel = extras_map[extra]

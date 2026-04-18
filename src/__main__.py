@@ -1,10 +1,33 @@
 ### main.py
 
-import pydantic.fields
-import uvicorn
 import os
 import sys
+
+
+from dotenv import load_dotenv
+ENV_FILENAME = "features.env" 
+loaded = load_dotenv(dotenv_path=ENV_FILENAME)
+
+backend = os.environ.get("NEUROMITA_BACKEND", "cpu")
+bootstrap_members = ["core"]
+
+current_file = os.path.abspath(__file__)
+if current_file.lower().endswith(".pyz"):
+    base_dir = os.path.dirname(current_file)
+else:
+    base_dir = os.path.dirname(os.path.dirname(current_file))
+
+for member in bootstrap_members:
+    sp = os.path.join(base_dir, "packages", member, ".lib", "site-packages")
+    if os.path.isdir(sp) and sp not in sys.path:
+        sys.path.insert(0, sp)
+
+
+
+import pydantic.fields
+import uvicorn
 import re
+
 from main_logger import logger
 from _version import __version__
 def create_startup_banner(title: str, version: str) -> str:
@@ -39,9 +62,7 @@ banner = create_startup_banner("NeuroMita", __version__)
 logger.success(f"\n\n{banner}\n\n")
 
 
-from dotenv import load_dotenv
-ENV_FILENAME = "features.env" 
-loaded = load_dotenv(dotenv_path=ENV_FILENAME)
+
 os.environ["WHISPER_ONNX_DEBUG"]="1"
 if loaded:
     logger.notify(f"Переменные окружения успешно загружены из файла: {ENV_FILENAME}")
@@ -91,11 +112,7 @@ try:
 except ImportError:
     import tomli as tomllib
 
-current_file = os.path.abspath(__file__)
-if current_file.lower().endswith(".pyz"):
-    base_dir = os.path.dirname(current_file)
-else:
-    base_dir = os.path.dirname(os.path.dirname(current_file))
+
 
 os.environ["NEUROMITA_BASE_DIR"] = base_dir
 os.environ.setdefault("NEUROMITA_PROMPTS_DIR", os.path.join(base_dir, "Prompts"))
