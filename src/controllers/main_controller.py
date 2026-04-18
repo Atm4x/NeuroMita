@@ -28,7 +28,6 @@ from controllers.ai_engine_controller import AIEngineController
 
 from main_logger import logger
 from utils.ffmpeg_installer import install_ffmpeg
-from utils.pip_installer import PipInstaller
 from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
 from controllers.server_controller import ServerController
@@ -61,14 +60,7 @@ class MainController:
             logger.info("Не удалось удачно получить из системных переменных все данные", e)
             self.settings = SettingsController("Settings/settings.json").settings
 
-        try:
-            self.pip_installer = PipInstaller(
-                update_log=logger.info
-            )
-            logger.notify("PipInstaller успешно инициализирован.")
-        except Exception as e:
-            logger.error(f"Не удалось инициализировать PipInstaller: {e}", exc_info=True)
-            self.pip_installer = None
+        self.pip_installer = None
 
         self._check_and_perform_pending_update()
 
@@ -226,44 +218,14 @@ class MainController:
         logger.info("Закрываемся")
 
     def _check_and_perform_pending_update(self):
-        if not self.pip_installer:
-            logger.warning("PipInstaller не инициализирован, проверка отложенного обновления пропущена.")
-            return
-
         update_pending = self.settings.get("G4F_UPDATE_PENDING", False)
         target_version = self.settings.get("G4F_TARGET_VERSION", None)
 
         if update_pending and target_version:
-            logger.info(f"Обнаружено запланированное обновление g4f до версии: {target_version}")
-            package_spec = f"g4f=={target_version}" if target_version != "latest" else "g4f"
-            description = f"Запланированное обновление g4f до {target_version}..."
-
-            success = False
-            try:
-                success = self.pip_installer.install_package(
-                    package_spec,
-                    description=description,
-                    extra_args=["--force-reinstall", "--upgrade"]
-                )
-                if success:
-                    logger.success(f"Запланированное обновление g4f до {target_version} успешно завершено.")
-                    try:
-                        import importlib
-                        importlib.invalidate_caches()
-                        logger.info("Кэш импорта очищен после запланированного обновления.")
-                    except Exception as e_invalidate:
-                        logger.error(f"Ошибка при очистке кэша импорта после обновления: {e_invalidate}")
-                else:
-                    logger.error(f"Запланированное обновление g4f до {target_version} не удалось (ошибка pip).")
-            except Exception as e_install:
-                logger.error(f"Исключение во время запланированного обновления g4f: {e_install}", exc_info=True)
-                success = False
-
-            finally:
-                logger.info("Сброс флагов запланированного обновления g4f.")
-                self.settings.set("G4F_UPDATE_PENDING", False)
-                self.settings.set("G4F_TARGET_VERSION", None)
-                self.settings.save_settings()
+            logger.info(f"Сброс устаревшего флага обновления g4f до версии: {target_version}")
+            self.settings.set("G4F_UPDATE_PENDING", False)
+            self.settings.set("G4F_TARGET_VERSION", None)
+            self.settings.save_settings()
         else:
             logger.info("Нет запланированных обновлений g4f.")
 

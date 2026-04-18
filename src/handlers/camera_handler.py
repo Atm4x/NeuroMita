@@ -2,11 +2,6 @@ import threading
 import time
 from main_logger import logger
 
-# Добавляем необходимые импорты для PipInstaller
-import sys
-import os
-from utils.pip_installer import PipInstaller
-
 # Функция для перевода
 def getTranslationVariant(ru_str, en_str=""):
     from managers.settings_manager import SettingsManager
@@ -36,46 +31,17 @@ class CameraCapture:
         self._video_capture = None
         self._cv2_checked = False  # Флаг для проверки установки cv2
         
-        # Инициализация PipInstaller
-        try:
-            self._pip_installer = PipInstaller(
-                update_log=logger.info
-            )
-            logger.debug("PipInstaller успешно инициализирован для CameraCapture.")
-        except Exception as e:
-            logger.error(f"Не удалось инициализировать PipInstaller: {e}", exc_info=True)
-            self._pip_installer = None
-
     def _ensure_cv2_installed(self):
-        """Проверяет наличие OpenCV и устанавливает при необходимости."""
+        """Проверяет наличие OpenCV. Установка выполняется через core extra."""
         if self._cv2_checked:
             return
-        
+
         try:
-            # Пробуем импортировать, чтобы проверить наличие
             __import__('cv2')
             logger.debug("Библиотека OpenCV (cv2) уже установлена.")
         except ImportError:
-            logger.warning("Библиотека OpenCV (cv2) не найдена. Попытка автоматической установки...")
-            
-            if self._pip_installer is None:
-                raise RuntimeError("PipInstaller не инициализирован - установку нельзя осуществить")
-            
-            success = self._pip_installer.install_package(
-                "opencv-python",
-                description=_("Установка библиотеки OpenCV (cv2)...", "Installing OpenCV (cv2) library...")
-            )
-            
-            if not success:
-                raise RuntimeError("Не удалось установить opencv-python")
-            
-            try:
-                # После установки пытаемся импортировать снова
-                __import__('cv2')
-                logger.info("Библиотека OpenCV успешно установлена.")
-            except ImportError:
-                raise RuntimeError("Даже после установки opencv-python - не получилось импортировать cv2.")
-        
+            raise RuntimeError("OpenCV (cv2) не установлен. Запустите синхронизацию core extra.")
+
         self._cv2_checked = True
 
     def start_capture(self, camera_index: int = 0, quality: int = 25, fps: int = 1, max_history_frames: int = 1, max_transfer_frames: int = 3, capture_width: int = 640, capture_height: int = 480):

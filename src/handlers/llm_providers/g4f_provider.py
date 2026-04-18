@@ -46,14 +46,8 @@ class G4FProvider(OpenAICompatibleProvider):
                 return InstallPlan(actions=[], already_installed=True, already_installed_status="Already installed")
 
             return InstallPlan(
-                actions=[
-                    InstallAction(
-                        type="pip",
-                        description=f"Installing {spec}...",
-                        progress=10,
-                        packages=[spec],
-                    )
-                ],
+                required_extras=["g4f"],
+                actions=[],
                 already_installed=False,
                 ok_status="Done",
             )

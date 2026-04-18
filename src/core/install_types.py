@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional, Any
 
 
@@ -13,13 +13,10 @@ class InstallCallbacks:
 
 @dataclass
 class InstallAction:
-    type: str  # "pip" | "download_http" | "call" | "call_async"
+    type: str  # "download_http" | "call" | "call_async"
     description: str = ""
     progress: int = 0
     progress_to: Optional[int] = None
-
-    packages: Optional[list[str]] = None
-    extra_args: Optional[list[str]] = None
 
     files: Optional[list[dict]] = None
     headers: Optional[dict[str, str]] = None
@@ -31,6 +28,8 @@ class InstallAction:
 @dataclass
 class InstallPlan:
     actions: list[InstallAction]
+    required_extras: list[str] = field(default_factory=list)
+    removed_extras: list[str] = field(default_factory=list)
     already_installed: bool = False
     ok_status: str = "Done"
     already_installed_status: str = "Already installed"

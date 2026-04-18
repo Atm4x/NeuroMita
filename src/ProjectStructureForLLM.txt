@@ -42,7 +42,7 @@ NeuroMita employs dataclasses, abstract base classes (ABC), and enums for type s
 
 - **SpeechRecognizerInterface** (registered in `SpeechRecognition._registry: Dict[str, type]` [handlers/asr_handler.py](handlers/asr_handler.py:66-69)): Base interface for ASR engines (e.g., GoogleRecognizer [handlers/asr_models/google_recognizer.py](handlers/asr_models/google_recognizer.py), GigaAMRecognizer [handlers/asr_models/gigaam_recognizer.py](handlers/asr_models/gigaam_recognizer.py)).
 
-- **Other Types**: `LLMRequest` in ProviderManager ([managers/provider_manager.py](managers/provider_manager.py:9-30)), `NormalizedName` in PipInstaller ([utils/pip_installer.py](utils/pip_installer.py:165-726)), `RunState` inner class in PipInstaller ([utils/pip_installer.py](utils/pip_installer.py:354-371)).
+- **Other Types**: `LLMRequest` in ProviderManager ([managers/provider_manager.py](managers/provider_manager.py:9-30)), install plans in [core/install_types.py](core/install_types.py), and uv workspace synchronization in [utils/uv_sync.py](utils/uv_sync.py).
 
 **AI Parsing Tip:** Use these types for schema validation in code generation. EventBus is the primary integration point—subscribe/emit for modularity.
 
@@ -144,7 +144,7 @@ Handlers execute core functions, often async/threaded.
 - **Core**: `events.py` (as above). `models_settings.py` (model configs).
 
 - **Utils**:
-  - `pip_installer.py` ([utils/pip_installer.py](utils/pip_installer.py:165-726)): Package install/uninstall (env/winpty for Windows). `DependencyResolver` for trees; `install_package(package_spec, description) -> bool`.
+  - `uv_sync.py` ([utils/uv_sync.py](utils/uv_sync.py)): Synchronizes root `pyproject.toml` extras into isolated `packages/<extra>/.lib/site-packages` workspaces and writes `.uv-state.json`.`r`n  - `patches.py` ([utils/patches.py](utils/patches.py)): Runtime compatibility patches for package workspaces without mutating uv cache hardlinks.
   - `audio_converter.py` ([utils/audio_converter.py](utils/audio_converter.py:9-34)): WAV conversion (FFmpeg async).
   - `command_parser.py` ([utils/command_parser.py](utils/command_parser.py:22-272)): Command parsing with embeddings (cosine sim via `_find_best_match`).
   - `prompt_builder.py` ([utils/prompt_builder.py](utils/prompt_builder.py:4-10)): System prompt assembly (`build_system_prompts(blocks: List[str], separate: bool) -> List[Dict[str, str]]`).
@@ -180,7 +180,7 @@ Handlers execute core functions, often async/threaded.
   - Games: HOI4 mod (event-driven), local (Chess/SeaBattle via GameManager).
   - External: Telegram (Telethon), g4f (LLM proxy), OpenCV/mss (capture), pygame (audio).
   - Local AI: Fish Speech (Triton/CUDA), Edge-TTS/Silero.
-- **Lifecycle**: LifecycleManager for loops/shutdown; auto-updates (g4f), dependency installs (PipInstaller).
+- **Lifecycle**: LifecycleManager for loops/shutdown; dependency extras synchronized by UvSync before optional models are loaded.
 
 **Data Flow (for AI Simulation):** User input → UI Event → Controller → Handler (e.g., ChatModel.generate) → Provider/LLM → Response → TTS/ASR → UI Update.
 
@@ -192,11 +192,11 @@ Handlers execute core functions, often async/threaded.
 - **AI/LLM**: g4f (free providers), openai, google-generativeai (Gemini), transformers (embeddings), torch (TTS/ASR).
 - **Audio/TTS/ASR**: edge-tts, fish-speech (Triton), silero-models, speechrecognition, pygame, torchaudio, soundfile.
 - **Capture**: opencv-python (camera), mss (screen), Pillow (PIL image processing).
-- **Install/Utils**: pip (custom PipInstaller), requests (downloads), zipfile (extraction).
+- **Install/Utils**: uv workspace synchronization, requests (downloads), zipfile (extraction).
 - **Games/External**: telethon (Telegram), possibly python-chess/stockfish (Chess).
 - **System**: FFmpeg (audio conversion), CUDA/LLVM/Triton (NVIDIA local models; optional for CPU fallbacks).
 - **Other**: numpy (embeddings/math), dataclasses, enum, abc, concurrent.futures.
 
-**AI Dependency Resolution:** Windows-focused (cmd/winpty); check `gpu_utils.py` for hardware. For code gen, include `PipInstaller` for dynamic installs. Project emphasizes modularity—add providers via subclassing.
+**AI Dependency Resolution:** Windows-focused (cmd/winpty); check `gpu_utils.py` for hardware. For code gen, declare new dependencies in root `pyproject.toml` extras and let install plans request `required_extras`/`removed_extras`. Project emphasizes modularity—add providers via subclassing.
 
 This documentation equips AI models to comprehend, generate, or optimize NeuroMita code. For updates, re-analyze via tools like list_code_definition_names.

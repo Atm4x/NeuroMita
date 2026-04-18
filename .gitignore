@@ -31,3 +31,7 @@ vec-768-layer-12.onnx
 extra/Prompts/CLAUDE.md
 CLAUDE.md
 /FineTuneData
+packages/**/.lib/
+.uv-state.json
+libs/.uv-cache/
+libs/python/Lib/site-packages/

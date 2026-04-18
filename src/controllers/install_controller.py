@@ -1,16 +1,17 @@
 ﻿# src/controllers/install_controller.py
 from __future__ import annotations
 
-from typing import Callable, Optional, Any, Iterable
+from typing import Callable, Optional, Any
 import os
 import sys
 import time
 import urllib.request
 import urllib.error
+import json
 
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
-from utils.pip_installer import PipInstaller
+from utils.uv_sync import UvSync
 from core.install_types import InstallCallbacks, InstallAction, InstallPlan
 
 
@@ -18,18 +19,16 @@ class InstallController:
     """
     Generic install orchestrator.
 
-    - Creates PipInstaller wired to callbacks
-    - Runs a runner(pip_installer, callbacks, ctx) which may:
+    - Runs a runner(callbacks, ctx) which may:
         a) return bool (legacy mode), or
         b) return InstallPlan (preferred mode)
-    - Executes InstallPlan with built-in skip for pip specs (generic).
+    - Executes InstallPlan and syncs required uv extras.
     - Emits generic install events: Events.Install.TASK_*
     - NEW: supports blocking event-driven installs via Events.Install.RUN_BLOCKING
     """
 
     def __init__(self):
         self.script_path = os.environ.get("NEUROMITA_PYTHON", sys.executable)
-        self.libs_path = os.environ.get("NEUROMITA_LIB_DIR", "Lib")
         self.event_bus = get_event_bus()
         self._subscribe_to_events()
 
@@ -59,16 +58,6 @@ class InstallController:
             timeout_sec=timeout_sec,
         ))
 
-    def _make_pip_installer(self, cb: InstallCallbacks) -> PipInstaller:
-        return PipInstaller(
-            # script_path=self.script_path,
-            # libs_path=self.libs_path,
-            update_status=cb.status,
-            update_log=cb.log,
-            update_progress=cb.progress,
-            progress_window=None,
-        )
-
     def _emit(self, event_name: str, payload: dict) -> None:
         try:
             self.event_bus.emit(event_name, payload)
@@ -81,74 +70,15 @@ class InstallController:
         except TypeError:
             return fn()
 
-    def _dist_exists_and_version(self, dist_name: str) -> tuple[bool, Optional[str]]:
+    def _load_uv_state(self) -> list[str]:
+        state_path = os.path.join(os.environ.get("NEUROMITA_BASE_DIR", os.getcwd()), ".uv-state.json")
+        if not os.path.exists(state_path):
+            return []
         try:
-            import importlib.metadata as md
+            with open(state_path, "r", encoding="utf-8") as f:
+                return list(json.load(f).get("extras", []))
         except Exception:
-            return False, None
-
-        names_to_try = [dist_name]
-        n = (dist_name or "").strip()
-        if n:
-            names_to_try.append(n.replace("_", "-"))
-            names_to_try.append(n.replace("-", "_"))
-
-        for name in names_to_try:
-            if not name:
-                continue
-            try:
-                ver = md.version(name)
-                return True, ver
-            except Exception:
-                continue
-        return False, None
-
-    def _is_pip_spec_satisfied(self, spec: str) -> bool:
-        spec = (spec or "").strip()
-        if not spec:
-            return True
-
-        try:
-            from packaging.requirements import Requirement
-        except Exception:
-            ok, _ver = self._dist_exists_and_version(spec)
-            return bool(ok)
-
-        try:
-            req = Requirement(spec)
-        except Exception:
-            return False
-
-        try:
-            if req.marker is not None and not req.marker.evaluate():
-                return True
-        except Exception:
-            pass
-
-        ok, ver = self._dist_exists_and_version(req.name)
-        if not ok:
-            return False
-
-        if not req.specifier:
-            return True
-
-        if not ver:
-            return False
-
-        try:
-            return bool(req.specifier.contains(ver, prereleases=True))
-        except Exception:
-            return False
-
-    def _missing_pip_specs(self, specs: Iterable[str]) -> list[str]:
-        missing: list[str] = []
-        for s in specs or []:
-            s = (s or "").strip()
-            if not s:
-                continue
-            if not self._is_pip_spec_satisfied(s):
-                missing.append(s)
-        return missing
+            return []
 
     def _download_http_files(
         self,
@@ -275,7 +205,6 @@ class InstallController:
         self,
         plan: InstallPlan,
         *,
-        pip_installer: PipInstaller,
         callbacks: InstallCallbacks,
         ctx: dict,
     ) -> bool:
@@ -285,6 +214,13 @@ class InstallController:
             cb.status(plan.already_installed_status or "Already installed")
             cb.progress(100)
             return True
+
+        current = set(self._load_uv_state())
+        desired = (current | set(plan.required_extras or [])) - set(plan.removed_extras or [])
+        desired |= {"core", f"backend-{os.environ.get('NEUROMITA_BACKEND', 'cpu')}"}
+        if desired != current:
+            if not UvSync(cb.status, cb.log, cb.progress).apply(desired):
+                raise RuntimeError("uv install failed")
 
         actions = plan.actions or []
         for act in actions:
@@ -299,26 +235,7 @@ class InstallController:
             if pr > 0:
                 cb.progress(pr)
 
-            if atype == "pip":
-                pkgs = act.packages or []
-                to_install = self._missing_pip_specs(pkgs)
-                if not to_install:
-                    if pkgs:
-                        cb.log(f"Skip pip step (already satisfied): {', '.join(pkgs)}")
-                    continue
-
-                cb.log(f"Installing: {', '.join(to_install)}")
-                ok = pip_installer.install_package(
-                    to_install,
-                    description=desc or "Installing...",
-                    extra_args=act.extra_args,
-                )
-                if not ok:
-                    cb.status("Failed")
-                    cb.log("pip step failed")
-                    return False
-
-            elif atype == "download_http":
+            if atype == "download_http":
                 files = act.files or []
                 end_pr = act.progress_to if act.progress_to is not None else 99
                 ok = self._download_http_files(
@@ -337,7 +254,7 @@ class InstallController:
                     cb.log("Invalid plan action: call without fn")
                     return False
                 try:
-                    res = self._call_flex(act.fn, pip_installer=pip_installer, callbacks=cb, ctx=ctx)
+                    res = self._call_flex(act.fn, callbacks=cb, ctx=ctx)
                     if res is False:
                         cb.status("Failed")
                         cb.log("call step returned False")
@@ -356,7 +273,7 @@ class InstallController:
                     import asyncio
 
                     timeout = float(act.timeout_sec or ctx.get("timeout_sec", 3600.0) or 3600.0)
-                    coro = self._call_flex(act.fn, pip_installer=pip_installer, callbacks=cb, ctx=ctx)
+                    coro = self._call_flex(act.fn, callbacks=cb, ctx=ctx)
                     ok = bool(asyncio.run(asyncio.wait_for(coro, timeout=timeout)))
                     if not ok:
                         cb.status("Failed")
@@ -437,8 +354,6 @@ class InstallController:
             self._emit(Events.Install.TASK_LOG, base_payload({"message": m}))
 
         cb = InstallCallbacks(progress=cb_progress, status=cb_status, log=cb_log)
-        pip_installer = self._make_pip_installer(cb)
-
         self._emit(Events.Install.TASK_STARTED, base_payload({"progress": 0, "status": "Preparing..."}))
         cb.status("Preparing...")
         cb.progress(1)
@@ -453,21 +368,23 @@ class InstallController:
         try:
             result: Any
             try:
-                result = runner(pip_installer=pip_installer, callbacks=cb, ctx=ctx)
+                result = runner(callbacks=cb, ctx=ctx)
             except TypeError:
-                result = runner(pip_installer, cb, ctx)
+                result = runner(None, cb, ctx)
 
             if isinstance(result, InstallPlan):
-                ok = self._execute_plan(result, pip_installer=pip_installer, callbacks=cb, ctx=ctx)
+                ok = self._execute_plan(result, callbacks=cb, ctx=ctx)
             elif isinstance(result, dict) and "actions" in result:
                 actions = result.get("actions") or []
                 plan = InstallPlan(
                     actions=[InstallAction(**a) if isinstance(a, dict) else a for a in actions],
+                    required_extras=list(result.get("required_extras") or []),
+                    removed_extras=list(result.get("removed_extras") or []),
                     already_installed=bool(result.get("already_installed", False)),
                     ok_status=str(result.get("ok_status", "Done") or "Done"),
                     already_installed_status=str(result.get("already_installed_status", "Already installed") or "Already installed"),
                 )
-                ok = self._execute_plan(plan, pip_installer=pip_installer, callbacks=cb, ctx=ctx)
+                ok = self._execute_plan(plan, callbacks=cb, ctx=ctx)
             else:
                 ok = bool(result)
                 if ok:

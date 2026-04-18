@@ -15,9 +15,6 @@ from utils import getTranslationVariant as _, get_character_voice_paths
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
 
-from handlers.voice_models.install_plan_helpers import torch_install_action, pip_uninstall_action
-
-
 class EdgeTTSRVCInstallSpec:
     @classmethod
     def supported_model_ids(cls) -> list[str]:
@@ -52,43 +49,15 @@ class EdgeTTSRVCInstallSpec:
         return bool(st.get("ok"))
 
     @classmethod
-    def _patch_fairseq_configs_call(cls):
-        def _fn(*, pip_installer=None, callbacks=None, ctx=None, **_kwargs) -> bool:
-            cb = callbacks
-            libs_path_abs = getattr(pip_installer, "libs_path_abs", None) if pip_installer else None
-            libs_path_abs = str(libs_path_abs or os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib")))
-
-            def log(m: str):
-                try:
-                    if cb:
-                        cb.log(str(m))
-                except Exception:
-                    pass
-
-            config_path = os.path.join(libs_path_abs, "fairseq", "dataclass", "configs.py")
-            if not os.path.exists(config_path):
-                log(_("fairseq/dataclass/configs.py не найден — патч пропущен", "fairseq/dataclass/configs.py not found — patch skipped"))
-                return True
-
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-
-                patched = re.sub(r"metadata=\{(.*?)help:", r'metadata={\1"help":', source)
-
-                if patched != source:
-                    with open(config_path, "w", encoding="utf-8") as f:
-                        f.write(patched)
-                    log(_("Патч успешно применен к configs.py", "Patch successfully applied to configs.py"))
-                else:
-                    log(_("Патч configs.py уже применен или не требуется", "configs.py patch already applied or not needed"))
-                return True
-            except Exception as e:
-                log(_(f"Ошибка при патче configs.py: {e}", f"Error patching configs.py: {e}"))
-                log(traceback.format_exc())
-                return False
-
-        return _fn
+    def _extra_for(cls, model_id: str, ctx: dict) -> str:
+        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
+        mid = str(model_id)
+        return {
+            ("low", "AMD"): "tts-edge-rvc-amd",
+            ("low", "OTHER"): "tts-edge-rvc",
+            ("low+", "AMD"): "tts-silero-rvc-amd",
+            ("low+", "OTHER"): "tts-silero-rvc",
+        }[(mid, "AMD" if gpu == "AMD" else "OTHER")]
 
     @classmethod
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
@@ -100,73 +69,25 @@ class EdgeTTSRVCInstallSpec:
                 already_installed_status=_("Уже установлено", "Already installed")
             )
 
-        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
-        actions: list[InstallAction] = []
-
-        actions.append(torch_install_action(ctx, progress=10))
-
-        pkgs: list[str] = ["omegaconf"]
-
-        if mid == "low+":
-            pkgs.append("silero")
-
-        if gpu == "AMD":
-            pkgs.append("tts-with-rvc-onnx[dml]")
-        else:
-            pkgs.append("tts-with-rvc")
-
-        actions.append(
-            InstallAction(
-                type="pip",
-                description=_("Установка зависимостей...", "Installing dependencies..."),
-                progress=60,
-                packages=pkgs,
-            )
-        )
-
-        actions.append(
-            InstallAction(
-                type="call",
-                description=_("Применение патчей...", "Applying patches..."),
-                progress=90,
-                fn=cls._patch_fairseq_configs_call(),
-            )
-        )
-
-        actions.append(
-            InstallAction(
+        extra = cls._extra_for(mid, ctx)
+        return InstallPlan(
+            required_extras=[extra],
+            actions=[
+                InstallAction(
                 type="call",
                 description=_("Проверка установки...", "Final check..."),
                 progress=99,
                 fn=lambda **_k: cls.is_installed(mid, ctx),
-            )
+                )
+            ],
+            ok_status=_("Готово", "Done"),
         )
-
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
-        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
-        if gpu == "AMD":
-            return InstallPlan(
-                actions=[
-                    pip_uninstall_action(
-                        ["tts-with-rvc-onnx"],
-                        description=_("Удаление tts-with-rvc-onnx...", "Uninstalling tts-with-rvc-onnx..."),
-                        progress=20,
-                    )
-                ],
-                ok_status=_("Удалено", "Uninstalled"),
-            )
-
         return InstallPlan(
-            actions=[
-                pip_uninstall_action(
-                    ["tts-with-rvc"],
-                    description=_("Удаление tts-with-rvc...", "Uninstalling tts-with-rvc..."),
-                    progress=20,
-                )
-            ],
+            actions=[],
+            removed_extras=[cls._extra_for(str(model_id), ctx)],
             ok_status=_("Удалено", "Uninstalled"),
         )
 
@@ -334,10 +255,6 @@ class EdgeTTS_RVC_Model(IVoiceModel):
 
         self._import_attempted = True
         self._silero_available = False
-
-        libs_path_abs = os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib"))
-        if libs_path_abs not in sys.path:
-            sys.path.insert(0, libs_path_abs)
 
         try:
             from tts_with_rvc import TTS_RVC

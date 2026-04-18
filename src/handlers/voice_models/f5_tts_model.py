@@ -12,7 +12,7 @@ from utils import getTranslationVariant as _, get_character_voice_paths
 
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
-from handlers.voice_models.install_plan_helpers import torch_install_action, pip_uninstall_action, remove_paths_action
+from handlers.voice_models.install_plan_helpers import remove_paths_action
 
 class F5TTSInstallSpec:
     @classmethod
@@ -46,6 +46,10 @@ class F5TTSInstallSpec:
         return bool(st.get("ok"))
 
     @classmethod
+    def _extra_for(cls, model_id: str) -> str:
+        return "tts-f5-high-low-rvc" if str(model_id) == "high+low" else "tts-f5-high"
+
+    @classmethod
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
         if cls.is_installed(mid, ctx):
@@ -60,29 +64,6 @@ class F5TTSInstallSpec:
         vocab_dest = os.path.join(model_dir, "vocab.txt")
 
         actions: list[InstallAction] = []
-
-        actions.append(torch_install_action(ctx, progress=10))
-
-        pkgs = [
-            "f5-tts",
-            "cached_path",
-            "google-api-core",
-            "numpy==1.26.0",
-            "librosa==0.9.1",
-            "numba==0.60.0",
-            "ruaccent",
-        ]
-        if mid == "high+low":
-            pkgs.insert(0, "tts-with-rvc")
-
-        actions.append(
-            InstallAction(
-                type="pip",
-                description=_("Установка зависимостей F5-TTS...", "Installing F5-TTS dependencies..."),
-                progress=35,
-                packages=pkgs,
-            )
-        )
 
         actions.append(
             InstallAction(
@@ -123,19 +104,15 @@ class F5TTSInstallSpec:
             )
         )
 
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
+        return InstallPlan(required_extras=[cls._extra_for(mid)], actions=actions, ok_status=_("Готово", "Done"))
 
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
-        pkgs = ["f5-tts", "ruaccent"]
-        if mid == "high+low":
-            pkgs = ["tts-with-rvc"] + pkgs
-
         return InstallPlan(
+            removed_extras=[cls._extra_for(mid)],
             actions=[
-                pip_uninstall_action(pkgs, description=_("Удаление компонентов...", "Uninstalling components...")),
                 remove_paths_action([os.path.join("checkpoints", "F5-TTS")], description=_("Удаление файлов модели...", "Removing model files..."), progress=85),
             ],
             ok_status=_("Удалено", "Uninstalled"),

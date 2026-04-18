@@ -2,19 +2,26 @@
 
 import os
 import sys
+import json
 import asyncio
 import traceback
 from typing import Any, Callable, Optional
 
 
 def _ensure_lib_on_path() -> None:
-    lib_path = os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib"))
-    lib_path_norm = os.path.normcase(os.path.abspath(lib_path))
-    sys.path = [
-        p for p in sys.path
-        if os.path.normcase(os.path.abspath(p or "")) != lib_path_norm
-    ]
-    sys.path.insert(0, lib_path)
+    base_dir = os.environ.get("NEUROMITA_BASE_DIR", os.getcwd())
+    state_path = os.path.join(base_dir, ".uv-state.json")
+    active = []
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                active = json.load(f).get("extras", [])
+        except Exception:
+            active = []
+    for extra in reversed(active):
+        sp = os.path.join(base_dir, "packages", str(extra), ".lib", "site-packages")
+        if os.path.isdir(sp) and sp not in sys.path:
+            sys.path.insert(0, sp)
 
 
 def _log(log_queue, level: str, message: str) -> None:

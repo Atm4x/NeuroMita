@@ -17,9 +17,6 @@ from utils import getTranslationVariant as _, get_character_voice_paths
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
 
-from handlers.voice_models.install_plan_helpers import torch_install_action, pip_uninstall_action
-
-
 class FishSpeechInstallSpec:
     @classmethod
     def supported_model_ids(cls) -> list[str]:
@@ -47,112 +44,17 @@ class FishSpeechInstallSpec:
         return bool(st.get("ok"))
 
     @classmethod
-    def _libs_path_abs(cls, pip_installer) -> str:
-        lp = getattr(pip_installer, "libs_path_abs", None)
-        if lp:
-            return str(lp)
-        return os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib"))
-
-    @classmethod
-    def _script_path(cls, pip_installer) -> str:
-        sp = getattr(pip_installer, "script_path", None)
-        if sp:
-            return str(sp)
-        return os.environ.get("NEUROMITA_PYTHON", sys.executable)
+    def _extra_for(cls, model_id: str) -> str:
+        return {
+            "medium": "tts-fish-medium",
+            "medium+": "tts-fish-medium-plus",
+            "medium+low": "tts-fish-medium-low-rvc",
+        }[str(model_id)]
 
     @classmethod
     def _ensure_sys_path(cls, libs_path_abs: str) -> None:
         if libs_path_abs and libs_path_abs not in sys.path:
             sys.path.insert(0, libs_path_abs)
-
-    @classmethod
-    def _apply_triton_patches(cls, libs_path_abs: str, log_cb) -> None:
-        def _safe_write(path: str, new_text: str) -> None:
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_text)
-            except Exception as e:
-                log_cb(_(f"Ошибка записи {path}: {e}", f"Write error {path}: {e}"))
-
-        build_py_path = os.path.join(libs_path_abs, "triton", "runtime", "build.py")
-        if os.path.exists(build_py_path):
-            try:
-                with open(build_py_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-
-                new_line_tcc = 'cc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tcc", "tcc.exe")'
-                source2 = source
-
-                # patch tcc path (a bit tolerant)
-                if "tcc.exe" in source2 and "sysconfig.get_paths()" in source2 and "platlib" in source2:
-                    import re as _re
-                    source2 = _re.sub(
-                        r'cc\s*=\s*os\.path\.join\(\s*sysconfig\.get_paths\(\)\s*\[\s*"platlib"\s*\]\s*,\s*"triton"\s*,\s*"runtime"\s*,\s*"tcc"\s*,\s*"tcc\.exe"\s*\)',
-                        new_line_tcc,
-                        source2
-                    )
-
-                # remove -fPIC
-                source2 = source2.replace(
-                    'cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", out]',
-                    'cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi", "-o", out]'
-                )
-
-                if source2 != source:
-                    _safe_write(build_py_path, source2)
-                    log_cb(_("Патчи применены к triton/runtime/build.py", "Patched triton/runtime/build.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча build.py: {e}", f"Error patching build.py: {e}"))
-                log_cb(traceback.format_exc())
-        else:
-            log_cb(_("build.py не найден, патч пропущен", "build.py not found, patch skipped"))
-
-        windows_utils_path = os.path.join(libs_path_abs, "triton", "windows_utils.py")
-        if os.path.exists(windows_utils_path):
-            try:
-                with open(windows_utils_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_code = "output = subprocess.check_output(command, text=True).strip()"
-                new_code = (
-                    "output = subprocess.check_output(\n"
-                    "            command, text=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True, "
-                    "stdin=subprocess.DEVNULL, stderr=subprocess.PIPE\n"
-                    "        ).strip()"
-                )
-                if old_code in source:
-                    _safe_write(windows_utils_path, source.replace(old_code, new_code))
-                    log_cb(_("Патч применён к triton/windows_utils.py", "Patched triton/windows_utils.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча windows_utils.py: {e}", f"Error patching windows_utils.py: {e}"))
-                log_cb(traceback.format_exc())
-
-        compiler_path = os.path.join(libs_path_abs, "triton", "backends", "nvidia", "compiler.py")
-        if os.path.exists(compiler_path):
-            try:
-                with open(compiler_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_line = 'version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")'
-                new_line = 'version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"], creationflags=subprocess.CREATE_NO_WINDOW, stderr=subprocess.PIPE, close_fds=True, stdin=subprocess.DEVNULL).decode("utf-8")'
-                if old_line in source:
-                    _safe_write(compiler_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/backends/nvidia/compiler.py", "Patched triton/backends/nvidia/compiler.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча compiler.py: {e}", f"Error patching compiler.py: {e}"))
-                log_cb(traceback.format_exc())
-
-        cache_py_path = os.path.join(libs_path_abs, "triton", "runtime", "cache.py")
-        if os.path.exists(cache_py_path):
-            try:
-                with open(cache_py_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_line = 'temp_dir = os.path.join(self.cache_dir, f"tmp.pid_{pid}_{rnd_id}")'
-                new_line = 'temp_dir = os.path.join(self.cache_dir, f"tmp.pid_{str(pid)[:5]}_{str(rnd_id)[:5]}")'
-                if old_line in source:
-                    _safe_write(cache_py_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/runtime/cache.py", "Patched triton/runtime/cache.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча cache.py: {e}", f"Error patching cache.py: {e}"))
-                log_cb(traceback.format_exc())
 
     @classmethod
     def _probe_triton_deps(cls, libs_path_abs: str) -> dict:
@@ -221,14 +123,18 @@ class FishSpeechInstallSpec:
                 except Exception:
                     pass
 
-            if pip_installer is None:
-                return False
-
-            libs_path_abs = cls._libs_path_abs(pip_installer)
+            extra = cls._extra_for(mode)
+            base_dir = os.environ.get("NEUROMITA_BASE_DIR", os.getcwd())
+            libs_path_abs = os.path.join(base_dir, "packages", extra, ".lib", "site-packages")
             cls._ensure_sys_path(libs_path_abs)
 
             status(_("Применение патчей Triton...", "Applying Triton patches..."))
-            cls._apply_triton_patches(libs_path_abs, log)
+            try:
+                from utils.patches import apply_runtime_patches
+                apply_runtime_patches(base_dir, [extra], {extra: {"target": os.path.join("packages", extra)}})
+            except Exception as e:
+                log(_(f"Ошибка применения runtime-патчей: {e}", f"Runtime patch error: {e}"))
+                return False
 
             # Import check with VC redist retry dialog
             import importlib as _importlib
@@ -269,7 +175,7 @@ class FishSpeechInstallSpec:
                     return True
 
             status(_("Инициализация ядра Triton...", "Initializing Triton kernel..."))
-            script_path = cls._script_path(pip_installer)
+            script_path = os.environ.get("NEUROMITA_PYTHON", sys.executable)
 
             try:
                 temp_dir = "temp"
@@ -337,38 +243,7 @@ class FishSpeechInstallSpec:
             )
 
         actions: list[InstallAction] = []
-
-        actions.append(torch_install_action(ctx, progress=10))
-
-        pkgs = [
-            "fish-speech-lib",
-            "numpy==1.26.0",
-            "librosa==0.9.1",
-            "numba==0.60.0",
-        ]
-        if mid == "medium+low":
-            pkgs.append("tts-with-rvc")
-
-        actions.append(
-            InstallAction(
-                type="pip",
-                description=_("Установка зависимостей Fish Speech...", "Installing Fish Speech dependencies..."),
-                progress=45,
-                packages=pkgs,
-            )
-        )
-
-        # Triton оставляем отдельным шагом (и окно/патчи — отдельно)
         if mid in ("medium+", "medium+low"):
-            actions.append(
-                InstallAction(
-                    type="pip",
-                    description=_("Установка Triton...", "Installing Triton..."),
-                    progress=65,
-                    packages=["triton-windows<3.4"],
-                    extra_args=["--upgrade"],
-                )
-            )
             actions.append(
                 InstallAction(
                     type="call",
@@ -387,27 +262,14 @@ class FishSpeechInstallSpec:
             )
         )
 
-        return InstallPlan(actions=actions, ok_status=_("Готово", "Done"))
+        return InstallPlan(required_extras=[cls._extra_for(mid)], actions=actions, ok_status=_("Готово", "Done"))
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
 
-        if mid == "medium":
-            return InstallPlan(
-                actions=[
-                    pip_uninstall_action(["fish-speech-lib"], description=_("Удаление fish-speech-lib...", "Uninstalling fish-speech-lib..."), progress=20)
-                ],
-                ok_status=_("Удалено", "Uninstalled"),
-            )
-
-        if mid in ("medium+", "medium+low"):
-            return InstallPlan(
-                actions=[
-                    pip_uninstall_action(["triton-windows"], description=_("Удаление Triton...", "Uninstalling Triton..."), progress=20)
-                ],
-                ok_status=_("Удалено", "Uninstalled"),
-            )
+        if mid in ("medium", "medium+", "medium+low"):
+            return InstallPlan(actions=[], removed_extras=[cls._extra_for(mid)], ok_status=_("Удалено", "Uninstalled"))
 
         return InstallPlan(actions=[InstallAction(type="call", description="Failed", progress=1, fn=lambda **_k: False)])
 

@@ -7,11 +7,6 @@ from main_logger import logger
 from win32 import win32gui
 # import win32con
 
-# Добавляем необходимые импорты для PipInstaller
-import sys
-import os
-from utils.pip_installer import PipInstaller
-
 # Функция для перевода
 def getTranslationVariant(ru_str, en_str=""):
     from managers.settings_manager import SettingsManager
@@ -42,46 +37,17 @@ class ScreenCapture:
         self.window_title_to_exclude = None # Заголовок окна, которое нужно исключить
         self.exclude_gui_window = False # Флаг для исключения окна GUI
         
-        # Инициализация PipInstaller
-        try:
-            self._pip_installer = PipInstaller(
-                update_log=logger.info
-            )
-            logger.debug("PipInstaller успешно инициализирован для ScreenCapture.")
-        except Exception as e:
-            logger.error(f"Не удалось инициализировать PipInstaller: {e}", exc_info=True)
-            self._pip_installer = None
-            
     def _ensure_pil_installed(self):
-        """Проверяет наличие Pillow и устанавливает при необходимости."""
+        """Проверяет наличие Pillow. Установка выполняется через core extra."""
         if self._pil_checked:
             return
-        
+
         try:
-            # Пробуем импортировать, чтобы проверить наличие
             __import__('PIL.Image')
             logger.debug("Библиотека Pillow (PIL) уже установлена.")
         except ImportError:
-            logger.warning("Библиотека Pillow (PIL) не найдена. Попытка автоматической установки...")
-            
-            if self._pip_installer is None:
-                raise RuntimeError("PipInstaller не инициализирован - установку нельзя осуществить")
-            
-            success = self._pip_installer.install_package(
-                "Pillow",
-                description=_("Установка библиотеки Pillow (PIL)...", "Installing Pillow (PIL) library...")
-            )
-            
-            if not success:
-                raise RuntimeError("Не удалось установить Pillow")
-            
-            try:
-                # После установки пытаемся импортировать снова
-                __import__('PIL.Image')
-                logger.info("Библиотека Pillow успешно установлена.")
-            except ImportError:
-                raise RuntimeError("Даже после установки Pillow - не получилось импортировать.")
-        
+            raise RuntimeError("Pillow (PIL) не установлен. Запустите синхронизацию core extra.")
+
         self._pil_checked = True
 
     def start_capture(self, interval_seconds: float = 1.0, quality: int = 25, fps: int = 1, max_history_frames: int = 1, max_transfer_frames: int = 1, capture_width: int = 1024, capture_height: int = 768):

@@ -231,13 +231,7 @@ class ASRService:
             self._logger = _logger
 
         if self._pip_installer is None:
-            try:
-                from utils.pip_installer import PipInstaller
-                self._pip_installer = PipInstaller(
-                    update_log=self._logger.info,
-                )
-            except Exception:
-                self._pip_installer = None
+            self._pip_installer = None
 
         self._recognizer = cls(self._pip_installer, self._logger)
         return self._recognizer

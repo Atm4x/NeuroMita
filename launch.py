@@ -1,10 +1,8 @@
 """
-Локальный лаунчер для PyCharm (в .gitignore).
-1. Собирает fast-билд (build.py)
-2. Если requirements.txt изменился — запускает uv pip install
-3. Запускает игру
+Локальный лаунчер для PyCharm.
+1. Собирает билд через build.py.
+2. Запускает новый uv-workspace скрипт для выбранного backend.
 """
-import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -12,11 +10,11 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).parent
 
 
-def load_env(env_path: Path) -> dict:
-    env = {}
+def load_env(env_path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
     if not env_path.exists():
         return env
-    with open(env_path, encoding="utf-8") as f:
+    with env_path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -27,92 +25,55 @@ def load_env(env_path: Path) -> dict:
     return env
 
 
-env = load_env(PROJECT_DIR / "build.env")
-
-OUTPUT_DIR = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
-
-# Путь к python игры — можно переопределить через LAUNCH_PYTHON в build.env
-_default_python = str(OUTPUT_DIR / "libs" / "python" / "python.exe")
-GAME_PYTHON = Path(env.get("LAUNCH_PYTHON", _default_python))
-
-# GPU_VENDOR: none | nvidia | amd  (по умолчанию none)
-GPU_VENDOR = env.get("GPU_VENDOR", "none").strip().lower()
-_GPU_EXTRA_PKG = {
-    "nvidia": "onnxruntime",
-    "amd":    "onnxruntime-directml",
-}
-
-REQ_FILE = OUTPUT_DIR / "requirements.txt"
-HASH_FILE = OUTPUT_DIR / ".req_hash"
-
-
-def file_hash(path: Path) -> str:
-    return hashlib.md5(path.read_bytes()).hexdigest()
-
-
-def requirements_changed() -> bool:
-    if not REQ_FILE.exists():
-        return False
-    current = file_hash(REQ_FILE)
-    if HASH_FILE.exists() and HASH_FILE.read_text().strip() == current:
-        return False
-    return True
-
-
-def save_hash():
-    HASH_FILE.write_text(file_hash(REQ_FILE))
-
-
-def run(cmd: list, cwd: Path = None):
+def run(cmd: list[str], cwd: Path | None = None) -> int:
     print(f"\n>>> {' '.join(str(c) for c in cmd)}")
     result = subprocess.run(cmd, cwd=cwd)
-    if result.returncode != 0:
-        print(f"Ошибка (код {result.returncode}), прерываю.")
-        sys.exit(result.returncode)
+    return result.returncode
+
+
+def fail(code: int) -> None:
+    print(f"Ошибка (код {code}), прерываю.")
+    sys.exit(code)
 
 
 if __name__ == "__main__":
-    # 1. Сборка
-    print("=" * 50)
-    print("Шаг 1: сборка (fast)")
-    print("=" * 50)
-    run([sys.executable, str(PROJECT_DIR / "build.py")])
+    env = load_env(PROJECT_DIR / "build.env")
+    output_dir = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
+    backend = env.get("NEUROMITA_BACKEND") or env.get("GPU_VENDOR", "cpu")
+    backend = backend.strip().lower()
+    if backend in {"none", "default"}:
+        backend = "cpu"
 
-    # 2. Обновление зависимостей если нужно
-    if requirements_changed():
-        print("=" * 50)
-        print("Шаг 2: requirements.txt изменился — обновляю зависимости")
-        print("=" * 50)
-        _install_scripts = {
-            "nvidia": "scripts/install_nvidia.cmd",
-            "amd":    "scripts/install_amd.cmd",
-        }
-        install_script = _install_scripts.get(GPU_VENDOR)
-        if install_script:
-            script_path = OUTPUT_DIR / install_script
-            print(f"GPU_VENDOR={GPU_VENDOR!r}, запускаю {script_path}")
-            run(["cmd", "/c", str(script_path)], cwd=OUTPUT_DIR)
-        else:
-            print("GPU_VENDOR=none, устанавливаю только requirements.txt")
-            run([str(GAME_PYTHON), "-m", "uv", "pip", "install",
-                 "-r", str(REQ_FILE), "--no-cache-dir"], cwd=OUTPUT_DIR)
-        save_hash()
-    else:
-        print("\nШаг 2: requirements.txt не изменился — пропускаю.")
+    scripts = {
+        "nvidia": "run_nvidia.cmd",
+        "amd": "run_amd.cmd",
+        "cpu": "run_cpu.cmd",
+    }
+    script_name = scripts.get(backend)
+    if script_name is None:
+        print(f"Неизвестный backend {backend!r}. Используй nvidia, amd или cpu.")
+        sys.exit(2)
 
-    # 3. Запуск игры (с перезапуском после автообновления)
-    # Exit code 42 означает что updater применил обновление и нужен рестарт.
-    game_cmd = [str(GAME_PYTHON), "-m", "uv", "run", "NeuroMita.pyz"]
+    print("=" * 50)
+    print("Шаг 1: сборка")
+    print("=" * 50)
+    code = run([sys.executable, str(PROJECT_DIR / "build.py")], cwd=PROJECT_DIR)
+    if code != 0:
+        fail(code)
+
+    script_path = output_dir / script_name
+    if not script_path.exists():
+        print(f"Скрипт запуска не найден: {script_path}")
+        sys.exit(2)
+
+    print("=" * 50)
+    print(f"Шаг 2: запуск backend={backend}")
+    print("=" * 50)
     while True:
-        print("=" * 50)
-        print("Шаг 3: запуск игры")
-        print("=" * 50)
-        print(f"\n>>> {' '.join(str(c) for c in game_cmd)}")
-        result = subprocess.run(game_cmd, cwd=OUTPUT_DIR)
-        if result.returncode == 42:
+        code = run(["cmd", "/c", str(script_path)], cwd=output_dir)
+        if code == 42:
             print("\nОбновление применено, перезапускаю...")
-        elif result.returncode != 0:
-            print(f"Ошибка (код {result.returncode}), прерываю.")
-            sys.exit(result.returncode)
-        else:
-            break
+            continue
+        if code != 0:
+            fail(code)
+        break

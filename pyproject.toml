@@ -1,0 +1,142 @@
+[project]
+name = "neuromita"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+
+# --- CORE: UI / HTTP / LLM SDK / common utils ---
+core = [
+  # HTTP / async
+  "aiohappyeyeballs==2.5.0", "aiohttp", "aiosignal==1.3.2", "anyio==4.8.0", "attrs==25.1.0",
+  "frozenlist==1.5.0", "h11==0.14.0", "httpcore==1.0.7", "httpx==0.27.0", "idna==3.10",
+  "multidict==6.1.0", "propcache==0.3.0", "requests==2.32.3", "sniffio==1.3.1",
+  "urllib3==2.3.0", "yarl==1.18.3", "certifi==2025.1.31", "charset-normalizer==3.4.1",
+  "brotli==1.1.0", "nest-asyncio==1.6.0",
+  # LLM SDKs
+  "openai==1.61.1", "mistralai==1.5.1", "tiktoken==0.8.0", "jiter==0.8.2", "distro==1.9.0",
+  "transformers>=4.45.2",
+  # Pydantic / typing
+  "annotated-types==0.7.0", "pydantic==2.9.2",
+  "typing-extensions==4.12.2", "typing-inspect==0.9.0", "mypy-extensions==1.0.0",
+  "eval-type-backport==0.2.2", "jsonpath-python==1.0.6", "json-repair",
+  # UI
+  "pyqt6", "qtawesome", "pillow", "opencv-python", "mss",
+  # Audio capture (imported unconditionally in __main__.py)
+  "pyaudio==0.2.14", "sounddevice==0.5.1", "soundfile==0.13.1",
+  "speechrecognition==3.14.1", "pygame==2.6.1", "ffmpeg-python==0.2.0", "soxr",
+  "pyworld==0.3.5",
+  # Integrations
+  "telethon==1.38.1", "python-chess", "google-api-core", "google-cloud-storage",
+  # Crypto
+  "pycryptodome==3.21.0", "pyaes==1.6.1", "pyasn1==0.6.1", "rsa==4.9",
+  "cffi==1.17.1", "pycparser==2.22",
+  # Scraping / web tools
+  "bs4", "ddgs", "nodriver",
+  # Misc
+  "emoji", "num2words", "regex==2024.11.6", "tqdm==4.67.1", "colorama==0.4.6",
+  "colorlog==6.9.0", "docopt-ng", "packaging==24.2", "python-dateutil==2.9.0.post0",
+  "six==1.17.0", "future==1.0.0", "platformdirs", "dotenv", "portalocker",
+  # Windows
+  "pywin32", "pywinpty", "py7zr",
+  # ONNX abstract API (runtime provider comes from backend-*)
+  "onnx",
+  # HTTP server
+  "uvicorn",
+  # numpy pinned (compatible with torch 2.7.1)
+  "numpy==1.26.0",
+  # setuptools for runtime imports (separate from bootstrap)
+  "setuptools==75.8.0",
+  # Possibly unused legacy; left in for parity
+  "altgraph==0.17.4", "macholib==1.16.3", "pefile==2023.2.7",
+]
+
+# --- BACKENDS (mutually exclusive; exactly one active at a time) ---
+backend-nvidia = [ "torch==2.7.1", "torchaudio==2.7.1", "onnxruntime-gpu" ]
+backend-cpu    = [ "torch==2.7.1", "torchaudio==2.7.1", "onnxruntime" ]
+backend-amd    = [ "torch==2.7.1", "torchaudio==2.7.1", "onnxruntime-directml" ]
+
+# --- RVC (mutually exclusive) ---
+rvc-common      = [ "tts-with-rvc", "silero-vad", "omegaconf" ]
+rvc-common-onnx = [ "tts-with-rvc-onnx[dml]", "omegaconf" ]
+
+# --- ASR ---
+asr-gigaam  = [ "gigaam" ]
+asr-whisper = [ "openai-whisper" ]
+g4f         = [ "g4f==0.4.7.7" ]
+
+# --- TTS base (composition blocks, no standalone target) ---
+tts-edge    = [ "edge-tts", "omegaconf" ]
+tts-silero  = [ "silero" ]
+tts-fish    = [ "fish-speech-lib", "librosa==0.9.1", "numba==0.60.0" ]
+tts-f5      = [ "f5-tts", "cached_path", "librosa==0.9.1", "numba==0.60.0", "ruaccent" ]
+
+# --- TTS variants (one extra per concrete model_id shown in UI) ---
+tts-edge-rvc            = [ "neuromita[tts-edge,rvc-common]" ]
+tts-edge-rvc-amd        = [ "neuromita[tts-edge,rvc-common-onnx]" ]
+tts-silero-rvc          = [ "neuromita[tts-edge,tts-silero,rvc-common]" ]
+tts-silero-rvc-amd      = [ "neuromita[tts-edge,tts-silero,rvc-common-onnx]" ]
+tts-fish-medium         = [ "neuromita[tts-fish]" ]
+tts-fish-medium-plus    = [ "neuromita[tts-fish]", "triton-windows<3.4" ]
+tts-fish-medium-low-rvc = [ "neuromita[tts-fish,rvc-common]", "triton-windows<3.4" ]
+tts-f5-high             = [ "neuromita[tts-f5]" ]
+tts-f5-high-low-rvc     = [ "neuromita[tts-f5,rvc-common]" ]
+
+# --- Torch per-index: CUDA only for NVIDIA ---
+[tool.uv.sources]
+torch      = [{ index = "pytorch-cu128", extra = "backend-nvidia" }]
+torchaudio = [{ index = "pytorch-cu128", extra = "backend-nvidia" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url  = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv]
+override-dependencies = [
+  "torch==2.7.1",
+  "torchaudio==2.7.1",
+]
+conflicts = [
+  [
+    { extra = "backend-nvidia" },
+    { extra = "backend-cpu" },
+    { extra = "backend-amd" },
+  ],
+  [
+    { extra = "rvc-common" },
+    { extra = "rvc-common-onnx" },
+  ],
+]
+
+# --- Custom: maps extras to install target folders.
+# NOT a standard pyproject field. Consumed by src/utils/uv_sync.py via tomllib.
+# Base composition extras (tts-edge, tts-silero, tts-fish, tts-f5) have no target
+# — they exist only to be composed into concrete variants. ---
+[tool.neuromita.extras]
+core                     = { target = "packages/core" }
+backend-nvidia           = { target = "packages/backend-nvidia" }
+backend-cpu              = { target = "packages/backend-cpu" }
+backend-amd              = { target = "packages/backend-amd" }
+rvc-common               = { target = "packages/rvc-common" }
+rvc-common-onnx          = { target = "packages/rvc-common-onnx" }
+asr-gigaam               = { target = "packages/asr-gigaam" }
+asr-whisper              = { target = "packages/asr-whisper" }
+g4f                      = { target = "packages/g4f" }
+tts-edge-rvc             = { target = "packages/tts-edge-rvc" }
+tts-edge-rvc-amd         = { target = "packages/tts-edge-rvc-amd" }
+tts-silero-rvc           = { target = "packages/tts-silero-rvc" }
+tts-silero-rvc-amd       = { target = "packages/tts-silero-rvc-amd" }
+tts-fish-medium          = { target = "packages/tts-fish-medium" }
+tts-fish-medium-plus     = { target = "packages/tts-fish-medium-plus" }
+tts-fish-medium-low-rvc  = { target = "packages/tts-fish-medium-low-rvc" }
+tts-f5-high              = { target = "packages/tts-f5-high" }
+tts-f5-high-low-rvc      = { target = "packages/tts-f5-high-low-rvc" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

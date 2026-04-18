@@ -51,7 +51,7 @@ FAST_DIRS_TO_COPY: List[Tuple[Path, Path]] = [
 ]
 
 # Файлы: поддержка абсолютных путей
-_copy_files_raw = env.get("BUILD_COPY_FILES", "extra/init.py,extra/Icon.png")
+_copy_files_raw = env.get("BUILD_COPY_FILES", "extra/init.py,extra/Icon.png,pyproject.toml,uv.lock")
 FILES_TO_COPY: List[Tuple[Path, Path]] = [
     (resolve_path(f.strip(), PROJECT_DIR), OUTPUT_DIR / Path(f.strip()).name)
     for f in _copy_files_raw.split(",") if f.strip()
@@ -149,18 +149,18 @@ if __name__ == "__main__":
     shutil.move(str(pyz_temp), str(pyz_dest))
     print(f"Готово: {pyz_dest}")
 
-    # requirements.txt — всегда
-    req = PROJECT_DIR / "requirements.txt"
-    if req.exists():
-        print(f"\nКопирую requirements.txt -> {OUTPUT_DIR / 'requirements.txt'}")
-        shutil.copy2(req, OUTPUT_DIR / "requirements.txt")
+    for manifest in ("pyproject.toml", "uv.lock"):
+        src = PROJECT_DIR / manifest
+        if src.exists():
+            print(f"\nКопирую {manifest} -> {OUTPUT_DIR / manifest}")
+            shutil.copy2(src, OUTPUT_DIR / manifest)
 
     if BUILD_MODE == "full":
         print("\nПолный режим — копирую дополнительные файлы...")
         copy_entries(DIRS_TO_COPY)
         copy_entries(FILES_TO_COPY)
     else:
-        print("\nБыстрый режим — .pyz + requirements.txt + быстрые папки...")
+        print("\nБыстрый режим — .pyz + быстрые папки...")
         copy_entries(FAST_DIRS_TO_COPY)
 
     if ROOT_SCRIPTS:

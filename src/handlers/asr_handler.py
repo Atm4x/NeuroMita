@@ -8,7 +8,6 @@ from typing import Optional, List, Dict
 
 from main_logger import logger
 
-from utils.pip_installer import PipInstaller
 from utils import getTranslationVariant as _
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from handlers.asr_models.google_recognizer import GoogleRecognizer
@@ -160,7 +159,7 @@ class SpeechRecognition:
     @staticmethod
     def _init_pip():
         if SpeechRecognition._pip_installer is None:
-            SpeechRecognition._pip_installer = PipInstaller(update_log=logger.info)
+            SpeechRecognition._pip_installer = None
 
     @staticmethod
     def _new_instance(engine: str) -> Optional[SpeechRecognizerInterface]:
@@ -213,7 +212,7 @@ class SpeechRecognition:
     def build_install_plan(
         engine: str,
         *,
-        pip_installer: PipInstaller,
+        pip_installer,
         engine_settings: Optional[dict] = None,
         callbacks: Optional[object] = None,
         timeout_sec: float = 3600.0,
@@ -254,39 +253,15 @@ class SpeechRecognition:
         except Exception:
             pass
 
-        try:
-            steps = recognizer.pip_install_steps(ctx) if hasattr(recognizer, "pip_install_steps") else []
-            steps = steps or []
-        except Exception:
-            steps = []
-
         actions: list[InstallAction] = []
-
-        for step in steps:
-            try:
-                pr = int(step.get("progress", 10) or 10)
-            except Exception:
-                pr = 10
-            desc = str(step.get("description", "Installing...") or "Installing...")
-            pkgs = step.get("packages")
-            extra = step.get("extra_args")
-
-            if isinstance(pkgs, str):
-                pkgs_list = [pkgs]
-            elif pkgs:
-                pkgs_list = list(pkgs)
-            else:
-                pkgs_list = []
-
-            actions.append(
-                InstallAction(
-                    type="pip",
-                    description=desc,
-                    progress=pr,
-                    packages=pkgs_list,
-                    extra_args=extra,
-                )
-            )
+        extra_map = {
+            "gigaam": "asr-gigaam",
+            "gigaam_onnx": "asr-gigaam",
+            "whisper": "asr-whisper",
+            "whisper_onnx": "asr-whisper",
+            "google": "core",
+        }
+        required_extras = [extra_map[engine]] if engine in extra_map else []
 
         manifest = None
         if hasattr(recognizer, "install_manifest"):
@@ -334,7 +309,7 @@ class SpeechRecognition:
             )
         )
 
-        return InstallPlan(actions=actions, already_installed=False, ok_status="Done")
+        return InstallPlan(required_extras=required_extras, actions=actions, already_installed=False, ok_status="Done")
 
     @staticmethod
     def get_settings_schema(engine: Optional[str] = None) -> List[dict]:

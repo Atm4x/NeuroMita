@@ -2,12 +2,6 @@ import os
 import sys
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
-libs_dir = os.path.join("Lib")
-if not os.path.exists(libs_dir):
-    os.makedirs(libs_dir)
-
-print(libs_dir)
-sys.path.insert(0, libs_dir)
 import torch
 print(torch.__version__)
 
