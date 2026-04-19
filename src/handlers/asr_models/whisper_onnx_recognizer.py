@@ -17,11 +17,13 @@ import urllib.error
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from core.install_requirements import InstallRequirement, check_requirements
 
+from managers.backend_manager import Backend
 from utils import getTranslationVariant as _
 from utils.gpu_utils import check_gpu_provider
 
 
 class WhisperOnnxRecognizer(SpeechRecognizerInterface):
+    REQUIRED_BACKEND = Backend.ONNX
     """
     Whisper large-v3-turbo ONNX (onnx-community) через onnxruntime (+ DirectML).
     ONNX runtime и InferenceSession живут в отдельном процессе.

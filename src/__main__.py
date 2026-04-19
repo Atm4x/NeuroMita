@@ -28,13 +28,28 @@ def _prepend_site_dir(p: str) -> None:
 
 ENV_FILENAME = "features.env"
 
-backend = os.environ.get("NEUROMITA_BACKEND", "cpu")
-
 current_file = os.path.abspath(__file__)
 if current_file.lower().endswith(".pyz"):
-    base_dir = os.path.dirname(current_file)
+    _base_dir_early = os.path.dirname(current_file)
 else:
-    base_dir = os.path.dirname(os.path.dirname(current_file))
+    _base_dir_early = os.path.dirname(os.path.dirname(current_file))
+
+if "--install" in sys.argv:
+    import sysconfig
+    os.environ["NEUROMITA_BASE_DIR"] = _base_dir_early
+    os.environ.setdefault("NEUROMITA_PYTHON", sys.executable)
+    from utils.uv_sync import UvSync
+    _ok = UvSync().apply({"core"})
+    try:
+        import pywin32_postinstall as postinstall
+        postinstall.install(sysconfig.get_paths()["platlib"])
+    except Exception:
+        pass
+    sys.exit(0 if _ok else 1)
+
+backend = os.environ.get("NEUROMITA_BACKEND", "cpu")
+
+base_dir = _base_dir_early
 
 _prepend_site_dir(os.path.join(base_dir, "packages"))
 
@@ -157,6 +172,10 @@ except Exception as _upd_err:
 
 from utils.patches import apply_runtime_patches
 apply_runtime_patches(base_dir, active, {})
+
+from managers.backend_manager import BackendManager
+BackendManager.instance = BackendManager()
+logger.info(f"Бэкенды доступны: {BackendManager.instance.available()}, активный: {BackendManager.instance.active()}")
 
 import onnxruntime
 

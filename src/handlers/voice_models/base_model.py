@@ -1,12 +1,16 @@
 import abc
 from typing import Optional, Any, Dict, List
 
+from managers.backend_manager import Backend
+
 
 class IVoiceModel(abc.ABC):
     """
     Абстрактный базовый класс (интерфейс) для всех моделей озвучки.
     Определяет контракт, которому должны следовать все классы моделей.
     """
+
+    REQUIRED_BACKEND: Backend | None = None  # None = работает без GPU
 
     def __init__(self, parent: "LocalVoice", model_id: str):
         self.parent = parent

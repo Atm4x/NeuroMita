@@ -9,6 +9,7 @@ import subprocess
 from typing import Optional, Any, List, Dict
 
 from .base_model import IVoiceModel
+from managers.backend_manager import Backend
 from main_logger import logger
 
 from core.events import Events
@@ -275,6 +276,8 @@ class FishSpeechInstallSpec:
 
 
 class FishSpeechModel(IVoiceModel):
+    REQUIRED_BACKEND = Backend.CUDA
+
     def __init__(self, parent: 'LocalVoice', model_id: str, rvc_handler: Optional[IVoiceModel] = None):
         super().__init__(parent, model_id)
         self.fish_speech_module = None

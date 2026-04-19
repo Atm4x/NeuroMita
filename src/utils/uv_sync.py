@@ -736,3 +736,28 @@ class UvSync:
         if not s:
             return ""
         return cls._ANSI_RE.sub("", s).replace("\x1b", "")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="UvSync — install extras for NeuroMita")
+    parser.add_argument("--install", action="store_true", help="Run uv pip sync for given extras")
+    parser.add_argument(
+        "--extras",
+        default="",
+        help="Comma-separated list of extras to install (e.g. core,backend-nvidia,asr-gigaam)",
+    )
+    args = parser.parse_args()
+
+    if not args.install:
+        print("No --install flag passed; skipping package sync.")
+        sys.exit(0)
+
+    extras_set = {e.strip() for e in args.extras.split(",") if e.strip()}
+    if not extras_set:
+        print("--install passed but --extras is empty; nothing to do.")
+        sys.exit(0)
+
+    ok = UvSync().apply(extras_set)
+    sys.exit(0 if ok else 1)

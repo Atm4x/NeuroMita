@@ -8,6 +8,7 @@ from typing import Optional, Any, List, Dict
 
 from .base_model import IVoiceModel
 from main_logger import logger
+from managers.backend_manager import Backend
 from utils import getTranslationVariant as _, get_character_voice_paths
 
 from core.install_types import InstallPlan, InstallAction
@@ -119,6 +120,8 @@ class F5TTSInstallSpec:
         )
 
 class F5TTSModel(IVoiceModel):
+    REQUIRED_BACKEND = Backend.CUDA
+
     def __init__(self, parent: "LocalVoice", model_id: str, rvc_handler: Optional[IVoiceModel] = None):
         super().__init__(parent, model_id)
         self.f5_pipeline_module = None

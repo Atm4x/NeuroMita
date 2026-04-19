@@ -19,11 +19,13 @@ class VoiceModelSpecProtocol:
 def _load_specs() -> List[Type[VoiceModelSpecProtocol]]:
     # Единственная точка, где перечисляются спеки (каталог).
     from handlers.voice_models.edge_tts_rvc_model import EdgeTTSRVCInstallSpec
+    from handlers.voice_models.edge_tts_rvc_onnx_model import EdgeTTSRVCOnnxInstallSpec
     from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec
     from handlers.voice_models.f5_tts_model import F5TTSInstallSpec
 
     return [
         EdgeTTSRVCInstallSpec,
+        EdgeTTSRVCOnnxInstallSpec,
         FishSpeechInstallSpec,
         F5TTSInstallSpec,
     ]

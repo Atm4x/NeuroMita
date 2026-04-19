@@ -11,11 +11,13 @@ import numpy as np
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from core.install_requirements import InstallRequirement, check_requirements
 
+from managers.backend_manager import Backend
 from utils import getTranslationVariant as _
 from utils.gpu_utils import check_gpu_provider
 
 
 class WhisperRecognizer(SpeechRecognizerInterface):
+    REQUIRED_BACKEND = Backend.CUDA
     
     MODEL_CONFIGS = [
         {
