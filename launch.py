@@ -1,7 +1,7 @@
 """
 Локальный лаунчер для PyCharm.
 1. Собирает билд через build.py.
-2. Запускает новый uv-workspace скрипт для выбранного backend.
+2. Запускает build_output/scripts/run.bat.
 """
 import subprocess
 import sys
@@ -39,20 +39,6 @@ def fail(code: int) -> None:
 if __name__ == "__main__":
     env = load_env(PROJECT_DIR / "build.env")
     output_dir = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
-    backend = env.get("NEUROMITA_BACKEND") or env.get("GPU_VENDOR", "cpu")
-    backend = backend.strip().lower()
-    if backend in {"none", "default"}:
-        backend = "cpu"
-
-    scripts = {
-        "nvidia": "run_nvidia.cmd",
-        "amd": "run_amd.cmd",
-        "cpu": "run_cpu.cmd",
-    }
-    script_name = scripts.get(backend)
-    if script_name is None:
-        print(f"Неизвестный backend {backend!r}. Используй nvidia, amd или cpu.")
-        sys.exit(2)
 
     print("=" * 50)
     print("Шаг 1: сборка")
@@ -61,13 +47,13 @@ if __name__ == "__main__":
     if code != 0:
         fail(code)
 
-    script_path = output_dir / script_name
+    script_path = output_dir / "scripts" / "run.bat"
     if not script_path.exists():
         print(f"Скрипт запуска не найден: {script_path}")
         sys.exit(2)
 
     print("=" * 50)
-    print(f"Шаг 2: запуск backend={backend}")
+    print("Шаг 2: запуск")
     print("=" * 50)
     while True:
         code = run(["cmd", "/c", str(script_path)], cwd=output_dir)
