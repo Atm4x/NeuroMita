@@ -36,18 +36,20 @@ def run_ai_engine_process(cmd_queue, res_queue, log_queue) -> None:
 
 def _ensure_lib_on_path() -> None:
     base_dir = os.environ.get("NEUROMITA_BASE_DIR", os.getcwd())
-    state_path = os.path.join(base_dir, ".uv-state.json")
-    active = []
-    if os.path.exists(state_path):
+    packages_dir = os.path.join(base_dir, "packages")
+    if not os.path.isdir(packages_dir):
+        return
+    try:
+        import site
+        site.addsitedir(packages_dir)
+    except Exception:
+        pass
+    if packages_dir in sys.path:
         try:
-            with open(state_path, "r", encoding="utf-8") as f:
-                active = json.load(f).get("extras", [])
+            sys.path.remove(packages_dir)
         except Exception:
-            active = []
-    for extra in reversed(active):
-        sp = os.path.join(base_dir, "packages", str(extra), ".lib", "site-packages")
-        if os.path.isdir(sp) and sp not in sys.path:
-            sys.path.insert(0, sp)
+            pass
+    sys.path.insert(0, packages_dir)
 
 
 def _log(log_queue, level: str, message: str) -> None:

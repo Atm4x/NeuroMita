@@ -17,6 +17,12 @@ if not exist "NeuroMita.pyz" (
 
 %PY% -m pip show uv >nul 2>&1 || %PY% -m pip install --upgrade uv || goto :fail
 %PY% -c "import os, sys; sys.path.insert(0, os.path.abspath('NeuroMita.pyz')); from utils.uv_sync import UvSync; UvSync().apply({'core','backend-nvidia','asr-gigaam'})" || goto :fail
+
+if exist "libs\python\Scripts\pywin32_postinstall.py" (
+    echo Registering pywin32...
+    %PY% libs\python\Scripts\pywin32_postinstall.py -install >nul 2>&1
+)
+
 %PY% NeuroMita.pyz
 goto :eof
 

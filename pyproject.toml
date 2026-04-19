@@ -95,6 +95,7 @@ explicit = true
 
 [tool.uv]
 override-dependencies = [
+  "numpy<2.0.0",
   "torch==2.7.1",
   "torchaudio==2.7.1",
 ]
@@ -109,30 +110,6 @@ conflicts = [
     { extra = "rvc-common-onnx" },
   ],
 ]
-
-# --- Custom: maps extras to install target folders.
-# NOT a standard pyproject field. Consumed by src/utils/uv_sync.py via tomllib.
-# Base composition extras (tts-edge, tts-silero, tts-fish, tts-f5) have no target
-# — they exist only to be composed into concrete variants. ---
-[tool.neuromita.extras]
-core                     = { target = "packages/core" }
-backend-nvidia           = { target = "packages/backend-nvidia" }
-backend-cpu              = { target = "packages/backend-cpu" }
-backend-amd              = { target = "packages/backend-amd" }
-rvc-common               = { target = "packages/rvc-common" }
-rvc-common-onnx          = { target = "packages/rvc-common-onnx" }
-asr-gigaam               = { target = "packages/asr-gigaam" }
-asr-whisper              = { target = "packages/asr-whisper" }
-g4f                      = { target = "packages/g4f" }
-tts-edge-rvc             = { target = "packages/tts-edge-rvc" }
-tts-edge-rvc-amd         = { target = "packages/tts-edge-rvc-amd" }
-tts-silero-rvc           = { target = "packages/tts-silero-rvc" }
-tts-silero-rvc-amd       = { target = "packages/tts-silero-rvc-amd" }
-tts-fish-medium          = { target = "packages/tts-fish-medium" }
-tts-fish-medium-plus     = { target = "packages/tts-fish-medium-plus" }
-tts-fish-medium-low-rvc  = { target = "packages/tts-fish-medium-low-rvc" }
-tts-f5-high              = { target = "packages/tts-f5-high" }
-tts-f5-high-low-rvc      = { target = "packages/tts-f5-high-low-rvc" }
 
 [build-system]
 requires = ["hatchling"]

@@ -24,16 +24,8 @@ def _cow_write(path: str, new_text: str) -> bool:
 
 
 def _iter_site_packages(base_dir: str, active: list[str], extras_map: dict) -> list[str]:
-    result: list[str] = []
-    for extra in active or []:
-        info = extras_map.get(extra) or {}
-        target = info.get("target") if isinstance(info, dict) else None
-        if not target:
-            continue
-        sp = os.path.join(base_dir, target, ".lib", "site-packages")
-        if os.path.isdir(sp):
-            result.append(sp)
-    return result
+    sp = os.path.join(base_dir, "packages")
+    return [sp] if os.path.isdir(sp) else []
 
 
 def _apply_fairseq_patch(site_packages: str) -> None:

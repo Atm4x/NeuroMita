@@ -98,134 +98,184 @@ class UvSync:
         self.update_progress = update_progress or (lambda *_: None)
 
     # ================================================================== public API
-
+    
     def apply(self, desired: set[str]) -> bool:
-        """Bring packages/ dirs to match *desired* set of extras. Returns True on success."""
-        extras_map = self._load_extras_map()
-        current    = set(self._load_state())
+        desired_list = self._order_extras(desired)
+        if not desired_list:
+            self._save_state_atomic([])
+            return True
 
-        targets   = {e: extras_map[e] for e in desired if e in extras_map}
-        to_remove = set(extras_map) & (current - desired)
+        if not os.path.isfile(self.pyproject_path):
+            self.update_log(f"pyproject.toml not found: {self.pyproject_path}")
+            return False
 
-        status = True
+        use_torch_cu128 = "backend-nvidia" in set(desired_list)
+        torch_index_url = "https://download.pytorch.org/whl/cu128"
+        pypi_index_url = "https://pypi.org/simple"
 
-        def _install_priority(item):
-            extra_name = item[0]
-            if extra_name == "core":
-                return 0
-            if extra_name.startswith("backend-"):
-                return 1
-            return 2
+        req_dir = os.path.join(self.base_dir, ".uv")
+        os.makedirs(req_dir, exist_ok=True)
 
-        for extra, target_rel in sorted(targets.items(), key=_install_priority):
-            target_dir = os.path.join(self.base_dir, target_rel)
-            lib_dir    = os.path.join(target_dir, ".lib")
-            req_file   = os.path.join(lib_dir, "requirements.txt")
-            sp_dir     = os.path.join(lib_dir, "site-packages")
-            os.makedirs(lib_dir, exist_ok=True)
+        compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
+        sync_req = os.path.join(req_dir, "requirements.txt")
 
-            # Step 1: compile locked requirements
-            compile_cmd = [
-                self.python_exe, "-m", "uv", "pip", "compile",
-                self.pyproject_path,
-                "--extra", extra,
-                "--python", self.python_exe,
-                "--quiet",
-                "-o", req_file,
-            ]
-            if not self._run(compile_cmd, f"compile {extra}"):
-                status = False
-                break
+        compile_cmd = [
+            self.python_exe, "-m", "uv", "pip", "compile",
+            self.pyproject_path,
+            "--python", self.python_exe,
+            "--quiet",
+            "-o", compiled_req,
+        ]
+        if use_torch_cu128:
+            compile_cmd += ["--index-url", torch_index_url, "--extra-index-url", pypi_index_url]
+        for e in desired_list:
+            compile_cmd += ["--extra", e]
 
-            # Step 2: install into isolated target
-            install_cmd = [
-                self.python_exe, "-m", "uv", "pip", "install",
-                "-r", req_file,
-                "--target", sp_dir,
-                "--python", self.python_exe,
-                "--link-mode=hardlink",
-                "--strict",
-            ]
-            if not self._run(install_cmd, f"install {extra}"):
-                status = False
-                break
-            
-            # ДОБАВЛЕНИЕ ПУТИ (Moment 1)
-            if os.path.isdir(sp_dir) and sp_dir not in sys.path:
-                sys.path.insert(0, sp_dir)
-                import importlib
-                importlib.invalidate_caches()
+        if not self._run(compile_cmd, "compile"):
+            return False
 
-        for extra in to_remove:
-            target_rel = extras_map[extra]
-            lib_dir    = os.path.join(self.base_dir, target_rel, ".lib")
-            if os.path.isdir(lib_dir):
-                if not self._rmtree_retry(lib_dir):
-                    status = False
+        try:
+            compiled_ref = compiled_req.replace("\\", "/")
+            with open(sync_req, "w", encoding="utf-8") as f:
+                if use_torch_cu128:
+                    f.write(f"--index-url {torch_index_url}\n")
+                    f.write(f"--extra-index-url {pypi_index_url}\n")
+                f.write("pip\nsetuptools\nuv\n")
+                f.write(f"-r {compiled_ref}\n")
+        except Exception as exc:
+            self.update_log(f"Failed to write sync requirements: {exc}")
+            return False
 
-        if status:
-            final_state = sorted(e for e in desired if e in extras_map)
-            self._save_state_atomic(final_state)
+        sync_cmd = [
+            self.python_exe, "-m", "uv", "pip", "sync",
+            sync_req,
+            "--python", self.python_exe,
+        ]
+        if not self._run(sync_cmd, "sync"):
+            return False
 
-        return status
+        self._save_state_atomic(desired_list)
+        return True
 
     def dry_run(self, desired: set[str]) -> dict:
-        """Return {"ok": bool, "actions": [{"extra": str, "changes": str}, ...]}."""
-        extras_map = self._load_extras_map()
-        actions: list[dict] = []
-        all_ok = True
+        desired_list = self._order_extras(desired)
+        if not desired_list:
+            return {"ok": True, "actions": []}
 
-        for extra in sorted(desired):
-            if extra not in extras_map:
-                continue
-            target_rel = extras_map[extra]
-            lib_dir  = os.path.join(self.base_dir, target_rel, ".lib")
-            req_file = os.path.join(lib_dir, "requirements.txt")
-            sp_dir   = os.path.join(lib_dir, "site-packages")
+        req_dir = os.path.join(self.base_dir, ".uv")
+        os.makedirs(req_dir, exist_ok=True)
 
-            if not os.path.isfile(req_file):
-                actions.append({"extra": extra, "changes": "recompile needed"})
-                all_ok = False
-                continue
+        compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
+        sync_req = os.path.join(req_dir, "requirements.txt")
 
-            dry_cmd = [
-                self.python_exe, "-m", "uv", "pip", "install",
-                "-r", req_file,
-                "--target", sp_dir,
-                "--python", self.python_exe,
-                "--link-mode=hardlink",
-                "--dry-run",
-            ]
-            ok, output = self._run_capture(dry_cmd, f"dry-run {extra}")
-            if not ok:
-                all_ok = False
-            actions.append({"extra": extra, "changes": output.strip() or "(no changes)"})
+        compile_cmd = [
+            self.python_exe, "-m", "uv", "pip", "compile",
+            self.pyproject_path,
+            "--python", self.python_exe,
+            "--quiet",
+            "-o", compiled_req,
+        ]
+        for e in desired_list:
+            compile_cmd += ["--extra", e]
 
-        return {"ok": all_ok, "actions": actions}
+        if not self._run(compile_cmd, "compile (dry_run)"):
+            return {"ok": False, "actions": [{"extras": desired_list, "changes": "compile failed"}]}
 
+        try:
+            with open(compiled_req, "r", encoding="utf-8", errors="ignore") as f:
+                compiled_text = f.read()
+            with open(sync_req, "w", encoding="utf-8") as f:
+                f.write("pip\nsetuptools\nuv\n")
+                if compiled_text and not compiled_text.endswith("\n"):
+                    compiled_text += "\n"
+                f.write(compiled_text or "")
+        except Exception as exc:
+            return {"ok": False, "actions": [{"extras": desired_list, "changes": f"write requirements failed: {exc}"}]}
+
+        sync_cmd = [
+            self.python_exe, "-m", "uv", "pip", "sync",
+            sync_req,
+            "--python", self.python_exe,
+            "--dry-run",
+        ]
+        ok, output = self._run_capture(sync_cmd, "sync (dry-run)")
+        return {"ok": ok, "actions": [{"extras": desired_list, "changes": (output.strip() or "(no changes)")}]} 
+
+    def _addsitedir_prepend(self, path: str) -> None:
+        if not path or not os.path.isdir(path):
+            return
+        try:
+            import site
+            site.addsitedir(path)
+        except Exception:
+            if path not in sys.path:
+                sys.path.append(path)
+        try:
+            while path in sys.path:
+                sys.path.remove(path)
+            sys.path.insert(0, path)
+        except Exception:
+            pass
+        try:
+            import importlib
+            importlib.invalidate_caches()
+        except Exception:
+            pass
+
+
+    @staticmethod
+    def _order_extras(extras) -> list[str]:
+        def _k(name: str):
+            if name == "core":
+                return (0, name)
+            if name.startswith("backend-"):
+                return (1, name)
+            if name.startswith("rvc-"):
+                return (2, name)
+            if name.startswith("asr-"):
+                return (3, name)
+            return (9, name)
+        return sorted([str(e) for e in (extras or [])], key=_k)
     # ================================================================== state helpers
 
     def _load_extras_map(self) -> dict[str, str]:
-        """Read [tool.neuromita.extras] from pyproject.toml -> {extra: target_rel}."""
+        """Resolve extras -> target_rel.
+
+        Priority:
+        1) [tool.neuromita.extras] if present (custom mapping)
+        2) fallback: [project.optional-dependencies] keys -> "packages"
+        """
         if tomllib is None:
             logger.warning("tomllib/tomli not available; cannot read pyproject.toml extras map.")
             return {}
         if not os.path.isfile(self.pyproject_path):
             logger.warning(f"pyproject.toml not found at {self.pyproject_path}")
             return {}
+
         try:
             with open(self.pyproject_path, "rb") as f:
                 data = tomllib.load(f)
-            raw: dict = data.get("tool", {}).get("neuromita", {}).get("extras", {})
+
+            tool_map = data.get("tool", {}).get("neuromita", {}).get("extras", {})
             result: dict[str, str] = {}
-            for name, val in raw.items():
-                if isinstance(val, dict) and "target" in val:
-                    result[name] = val["target"]
-                elif isinstance(val, str):
-                    result[name] = val
-            return result
+
+            if isinstance(tool_map, dict) and tool_map:
+                for name, val in tool_map.items():
+                    if isinstance(val, dict) and "target" in val:
+                        result[str(name)] = str(val["target"])
+                    elif isinstance(val, str):
+                        result[str(name)] = val
+                return result
+
+            opt = data.get("project", {}).get("optional-dependencies", {})
+            if isinstance(opt, dict) and opt:
+                for extra_name in opt.keys():
+                    result[str(extra_name)] = "packages"
+                return result
+
+            return {}
         except Exception as exc:
-            logger.warning(f"Failed to parse [tool.neuromita.extras] from pyproject.toml: {exc}")
+            logger.warning(f"Failed to parse extras map from pyproject.toml: {exc}")
             return {}
 
     def _load_state(self) -> list[str]:
