@@ -55,11 +55,6 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Шаг 2: запуск")
     print("=" * 50)
-    while True:
-        code = run(["cmd", "/c", str(script_path)], cwd=output_dir)
-        if code == 42:
-            print("\nОбновление применено, перезапускаю...")
-            continue
-        if code != 0:
-            fail(code)
-        break
+    code = run(["cmd", "/c", str(script_path)], cwd=output_dir)
+    if code != 0:
+        fail(code)
