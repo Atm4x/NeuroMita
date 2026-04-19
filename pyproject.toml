@@ -63,6 +63,7 @@ rvc-common-onnx = [ "tts-with-rvc-onnx[dml]", "omegaconf" ]
 
 # --- ASR ---
 asr-gigaam  = [ "gigaam" ]
+# asr-gigaam  = []
 asr-whisper = [ "openai-whisper" ]
 g4f         = [ "g4f==0.4.7.7" ]
 
@@ -83,6 +84,9 @@ tts-fish-medium-low-rvc = [ "neuromita[tts-fish,rvc-common]", "triton-windows<3.
 tts-f5-high             = [ "neuromita[tts-f5]" ]
 tts-f5-high-low-rvc     = [ "neuromita[tts-f5,rvc-common]" ]
 
+# [tool.uv.pip]
+# torch-backend = "cu128"
+
 # --- Torch per-index: CUDA only for NVIDIA ---
 [tool.uv.sources]
 torch      = [{ index = "pytorch-cu128", extra = "backend-nvidia" }]
@@ -91,7 +95,7 @@ torchaudio = [{ index = "pytorch-cu128", extra = "backend-nvidia" }]
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url  = "https://download.pytorch.org/whl/cu128"
-explicit = true
+# explicit = true
 
 [tool.uv]
 override-dependencies = [

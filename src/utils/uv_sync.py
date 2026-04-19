@@ -109,97 +109,165 @@ class UvSync:
             self.update_log(f"pyproject.toml not found: {self.pyproject_path}")
             return False
 
-        use_torch_cu128 = "backend-nvidia" in set(desired_list)
+        is_nvidia = "backend-nvidia" in set(desired_list)
+
         torch_index_url = "https://download.pytorch.org/whl/cu128"
         pypi_index_url = "https://pypi.org/simple"
 
-        req_dir = os.path.join(self.base_dir, ".uv")
-        os.makedirs(req_dir, exist_ok=True)
-
-        compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
-        sync_req = os.path.join(req_dir, "requirements.txt")
-
-        compile_cmd = [
-            self.python_exe, "-m", "uv", "pip", "compile",
-            self.pyproject_path,
-            "--python", self.python_exe,
-            "--quiet",
-            "-o", compiled_req,
-        ]
-        if use_torch_cu128:
-            compile_cmd += ["--index-url", torch_index_url, "--extra-index-url", pypi_index_url]
-        for e in desired_list:
-            compile_cmd += ["--extra", e]
-
-        if not self._run(compile_cmd, "compile"):
-            return False
+        old_env: dict[str, str | None] = {}
+        def _setenv(k: str, v: str | None) -> None:
+            old_env.setdefault(k, os.environ.get(k))
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
         try:
-            compiled_ref = compiled_req.replace("\\", "/")
-            with open(sync_req, "w", encoding="utf-8") as f:
-                if use_torch_cu128:
-                    f.write(f"--index-url {torch_index_url}\n")
-                    f.write(f"--extra-index-url {pypi_index_url}\n")
-                f.write("pip\nsetuptools\nuv\n")
-                f.write(f"-r {compiled_ref}\n")
-        except Exception as exc:
-            self.update_log(f"Failed to write sync requirements: {exc}")
-            return False
+            if is_nvidia:
+                _setenv("UV_TORCH_BACKEND", "cu128")
+                _setenv("UV_INDEX_URL", torch_index_url)
+                _setenv("UV_EXTRA_INDEX_URL", pypi_index_url)
+                _setenv("PIP_INDEX_URL", torch_index_url)
+                _setenv("PIP_EXTRA_INDEX_URL", pypi_index_url)
+            else:
+                _setenv("UV_TORCH_BACKEND", None)
+                _setenv("UV_INDEX_URL", None)
+                _setenv("UV_EXTRA_INDEX_URL", None)
+                _setenv("PIP_INDEX_URL", None)
+                _setenv("PIP_EXTRA_INDEX_URL", None)
 
-        sync_cmd = [
-            self.python_exe, "-m", "uv", "pip", "sync",
-            sync_req,
-            "--python", self.python_exe,
-        ]
-        if not self._run(sync_cmd, "sync"):
-            return False
+            req_dir = os.path.join(self.base_dir, ".uv")
+            os.makedirs(req_dir, exist_ok=True)
 
-        self._save_state_atomic(desired_list)
-        return True
+            compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
+            sync_req = os.path.join(req_dir, "requirements.txt")
+
+            compile_cmd = [
+                self.python_exe, "-m", "uv", "pip", "compile",
+                self.pyproject_path,
+                "--python", self.python_exe,
+                "--quiet",
+                "-o", compiled_req,
+            ]
+            for e in desired_list:
+                compile_cmd += ["--extra", e]
+
+            if not self._run(compile_cmd, "compile"):
+                return False
+
+            try:
+                with open(compiled_req, "r", encoding="utf-8", errors="ignore") as f:
+                    compiled_text = f.read() or ""
+                with open(sync_req, "w", encoding="utf-8") as f:
+                    f.write("pip\nsetuptools\nuv\n")
+                    if compiled_text and not compiled_text.endswith("\n"):
+                        compiled_text += "\n"
+                    f.write(compiled_text)
+            except Exception as exc:
+                self.update_log(f"Failed to write sync requirements: {exc}")
+                return False
+
+            sync_cmd = [
+                self.python_exe, "-m", "uv", "pip", "sync",
+                sync_req,
+                "--python", self.python_exe,
+            ]
+            if not self._run(sync_cmd, "sync"):
+                return False
+
+            self._save_state_atomic(desired_list)
+            return True
+
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
     def dry_run(self, desired: set[str]) -> dict:
         desired_list = self._order_extras(desired)
         if not desired_list:
             return {"ok": True, "actions": []}
 
-        req_dir = os.path.join(self.base_dir, ".uv")
-        os.makedirs(req_dir, exist_ok=True)
+        if not os.path.isfile(self.pyproject_path):
+            return {
+                "ok": False,
+                "actions": [{"extras": desired_list, "changes": f"pyproject.toml not found: {self.pyproject_path}"}],
+            }
 
-        compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
-        sync_req = os.path.join(req_dir, "requirements.txt")
+        is_nvidia = "backend-nvidia" in set(desired_list)
 
-        compile_cmd = [
-            self.python_exe, "-m", "uv", "pip", "compile",
-            self.pyproject_path,
-            "--python", self.python_exe,
-            "--quiet",
-            "-o", compiled_req,
-        ]
-        for e in desired_list:
-            compile_cmd += ["--extra", e]
+        torch_index_url = "https://download.pytorch.org/whl/cu128"
+        pypi_index_url = "https://pypi.org/simple"
 
-        if not self._run(compile_cmd, "compile (dry_run)"):
-            return {"ok": False, "actions": [{"extras": desired_list, "changes": "compile failed"}]}
+        old_env: dict[str, str | None] = {}
+        def _setenv(k: str, v: str | None) -> None:
+            old_env.setdefault(k, os.environ.get(k))
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
         try:
-            with open(compiled_req, "r", encoding="utf-8", errors="ignore") as f:
-                compiled_text = f.read()
-            with open(sync_req, "w", encoding="utf-8") as f:
-                f.write("pip\nsetuptools\nuv\n")
-                if compiled_text and not compiled_text.endswith("\n"):
-                    compiled_text += "\n"
-                f.write(compiled_text or "")
-        except Exception as exc:
-            return {"ok": False, "actions": [{"extras": desired_list, "changes": f"write requirements failed: {exc}"}]}
+            if is_nvidia:
+                _setenv("UV_TORCH_BACKEND", "cu128")
+                _setenv("UV_INDEX_URL", torch_index_url)
+                _setenv("UV_EXTRA_INDEX_URL", pypi_index_url)
+                _setenv("PIP_INDEX_URL", torch_index_url)
+                _setenv("PIP_EXTRA_INDEX_URL", pypi_index_url)
+            else:
+                _setenv("UV_TORCH_BACKEND", None)
+                _setenv("UV_INDEX_URL", None)
+                _setenv("UV_EXTRA_INDEX_URL", None)
+                _setenv("PIP_INDEX_URL", None)
+                _setenv("PIP_EXTRA_INDEX_URL", None)
 
-        sync_cmd = [
-            self.python_exe, "-m", "uv", "pip", "sync",
-            sync_req,
-            "--python", self.python_exe,
-            "--dry-run",
-        ]
-        ok, output = self._run_capture(sync_cmd, "sync (dry-run)")
-        return {"ok": ok, "actions": [{"extras": desired_list, "changes": (output.strip() or "(no changes)")}]} 
+            req_dir = os.path.join(self.base_dir, ".uv")
+            os.makedirs(req_dir, exist_ok=True)
+
+            compiled_req = os.path.join(req_dir, "requirements.compiled.txt")
+            sync_req = os.path.join(req_dir, "requirements.txt")
+
+            compile_cmd = [
+                self.python_exe, "-m", "uv", "pip", "compile",
+                self.pyproject_path,
+                "--python", self.python_exe,
+                "--quiet",
+                "-o", compiled_req,
+            ]
+            for e in desired_list:
+                compile_cmd += ["--extra", e]
+
+            if not self._run(compile_cmd, "compile (dry_run)"):
+                return {"ok": False, "actions": [{"extras": desired_list, "changes": "compile failed"}]}
+
+            try:
+                with open(compiled_req, "r", encoding="utf-8", errors="ignore") as f:
+                    compiled_text = f.read() or ""
+                with open(sync_req, "w", encoding="utf-8") as f:
+                    f.write("pip\nsetuptools\nuv\n")
+                    if compiled_text and not compiled_text.endswith("\n"):
+                        compiled_text += "\n"
+                    f.write(compiled_text)
+            except Exception as exc:
+                return {"ok": False, "actions": [{"extras": desired_list, "changes": f"write requirements failed: {exc}"}]}
+
+            sync_cmd = [
+                self.python_exe, "-m", "uv", "pip", "sync",
+                sync_req,
+                "--python", self.python_exe,
+                "--dry-run",
+            ]
+            ok, output = self._run_capture(sync_cmd, "sync (dry-run)")
+            return {"ok": ok, "actions": [{"extras": desired_list, "changes": (output.strip() or "(no changes)")}]} 
+
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
     def _addsitedir_prepend(self, path: str) -> None:
         if not path or not os.path.isdir(path):
