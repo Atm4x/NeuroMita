@@ -16,7 +16,6 @@ from typing import Optional
 
 TORCH_VERSION = "2.7.1"
 TORCH_PACKAGES = [f"torch=={TORCH_VERSION}", f"torchaudio=={TORCH_VERSION}"]
-CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 
 
 def _has_cuda_libs(torch_pkg_dir: str) -> bool:
@@ -129,16 +128,13 @@ def decide_torch_install(gpu_vendor: str, target_dir: Optional[str] = None) -> d
         if installed == "cpu":
             return {
                 "action": "reinstall",
-                "extra_args": [
-                    "--reinstall",
-                    "--index-url", CUDA_INDEX_URL,
-                ],
+                "extra_args": ["--reinstall"],
                 "description": "Переустановка PyTorch: CPU → CUDA (cu128)...",
             }
         # installed is None
         return {
             "action": "install",
-            "extra_args": ["--index-url", CUDA_INDEX_URL],
+            "extra_args": None,
             "description": "Установка PyTorch с CUDA (cu128)...",
         }
 

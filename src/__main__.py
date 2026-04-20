@@ -26,6 +26,62 @@ def _prepend_site_dir(p: str) -> None:
         pass
 
 
+def _check_gpu_provider_early() -> str:
+    """Detect GPU vendor before project dependencies are installed."""
+    import platform
+    import subprocess
+
+    if os.environ.get("TEST_AS_AMD", "").upper() == "TRUE":
+        return "AMD"
+    if os.environ.get("TEST_AS_NVIDIA", "").upper() == "TRUE":
+        return "NVIDIA"
+    if platform.system() != "Windows":
+        return "CPU"
+
+    def parse_output(output: str) -> str | None:
+        out = (output or "").upper()
+        if "NVIDIA" in out:
+            return "NVIDIA"
+        if "AMD" in out or "RADEON" in out:
+            return "AMD"
+        return None
+
+    try:
+        output = subprocess.check_output(
+            "wmic path win32_VideoController get name",
+            shell=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=2.0,
+        ).strip()
+        vendor = parse_output(output)
+        if vendor:
+            return vendor
+    except Exception:
+        pass
+
+    try:
+        output = subprocess.check_output(
+            [
+                "powershell",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+            ],
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.5,
+        ).strip()
+        vendor = parse_output(output)
+        if vendor:
+            return vendor
+    except Exception:
+        pass
+
+    return "CPU"
+
+
 ENV_FILENAME = "features.env"
 
 current_file = os.path.abspath(__file__)
@@ -38,8 +94,16 @@ if "--install" in sys.argv:
     import sysconfig
     os.environ["NEUROMITA_BASE_DIR"] = _base_dir_early
     os.environ.setdefault("NEUROMITA_PYTHON", sys.executable)
+
+    _vendor = _check_gpu_provider_early()
+    _backend_extra = {"NVIDIA": "backend-nvidia", "AMD": "backend-amd"}.get(_vendor, "backend-cpu")
+    print(f"[install] GPU detected: {_vendor} → installing {_backend_extra}", flush=True)
+
     from utils.uv_sync import UvSync
-    _ok = UvSync().apply({"core"})
+    _ok = UvSync(
+        update_status=lambda m: print(f"[install] {m}", flush=True),
+        update_log=lambda m: print(m, flush=True),
+    ).apply({"core", _backend_extra})
     try:
         import pywin32_postinstall as postinstall
         postinstall.install(sysconfig.get_paths()["platlib"])
@@ -177,7 +241,10 @@ from managers.backend_manager import BackendManager
 BackendManager.instance = BackendManager()
 logger.info(f"Бэкенды доступны: {BackendManager.instance.available()}, активный: {BackendManager.instance.active()}")
 
-import onnxruntime
+try:
+    import onnxruntime
+except ImportError:
+    logger.warning("onnxruntime не установлен — backend не будет доступен до установки")
 
 from PyQt6.QtWidgets import QApplication
 

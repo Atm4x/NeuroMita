@@ -1,9 +1,8 @@
 """
-UvSync — per-extra hardlink installer driven by [tool.neuromita.extras] from pyproject.toml.
+UvSync — synchronize the active environment from pyproject.toml extras.
 
-Replaces the global `uv pip install --target Lib/` approach with per-extra isolation:
-each extra group goes into packages/<target>/.lib/site-packages/ via
-`uv pip compile` + `uv pip install --target --link-mode=hardlink`.
+Uses `uv pip compile` to build a requirements file and `uv pip sync` to make
+the Python environment match it.
 """
 
 from __future__ import annotations
@@ -92,6 +91,7 @@ class UvSync:
         self.base_dir    = os.environ.get("NEUROMITA_BASE_DIR", os.getcwd())
         self.pyproject_path = os.path.join(self.base_dir, "pyproject.toml")
         self._state_path    = os.path.join(self.base_dir, ".uv-state.json")
+        self.uv_exe = self._find_uv_executable()
 
         self.update_status   = update_status   or (lambda m: logger.info(f"STATUS: {m}"))
         self.update_log      = update_log      or (lambda m: logger.info(f"LOG: {m}"))
@@ -111,9 +111,6 @@ class UvSync:
 
         is_nvidia = "backend-nvidia" in set(desired_list)
 
-        torch_index_url = "https://download.pytorch.org/whl/cu128"
-        pypi_index_url = "https://pypi.org/simple"
-
         old_env: dict[str, str | None] = {}
         def _setenv(k: str, v: str | None) -> None:
             old_env.setdefault(k, os.environ.get(k))
@@ -125,16 +122,8 @@ class UvSync:
         try:
             if is_nvidia:
                 _setenv("UV_TORCH_BACKEND", "cu128")
-                _setenv("UV_INDEX_URL", torch_index_url)
-                _setenv("UV_EXTRA_INDEX_URL", pypi_index_url)
-                _setenv("PIP_INDEX_URL", torch_index_url)
-                _setenv("PIP_EXTRA_INDEX_URL", pypi_index_url)
             else:
                 _setenv("UV_TORCH_BACKEND", None)
-                _setenv("UV_INDEX_URL", None)
-                _setenv("UV_EXTRA_INDEX_URL", None)
-                _setenv("PIP_INDEX_URL", None)
-                _setenv("PIP_EXTRA_INDEX_URL", None)
 
             req_dir = os.path.join(self.base_dir, ".uv")
             os.makedirs(req_dir, exist_ok=True)
@@ -143,7 +132,7 @@ class UvSync:
             sync_req = os.path.join(req_dir, "requirements.txt")
 
             compile_cmd = [
-                self.python_exe, "-m", "uv", "pip", "compile",
+                *self._uv_cmd("pip", "compile"),
                 self.pyproject_path,
                 "--python", self.python_exe,
                 "--quiet",
@@ -168,10 +157,11 @@ class UvSync:
                 return False
 
             sync_cmd = [
-                self.python_exe, "-m", "uv", "pip", "sync",
+                *self._uv_cmd("pip", "sync"),
                 sync_req,
                 "--python", self.python_exe,
             ]
+
             if not self._run(sync_cmd, "sync"):
                 return False
 
@@ -198,9 +188,6 @@ class UvSync:
 
         is_nvidia = "backend-nvidia" in set(desired_list)
 
-        torch_index_url = "https://download.pytorch.org/whl/cu128"
-        pypi_index_url = "https://pypi.org/simple"
-
         old_env: dict[str, str | None] = {}
         def _setenv(k: str, v: str | None) -> None:
             old_env.setdefault(k, os.environ.get(k))
@@ -212,16 +199,8 @@ class UvSync:
         try:
             if is_nvidia:
                 _setenv("UV_TORCH_BACKEND", "cu128")
-                _setenv("UV_INDEX_URL", torch_index_url)
-                _setenv("UV_EXTRA_INDEX_URL", pypi_index_url)
-                _setenv("PIP_INDEX_URL", torch_index_url)
-                _setenv("PIP_EXTRA_INDEX_URL", pypi_index_url)
             else:
                 _setenv("UV_TORCH_BACKEND", None)
-                _setenv("UV_INDEX_URL", None)
-                _setenv("UV_EXTRA_INDEX_URL", None)
-                _setenv("PIP_INDEX_URL", None)
-                _setenv("PIP_EXTRA_INDEX_URL", None)
 
             req_dir = os.path.join(self.base_dir, ".uv")
             os.makedirs(req_dir, exist_ok=True)
@@ -230,7 +209,7 @@ class UvSync:
             sync_req = os.path.join(req_dir, "requirements.txt")
 
             compile_cmd = [
-                self.python_exe, "-m", "uv", "pip", "compile",
+                *self._uv_cmd("pip", "compile"),
                 self.pyproject_path,
                 "--python", self.python_exe,
                 "--quiet",
@@ -254,7 +233,7 @@ class UvSync:
                 return {"ok": False, "actions": [{"extras": desired_list, "changes": f"write requirements failed: {exc}"}]}
 
             sync_cmd = [
-                self.python_exe, "-m", "uv", "pip", "sync",
+                *self._uv_cmd("pip", "sync"),
                 sync_req,
                 "--python", self.python_exe,
                 "--dry-run",
@@ -304,6 +283,25 @@ class UvSync:
                 return (3, name)
             return (9, name)
         return sorted([str(e) for e in (extras or [])], key=_k)
+
+    def _find_uv_executable(self) -> Optional[str]:
+        exe_name = "uv.exe" if os.name == "nt" else "uv"
+        candidates = [
+            os.environ.get("UV_EXE"),
+            os.path.join(self.base_dir, "libs", exe_name),
+            os.path.join(self.base_dir, exe_name),
+            shutil.which("uv"),
+        ]
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def _uv_cmd(self, *args: str) -> List[str]:
+        if self.uv_exe:
+            return [self.uv_exe, *args]
+        return [self.python_exe, "-m", "uv", *args]
+
     # ================================================================== state helpers
 
     def _load_extras_map(self) -> dict[str, str]:

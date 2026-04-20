@@ -131,7 +131,7 @@ class WhisperRecognizer(SpeechRecognizerInterface):
                 "progress": 10,
                 "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
                 "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-                "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
+                "extra_args": None
             })
         else:
             steps.append({
