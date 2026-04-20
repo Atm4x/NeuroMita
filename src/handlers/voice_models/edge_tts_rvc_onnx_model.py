@@ -55,8 +55,10 @@ class EdgeTTSRVCOnnxInstallSpec:
                 already_installed_status=_("Уже установлено", "Already installed"),
             )
         extra = cls._extra_for(mid, ctx)
+        removed_extra = {"low": "tts-edge-rvc", "low+": "tts-silero-rvc"}[mid]
         return InstallPlan(
             required_extras=[extra],
+            removed_extras=[removed_extra],
             actions=[
                 InstallAction(
                     type="call",

@@ -33,14 +33,28 @@ def _load_specs() -> List[Type[VoiceModelSpecProtocol]]:
 
 _SPECS: List[Type[VoiceModelSpecProtocol]] = _load_specs()
 
-_BY_ID: Dict[str, Type[VoiceModelSpecProtocol]] = {}
+_BY_ID: Dict[str, List[Type[VoiceModelSpecProtocol]]] = {}
 for _spec in _SPECS:
     for _mid in (_spec.supported_model_ids() or []):
-        _BY_ID[str(_mid)] = _spec
+        _BY_ID.setdefault(str(_mid), []).append(_spec)
 
 
-def get_voice_spec(model_id: str) -> Optional[Type[VoiceModelSpecProtocol]]:
-    return _BY_ID.get(str(model_id or "").strip())
+def get_voice_spec(model_id: str, ctx: Optional[dict] = None) -> Optional[Type[VoiceModelSpecProtocol]]:
+    specs = _BY_ID.get(str(model_id or "").strip()) or []
+    if not specs:
+        return None
+
+    gpu_vendor = str((ctx or {}).get("gpu_vendor") or "").strip().upper()
+    if gpu_vendor == "NVIDIA":
+        for spec in specs:
+            if "Onnx" not in getattr(spec, "__name__", ""):
+                return spec
+    elif gpu_vendor:
+        for spec in specs:
+            if "Onnx" in getattr(spec, "__name__", ""):
+                return spec
+
+    return specs[0]
 
 
 def get_all_voice_specs() -> List[Type[VoiceModelSpecProtocol]]:

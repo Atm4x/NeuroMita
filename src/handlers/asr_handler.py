@@ -15,6 +15,7 @@ from handlers.asr_models.gigaam_recognizer import GigaAMRecognizer
 from handlers.asr_models.gigaam_onnx_recognizer import GigaAMOnnxRecognizer
 from handlers.asr_models.whisper_recognizer import WhisperRecognizer
 from handlers.asr_models.whisper_onnx_recognizer import WhisperOnnxRecognizer
+from core.install_requirements import check_requirements
 from core.events import get_event_bus, Events, Event
 
 
@@ -235,8 +236,14 @@ class SpeechRecognition:
         reg = getattr(SpeechRecognition, "_registry", {}) or {}
         cls = reg.get(engine)
         if not cls:
+            def _unknown_engine(**kwargs) -> bool:
+                cb = kwargs.get("callbacks")
+                if cb is not None:
+                    cb.log(f"Unknown ASR engine: {engine}")
+                return False
+
             return InstallPlan(
-                actions=[InstallAction(type="call", description="Failed", progress=1, fn=lambda: False)],
+                actions=[InstallAction(type="call", description="Failed", progress=1, fn=_unknown_engine)],
                 already_installed=False,
             )
 
@@ -294,11 +301,40 @@ class SpeechRecognition:
                 )
             )
 
-        def _final_check(**_kwargs) -> bool:
+        def _final_check(**kwargs) -> bool:
             try:
-                return bool(recognizer.is_installed())
-            except Exception:
-                return True
+                ok = bool(recognizer.is_installed())
+                if ok:
+                    return True
+
+                cb = kwargs.get("callbacks")
+                if cb is not None:
+                    try:
+                        details = check_requirements(recognizer.requirements(), ctx=ctx)
+                        missing = details.get("missing_required") or []
+                        cb.log(f"ASR final check failed for '{engine}'. Missing required: {', '.join(missing) or '(unknown)'}")
+                        for item in details.get("details") or []:
+                            if item.get("ok"):
+                                continue
+                            req_id = item.get("id")
+                            kind = item.get("kind")
+                            extra = item.get("extra") or {}
+                            if kind == "python_module":
+                                cb.log(f"missing module: {req_id} ({extra.get('module')})")
+                            elif kind == "python_dist":
+                                cb.log(f"missing package: {req_id} ({extra.get('spec') or extra.get('dist')})")
+                            elif kind == "file":
+                                cb.log(f"missing file: {req_id} ({extra.get('path')})")
+                            else:
+                                cb.log(f"missing requirement: {req_id} ({kind})")
+                    except Exception as detail_exc:
+                        cb.log(f"ASR final check failed for '{engine}', but details could not be collected: {detail_exc}")
+                return False
+            except Exception as exc:
+                cb = kwargs.get("callbacks")
+                if cb is not None:
+                    cb.log(f"ASR final check crashed for '{engine}': {exc}")
+                return False
 
         actions.append(
             InstallAction(

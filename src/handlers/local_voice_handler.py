@@ -111,11 +111,11 @@ class LocalVoice:
         try:
             from handlers.voice_models.catalog import get_voice_spec
 
-            spec = get_voice_spec(model_id)
+            ctx = {"gpu_vendor": self.provider or "CPU"}
+            spec = get_voice_spec(model_id, ctx)
             if not spec:
                 return False
 
-            ctx = {"gpu_vendor": self.provider or "CPU"}
             return bool(spec.is_installed(model_id, ctx))
         except Exception:
             return False
@@ -226,14 +226,6 @@ class LocalVoice:
         if not self.current_model_id or not self.active_model_instance:
             raise RuntimeError("No active voice model selected")
 
-        mid = self.current_model_id
-        if not self.is_model_initialized(mid):
-            ok = self.initialize_model(mid, init=False)
-            if not ok:
-                raise RuntimeError(f"Failed to initialize model '{mid}'")
-
-        os.makedirs(os.path.dirname(os.path.abspath(output_file)) or ".", exist_ok=True)
-
         try:
             _paths = get_character_voice_paths(character, self.provider)
             self.pth_path = _paths.get("pth_path")
@@ -243,6 +235,14 @@ class LocalVoice:
             self.current_character_name = _paths.get("character_name")
         except Exception:
             pass
+
+        mid = self.current_model_id
+        if not self.is_model_initialized(mid):
+            ok = self.initialize_model(mid, init=False)
+            if not ok:
+                raise RuntimeError(f"Failed to initialize model '{mid}'")
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_file)) or ".", exist_ok=True)
 
         try:
             return await self.active_model_instance.voiceover(text, character, output_file=output_file)

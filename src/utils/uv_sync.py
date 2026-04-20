@@ -382,6 +382,8 @@ class UvSync:
         self.update_log("Выполняем: " + " ".join(cmd))
 
         use_pty, PtyProcess = self._detect_pty()
+        if self._should_skip_pty(cmd):
+            use_pty = False
         ok, ret = False, -1
 
         if use_pty and PtyProcess is not None and os.name == "nt":
@@ -422,6 +424,12 @@ class UvSync:
         except Exception as exc:
             logger.error(f"_run_capture({description}) failed: {exc}")
             return False, str(exc)
+
+    @staticmethod
+    def _should_skip_pty(cmd: List[str]) -> bool:
+        if os.name != "nt" or not cmd:
+            return False
+        return os.path.basename(str(cmd[0])).lower() == "uv.exe"
 
     def _rmtree_retry(self, path: str) -> bool:
         """Remove *path* directory tree with retries (port of old _manual_remove)."""

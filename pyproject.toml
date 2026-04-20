@@ -62,9 +62,9 @@ rvc-common      = [ "tts-with-rvc", "silero-vad", "omegaconf" ]
 rvc-common-onnx = [ "tts-with-rvc-onnx[dml]", "omegaconf" ]
 
 # --- ASR ---
-asr-gigaam  = [ "gigaam" ]
+asr-gigaam  = [ "gigaam", "hydra-core", "sentencepiece", "omegaconf", "silero-vad" ]
 # asr-gigaam  = []
-asr-whisper = [ "openai-whisper" ]
+asr-whisper = [ "openai-whisper", "faster-whisper", "silero-vad", "optimum[onnxruntime]" ]
 g4f         = [ "g4f==0.4.7.7" ]
 
 # --- TTS base (composition blocks, no standalone target) ---

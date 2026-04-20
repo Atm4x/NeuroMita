@@ -218,7 +218,7 @@ class InstallController:
         current = set(self._load_uv_state())
         desired = (current | set(plan.required_extras or [])) - set(plan.removed_extras or [])
         desired |= {"core", f"backend-{os.environ.get('NEUROMITA_BACKEND', 'cpu')}"}
-        if desired != current:
+        if desired != current or plan.required_extras:
             if not UvSync(cb.status, cb.log, cb.progress).apply(desired):
                 raise RuntimeError("uv install failed")
 
@@ -257,7 +257,7 @@ class InstallController:
                     res = self._call_flex(act.fn, callbacks=cb, ctx=ctx)
                     if res is False:
                         cb.status("Failed")
-                        cb.log("call step returned False")
+                        cb.log(f"call step returned False: {desc or 'unnamed action'}")
                         return False
                 except Exception as e:
                     cb.status("Failed")

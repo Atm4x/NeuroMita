@@ -24,9 +24,9 @@ except Exception:
         return None
 
 
-def _get_voice_spec(model_id: str):
+def _get_voice_spec(model_id: str, ctx: dict | None = None):
     from handlers.voice_models.catalog import get_voice_spec
-    return get_voice_spec(model_id)
+    return get_voice_spec(model_id, ctx)
 
 
 class VoiceModelController:
@@ -352,14 +352,13 @@ class VoiceModelController:
             if not mid:
                 continue
 
-            spec = _get_voice_spec(mid)
-            if not spec:
-                continue
-
             ok = False
             for v in vendors:
                 ctx = dict(ctx_base)
                 ctx["gpu_vendor"] = v
+                spec = _get_voice_spec(mid, ctx)
+                if not spec:
+                    continue
                 try:
                     if spec.is_installed(mid, ctx):
                         ok = True
@@ -375,12 +374,11 @@ class VoiceModelController:
 
     def start_install(self, model_id: str, *, with_ui: bool = True, timeout_sec: float = 3600.0) -> bool:
         mid = str(model_id or "").strip()
-        spec = _get_voice_spec(mid)
+        ctx = self._ctx()
+        spec = _get_voice_spec(mid, ctx)
         if not spec:
             logger.error(f"Unknown voice model spec for '{mid}'")
             return False
-
-        ctx = self._ctx()
 
         def runner(*args, **kwargs):
             run_ctx = (kwargs.get("ctx") or {})
@@ -407,12 +405,11 @@ class VoiceModelController:
 
     def start_uninstall(self, model_id: str, *, with_ui: bool = True, timeout_sec: float = 3600.0) -> bool:
         mid = str(model_id or "").strip()
-        spec = _get_voice_spec(mid)
+        ctx = self._ctx()
+        spec = _get_voice_spec(mid, ctx)
         if not spec:
             logger.error(f"Unknown voice model spec for '{mid}'")
             return False
-
-        ctx = self._ctx()
 
         def runner(*args, **kwargs):
             run_ctx = (kwargs.get("ctx") or {})
