@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Callable, Optional, Any
 
+from core.backends import Backend
+
 
 @dataclass
 class InstallCallbacks:
@@ -26,6 +28,7 @@ class InstallAction:
 
     fn: Optional[Callable[..., Any]] = None
     timeout_sec: Optional[float] = None
+    backend: Optional[Backend] = None
 
 
 @dataclass

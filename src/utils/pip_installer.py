@@ -183,12 +183,13 @@ class PipInstaller:
         self.protected_packages = protected_packages or ["g4f", "gigaam", "pillow", "silero-vad"]
         self._ensure_libs_path()
 
-    def install_package(self, package_spec, description="Установка пакета...", extra_args=None) -> bool:
+    def install_package(self, package_spec, description="Установка пакета...", extra_args=None, use_cache: bool = False) -> bool:
         cmd = [
             self.script_path, "-m", "uv", "pip", "install",
             "--target", str(self.libs_path_abs),
-            "--no-cache-dir"
         ]
+        if not use_cache:
+            cmd.append("--no-cache-dir")
         if extra_args:
             cmd.extend(extra_args)
         if isinstance(package_spec, list):

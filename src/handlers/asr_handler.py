@@ -6,6 +6,8 @@ from collections import deque
 from threading import Lock, RLock, Event as ThreadEvent
 from typing import Optional, List, Dict
 
+from core.backends import normalize_backend
+from managers.backend_manager import BackendManager
 from main_logger import logger
 
 from utils.pip_installer import PipInstaller
@@ -219,17 +221,12 @@ class SpeechRecognition:
         timeout_sec: float = 3600.0,
     ) -> "InstallPlan":
         from core.install_types import InstallPlan, InstallAction
-        from utils.gpu_utils import check_gpu_provider
 
         engine_settings = engine_settings or {}
-
-        try:
-            gpu_vendor = check_gpu_provider() or "CPU"
-        except Exception:
-            gpu_vendor = "CPU"
+        backend = BackendManager.active().value
 
         ctx = {
-            "gpu_vendor": gpu_vendor,
+            "backend": backend,
             "device": engine_settings.get("device"),
         }
 
@@ -242,6 +239,7 @@ class SpeechRecognition:
             )
 
         recognizer = cls(pip_installer, logger)
+        required_backend = normalize_backend(getattr(cls, "REQUIRED_BACKEND", None))
         try:
             if hasattr(recognizer, "apply_settings"):
                 recognizer.apply_settings(engine_settings)
@@ -285,6 +283,7 @@ class SpeechRecognition:
                     progress=pr,
                     packages=pkgs_list,
                     extra_args=extra,
+                    backend=required_backend,
                 )
             )
 
@@ -303,6 +302,7 @@ class SpeechRecognition:
                     progress=75,
                     progress_to=99,
                     files=list(manifest),
+                    backend=required_backend,
                 )
             )
         else:
@@ -316,6 +316,7 @@ class SpeechRecognition:
                     progress=75,
                     fn=_install_artifacts_async,
                     timeout_sec=float(timeout_sec or 3600.0),
+                    backend=required_backend,
                 )
             )
 
@@ -331,6 +332,7 @@ class SpeechRecognition:
                 description="Finalizing...",
                 progress=99,
                 fn=_final_check,
+                backend=required_backend,
             )
         )
 

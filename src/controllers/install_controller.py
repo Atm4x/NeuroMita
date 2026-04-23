@@ -9,9 +9,12 @@ import urllib.request
 import urllib.error
 
 from main_logger import logger
+from core.backends import normalize_backend
 from core.events import get_event_bus, Events, Event
 from utils.pip_installer import PipInstaller
 from core.install_types import InstallCallbacks, InstallAction, InstallPlan
+from managers.backend_manager import BackendManager
+from managers.settings_manager import SettingsManager
 
 
 class InstallController:
@@ -280,6 +283,26 @@ class InstallController:
         ctx: dict,
     ) -> bool:
         cb = callbacks
+        required_backend = normalize_backend(ctx.get("required_backend"))
+        if required_backend is None:
+            for act in plan.actions or []:
+                required_backend = normalize_backend(getattr(act, "backend", None))
+                if required_backend is not None:
+                    break
+
+        if required_backend is not None and not ctx.get("_backend_prepared"):
+            current_backend = BackendManager.current_backend_from_marker()
+            if current_backend != required_backend:
+                backend_plan = BackendManager.build_switch_plan(current_backend, required_backend)
+                nested_ctx = dict(ctx)
+                nested_ctx["_backend_prepared"] = True
+                if not self._execute_plan(
+                    backend_plan,
+                    pip_installer=pip_installer,
+                    callbacks=callbacks,
+                    ctx=nested_ctx,
+                ):
+                    return False
 
         if plan.already_installed:
             cb.status(plan.already_installed_status or "Already installed")
@@ -312,6 +335,7 @@ class InstallController:
                     to_install,
                     description=desc or "Installing...",
                     extra_args=act.extra_args,
+                    use_cache=bool(SettingsManager.get("PKG_USE_CACHE", False)),
                 )
                 if not ok:
                     cb.status("Failed")
@@ -448,6 +472,7 @@ class InstallController:
             "meta": meta,
             "timeout_sec": float(timeout_sec),
             "event_bus": self.event_bus,
+            "required_backend": meta.get("required_backend"),
         }
 
         try:

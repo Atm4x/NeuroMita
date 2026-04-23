@@ -11,6 +11,16 @@ class SettingsManager:
     instance = None
     SAVE_DEBOUNCE_SEC = 0.5          # сколько «выжидать», собирая изменения
     _SENTINEL = object()             # сигнал завершения потока
+    DEFAULTS = {
+        "ACTIVE_BACKEND": "",
+        "PKG_USE_CACHE": False,
+    }
+    LEGACY_RENAMES = {
+        "values_nvidia": "values_cuda",
+        "values_amd": "values_onnx",
+        "default_nvidia": "default_cuda",
+        "default_amd": "default_onnx",
+    }
 
     def __init__(self, config_path: str):
         self.config_path = config_path
@@ -46,15 +56,26 @@ class SettingsManager:
         try:
             if not os.path.exists(self.config_path):
                 logger.info("Файл настроек не найден – используем дефолты")
+                self.settings = dict(self.DEFAULTS)
                 return
 
             with open(self.config_path, "r", encoding="utf-8") as f:
                 self.settings = json.load(f)
+            if not isinstance(self.settings, dict):
+                self.settings = {}
+            self._apply_migrations()
+            for key, value in self.DEFAULTS.items():
+                self.settings.setdefault(key, value)
             logger.info("Настройки загружены")
 
         except (OSError, json.JSONDecodeError) as e:
             logger.error(f"Не удалось загрузить настройки: {e}")
-            self.settings = {}
+            self.settings = dict(self.DEFAULTS)
+
+    def _apply_migrations(self):
+        for old_key, new_key in self.LEGACY_RENAMES.items():
+            if old_key in self.settings and new_key not in self.settings:
+                self.settings[new_key] = self.settings.pop(old_key)
 
     # Вызывается из фонового потока
     def _write_file(self):

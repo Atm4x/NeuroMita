@@ -7,6 +7,7 @@ import asyncio
 from typing import Optional, Any, List, Dict
 
 from .base_model import IVoiceModel
+from core.backends import Backend
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
 
@@ -15,6 +16,7 @@ from core.install_requirements import InstallRequirement, check_requirements
 from handlers.voice_models.install_plan_helpers import torch_install_action, pip_uninstall_action, remove_paths_action
 
 class F5TTSInstallSpec:
+    REQUIRED_BACKEND = Backend.CUDA
     @classmethod
     def supported_model_ids(cls) -> list[str]:
         return ["high", "high+low"]
@@ -142,6 +144,7 @@ class F5TTSInstallSpec:
         )
 
 class F5TTSModel(IVoiceModel):
+    REQUIRED_BACKEND = Backend.CUDA
     def __init__(self, parent: "LocalVoice", model_id: str, rvc_handler: Optional[IVoiceModel] = None):
         super().__init__(parent, model_id)
         self.f5_pipeline_module = None
@@ -155,7 +158,7 @@ class F5TTSModel(IVoiceModel):
             "id": "high",
             "name": "F5-TTS",
             "min_vram": 4, "rec_vram": 8,
-            "gpu_vendor": ["NVIDIA"],
+            "backend": ["CUDA"],
             "size_gb": 4,
             "languages": ["Russian", "English"],
             "intents": [_("Эмоции", "Emotion"), _("Качество", "Quality")],
@@ -182,7 +185,7 @@ class F5TTSModel(IVoiceModel):
             "id": "high+low",
             "name": "F5-TTS + RVC",
             "min_vram": 6, "rec_vram": 8,
-            "gpu_vendor": ["NVIDIA"],
+            "backend": ["CUDA"],
             "size_gb": 7,
             "languages": ["Russian", "English"],
             "intents": [_("Эмоции", "Emotion"), _("Конверсия голоса", "Voice conversion")],
@@ -195,8 +198,8 @@ class F5TTSModel(IVoiceModel):
                  "options": {"values": ["cuda", "cpu"], "default": "cuda"},
                  "help": _("Устройство для части F5‑TTS.", "Device for F5‑TTS part.")},
                 {"key": "f5rvc_rvc_device", "label": _("[RVC] Устройство RVC", "[RVC] RVC Device"), "type": "combobox",
-                 "options": {"values_nvidia": ["dml", "cuda:0", "cpu"], "default_nvidia": "cuda:0",
-                             "values_amd": ["dml", "cpu"], "default_amd": "dml",
+                 "options": {"values_cuda": ["dml", "cuda:0", "cpu"], "default_cuda": "cuda:0",
+                             "values_onnx": ["dml", "cpu"], "default_onnx": "dml",
                              "values_other": ["cpu", "dml"], "default_other": "cpu"},
                  "help": _("Устройство для части RVC.", "Device for RVC part.")},
 
@@ -280,7 +283,7 @@ class F5TTSModel(IVoiceModel):
 
         settings = self.parent.load_model_settings(mode)
         device_key = "f5rvc_f5_device" if mode == "high+low" else "device"
-        device = settings.get(device_key, "cuda" if self.parent.provider == "NVIDIA" else "cpu")
+        device = settings.get(device_key, "cuda" if self.parent.provider == "CUDA" else "cpu")
 
         self.current_f5_pipeline = self.f5_pipeline_module(
             model="F5TTS_v1_Base",
@@ -322,7 +325,7 @@ class F5TTSModel(IVoiceModel):
         try:
             from ruaccent import RUAccent
             self.ruaccent_instance = RUAccent()
-            device = "CUDA" if self.parent.provider == "NVIDIA" else "CPU"
+            device = "CUDA" if self.parent.provider == "CUDA" else "CPU"
             workdir = os.path.join("checkpoints", "ruaccent_models")
             os.makedirs(workdir, exist_ok=True)
             self.ruaccent_instance.load(

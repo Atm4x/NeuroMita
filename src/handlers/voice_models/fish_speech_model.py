@@ -9,6 +9,7 @@ import subprocess
 from typing import Optional, Any, List, Dict
 
 from .base_model import IVoiceModel
+from core.backends import Backend
 from main_logger import logger
 
 from core.events import Events
@@ -21,6 +22,7 @@ from handlers.voice_models.install_plan_helpers import torch_install_action, pip
 
 
 class FishSpeechInstallSpec:
+    REQUIRED_BACKEND = Backend.CUDA
     @classmethod
     def supported_model_ids(cls) -> list[str]:
         return ["medium", "medium+", "medium+low"]
@@ -321,9 +323,9 @@ class FishSpeechInstallSpec:
             )
 
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
-        gpu = str((ctx or {}).get("gpu_vendor") or "")
+        gpu = str((ctx or {}).get("backend") or "")
 
-        if gpu != "NVIDIA" and not allow_unsupported:
+        if gpu != "CUDA" and not allow_unsupported:
             return InstallPlan(
                 actions=[
                     InstallAction(
@@ -413,6 +415,7 @@ class FishSpeechInstallSpec:
 
 
 class FishSpeechModel(IVoiceModel):
+    REQUIRED_BACKEND = Backend.CUDA
     def __init__(self, parent: 'LocalVoice', model_id: str, rvc_handler: Optional[IVoiceModel] = None):
         super().__init__(parent, model_id)
         self.fish_speech_module = None
@@ -424,7 +427,7 @@ class FishSpeechModel(IVoiceModel):
             "id": "medium",
             "name": "Fish Speech",
             "min_vram": 3, "rec_vram": 6,
-            "gpu_vendor": ["NVIDIA"],
+            "backend": ["CUDA"],
             "size_gb": 5,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
             "intents": [_("Качество", "Quality"), _("Сбалансировано", "Balanced")],
@@ -463,7 +466,7 @@ class FishSpeechModel(IVoiceModel):
             "id": "medium+",
             "name": "Fish Speech+",
             "min_vram": 3, "rec_vram": 6,
-            "gpu_vendor": ["NVIDIA"],
+            "backend": ["CUDA"],
             "size_gb": 10,
             "rtx30plus": True,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
@@ -504,7 +507,7 @@ class FishSpeechModel(IVoiceModel):
             "id": "medium+low",
             "name": "Fish Speech+ + RVC",
             "min_vram": 5, "rec_vram": 8,
-            "gpu_vendor": ["NVIDIA"],
+            "backend": ["CUDA"],
             "size_gb": 15,
             "rtx30plus": True,
             "languages": ["Russian", "English", "Chinese", "German", "Japanese", "French", "Korean", "Arabic", "Dutch", "Italian", "Polish", "Portuguese"],
@@ -538,13 +541,13 @@ class FishSpeechModel(IVoiceModel):
                 {"key": "fsprvc_fsp_seed", "label": _("[FSP] Seed", "[FSP] Seed"), "type": "entry", "options": {"default": "0"},
                  "help": _("Сид генерации для Fish Speech+.", "Seed value for Fish Speech+.")},
                 {"key": "fsprvc_rvc_device", "label": _("[RVC] Устройство", "[RVC] Device"), "type": "combobox",
-                 "options": {"values": ["cuda:0", "cpu", "mps:0", "dml"], "default_nvidia": "cuda:0", "default_amd": "dml"},
+                 "options": {"values": ["cuda:0", "cpu", "mps:0", "dml"], "default_cuda": "cuda:0", "default_onnx": "dml"},
                  "help": _("Устройство для части RVC.", "Device for RVC part.")},
                 {"key": "fsprvc_is_half", "label": _("[RVC] Half-precision", "[RVC] Half-precision"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False"},
+                 "options": {"values": ["True", "False"], "default_cuda": "True", "default_onnx": "False"},
                  "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
                 {"key": "fsprvc_f0method", "label": _("[RVC] Метод F0", "[RVC] F0 Method"), "type": "combobox",
-                 "options": {"values": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_nvidia": "rmvpe", "default_amd": "dio"},
+                 "options": {"values": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_cuda": "rmvpe", "default_onnx": "dio"},
                  "help": _("Алгоритм извлечения высоты тона.", "Pitch extraction algorithm.")},
                 {"key": "fsprvc_rvc_pitch", "label": _("[RVC] Высота голоса (пт)", "[RVC] Pitch (semitones)"), "type": "entry", "options": {"default": "0"},
                  "help": _("Смещение высоты в полутонах.", "Pitch shift in semitones.")},

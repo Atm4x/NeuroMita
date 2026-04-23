@@ -64,6 +64,7 @@ def setup_settings_panel(gui, main_layout):
         ("fa6s.microphone", _("Микрофон",    "Microphone"),  "microphone", "advanced"),
         ("fa5s.gamepad",    _("Игра",        "Game"),        "game",       "advanced"),
         ("fa6s.robot",      _("Модели",      "Models"),      "models",     "full"),
+        ("fa6s.box-open",   _("Пакеты",      "Packages"),    "packages",   "full"),
         ("fa6s.display",    _("Экран",       "Screen"),      "screen",     "full"),
         ("fa6s.bug",        _("Отладка",     "Debug"),       "debug",      "full"),
         ("fa6s.newspaper",  _("Новости",     "News"),        "news",       "full"),

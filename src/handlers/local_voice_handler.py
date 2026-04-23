@@ -5,12 +5,14 @@ import traceback
 from typing import Dict, Optional, Any, List
 
 import ffmpeg
+from core.backends import Backend, normalize_backend
+from managers.backend_manager import BackendManager
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
-from utils.gpu_utils import check_gpu_provider
 
 from handlers.voice_models.base_model import IVoiceModel
 from handlers.voice_models.edge_tts_rvc_model import EdgeTTS_RVC_Model
+from handlers.voice_models.edge_tts_rvc_onnx_model import EdgeTTS_RVC_ONNX_Model
 from handlers.voice_models.fish_speech_model import FishSpeechModel
 from handlers.voice_models.f5_tts_model import F5TTSModel
 
@@ -25,11 +27,7 @@ class LocalVoice:
     """
 
     def __init__(self, *, voice_language: str = "ru"):
-        self.provider = None
-        try:
-            self.provider = check_gpu_provider()
-        except Exception:
-            self.provider = None
+        self.provider = BackendManager.active().value
 
         self.voice_language = str(voice_language or "ru")
 
@@ -39,18 +37,24 @@ class LocalVoice:
         self.current_model_id: Optional[str] = None
         self.active_model_instance: Optional[IVoiceModel] = None
 
-        edge_rvc_handler = EdgeTTS_RVC_Model(self, "edge_rvc_handler")
-        fish_handler = FishSpeechModel(self, "fish_handler", rvc_handler=edge_rvc_handler)
-        f5_handler = F5TTSModel(self, "f5_handler", rvc_handler=edge_rvc_handler)
+        edge_rvc_cuda_handler = EdgeTTS_RVC_Model(self, "edge_rvc_cuda_handler")
+        edge_rvc_onnx_handler = EdgeTTS_RVC_ONNX_Model(self, "edge_rvc_onnx_handler")
+        active_edge_handler = edge_rvc_cuda_handler if self.provider == Backend.CUDA.value else edge_rvc_onnx_handler
+        fish_handler = FishSpeechModel(self, "fish_handler", rvc_handler=active_edge_handler)
+        f5_handler = F5TTSModel(self, "f5_handler", rvc_handler=active_edge_handler)
 
-        self._registry: Dict[str, IVoiceModel] = self._build_registry_from_handlers(
-            [edge_rvc_handler, fish_handler, f5_handler]
-        )
+        all_handlers = [edge_rvc_cuda_handler, edge_rvc_onnx_handler, fish_handler, f5_handler]
+        active_handlers = [
+            handler for handler in all_handlers
+            if normalize_backend(getattr(handler, "REQUIRED_BACKEND", None), Backend.ONNX).value == self.provider
+        ]
+
+        self._registry: Dict[str, IVoiceModel] = self._build_registry_from_handlers(active_handlers)
 
         if not self._registry:
             self._registry = {
-                "low": edge_rvc_handler,
-                "low+": edge_rvc_handler,
+                "low": active_edge_handler,
+                "low+": active_edge_handler,
                 "medium": fish_handler,
                 "medium+": fish_handler,
                 "medium+low": fish_handler,
@@ -111,11 +115,11 @@ class LocalVoice:
         try:
             from handlers.voice_models.catalog import get_voice_spec
 
-            spec = get_voice_spec(model_id)
+            spec = get_voice_spec(model_id, backend=self.provider)
             if not spec:
                 return False
 
-            ctx = {"gpu_vendor": self.provider or "CPU"}
+            ctx = {"backend": self.provider}
             return bool(spec.is_installed(model_id, ctx))
         except Exception:
             return False

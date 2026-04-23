@@ -1,4 +1,4 @@
-﻿# src/ui/windows/asr_glossary_view.py
+# src/ui/windows/asr_glossary_view.py
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
@@ -399,7 +399,7 @@ class AsrGlossaryView(QWidget):
 
         tags: list[QLabel] = []
 
-        vendors = data.get("gpu_vendor") or data.get("gpu_vendors") or data.get("vendors")
+        vendors = data.get("backend") or data.get("backends") or data.get("vendors")
         if isinstance(vendors, str):
             vendors = [vendors]
         if isinstance(vendors, (list, tuple)):

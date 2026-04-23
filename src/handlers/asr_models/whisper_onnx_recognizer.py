@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import wave
 import asyncio
@@ -14,14 +14,16 @@ import numpy as np
 import urllib.request
 import urllib.error
 
+from core.backends import Backend
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from core.install_requirements import InstallRequirement, check_requirements
+from managers.backend_manager import BackendManager
 
 from utils import getTranslationVariant as _
-from utils.gpu_utils import check_gpu_provider
 
 
 class WhisperOnnxRecognizer(SpeechRecognizerInterface):
+    REQUIRED_BACKEND = Backend.ONNX
     """
     Whisper large-v3-turbo ONNX (onnx-community) через onnxruntime (+ DirectML).
     ONNX runtime и InferenceSession живут в отдельном процессе.
@@ -39,7 +41,7 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
                 "use DirectML. Model and transformers files are downloaded locally."
             ),
             "languages": ["Multilingual"],
-            "gpu_vendor": ["NVIDIA", "AMD"],
+            "backend": ["ONNX"],
             "tags": [
                 _("Локально", "Local"),
                 _("ONNX", "ONNX"),
@@ -158,13 +160,13 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
         ]
 
     def pip_install_steps(self, ctx: dict) -> List[dict]:
-        gpu = (ctx.get("gpu_vendor") or "CPU")
+        gpu = (ctx.get("backend") or "CPU")
         device = str(ctx.get("device") or "auto").strip().lower()
 
         steps: List[dict] = []
 
         # 1) torch/torchaudio отдельно (из-за CUDA index-url)
-        if gpu == "NVIDIA" and device in ("auto", "cuda"):
+        if gpu == "CUDA" and device in ("auto", "cuda"):
             steps.append({
                 "progress": 10,
                 "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
@@ -180,7 +182,7 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
             })
 
         # 2) Остальные зависимости одним шагом
-        need_dml = (device in ("auto", "dml")) and gpu != "NVIDIA"
+        need_dml = (device in ("auto", "dml")) and gpu != "CUDA"
         ort_pkg = "onnxruntime-directml" if need_dml else "onnxruntime"
 
         steps.append({
@@ -208,11 +210,11 @@ class WhisperOnnxRecognizer(SpeechRecognizerInterface):
     def is_installed(self) -> bool:
         if self._current_gpu is None:
             try:
-                self._current_gpu = check_gpu_provider() or "CPU"
+                self._current_gpu = BackendManager.active().value
             except Exception:
-                self._current_gpu = "CPU"
+                self._current_gpu = Backend.ONNX.value
 
-        ctx = {"device": self.device, "gpu_vendor": self._current_gpu}
+        ctx = {"device": self.device, "backend": self._current_gpu}
         st = check_requirements(self.requirements(), ctx=ctx)
         return bool(st.get("ok"))
     

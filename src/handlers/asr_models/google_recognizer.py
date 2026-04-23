@@ -21,7 +21,7 @@ class GoogleRecognizer(SpeechRecognizerInterface):
             "id": "google",
             "name": "Google",
             "languages": ["Russian", "English"],
-            "gpu_vendor": ["CPU"],
+            "backend": ["ONNX"],
             "tags": [
                 _("Онлайн", "Online"),
             ],

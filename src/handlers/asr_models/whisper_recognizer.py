@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import wave
 import asyncio
@@ -8,14 +8,16 @@ from collections import deque
 
 import numpy as np
 
+from core.backends import Backend
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from core.install_requirements import InstallRequirement, check_requirements
+from managers.backend_manager import BackendManager
 
 from utils import getTranslationVariant as _
-from utils.gpu_utils import check_gpu_provider
 
 
 class WhisperRecognizer(SpeechRecognizerInterface):
+    REQUIRED_BACKEND = Backend.CUDA
     
     MODEL_CONFIGS = [
         {
@@ -28,7 +30,7 @@ class WhisperRecognizer(SpeechRecognizerInterface):
                 "CPU is supported as well. Requires downloading the model into local cache."
             ),
             "languages": ["Multilingual"],
-            "gpu_vendor": ["NVIDIA", "CPU"],
+            "backend": ["CUDA"],
             "tags": [
                 _("Офлайн", "Offline"),
                 _("Локально", "Local"),
@@ -118,13 +120,13 @@ class WhisperRecognizer(SpeechRecognizerInterface):
         ]
 
     def pip_install_steps(self, ctx: dict) -> List[dict]:
-        gpu = (ctx.get("gpu_vendor") or "CPU")
+        gpu = (ctx.get("backend") or "CPU")
         device = str(ctx.get("device") or "auto").strip().lower()
 
         steps: List[dict] = []
 
         # torch нужен для silero-vad (даже если whisper сам на CTranslate2)
-        if gpu == "NVIDIA" and device in ("auto", "cuda"):
+        if gpu == "CUDA" and device in ("auto", "cuda"):
             steps.append({
                 "progress": 10,
                 "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
@@ -169,11 +171,11 @@ class WhisperRecognizer(SpeechRecognizerInterface):
     def is_installed(self) -> bool:
         if self._current_gpu is None:
             try:
-                self._current_gpu = check_gpu_provider() or "CPU"
+                self._current_gpu = BackendManager.active().value
             except Exception:
-                self._current_gpu = "CPU"
+                self._current_gpu = Backend.ONNX.value
 
-        ctx = {"device": self.whisper_device, "gpu_vendor": self._current_gpu}
+        ctx = {"device": self.whisper_device, "backend": self._current_gpu}
         st = check_requirements(self.requirements(), ctx=ctx)
         return bool(st.get("ok"))
         
@@ -230,11 +232,11 @@ class WhisperRecognizer(SpeechRecognizerInterface):
 
         # auto
         try:
-            gpu = check_gpu_provider() or "CPU"
+            gpu = BackendManager.active().value
         except Exception:
-            gpu = "CPU"
+            gpu = Backend.ONNX.value
 
-        if gpu == "NVIDIA":
+        if gpu == "CUDA":
             try:
                 import torch
                 if torch.cuda.is_available():

@@ -511,12 +511,9 @@ class SpeechController:
         def compute():
             try:
                 from core.install_requirements import check_requirements
-                from utils.gpu_utils import check_gpu_provider
+                from managers.backend_manager import BackendManager
 
-                try:
-                    gpu_vendor = check_gpu_provider() or "CPU"
-                except Exception:
-                    gpu_vendor = "CPU"
+                backend = BackendManager.active().value
 
                 if not self._asr_settings or not self._asr_settings.get("models"):
                     self._load_asr_settings()
@@ -528,6 +525,10 @@ class SpeechController:
                 result = []
                 for engine in engines:
                     engine_settings = models_map.get(engine, {}) or {}
+                    cls = registry.get(engine)
+                    required_backend = getattr(getattr(cls, "REQUIRED_BACKEND", None), "value", None)
+                    if required_backend and required_backend != backend:
+                        continue
 
                     inst = None
                     try:
@@ -557,7 +558,7 @@ class SpeechController:
 
                     ctx = {
                         "device": engine_settings.get("device"),
-                        "gpu_vendor": gpu_vendor,
+                        "backend": backend,
                     }
 
                     status = check_requirements(reqs, ctx=ctx) if reqs else {
@@ -569,7 +570,7 @@ class SpeechController:
                         "name": meta.get("name") or engine,
                         "description": meta.get("description") or "",
                         "languages": meta.get("languages", []) if isinstance(meta.get("languages"), list) else [],
-                        "gpu_vendor": meta.get("gpu_vendor", []) if isinstance(meta.get("gpu_vendor"), list) else [],
+                        "backend": meta.get("backend", []) if isinstance(meta.get("backend"), list) else [],
                         "tags": meta.get("tags", []) if isinstance(meta.get("tags"), list) else [],
                         "links": meta.get("links", []) if isinstance(meta.get("links"), list) else [],
                         "installed": bool(status.get("ok")),

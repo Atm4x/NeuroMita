@@ -6,27 +6,27 @@ import json
 import threading
 from typing import Any
 
+from core.backends import Backend, normalize_backend
 from docs import DocsManager
 from main_logger import logger
+from managers.backend_manager import BackendManager
 from managers.settings_manager import SettingsManager
 from utils import getTranslationVariant as _
 
 from core.events import get_event_bus, Events, Event
 
 try:
-    from utils.gpu_utils import check_gpu_provider, get_cuda_devices, get_gpu_name_by_id
+    from utils.gpu_utils import get_cuda_devices, get_gpu_name_by_id
 except Exception:
-    def check_gpu_provider():
-        return None
     def get_cuda_devices():
         return []
     def get_gpu_name_by_id(_id):
         return None
 
 
-def _get_voice_spec(model_id: str):
+def _get_voice_spec(model_id: str, backend: str | Backend | None = None):
     from handlers.voice_models.catalog import get_voice_spec
-    return get_voice_spec(model_id)
+    return get_voice_spec(model_id, backend=backend)
 
 
 class VoiceModelController:
@@ -55,7 +55,8 @@ class VoiceModelController:
             "Hover over an interface element to get a description."
         )
 
-        self.detected_gpu_vendor = check_gpu_provider()
+        self.detected_backend = BackendManager.detect().value
+        self.active_backend = BackendManager.active().value
         self.detected_cuda_devices = get_cuda_devices()
         self.gpu_name = None
         if self.detected_cuda_devices:
@@ -119,7 +120,7 @@ class VoiceModelController:
 
     def _ctx(self) -> dict:
         return {
-            "gpu_vendor": self.detected_gpu_vendor or "CPU",
+            "backend": self.active_backend,
             "cuda_devices": list(self.detected_cuda_devices or []),
             "gpu_name": self.gpu_name,
             "platform": platform.system(),
@@ -171,7 +172,7 @@ class VoiceModelController:
         status = res[0] if res else {}
         status = status.copy() if isinstance(status, dict) else {}
         status["show_triton_checks"] = (platform.system() == "Windows")
-        status["detected_gpu_vendor"] = self.detected_gpu_vendor
+        status["detected_backend"] = self.active_backend
 
         with self._lock:
             self._dependencies_status_cache = status
@@ -235,9 +236,10 @@ class VoiceModelController:
         return []
 
     def load_settings(self):
+        self.active_backend = BackendManager.active().value
         default_model_structure = self.get_default_model_structure()
         adapted_default_structure = self.finalize_model_settings(
-            default_model_structure, self.detected_gpu_vendor, self.detected_cuda_devices
+            default_model_structure, self.active_backend, self.detected_cuda_devices
         )
 
         saved_values = {}
@@ -261,8 +263,10 @@ class VoiceModelController:
                         if setting_key in model_saved_values:
                             setting.setdefault("options", {})["default"] = model_saved_values[setting_key]
 
-            if not isinstance(model_data.get("gpu_vendor"), (list, tuple)):
-                model_data["gpu_vendor"] = [v for v in [model_data.get("gpu_vendor")] if v]
+            backend_values = model_data.get("backend")
+            if not isinstance(backend_values, (list, tuple)):
+                backend_values = [v for v in [backend_values] if v]
+            model_data["backend"] = [normalize_backend(v).value for v in backend_values if normalize_backend(v)]
 
         with self._lock:
             self._collect_descriptions_from_models(merged_model_structure)
@@ -344,7 +348,6 @@ class VoiceModelController:
 
     def refresh_installed_models(self):
         ctx_base = self._ctx()
-        vendors = [self.detected_gpu_vendor] if self.detected_gpu_vendor else ["NVIDIA", "AMD", "CPU"]
 
         installed = set()
         for m in self.get_default_model_structure():
@@ -352,20 +355,14 @@ class VoiceModelController:
             if not mid:
                 continue
 
-            spec = _get_voice_spec(mid)
+            spec = _get_voice_spec(mid, backend=self.active_backend)
             if not spec:
                 continue
 
-            ok = False
-            for v in vendors:
-                ctx = dict(ctx_base)
-                ctx["gpu_vendor"] = v
-                try:
-                    if spec.is_installed(mid, ctx):
-                        ok = True
-                        break
-                except Exception:
-                    continue
+            try:
+                ok = bool(spec.is_installed(mid, dict(ctx_base)))
+            except Exception:
+                ok = False
 
             if ok:
                 installed.add(mid)
@@ -375,7 +372,7 @@ class VoiceModelController:
 
     def start_install(self, model_id: str, *, with_ui: bool = True, timeout_sec: float = 3600.0) -> bool:
         mid = str(model_id or "").strip()
-        spec = _get_voice_spec(mid)
+        spec = _get_voice_spec(mid, backend=self.active_backend)
         if not spec:
             logger.error(f"Unknown voice model spec for '{mid}'")
             return False
@@ -390,6 +387,8 @@ class VoiceModelController:
 
         self.event_bus.emit(Events.VoiceModel.MODEL_INSTALL_STARTED, {"model_id": mid})
 
+        required_backend = normalize_backend(getattr(spec, "REQUIRED_BACKEND", None))
+
         self.event_bus.emit(
             Events.Install.RUN_WITH_UI if with_ui else Events.Install.RUN_HEADLESS,
             {
@@ -399,7 +398,12 @@ class VoiceModelController:
                 "title": spec.title(mid),
                 "initial_status": _("Подготовка...", "Preparing..."),
                 "timeout_sec": float(timeout_sec or 3600.0),
-                "meta": {"kind": "voice", "item_id": mid, "op": "install"},
+                "meta": {
+                    "kind": "voice",
+                    "item_id": mid,
+                    "op": "install",
+                    "required_backend": required_backend.value if required_backend else self.active_backend,
+                },
                 "runner": runner,
             },
         )
@@ -407,7 +411,7 @@ class VoiceModelController:
 
     def start_uninstall(self, model_id: str, *, with_ui: bool = True, timeout_sec: float = 3600.0) -> bool:
         mid = str(model_id or "").strip()
-        spec = _get_voice_spec(mid)
+        spec = _get_voice_spec(mid, backend=self.active_backend)
         if not spec:
             logger.error(f"Unknown voice model spec for '{mid}'")
             return False
@@ -422,6 +426,8 @@ class VoiceModelController:
 
         self.event_bus.emit(Events.VoiceModel.MODEL_UNINSTALL_STARTED, {"model_id": mid})
 
+        required_backend = normalize_backend(getattr(spec, "REQUIRED_BACKEND", None))
+
         self.event_bus.emit(
             Events.Install.RUN_WITH_UI if with_ui else Events.Install.RUN_HEADLESS,
             {
@@ -431,7 +437,12 @@ class VoiceModelController:
                 "title": _("Удаление локальной модели: ", "Uninstalling local model: ") + mid,
                 "initial_status": _("Подготовка...", "Preparing..."),
                 "timeout_sec": float(timeout_sec or 3600.0),
-                "meta": {"kind": "voice", "item_id": mid, "op": "uninstall"},
+                "meta": {
+                    "kind": "voice",
+                    "item_id": mid,
+                    "op": "uninstall",
+                    "required_backend": required_backend.value if required_backend else self.active_backend,
+                },
                 "runner": runner,
             },
         )
@@ -474,14 +485,14 @@ class VoiceModelController:
 
         self.event_bus.emit(Events.VoiceModel.REFRESH_MODEL_PANELS)
 
-    def finalize_model_settings(self, models_list, detected_vendor, cuda_devices):
+    def finalize_model_settings(self, models_list, detected_backend, cuda_devices):
         import copy as _copy
-        final_models = _copy.deepcopy(models_list)
 
+        final_models = _copy.deepcopy(models_list)
         gpu_name_upper = self.gpu_name.upper() if self.gpu_name else ""
         force_fp32 = False
 
-        if detected_vendor == "NVIDIA" and gpu_name_upper:
+        if detected_backend == Backend.CUDA.value and gpu_name_upper:
             if (
                 ("16" in gpu_name_upper and "V100" not in gpu_name_upper)
                 or "P40" in gpu_name_upper
@@ -491,21 +502,20 @@ class VoiceModelController:
                 or "1080" in gpu_name_upper
             ):
                 force_fp32 = True
-        elif detected_vendor == "AMD":
+        elif detected_backend == Backend.ONNX.value:
             force_fp32 = True
 
         for model in final_models:
-            model_vendors = model.get("gpu_vendor", [])
-            vendor_to_adapt_for = None
+            backend_values = model.get("backend")
+            if not isinstance(backend_values, (list, tuple)):
+                backend_values = [v for v in [backend_values] if v]
+            model["backend"] = [normalize_backend(v).value for v in backend_values if normalize_backend(v)]
 
-            if detected_vendor == "NVIDIA" and "NVIDIA" in model_vendors:
-                vendor_to_adapt_for = "NVIDIA"
-            elif detected_vendor == "AMD" and "AMD" in model_vendors:
-                vendor_to_adapt_for = "AMD"
-            elif not detected_vendor or detected_vendor not in model_vendors:
-                vendor_to_adapt_for = "OTHER"
-            elif detected_vendor in model_vendors:
-                vendor_to_adapt_for = detected_vendor
+            backend_to_adapt_for = "OTHER"
+            if detected_backend == Backend.CUDA.value and Backend.CUDA.value in model["backend"]:
+                backend_to_adapt_for = Backend.CUDA.value
+            elif detected_backend == Backend.ONNX.value and Backend.ONNX.value in model["backend"]:
+                backend_to_adapt_for = Backend.ONNX.value
 
             for setting in model.get("settings", []):
                 options = setting.get("options", {})
@@ -514,13 +524,11 @@ class VoiceModelController:
                 is_device_setting = "device" in str(setting_key).lower()
                 is_half_setting = setting_key in ["is_half", "silero_rvc_is_half", "fsprvc_is_half", "half", "fsprvc_fsp_half"]
 
-                adapt_key_suffix = ""
-                if vendor_to_adapt_for == "NVIDIA":
-                    adapt_key_suffix = "_nvidia"
-                elif vendor_to_adapt_for == "AMD":
-                    adapt_key_suffix = "_amd"
-                elif vendor_to_adapt_for == "OTHER":
-                    adapt_key_suffix = "_other"
+                adapt_key_suffix = "_other"
+                if backend_to_adapt_for == Backend.CUDA.value:
+                    adapt_key_suffix = "_cuda"
+                elif backend_to_adapt_for == Backend.ONNX.value:
+                    adapt_key_suffix = "_onnx"
 
                 values_key = f"values{adapt_key_suffix}"
                 default_key = f"default{adapt_key_suffix}"
@@ -535,21 +543,20 @@ class VoiceModelController:
                     options["default"] = options[default_key]
 
                 if is_device_setting:
-                    if vendor_to_adapt_for == "NVIDIA":
-                        base_nvidia_values = options.get("values_nvidia", [])
+                    if backend_to_adapt_for == Backend.CUDA.value:
+                        base_cuda_values = options.get("values_cuda", [])
                         base_other_values = options.get("values_other", ["cpu"])
-                        base_non_cuda_provider = base_nvidia_values if base_nvidia_values else base_other_values
+                        base_non_cuda_provider = base_cuda_values if base_cuda_values else base_other_values
                         non_cuda_options = [v for v in base_non_cuda_provider if not str(v).startswith("cuda")]
                         if cuda_devices:
                             final_values_list = list(cuda_devices) + non_cuda_options
                         else:
                             final_values_list = [v for v in base_other_values if v in ["cpu", "mps"]] or ["cpu"]
-                    else:
-                        if platform.system() == "Darwin":
-                            base_values = final_values_list or options.get("values_other", options.get("values", [])) or ["cpu"]
-                            if "mps" not in base_values:
-                                base_values = list(base_values) + ["mps"]
-                            final_values_list = base_values
+                    elif platform.system() == "Darwin":
+                        base_values = final_values_list or options.get("values_other", options.get("values", [])) or ["cpu"]
+                        if "mps" not in base_values:
+                            base_values = list(base_values) + ["mps"]
+                        final_values_list = base_values
 
                 if final_values_list is not None and widget_type == "combobox":
                     options["values"] = final_values_list
@@ -581,7 +588,7 @@ class VoiceModelController:
         if force_unsupported:
             return False
 
-        if self.detected_gpu_vendor != "NVIDIA" or not self.gpu_name:
+        if self.active_backend != Backend.CUDA.value or not self.gpu_name:
             return False
 
         name_upper = self.gpu_name.upper()

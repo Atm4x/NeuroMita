@@ -14,8 +14,11 @@ from __future__ import annotations
 
 from typing import Optional
 
+from core.backends import Backend, normalize_backend, vendor_to_backend
+from managers.backend_manager import BackendManager
+
 TORCH_VERSION = "2.7.1"
-TORCH_PACKAGES = [f"torch=={TORCH_VERSION}", f"torchaudio=={TORCH_VERSION}"]
+TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 
 
@@ -99,7 +102,7 @@ def get_installed_torch_variant(target_dir: Optional[str] = None) -> Optional[st
     return _variant_from_ver(ver, pkg_dir=_pkg_dir)
 
 
-def decide_torch_install(gpu_vendor: str, target_dir: Optional[str] = None) -> dict:
+def decide_torch_install(backend_hint: str | Backend, target_dir: Optional[str] = None) -> dict:
     """Решает, что делать с torch для данного вендора GPU.
 
     target_dir — папка установки (--target), проверяется в первую очередь.
@@ -120,12 +123,12 @@ def decide_torch_install(gpu_vendor: str, target_dir: Optional[str] = None) -> d
           installed == 'cuda' -> skip (не даунгрейдим — CUDA-билд работает и без GPU)
           installed == 'cpu'  -> skip
     """
-    gpu = str(gpu_vendor or "CPU").upper()
+    backend = normalize_backend(backend_hint) or vendor_to_backend(str(backend_hint or ""))
     installed = get_installed_torch_variant(target_dir=target_dir)
 
-    if gpu == "NVIDIA":
+    if backend == Backend.CUDA:
         if installed == "cuda":
-            return {"action": "skip", "reason": "PyTorch с CUDA уже установлен"}
+            return {"action": "skip", "reason": "PyTorch CUDA already installed"}
         if installed == "cpu":
             return {
                 "action": "reinstall",
@@ -133,23 +136,21 @@ def decide_torch_install(gpu_vendor: str, target_dir: Optional[str] = None) -> d
                     "--reinstall",
                     "--index-url", CUDA_INDEX_URL,
                 ],
-                "description": "Переустановка PyTorch: CPU → CUDA (cu128)...",
+                "description": "Reinstalling PyTorch: CPU -> CUDA (cu128)...",
             }
-        # installed is None
         return {
             "action": "install",
             "extra_args": ["--index-url", CUDA_INDEX_URL],
-            "description": "Установка PyTorch с CUDA (cu128)...",
+            "description": "Installing PyTorch CUDA (cu128)...",
         }
 
-    # non-NVIDIA
     if installed is None:
         return {
             "action": "install",
-            "extra_args": None,
-            "description": "Установка PyTorch CPU...",
+            "extra_args": list(BackendManager.ONNX_TORCH_EXTRA_ARGS),
+            "description": "Installing PyTorch CPU...",
         }
-    return {"action": "skip", "reason": f"PyTorch уже установлен ({installed})"}
+    return {"action": "skip", "reason": f"PyTorch already installed ({installed})"}
 
 
 def verify_torch_has_cuda() -> bool:

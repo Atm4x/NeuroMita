@@ -142,40 +142,15 @@ sys.path = [
 sys.path.insert(0, libs_dir)
 import importlib.util, ctypes, pathlib, os
 
-# ── Torch CUDA bootstrap ──────────────────────────────────────────────
-# Должен выполняться ДО любого import torch в процессе.
-# Если стоит CPU-вариант, а GPU — NVIDIA, переустанавливаем на CUDA.
+# ── Backend bootstrap ─────────────────────────────────────────────────
 try:
-    from utils.torch_install_utils import decide_torch_install, TORCH_PACKAGES
-    from utils.gpu_utils import check_gpu_provider
-    _gpu = check_gpu_provider() or "CPU"
-    # Передаём libs_dir как target_dir — проверяем dist-info прямо в папке
-    # установки, а не через importlib.metadata (который может найти torch из
-    # другого Python-окружения).
-    _plan = decide_torch_install(_gpu, target_dir=libs_dir)
-    # Только реактивный апгрейд: если torch уже установлен в неправильном варианте.
-    # Первичную установку делает lazy bootstrap (embedding_handler / cross_encoder).
-    from utils.torch_install_utils import get_installed_torch_variant as _get_torch_variant
-    if _plan["action"] == "reinstall" and _get_torch_variant(target_dir=libs_dir) is not None:
-        logger.info(f"Torch bootstrap (early): gpu={_gpu}, action=reinstall (CPU→CUDA)")
-        from utils.pip_installer import PipInstaller
-        _pip = PipInstaller(update_log=logger.info)
-        logger.info("Удаление CPU-варианта PyTorch перед установкой CUDA...")
-        _pip.uninstall_packages(
-            ["torch", "torchaudio"],
-            description="Удаление CPU-варианта PyTorch",
-        )
-        _pip.install_package(
-            list(TORCH_PACKAGES),
-            description=_plan["description"],
-            extra_args=_plan.get("extra_args"),
-        )
-    elif _plan["action"] != "skip":
-        logger.info(f"Torch bootstrap (early): gpu={_gpu}, action={_plan['action']} — отложено до первого использования")
-    else:
-        logger.info(f"Torch bootstrap (early): gpu={_gpu}, action=skip — {_plan.get('reason', '')}")
-except Exception as _torch_boot_err:
-    logger.warning(f"Torch early bootstrap failed: {_torch_boot_err}")
+    from managers.backend_manager import BackendManager
+
+    _active_backend = BackendManager.active()
+    logger.info(f"Backend bootstrap (early): target={_active_backend.value}")
+    BackendManager.ensure_backend(_active_backend)
+except Exception as _backend_boot_err:
+    logger.warning(f"Backend early bootstrap failed: {_backend_boot_err}")
 # ──────────────────────────────────────────────────────────────────────
 
 # ort_spec = importlib.util.find_spec("onnxruntime")

@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+from core.backends import Backend, vendor_to_backend
 from main_logger import logger
 
 _GPU_VENDOR_LOCK = threading.Lock()
@@ -155,3 +156,7 @@ def get_gpu_name_by_id(device_id):
     except Exception as e:
         logger.info(f"Ошибка при получении имени GPU для {device_id}: {e}")
         return None
+
+
+def recommended_backend() -> Backend:
+    return vendor_to_backend(check_gpu_provider())

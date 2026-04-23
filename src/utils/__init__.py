@@ -16,6 +16,7 @@ except Exception:
 from num2words import num2words
 
 from main_logger import logger
+from core.backends import Backend, normalize_backend
 from managers.settings_manager import SettingsManager
 from utils.gpu_utils import check_gpu_provider
 
@@ -54,10 +55,12 @@ def get_character_voice_paths(character=None, provider=None):
             - character_name: короткое имя персонажа
     """
     if provider is None:
-        provider = check_gpu_provider()
+        provider = normalize_backend(check_gpu_provider(), Backend.ONNX)
+    else:
+        provider = normalize_backend(provider, Backend.ONNX)
 
-    is_nvidia = provider in ["NVIDIA"]
-    model_ext = 'pth' if is_nvidia else 'onnx'
+    is_cuda_backend = provider == Backend.CUDA
+    model_ext = 'pth' if is_cuda_backend else 'onnx'
     clone_voice_folder = os.environ.get("NEUROMITA_MODELS_DIR", os.path.abspath("Models"))
 
     short_name = "Mila"  # значение по умолчанию

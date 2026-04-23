@@ -8,6 +8,7 @@ from typing import Optional, Any, List, Dict
 
 import soundfile as sf
 
+from core.backends import Backend
 from .base_model import IVoiceModel
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
@@ -19,6 +20,7 @@ from handlers.voice_models.install_plan_helpers import torch_install_action, pip
 
 
 class EdgeTTSRVCInstallSpec:
+    REQUIRED_BACKEND = Backend.CUDA
     @classmethod
     def supported_model_ids(cls) -> list[str]:
         return ["low", "low+"]
@@ -30,7 +32,7 @@ class EdgeTTSRVCInstallSpec:
     @classmethod
     def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
         mid = str(model_id)
-        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
+        gpu = str((ctx or {}).get("backend") or "CPU")
 
         req: list[InstallRequirement] = [
             InstallRequirement(id="omegaconf", kind="python_dist", spec="omegaconf", required=True),
@@ -39,7 +41,7 @@ class EdgeTTSRVCInstallSpec:
         if mid == "low+":
             req.append(InstallRequirement(id="silero", kind="python_dist", spec="silero", required=True))
 
-        if gpu == "AMD":
+        if gpu == "ONNX":
             req.append(InstallRequirement(id="tts_rvc_pkg", kind="python_dist", spec="tts-with-rvc-onnx[dml]", required=True))
         else:
             req.append(InstallRequirement(id="tts_rvc_pkg", kind="python_dist", spec="tts-with-rvc", required=True))
@@ -100,7 +102,7 @@ class EdgeTTSRVCInstallSpec:
                 already_installed_status=_("Уже установлено", "Already installed")
             )
 
-        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
+        gpu = str((ctx or {}).get("backend") or "CPU")
         actions: list[InstallAction] = []
 
         actions.append(torch_install_action(ctx, progress=10))
@@ -110,7 +112,7 @@ class EdgeTTSRVCInstallSpec:
         if mid == "low+":
             pkgs.append("silero")
 
-        if gpu == "AMD":
+        if gpu == "ONNX":
             pkgs.append("tts-with-rvc-onnx[dml]")
         else:
             pkgs.append("tts-with-rvc")
@@ -146,8 +148,8 @@ class EdgeTTSRVCInstallSpec:
 
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
-        gpu = str((ctx or {}).get("gpu_vendor") or "CPU")
-        if gpu == "AMD":
+        gpu = str((ctx or {}).get("backend") or "CPU")
+        if gpu == "ONNX":
             return InstallPlan(
                 actions=[
                     pip_uninstall_action(
@@ -172,6 +174,7 @@ class EdgeTTSRVCInstallSpec:
 
 
 class EdgeTTS_RVC_Model(IVoiceModel):
+    REQUIRED_BACKEND = Backend.CUDA
     def __init__(self, parent: 'LocalVoice', model_id: str):
         super().__init__(parent, model_id)
         self.tts_rvc_module = None
@@ -187,7 +190,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             "name": "Edge-TTS + RVC",
             "min_vram": 3,
             "rec_vram": 4,
-            "gpu_vendor": ["NVIDIA", "AMD"],
+            "backend": ["CUDA", "ONNX"],
             "size_gb": 3,
             "languages": ["Russian", "English"],
             "intents": [_("Быстро", "Fast"), _("Низкие требования", "Low reqs")],
@@ -199,10 +202,10 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                 {
                     "key": "device", "label": _("Устройство RVC", "RVC Device"), "type": "combobox",
                     "options": {
-                        "values_nvidia": ["dml", "cuda:0", "cpu"],
-                        "default_nvidia": "cuda:0",
-                        "values_amd": ["dml", "cpu"],
-                        "default_amd": "dml",
+                        "values_cuda": ["dml", "cuda:0", "cpu"],
+                        "default_cuda": "cuda:0",
+                        "values_onnx": ["dml", "cpu"],
+                        "default_onnx": "dml",
                         "values_other": ["cpu", "mps:0"],
                         "default_other": "cpu"
                     },
@@ -214,7 +217,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                 {
                     "key": "is_half", "label": _("Half-precision RVC", "Half-precision RVC"),
                     "type": "combobox",
-                    "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False", "default_other": "False"},
+                    "options": {"values": ["True", "False"], "default_cuda": "True", "default_onnx": "False", "default_other": "False"},
                     "help": _(
                         "Половинная точность (float16) для ускорения и экономии VRAM на совместимых GPU.",
                         "Half precision (float16) for speed and VRAM saving on compatible GPUs."
@@ -224,10 +227,10 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                     "key": "f0method", "label": _("Метод F0 (RVC)", "F0 Method (RVC)"),
                     "type": "combobox",
                     "options": {
-                        "values_nvidia": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"],
-                        "default_nvidia": "rmvpe",
-                        "values_amd": ["rmvpe", "harvest", "pm", "dio"],
-                        "default_amd": "pm",
+                        "values_cuda": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"],
+                        "default_cuda": "rmvpe",
+                        "values_onnx": ["rmvpe", "harvest", "pm", "dio"],
+                        "default_onnx": "pm",
                         "values_other": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"],
                         "default_other": "pm"
                     },
@@ -267,7 +270,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             "name": "Silero + RVC",
             "min_vram": 3,
             "rec_vram": 4,
-            "gpu_vendor": ["NVIDIA", "AMD"],
+            "backend": ["CUDA", "ONNX"],
             "size_gb": 3,
             "languages": ["Russian", "English"],
             "intents": [_("Быстро", "Fast"), _("Локальный синтез", "Offline synth")],
@@ -278,23 +281,23 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             "settings": [
                 {"key": "silero_rvc_device", "label": _("Устройство RVC", "RVC Device"), "type": "combobox",
                  "options": {
-                     "values_nvidia": ["dml", "cuda:0", "cpu"],
-                     "default_nvidia": "cuda:0",
-                     "values_amd": ["dml", "cpu"],
-                     "default_amd": "dml",
+                     "values_cuda": ["dml", "cuda:0", "cpu"],
+                     "default_cuda": "cuda:0",
+                     "values_onnx": ["dml", "cpu"],
+                     "default_onnx": "dml",
                      "values_other": ["cpu", "dml"],
                      "default_other": "cpu"
                  },
                  "help": _("Устройство для RVC (см. выше).", "RVC device (see above).")},
                 {"key": "silero_device", "label": _("Устройство Silero", "Silero Device"), "type": "combobox",
-                 "options": {"values_nvidia": ["cuda", "cpu"], "default_nvidia": "cuda", "values_amd": ["cpu"], "default_amd": "cpu", "values_other": ["cpu"], "default_other": "cpu"},
+                 "options": {"values_cuda": ["cuda", "cpu"], "default_cuda": "cuda", "values_onnx": ["cpu"], "default_onnx": "cpu", "values_other": ["cpu"], "default_other": "cpu"},
                  "help": _("Устройство для Silero (GPU/CPU).", "Device for Silero (GPU/CPU).")},
                 {"key": "silero_rvc_is_half", "label": _("Half-precision RVC", "Half-precision RVC"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False", "default_other": "False"},
+                 "options": {"values": ["True", "False"], "default_cuda": "True", "default_onnx": "False", "default_other": "False"},
                  "help": _("Половинная точность для RVC на совместимых GPU.", "Half precision for RVC on compatible GPUs.")},
                 {"key": "silero_rvc_f0method", "label": _("Метод F0 (RVC)", "F0 Method (RVC)"), "type": "combobox",
-                 "options": {"values_nvidia": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_nvidia": "rmvpe",
-                             "values_amd": ["rmvpe", "harvest", "pm", "dio"], "default_amd": "pm",
+                 "options": {"values_cuda": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_cuda": "rmvpe",
+                             "values_onnx": ["rmvpe", "harvest", "pm", "dio"], "default_onnx": "pm",
                              "values_other": ["pm", "rmvpe", "harvest", "dio"], "default_other": "pm"},
                  "help": _("Выбор алгоритма F0 (точность/скорость).", "Choose F0 method (accuracy/speed).")},
                 {"key": "silero_rvc_pitch", "label": _("Высота голоса RVC (пт)", "RVC Pitch (semitones)"), "type": "entry", "options": {"default": "6"},
@@ -323,7 +326,8 @@ class EdgeTTS_RVC_Model(IVoiceModel):
     ]
 
     def get_model_configs(self) -> List[Dict[str, Any]]:
-        return self.MODEL_CONFIGS
+        backend_value = getattr(getattr(self, "REQUIRED_BACKEND", Backend.CUDA), "value", Backend.CUDA.value)
+        return [cfg for cfg in self.MODEL_CONFIGS if backend_value in (cfg.get("backend") or [])]
 
     def _load_module(self):
         if self.tts_rvc_module is not None:
@@ -389,13 +393,13 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             settings = self.parent.load_model_settings(current_mode)
 
             if current_mode == "low+":
-                device = settings.get("silero_rvc_device", "cuda:0" if self.parent.provider == "NVIDIA" else "dml")
-                f0_method = settings.get("silero_rvc_f0method", "rmvpe" if self.parent.provider == "NVIDIA" else "pm")
+                device = settings.get("silero_rvc_device", "cuda:0" if self.parent.provider == "CUDA" else "dml")
+                f0_method = settings.get("silero_rvc_f0method", "rmvpe" if self.parent.provider == "CUDA" else "pm")
             else:
-                device = settings.get("device", "cuda:0" if self.parent.provider == "NVIDIA" else "dml")
-                f0_method = settings.get("f0method", "rmvpe" if self.parent.provider == "NVIDIA" else "pm")
+                device = settings.get("device", "cuda:0" if self.parent.provider == "CUDA" else "dml")
+                f0_method = settings.get("f0method", "rmvpe" if self.parent.provider == "CUDA" else "pm")
 
-            is_nvidia = self.parent.provider in ["NVIDIA"]
+            is_nvidia = self.parent.provider in ["CUDA"]
             model_ext = "pth" if is_nvidia else "onnx"
             default_model_path = os.path.join("Models", f"Mila.{model_ext}")
 
@@ -424,7 +428,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                 logger.info("Требуется режим 'low+', инициализация компонента Silero...")
                 try:
                     settings = self.parent.load_model_settings(current_mode)
-                    silero_device = settings.get("silero_device", "cuda" if self.parent.provider == "NVIDIA" else "cpu")
+                    silero_device = settings.get("silero_device", "cuda" if self.parent.provider == "CUDA" else "cpu")
                     self.current_silero_sample_rate = int(settings.get("silero_sample_rate", 48000))
                     language = "en" if self.parent.voice_language == "en" else "ru"
                     model_id_silero = "v3_en" if language == "en" else "v5_ru"
@@ -549,7 +553,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                 "rms_mix_rate": rms_mix_rate
             }
 
-            if self.parent.provider == "NVIDIA":
+            if self.parent.provider == "CUDA":
                 inference_params["is_half"] = is_half
 
             if f0method:
@@ -563,7 +567,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             self._adjust_sampling_rate_for_amd()
 
             if os.path.abspath(model_path) != os.path.abspath(self.current_tts_rvc.current_model):
-                if self.parent.provider in ["AMD"] and hasattr(self.current_tts_rvc, 'set_model'):
+                if self.parent.provider in ["ONNX"] and hasattr(self.current_tts_rvc, 'set_model'):
                     self.current_tts_rvc.set_model(model_path)
                     logger.info(f'RVC модель изменена на: {model_path}')
                 else:
@@ -637,7 +641,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             else:
                 self.current_tts_rvc.set_index_path("")
 
-            if self.parent.provider in ["NVIDIA"]:
+            if self.parent.provider in ["CUDA"]:
                 inference_params = {
                     "pitch": pitch,
                     "index_rate": index_rate,
@@ -662,7 +666,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
             model_path_abs = os.path.abspath(model_path)
 
             if current_model_abs != model_path_abs:
-                if self.parent.provider in ["AMD"] and hasattr(self.current_tts_rvc, "set_model"):
+                if self.parent.provider in ["ONNX"] and hasattr(self.current_tts_rvc, "set_model"):
                     self.current_tts_rvc.set_model(model_path)
                 else:
                     self.current_tts_rvc.current_model = model_path
@@ -750,7 +754,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
         return ssml_output, character_rvc_pitch, character_speaker
 
     def _adjust_sampling_rate_for_amd(self):
-        if self.parent.provider != "AMD":
+        if self.parent.provider != "ONNX":
             return
 
         char = getattr(self.parent, "current_character_name", "Mila")
@@ -805,7 +809,7 @@ class EdgeTTS_RVC_Model(IVoiceModel):
                 protect=float(settings.get("silero_rvc_protect", 0.33)),
                 filter_radius=int(settings.get("silero_rvc_filter_radius", 3)),
                 rms_mix_rate=float(settings.get("silero_rvc_rms_mix_rate", 0.5)),
-                is_half=str(settings.get("silero_rvc_is_half", "True")).lower() == "true" if self.parent.provider == "NVIDIA" else True,
+                is_half=str(settings.get("silero_rvc_is_half", "True")).lower() == "true" if self.parent.provider == "CUDA" else True,
                 f0method=settings.get("silero_rvc_f0method", None),
                 use_index_file=settings.get("silero_rvc_use_index_file", True),
                 volume=vol,

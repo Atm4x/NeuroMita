@@ -102,8 +102,8 @@ class VoiceModelGuiController(BaseController):
 
         if model_data and model_data.get("rtx30plus", False) and not backend.is_gpu_rtx30_or_40():
             gpu_info = backend.gpu_name if getattr(backend, "gpu_name", None) else "не определена"
-            if getattr(backend, "detected_gpu_vendor", None) and backend.detected_gpu_vendor != "NVIDIA":
-                gpu_info = f"{backend.detected_gpu_vendor} GPU"
+            if getattr(backend, "active_backend", None) and backend.active_backend != "CUDA":
+                gpu_info = f"{backend.active_backend} backend"
 
             model_name = model_data.get("name", model_id)
             message = _(

@@ -36,7 +36,7 @@ class ModelDetailView(QWidget):
         self.desc_cb = None
         self.clear_desc_cb = None
 
-        self.gpu_vendor = None
+        self.backend = None
         self.gpu_name = None
         self.cuda_devices = []
         self.rtx_check_func = None
@@ -87,7 +87,7 @@ class ModelDetailView(QWidget):
         self.profile_desc_label.setObjectName("Subtle")
         h.addWidget(self.profile_desc_label)
 
-        # Предупреждение (AMD и прочее)
+        # Предупреждение о backend-совместимости
         self.warning_label = QLabel("")
         self.warning_label.setObjectName("Warn")
         h.addWidget(self.warning_label)
@@ -139,8 +139,8 @@ class ModelDetailView(QWidget):
         self.installed_models = set(installed)
         self._update_action_buttons()
 
-    def set_gpu_info(self, vendor=None, name=None, cuda_devices=None):
-        self.gpu_vendor = vendor
+    def set_backend_info(self, backend=None, name=None, cuda_devices=None):
+        self.backend = backend
         self.gpu_name = name
         self.cuda_devices = list(cuda_devices or [])
 
@@ -189,18 +189,18 @@ class ModelDetailView(QWidget):
         self.btn_uninstall.setEnabled(installed)
         self.btn_install.setVisible(not installed)
 
-        # AMD compatibility check
+        # Active backend compatibility check
         model = self._find_model(mid)
-        supported = model.get("gpu_vendor", []) or []
-        is_amd_user = (self.gpu_vendor == "AMD")
-        is_amd_supported = ("AMD" in supported)
+        supported = model.get("backend", []) or []
+        active_backend = str(self.backend or "")
+        backend_supported = active_backend in supported if active_backend else True
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
 
         can_install = True
         install_text = _("Установить", "Install")
-        if is_amd_user and not is_amd_supported and not allow_unsupported:
+        if active_backend and not backend_supported and not allow_unsupported:
             can_install = False
-            install_text = _("Несовместимо с AMD", "Incompatible with AMD")
+            install_text = _("Несовместимо с backend", "Incompatible with backend")
 
         self.btn_install.setText(install_text)
         self.btn_install.setEnabled(can_install)
@@ -407,12 +407,12 @@ class ModelDetailView(QWidget):
                 )
             )
 
-        # GPU vendors
-        vendors = model.get("gpu_vendor", []) or []
-        if vendors:
+        # Supported backends
+        backends = model.get("backend", []) or []
+        if backends:
             meta_chips.append(
                 self._make_chip(
-                    f"GPU: {', '.join(vendors)}",
+                    f"Backend: {', '.join(backends)}",
                     "info",
                     icon_names=["mdi.graphics-card", "mdi.expansion-card", "fa5s.microchip"],
                     icon_color="#8bb6ff"
@@ -468,15 +468,15 @@ class ModelDetailView(QWidget):
         else:
             self.langs_title.setVisible(False)
 
-        # AMD warning
-        supported = model.get("gpu_vendor", []) or []
-        is_amd_user = (self.gpu_vendor == "AMD")
-        is_amd_supported = ("AMD" in supported)
+        # Backend warning
+        supported = model.get("backend", []) or []
+        active_backend = str(self.backend or "")
+        backend_supported = active_backend in supported if active_backend else True
         allow_unsupported = os.environ.get("ALLOW_UNSUPPORTED_GPU", "0") == "1"
-        if is_amd_user and not is_amd_supported and allow_unsupported:
-            self.warning_label.setText(_("Может не работать на AMD!", "May not work on AMD!"))
-        elif is_amd_user and not is_amd_supported and not allow_unsupported:
-            self.warning_label.setText(_("Несовместимо с AMD.", "Incompatible with AMD."))
+        if active_backend and not backend_supported and allow_unsupported:
+            self.warning_label.setText(_("Может не работать на текущем backend!", "May not work on the current backend!"))
+        elif active_backend and not backend_supported and not allow_unsupported:
+            self.warning_label.setText(_("Несовместимо с текущим backend.", "Incompatible with the current backend."))
         else:
             self.warning_label.setText("")
 
@@ -865,8 +865,8 @@ class VoiceModelSettingsView(QWidget):
         self.refresh_dependencies_panel()
 
         # Pass GPU info and RTX checker to detail
-        vendor = self._cached_dependencies_status.get('detected_gpu_vendor')
-        self.detail.set_gpu_info(vendor=vendor, name=None, cuda_devices=[])
+        backend = self._cached_dependencies_status.get('detected_backend')
+        self.detail.set_backend_info(backend=backend, name=None, cuda_devices=[])
         self.detail.set_rtx_check_func(lambda: bool(self._check_gpu_rtx30_40()))
 
     # ---------- EventBus helpers ----------
@@ -1089,7 +1089,7 @@ class VoiceModelSettingsView(QWidget):
 
     def _on_refresh_settings(self):
         self._cached_dependencies_status = self._get_dependencies_status()
-        self.detail.set_gpu_info(vendor=self._cached_dependencies_status.get('detected_gpu_vendor'))
+        self.detail.set_backend_info(backend=self._cached_dependencies_status.get('detected_backend'))
         # Пересобрать вкладку "Зависимости" с актуальными данными
         self.refresh_dependencies_panel()
         self._on_selection_changed()
