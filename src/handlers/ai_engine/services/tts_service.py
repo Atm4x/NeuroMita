@@ -5,6 +5,8 @@ import uuid
 import asyncio
 from typing import Any, Optional, Callable
 
+from main_logger import logger
+
 
 class TTSService:
     """
@@ -84,21 +86,26 @@ class TTSService:
             model_id = str(payload.get("model_id") or "").strip()
             do_warmup = bool(payload.get("warmup", True))
             if not model_id:
-                return False
+                return {"ok": False, "stage": "validate", "error": "Missing model_id"}
 
             lv = self._get_local_voice()
+            logger.info(f"TTS init_model requested: model_id={model_id}, warmup={do_warmup}, provider={getattr(lv, 'provider', '?')}")
             ok = await asyncio.to_thread(lv.initialize_model, model_id, init=False)
             if not ok:
-                return False
+                error = f"Model initialization returned False for '{model_id}'"
+                logger.error(error)
+                return {"ok": False, "stage": "initialize", "error": error}
 
             self._current_model_id = model_id
 
             if do_warmup:
-                warm = await self._best_effort_warmup(lv, model_id)
+                warm, warm_error = await self._best_effort_warmup(lv, model_id)
                 if not warm:
-                    return False
+                    error = warm_error or f"Warmup failed for '{model_id}'"
+                    logger.error(error)
+                    return {"ok": False, "stage": "warmup", "error": error}
 
-            return True
+            return {"ok": True}
 
         if m == "synthesize":
             text = str(payload.get("text") or "")
@@ -178,7 +185,7 @@ class TTSService:
 
         return status
 
-    async def _best_effort_warmup(self, lv, model_id: str) -> bool:
+    async def _best_effort_warmup(self, lv, model_id: str) -> tuple[bool, Optional[str]]:
         tmp_dir = os.path.abspath("temp")
         os.makedirs(tmp_dir, exist_ok=True)
         out = os.path.join(tmp_dir, f"tts_warmup_{model_id}_{uuid.uuid4()}.wav")
@@ -191,22 +198,26 @@ class TTSService:
                 character=None,
             )
             if not produced:
-                return False
+                return False, f"Warmup produced no output for '{model_id}'"
             if not os.path.exists(produced) or os.path.getsize(produced) <= 0:
-                return False
-            return True
+                return False, f"Warmup output is missing or empty for '{model_id}': {produced}"
+            return True, None
 
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             # "нет reference" или файлов модели — для warmup это допустимо, init уже прошёл
-            return True
+            logger.warning(f"TTS warmup skipped for '{model_id}': {e}")
+            return True, str(e)
         except RuntimeError as e:
             msg = str(e).lower()
             # generic: "requires reference audio" и т.п.
             if "reference" in msg and ("audio" in msg or "voice" in msg):
-                return True
-            return False
-        except Exception:
-            return False
+                logger.warning(f"TTS warmup skipped for '{model_id}': {e}")
+                return True, str(e)
+            logger.error(f"TTS warmup runtime error for '{model_id}': {e}", exc_info=True)
+            return False, str(e)
+        except Exception as e:
+            logger.error(f"TTS warmup failed for '{model_id}': {e}", exc_info=True)
+            return False, str(e)
         finally:
             for p in [out, produced]:
                 try:

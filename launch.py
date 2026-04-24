@@ -37,7 +37,7 @@ OUTPUT_DIR = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output"))
 _default_python = str(OUTPUT_DIR / "libs" / "python" / "python.exe")
 GAME_PYTHON = Path(env.get("LAUNCH_PYTHON", _default_python))
 
-# ACTIVE_BACKEND / BACKEND / GPU_VENDOR can be set in build.env or env vars.
+# ACTIVE_BACKEND / BACKEND / NEUROMITA_BACKEND / GPU_VENDOR can be set in build.env or env vars.
 
 
 def detect_backend() -> str:
@@ -79,9 +79,11 @@ def resolve_backend() -> str:
     raw = (
         env.get("ACTIVE_BACKEND")
         or env.get("BACKEND")
+        or env.get("NEUROMITA_BACKEND")
         or env.get("GPU_VENDOR")
         or os.environ.get("ACTIVE_BACKEND")
         or os.environ.get("BACKEND")
+        or os.environ.get("NEUROMITA_BACKEND")
         or os.environ.get("GPU_VENDOR")
         or ""
     ).strip().upper()
@@ -89,6 +91,7 @@ def resolve_backend() -> str:
     mapping = {
         "CUDA": "CUDA",
         "NVIDIA": "CUDA",
+        "NVIDIA-SMI": "CUDA",
         "ONNX": "ONNX",
         "AMD": "ONNX",
         "CPU": "ONNX",
@@ -106,6 +109,14 @@ HASH_FILE = OUTPUT_DIR / ".req_hash"
 SETTINGS_FILE = OUTPUT_DIR / "Settings" / "settings.json"
 BACKEND_MARKER = OUTPUT_DIR / "Lib" / ".backend"
 LIB_DIR = OUTPUT_DIR / "Lib"
+BOOTSTRAP_IMPORTS = (
+    "pydantic",
+    "pydantic_core",
+    "typing_extensions",
+    "annotated_types",
+    "dotenv",
+    "uvicorn",
+)
 
 
 def file_hash(path: Path) -> str:
@@ -122,13 +133,44 @@ def requirements_changed() -> bool:
 
 
 def bootstrap_deps_missing() -> bool:
-    return any(
-        not candidate.exists()
-        for candidate in (
-            LIB_DIR / "pydantic",
-            LIB_DIR / "pydantic_core",
-        )
+    if not GAME_PYTHON.exists():
+        return True
+
+    env_vars = os.environ.copy()
+    env_vars.pop("VIRTUAL_ENV", None)
+    existing_pythonpath = env_vars.get("PYTHONPATH", "").strip()
+    env_vars["PYTHONPATH"] = str(LIB_DIR) if not existing_pythonpath else str(LIB_DIR) + os.pathsep + existing_pythonpath
+
+    probe = (
+        "import importlib.util, json; "
+        f"mods={list(BOOTSTRAP_IMPORTS)!r}; "
+        "missing=[m for m in mods if importlib.util.find_spec(m) is None]; "
+        "print(json.dumps(missing, ensure_ascii=False))"
     )
+    result = subprocess.run(
+        [str(GAME_PYTHON), "-c", probe],
+        cwd=OUTPUT_DIR,
+        env=env_vars,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("Не удалось проверить bootstrap-зависимости, считаю их отсутствующими.")
+        if result.stderr:
+            print(result.stderr.strip())
+        return True
+
+    missing_raw = (result.stdout or "").strip()
+    try:
+        missing = json.loads(missing_raw) if missing_raw else []
+    except Exception:
+        print(f"Не удалось разобрать результат проверки bootstrap-зависимостей: {missing_raw}")
+        return True
+
+    if missing:
+        print(f"Отсутствуют bootstrap-зависимости: {', '.join(str(item) for item in missing)}")
+        return True
+    return False
 
 
 def save_hash():

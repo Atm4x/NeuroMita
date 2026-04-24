@@ -236,16 +236,24 @@ class LocalVoiceController:
             if progress_callback:
                 progress_callback("status", _("Инициализация модели...", "Initializing model..."))
 
-            ok = await self._engine_call_async(
+            result = await self._engine_call_async(
                 "init_model",
                 {"model_id": model_id, "warmup": True},
                 timeout=3600.0
             )
+            error_message = None
+            if isinstance(result, dict):
+                ok = bool(result.get("ok"))
+                error_message = str(result.get("error") or "").strip() or None
+            else:
+                ok = bool(result)
 
             if ok:
                 self._initialized_cache[model_id] = True
                 self.event_bus.emit(Events.Audio.FINISH_MODEL_LOADING, {"model_id": model_id})
             else:
+                if error_message:
+                    logger.error(f"TTS init failed for '{model_id}': {error_message}")
                 self._initialized_cache[model_id] = False
                 self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {
                     "status": _("Ошибка инициализации!", "Initialization error!")

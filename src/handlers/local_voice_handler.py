@@ -161,6 +161,12 @@ class LocalVoice:
             logger.error(f"initialize_model failed for {model_id}: {e}", exc_info=True)
             ok = False
 
+        if not ok:
+            logger.error(
+                f"Voice model initialization returned False: model_id={model_id}, "
+                f"provider={self.provider}, handler={type(model).__name__}"
+            )
+
         if ok:
             self.active_model_instance = model
         return ok
