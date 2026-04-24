@@ -147,8 +147,8 @@ try:
     from managers.backend_manager import BackendManager
 
     _active_backend = BackendManager.active()
-    logger.info(f"Backend bootstrap (early): target={_active_backend.value}")
-    BackendManager.ensure_backend(_active_backend)
+    logger.info(f"Backend core bootstrap (early): target={_active_backend.value}")
+    BackendManager.ensure_backend_core(_active_backend)
 except Exception as _backend_boot_err:
     logger.warning(f"Backend early bootstrap failed: {_backend_boot_err}")
 # ──────────────────────────────────────────────────────────────────────

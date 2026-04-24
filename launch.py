@@ -40,6 +40,41 @@ GAME_PYTHON = Path(env.get("LAUNCH_PYTHON", _default_python))
 # ACTIVE_BACKEND / BACKEND / GPU_VENDOR can be set in build.env or env vars.
 
 
+def detect_backend() -> str:
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if result.returncode == 0 and "NVIDIA" in (result.stdout or "").upper():
+            return "CUDA"
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.5,
+        )
+        output = (result.stdout or "").upper()
+        if "NVIDIA" in output:
+            return "CUDA"
+        if "AMD" in output or "RADEON" in output:
+            return "ONNX"
+    except Exception:
+        pass
+
+    return "ONNX"
+
+
 def resolve_backend() -> str:
     raw = (
         env.get("ACTIVE_BACKEND")
@@ -59,7 +94,9 @@ def resolve_backend() -> str:
         "CPU": "ONNX",
         "DIRECTML": "ONNX",
     }
-    return mapping.get(raw, "ONNX")
+    if raw:
+        return mapping.get(raw, detect_backend())
+    return detect_backend()
 
 
 ACTIVE_BACKEND = resolve_backend()

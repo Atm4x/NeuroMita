@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 from core.backends import Backend, normalize_backend, vendor_to_backend
 from core.install_types import InstallAction, InstallCallbacks, InstallPlan
 from main_logger import logger
@@ -12,12 +15,13 @@ from utils.pip_installer import PipInstaller
 
 
 class BackendManager:
+    CUDA_CORE_PACKAGES = ["onnxruntime"]
     CUDA_TORCH_PACKAGES = ["torch==2.7.1+cu128", "torchvision", "torchaudio"]
     CUDA_EXTRA_ARGS = ["--index-url", "https://download.pytorch.org/whl/cu128"]
 
     ONNX_TORCH_PACKAGES = ["torch", "torchvision", "torchaudio"]
     ONNX_TORCH_EXTRA_ARGS = ["--index-url", "https://download.pytorch.org/whl/cpu"]
-    ONNX_RUNTIME_PACKAGES = ["onnxruntime-directml", "onnx", "numpy<2"]
+    ONNX_CORE_PACKAGES = ["onnxruntime-directml", "onnx", "numpy<2"]
 
     _detected_backend: Optional[Backend] = None
 
@@ -28,6 +32,63 @@ class BackendManager:
     @classmethod
     def _marker_path(cls) -> str:
         return os.path.join(cls._libs_dir(), ".backend")
+
+    @classmethod
+    def _installed_package_names(cls) -> set[str]:
+        libs_dir = cls._libs_dir()
+        if not os.path.isdir(libs_dir):
+            return set()
+
+        installed: set[str] = set()
+        for name in os.listdir(libs_dir):
+            if not name.endswith(".dist-info"):
+                continue
+            try:
+                dist_name = name.split("-")[0]
+                installed.add(canonicalize_name(dist_name))
+            except Exception:
+                continue
+        return installed
+
+    @classmethod
+    def _core_specs(cls, backend: Backend) -> list[str]:
+        if backend == Backend.CUDA:
+            return list(cls.CUDA_CORE_PACKAGES)
+        return list(cls.ONNX_CORE_PACKAGES)
+
+    @classmethod
+    def _model_specs(cls, backend: Backend) -> list[str]:
+        if backend == Backend.CUDA:
+            return list(cls.CUDA_TORCH_PACKAGES)
+        return list(cls.ONNX_TORCH_PACKAGES)
+
+    @classmethod
+    def _full_specs(cls, backend: Backend) -> list[str]:
+        return cls._core_specs(backend) + cls._model_specs(backend)
+
+    @classmethod
+    def _spec_names_for_backend(cls, backend: Backend, *, include_models: bool = True) -> set[str]:
+        specs = cls._full_specs(backend) if include_models else cls._core_specs(backend)
+        names: set[str] = set()
+        for spec in specs:
+            try:
+                names.add(canonicalize_name(Requirement(spec).name))
+            except Exception:
+                raw = str(spec or "").split("[", 1)[0].split("=", 1)[0].split("<", 1)[0].strip()
+                if raw:
+                    names.add(canonicalize_name(raw))
+        return names
+
+    @classmethod
+    def is_backend_ready(cls, backend: Backend | str | None = None, *, include_models: bool = True) -> bool:
+        resolved = normalize_backend(backend, cls.active()) or cls.active()
+        required = cls._spec_names_for_backend(resolved, include_models=include_models)
+        installed = cls._installed_package_names()
+        return required.issubset(installed)
+
+    @classmethod
+    def is_backend_core_ready(cls, backend: Backend | str | None = None) -> bool:
+        return cls.is_backend_ready(backend, include_models=False)
 
     @classmethod
     def detect(cls) -> Backend:
@@ -67,9 +128,23 @@ class BackendManager:
     @classmethod
     def desired_specs(cls, backend: Backend | str | None = None) -> set[str]:
         resolved = normalize_backend(backend, cls.active()) or cls.active()
-        if resolved == Backend.CUDA:
-            return set(cls.CUDA_TORCH_PACKAGES)
-        return set(cls.ONNX_TORCH_PACKAGES) | set(cls.ONNX_RUNTIME_PACKAGES)
+        return set(cls._full_specs(resolved))
+
+    @classmethod
+    def desired_core_specs(cls, backend: Backend | str | None = None) -> set[str]:
+        resolved = normalize_backend(backend, cls.active()) or cls.active()
+        return set(cls._core_specs(resolved))
+
+    @classmethod
+    def _conflicting_runtime_packages(cls, backend: Backend) -> list[str]:
+        installed = cls._installed_package_names()
+        if backend == Backend.CUDA:
+            return ["onnxruntime-directml"] if "onnxruntime-directml" in installed else []
+        return ["onnxruntime"] if "onnxruntime" in installed else []
+
+    @classmethod
+    def _guess_conflicting_backend(cls, backend: Backend) -> Backend:
+        return Backend.ONNX if backend == Backend.CUDA else Backend.CUDA
 
     @classmethod
     def _write_marker_action(cls, backend: Backend, *, persist_setting: bool = False) -> InstallAction:
@@ -91,48 +166,138 @@ class BackendManager:
         )
 
     @classmethod
-    def _install_actions(cls, backend: Backend) -> list[InstallAction]:
+    def _install_actions(cls, backend: Backend, *, include_models: bool = True) -> list[InstallAction]:
+        actions: list[InstallAction] = []
+
         if backend == Backend.CUDA:
-            return [
+            actions.append(
                 InstallAction(
                     type="pip",
-                    description="Installing PyTorch CUDA 12.8",
-                    progress=15,
-                    packages=list(cls.CUDA_TORCH_PACKAGES),
-                    extra_args=list(cls.CUDA_EXTRA_ARGS),
+                    description="Installing ONNX Runtime",
+                    progress=10 if include_models else 20,
+                    packages=list(cls.CUDA_CORE_PACKAGES),
                     backend=backend,
-                ),
-                cls._write_marker_action(backend),
-            ]
+                )
+            )
+            if include_models:
+                actions.append(
+                    InstallAction(
+                        type="pip",
+                        description="Installing PyTorch CUDA 12.8",
+                        progress=45,
+                        packages=list(cls.CUDA_TORCH_PACKAGES),
+                        extra_args=list(cls.CUDA_EXTRA_ARGS),
+                        backend=backend,
+                    )
+                )
+            actions.append(cls._write_marker_action(backend))
+            return actions
 
-        return [
-            InstallAction(
-                type="pip",
-                description="Installing ONNX runtime + CPU PyTorch",
-                progress=15,
-                packages=list(cls.ONNX_TORCH_PACKAGES),
-                extra_args=list(cls.ONNX_TORCH_EXTRA_ARGS),
-                backend=backend,
-            ),
+        actions.append(
             InstallAction(
                 type="pip",
                 description="Installing ONNX Runtime DirectML",
-                progress=55,
-                packages=list(cls.ONNX_RUNTIME_PACKAGES),
+                progress=15 if include_models else 20,
+                packages=list(cls.ONNX_CORE_PACKAGES),
                 backend=backend,
-            ),
-            cls._write_marker_action(backend),
-        ]
+            )
+        )
+        if include_models:
+            actions.append(
+                InstallAction(
+                    type="pip",
+                    description="Installing CPU PyTorch",
+                    progress=55,
+                    packages=list(cls.ONNX_TORCH_PACKAGES),
+                    extra_args=list(cls.ONNX_TORCH_EXTRA_ARGS),
+                    backend=backend,
+                )
+            )
+        actions.append(cls._write_marker_action(backend))
+        return actions
+
+    @classmethod
+    def _core_activate_actions(cls, backend: Backend, *, persist_setting: bool = False) -> list[InstallAction]:
+        actions = cls._install_actions(backend, include_models=False)
+        if actions:
+            actions[-1] = cls._write_marker_action(backend, persist_setting=persist_setting)
+        return actions
 
     @classmethod
     def build_install_plan(cls, backend: Backend | str | None = None, *, force: bool = False) -> InstallPlan:
         resolved = normalize_backend(backend, cls.active()) or cls.active()
         current = cls.current_backend_from_marker()
-        if not force and current == resolved:
+        if not force and current == resolved and cls.is_backend_ready(resolved):
             return InstallPlan(actions=[], already_installed=True, already_installed_status=f"{resolved.value} already active")
-        if force or current not in (None, resolved):
-            return cls.build_switch_plan(current, resolved)
-        return InstallPlan(actions=cls._install_actions(resolved), ok_status=f"{resolved.value} ready")
+        if force or current not in (None, resolved) or cls._conflicting_runtime_packages(resolved):
+            switch_from = current if current not in (None, resolved) else cls._guess_conflicting_backend(resolved)
+            return cls.build_switch_plan(switch_from, resolved)
+        return InstallPlan(actions=cls._install_actions(resolved, include_models=True), ok_status=f"{resolved.value} ready")
+
+    @classmethod
+    def build_core_install_plan(
+        cls,
+        backend: Backend | str | None = None,
+        *,
+        force: bool = False,
+        persist_setting: bool = False,
+    ) -> InstallPlan:
+        resolved = normalize_backend(backend, cls.active()) or cls.active()
+        current = cls.current_backend_from_marker()
+        if not force and current == resolved and cls.is_backend_core_ready(resolved):
+            return InstallPlan(actions=[], already_installed=True, already_installed_status=f"{resolved.value} core already active")
+        if force or current not in (None, resolved) or cls._conflicting_runtime_packages(resolved):
+            switch_from = current if current not in (None, resolved) else cls._guess_conflicting_backend(resolved)
+            return cls.build_core_switch_plan(switch_from, resolved, persist_setting=persist_setting)
+        return InstallPlan(
+            actions=cls._core_activate_actions(resolved, persist_setting=persist_setting),
+            ok_status=f"{resolved.value} core ready",
+        )
+
+    @classmethod
+    def build_core_switch_plan(
+        cls,
+        old_backend: Backend | str | None,
+        new_backend: Backend | str | None,
+        *,
+        persist_setting: bool = False,
+    ) -> InstallPlan:
+        old_resolved = normalize_backend(old_backend)
+        new_resolved = normalize_backend(new_backend, cls.active()) or cls.active()
+
+        actions: list[InstallAction] = []
+        if old_resolved == Backend.CUDA and new_resolved == Backend.ONNX:
+            actions.append(
+                InstallAction(
+                    type="call",
+                    description="Removing CUDA runtime packages",
+                    progress=5,
+                    fn=lambda *, pip_installer=None, **_kwargs: bool(
+                        pip_installer and pip_installer.uninstall_packages(
+                            ["onnxruntime"],
+                            description="Removing CUDA runtime packages",
+                        )
+                    ),
+                )
+            )
+        elif old_resolved == Backend.ONNX and new_resolved == Backend.CUDA:
+            actions.append(
+                InstallAction(
+                    type="call",
+                    description="Removing ONNX runtime packages",
+                    progress=5,
+                    fn=lambda *, pip_installer=None, **_kwargs: bool(
+                        pip_installer and pip_installer.uninstall_packages(
+                            ["onnxruntime-directml"],
+                            description="Removing ONNX runtime packages",
+                        )
+                    ),
+                )
+            )
+
+        actions.extend(cls._core_activate_actions(new_resolved)[:-1])
+        actions.append(cls._write_marker_action(new_resolved, persist_setting=persist_setting))
+        return InstallPlan(actions=actions, ok_status=f"{new_resolved.value} core ready")
 
     @classmethod
     def build_switch_plan(
@@ -154,7 +319,7 @@ class BackendManager:
                     progress=5,
                     fn=lambda *, pip_installer=None, **_kwargs: bool(
                         pip_installer and pip_installer.uninstall_packages(
-                            ["torch", "torchvision", "torchaudio"],
+                            ["onnxruntime", "torch", "torchvision", "torchaudio"],
                             description="Removing CUDA backend packages",
                         )
                     ),
@@ -175,14 +340,14 @@ class BackendManager:
                 )
             )
 
-        actions.extend(cls._install_actions(new_resolved)[:-1])
+        actions.extend(cls._install_actions(new_resolved, include_models=True)[:-1])
         actions.append(cls._write_marker_action(new_resolved, persist_setting=persist_setting))
         return InstallPlan(actions=actions, ok_status=f"{new_resolved.value} ready")
 
     @classmethod
     def build_activate_plan(cls, backend: Backend | str | None) -> InstallPlan:
         target = normalize_backend(backend, cls.active()) or cls.active()
-        return cls.build_switch_plan(cls.current_backend_from_marker(), target, persist_setting=True)
+        return cls.build_core_install_plan(target, persist_setting=True)
 
     @classmethod
     def _run_plan(cls, plan: InstallPlan, *, callbacks: InstallCallbacks | None = None, use_cache: bool | None = None) -> bool:
@@ -234,7 +399,7 @@ class BackendManager:
     ) -> bool:
         target = normalize_backend(backend, cls.active()) or cls.active()
         current = cls.current_backend_from_marker()
-        if current == target:
+        if current == target and cls.is_backend_ready(target):
             return True
 
         if current is None:
@@ -242,7 +407,7 @@ class BackendManager:
             has_torch_dist = False
             if os.path.isdir(libs_dir):
                 has_torch_dist = any(name.startswith("torch-") and name.endswith(".dist-info") for name in os.listdir(libs_dir))
-            if has_torch_dist:
+            if has_torch_dist and cls.is_backend_ready(target):
                 marker = cls._marker_path()
                 os.makedirs(os.path.dirname(marker) or ".", exist_ok=True)
                 with open(marker, "w", encoding="utf-8") as f:
@@ -251,3 +416,30 @@ class BackendManager:
                 return True
 
         return cls._run_plan(cls.build_switch_plan(current, target, persist_setting=True), callbacks=callbacks, use_cache=use_cache)
+
+    @classmethod
+    def ensure_backend_core(
+        cls,
+        backend: Backend | str | None = None,
+        *,
+        callbacks: InstallCallbacks | None = None,
+        use_cache: bool | None = None,
+    ) -> bool:
+        target = normalize_backend(backend, cls.active()) or cls.active()
+        current = cls.current_backend_from_marker()
+        if current == target and cls.is_backend_core_ready(target):
+            return True
+
+        if cls.is_backend_core_ready(target):
+            marker = cls._marker_path()
+            os.makedirs(os.path.dirname(marker) or ".", exist_ok=True)
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(target.value)
+            SettingsManager.set("ACTIVE_BACKEND", target.value)
+            return True
+
+        return cls._run_plan(
+            cls.build_core_install_plan(target, persist_setting=True),
+            callbacks=callbacks,
+            use_cache=use_cache,
+        )
