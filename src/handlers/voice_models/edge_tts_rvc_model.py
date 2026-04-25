@@ -15,6 +15,7 @@ from utils import getTranslationVariant as _, get_character_voice_paths
 
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
+from managers.backend_manager import BackendManager
 
 from handlers.voice_models.install_plan_helpers import torch_install_action, pip_uninstall_action
 
@@ -51,7 +52,7 @@ class EdgeTTSRVCInstallSpec:
     @classmethod
     def is_installed(cls, model_id: str, ctx: dict) -> bool:
         st = check_requirements(cls.requirements(model_id, ctx), ctx=ctx)
-        return bool(st.get("ok"))
+        return BackendManager.is_backend_ready(cls.REQUIRED_BACKEND) and bool(st.get("ok"))
 
     @classmethod
     def _patch_fairseq_configs_call(cls):

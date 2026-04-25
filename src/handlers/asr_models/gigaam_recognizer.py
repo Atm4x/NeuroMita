@@ -148,8 +148,6 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
     # ---------- dependency model ----------
     def requirements(self):
         return [
-            InstallRequirement(id="torch", kind="python_module", module="torch", required=True),
-            InstallRequirement(id="torchaudio", kind="python_module", module="torchaudio", required=True),
             InstallRequirement(id="omegaconf", kind="python_module", module="omegaconf", required=True),
             InstallRequirement(id="hydra", kind="python_module", module="hydra", required=True),
             InstallRequirement(id="sentencepiece", kind="python_module", module="sentencepiece", required=True),
@@ -160,53 +158,32 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
         ]
 
     def pip_install_steps(self, ctx: dict) -> List[dict]:
-        gpu = (ctx.get("backend") or "CPU")
-        device = str(ctx.get("device") or "auto").strip().lower()
-
-        steps: List[dict] = []
-
-        if gpu == "CUDA" and device in ("auto", "cuda"):
-            steps.append({
-                "progress": 10,
-                "description": _("Installing PyTorch with CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
-                "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-                "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
-            })
-        else:
-            steps.append({
-                "progress": 10,
-                "description": _("Installing PyTorch CPU...", "Installing PyTorch CPU..."),
-                "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-                "extra_args": None
-            })
-
-        steps.append({
+        return [
+            {
             "progress": 30,
             "description": _("Installing deps...", "Installing deps..."),
             "packages": ["hydra-core", "sentencepiece", "omegaconf"],
             "extra_args": None
-        })
-
-        steps.append({
+            },
+            {
             "progress": 55,
             "description": _("Installing Silero VAD...", "Installing Silero VAD..."),
             "packages": ["silero-vad"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 60,
             "description": _("Installing sounddevice...", "Installing sounddevice..."),
             "packages": ["sounddevice"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 65,
             "description": _("Installing numpy...", "Installing numpy..."),
             "packages": ["numpy"],
             "extra_args": None
-        })
-
-        return steps
+            },
+        ]
 
     def is_installed(self) -> bool:
         if self._current_gpu is None:
@@ -217,7 +194,7 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
 
         ctx = {"device": self.gigaam_device, "backend": self._current_gpu}
         st = check_requirements(self.requirements(), ctx=ctx)
-        return bool(st.get("ok"))
+        return BackendManager.is_backend_ready(self.REQUIRED_BACKEND) and bool(st.get("ok"))
     
     def install_manifest(self) -> list[dict]:
         model_name = self._normalized_ckpt_name()

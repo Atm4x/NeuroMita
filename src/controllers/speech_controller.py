@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import sounddevice as sd
 
 from handlers.asr_handler import SpeechRecognition
+from managers.backend_manager import BackendManager
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from utils import getTranslationVariant as _
@@ -564,6 +565,23 @@ class SpeechController:
                     status = check_requirements(reqs, ctx=ctx) if reqs else {
                         "ok": True, "missing_required": [], "missing_optional": [], "details": []
                     }
+                    required_backend = getattr(inst, "REQUIRED_BACKEND", None) if inst else None
+                    backend_ready = True
+                    if required_backend is not None:
+                        try:
+                            backend_ready = BackendManager.is_backend_ready(required_backend)
+                        except Exception:
+                            backend_ready = False
+                    installed_ok = bool(status.get("ok")) and backend_ready
+                    details = list(status.get("details", []) or [])
+                    if required_backend is not None and not backend_ready:
+                        details.append({
+                            "id": "backend",
+                            "kind": "backend",
+                            "required": True,
+                            "ok": False,
+                            "message": f"Backend {getattr(required_backend, 'value', required_backend)} is not ready",
+                        })
 
                     result.append({
                         "id": engine,
@@ -573,10 +591,10 @@ class SpeechController:
                         "backend": meta.get("backend", []) if isinstance(meta.get("backend"), list) else [],
                         "tags": meta.get("tags", []) if isinstance(meta.get("tags"), list) else [],
                         "links": meta.get("links", []) if isinstance(meta.get("links"), list) else [],
-                        "installed": bool(status.get("ok")),
+                        "installed": installed_ok,
                         "missing_required": status.get("missing_required", []),
                         "missing_optional": status.get("missing_optional", []),
-                        "details": status.get("details", []),
+                        "details": details,
                     })
 
                 return result

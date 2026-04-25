@@ -142,8 +142,6 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
     # ---------- dependency model ----------
     def requirements(self):
         return [
-            InstallRequirement(id="torch", kind="python_module", module="torch", required=True),
-            InstallRequirement(id="torchaudio", kind="python_module", module="torchaudio", required=True),
             InstallRequirement(id="omegaconf", kind="python_module", module="omegaconf", required=True),
             InstallRequirement(id="hydra", kind="python_module", module="hydra", required=True),
             InstallRequirement(id="sentencepiece", kind="python_module", module="sentencepiece", required=True),
@@ -152,63 +150,35 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
             InstallRequirement(id="sounddevice", kind="python_module", module="sounddevice", required=True),
             InstallRequirement(id="numpy", kind="python_module", module="numpy", required=True),
 
-            InstallRequirement(id="onnxruntime", kind="python_module", module="onnxruntime", required=True),
         ]
 
     def pip_install_steps(self, ctx: dict) -> List[dict]:
-        gpu = (ctx.get("backend") or "CPU")
-        device = str(ctx.get("device") or "auto").strip().lower()
-
-        steps: List[dict] = []
-
-        # torch CPU достаточно (onnx inference всё равно в ORT; torch нужен для preprocessor/экспорта)
-        steps.append({
-            "progress": 10,
-            "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
-            "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-            "extra_args": None
-        })
-
-        steps.append({
+        return [
+            {
             "progress": 30,
             "description": _("Установка зависимостей GigaAM...", "Installing GigaAM deps..."),
             "packages": ["hydra-core", "sentencepiece", "omegaconf"],
             "extra_args": None
-        })
-
-        steps.append({
+            },
+            {
             "progress": 55,
             "description": _("Установка Silero VAD...", "Installing Silero VAD..."),
             "packages": ["silero-vad"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 60,
             "description": _("Установка sounddevice...", "Installing sounddevice..."),
             "packages": ["sounddevice"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 65,
             "description": _("Установка numpy...", "Installing numpy..."),
             "packages": ["numpy"],
             "extra_args": None
-        })
-
-        # ONNX runtime (+ directml при необходимости)
-        pkgs = ["onnx", "onnxruntime"]
-        desc = _("Установка ONNX Runtime...", "Installing ONNX Runtime...")
-        if (device in ("auto", "dml")) and gpu != "CUDA":
-            pkgs.append("onnxruntime-directml")
-            desc = _("Установка ONNX Runtime + DirectML...", "Installing ONNX Runtime + DirectML...")
-        steps.append({
-            "progress": 75,
-            "description": desc,
-            "packages": pkgs,
-            "extra_args": None
-        })
-
-        return steps
+            },
+        ]
 
     def is_installed(self) -> bool:
         if self._current_gpu is None:
@@ -219,7 +189,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
 
         ctx = {"device": self.gigaam_device, "backend": self._current_gpu}
         st = check_requirements(self.requirements(), ctx=ctx)
-        return bool(st.get("ok"))
+        return BackendManager.is_backend_ready(self.REQUIRED_BACKEND) and bool(st.get("ok"))
     
     def install_manifest(self) -> list[dict]:
         model_name = self._normalized_ckpt_name()

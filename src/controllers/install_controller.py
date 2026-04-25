@@ -291,18 +291,16 @@ class InstallController:
                     break
 
         if required_backend is not None and not ctx.get("_backend_prepared"):
-            current_backend = BackendManager.current_backend_from_marker()
-            if current_backend != required_backend:
-                backend_plan = BackendManager.build_switch_plan(current_backend, required_backend)
-                nested_ctx = dict(ctx)
-                nested_ctx["_backend_prepared"] = True
-                if not self._execute_plan(
-                    backend_plan,
-                    pip_installer=pip_installer,
-                    callbacks=callbacks,
-                    ctx=nested_ctx,
-                ):
-                    return False
+            backend_plan = BackendManager.build_install_plan(required_backend)
+            nested_ctx = dict(ctx)
+            nested_ctx["_backend_prepared"] = True
+            if not self._execute_plan(
+                backend_plan,
+                pip_installer=pip_installer,
+                callbacks=callbacks,
+                ctx=nested_ctx,
+            ):
+                return False
 
         if plan.already_installed:
             cb.status(plan.already_installed_status or "Already installed")

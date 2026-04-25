@@ -112,7 +112,6 @@ class WhisperRecognizer(SpeechRecognizerInterface):
     # ---------- dependency model ----------
     def requirements(self):
         return [
-            InstallRequirement(id="torch", kind="python_module", module="torch", required=True),
             InstallRequirement(id="silero_vad", kind="python_module", module="silero_vad", required=True),
             InstallRequirement(id="sounddevice", kind="python_module", module="sounddevice", required=True),
             InstallRequirement(id="numpy", kind="python_module", module="numpy", required=True),
@@ -120,53 +119,32 @@ class WhisperRecognizer(SpeechRecognizerInterface):
         ]
 
     def pip_install_steps(self, ctx: dict) -> List[dict]:
-        gpu = (ctx.get("backend") or "CPU")
-        device = str(ctx.get("device") or "auto").strip().lower()
-
-        steps: List[dict] = []
-
-        # torch нужен для silero-vad (даже если whisper сам на CTranslate2)
-        if gpu == "CUDA" and device in ("auto", "cuda"):
-            steps.append({
-                "progress": 10,
-                "description": _("Установка PyTorch с CUDA (cu128)...", "Installing PyTorch with CUDA (cu128)..."),
-                "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-                "extra_args": ["--index-url", "https://download.pytorch.org/whl/cu128"]
-            })
-        else:
-            steps.append({
-                "progress": 10,
-                "description": _("Установка PyTorch CPU...", "Installing PyTorch CPU..."),
-                "packages": ["torch==2.7.1", "torchaudio==2.7.1"],
-                "extra_args": None
-            })
-
-        steps.append({
+        return [
+            {
             "progress": 40,
             "description": _("Установка Silero VAD...", "Installing Silero VAD..."),
             "packages": ["silero-vad"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 55,
             "description": _("Установка sounddevice...", "Installing sounddevice..."),
             "packages": ["sounddevice"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 60,
             "description": _("Установка numpy...", "Installing numpy..."),
             "packages": ["numpy"],
             "extra_args": None
-        })
-        steps.append({
+            },
+            {
             "progress": 70,
             "description": _("Установка faster-whisper...", "Installing faster-whisper..."),
             "packages": ["faster-whisper"],
             "extra_args": None
-        })
-
-        return steps
+            },
+        ]
 
     def is_installed(self) -> bool:
         if self._current_gpu is None:
@@ -177,7 +155,7 @@ class WhisperRecognizer(SpeechRecognizerInterface):
 
         ctx = {"device": self.whisper_device, "backend": self._current_gpu}
         st = check_requirements(self.requirements(), ctx=ctx)
-        return bool(st.get("ok"))
+        return BackendManager.is_backend_ready(self.REQUIRED_BACKEND) and bool(st.get("ok"))
         
     def install_manifest(self) -> list[dict]:
         return []

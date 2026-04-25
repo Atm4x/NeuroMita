@@ -10,6 +10,7 @@ from typing import Optional, Any, List, Dict
 
 from .base_model import IVoiceModel
 from core.backends import Backend
+from managers.backend_manager import BackendManager
 from main_logger import logger
 
 from core.events import Events
@@ -46,7 +47,7 @@ class FishSpeechInstallSpec:
     @classmethod
     def is_installed(cls, model_id: str, ctx: dict) -> bool:
         st = check_requirements(cls.requirements(model_id, ctx), ctx=ctx)
-        return bool(st.get("ok"))
+        return BackendManager.is_backend_ready(cls.REQUIRED_BACKEND) and bool(st.get("ok"))
 
     @classmethod
     def _libs_path_abs(cls, pip_installer) -> str:
