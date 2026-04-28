@@ -345,20 +345,53 @@ from main_logger import logger
 from PyQt6.QtWidgets import QApplication
 import sys
 
+def _parse_cli_args(argv):
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="NeuroMita",
+        description="NeuroMita launcher. Optional CLI flags override settings.json BLOCK_*_ENABLED keys.",
+        add_help=True,
+    )
+    parser.add_argument("--headless", action="store_true",
+                        help="(reserved for Step 3) Run without GUI/QApplication.")
+    parser.add_argument("--server-only", dest="server_only", action="store_true",
+                        help="Disable all optional blocks (Telegram/Voice/RAG/Perception/Reminders/GUI).")
+    # tri-state per block: --no-X disables; default None = follow settings.json.
+    parser.add_argument("--no-gui", dest="block_gui_enabled", action="store_false", default=None)
+    parser.add_argument("--no-telegram", dest="block_telegram_enabled", action="store_false", default=None)
+    parser.add_argument("--no-voice", dest="block_voice_enabled", action="store_false", default=None)
+    parser.add_argument("--no-rag", dest="block_rag_enabled", action="store_false", default=None)
+    parser.add_argument("--no-perception", dest="block_perception_enabled", action="store_false", default=None)
+    parser.add_argument("--no-reminders", dest="block_reminders_enabled", action="store_false", default=None)
+    parser.add_argument("--enable", action="append", default=[],
+                        help="Force-enable a block by name (telegram/voice/rag/perception/reminders/gui). Can repeat.")
+    # parse_known_args so QApplication-related argv (e.g. -platform) is preserved.
+    args, _ = parser.parse_known_args(argv)
+    # Apply --enable overrides (set the corresponding tri-state to True).
+    for name in args.enable:
+        attr = f"block_{name.lower()}_enabled"
+        if hasattr(args, attr):
+            setattr(args, attr, True)
+    return args
+
+
 if __name__ == "__main__":
     logger.success("Функция main() запущена")
     try:
+        cli_args = _parse_cli_args(sys.argv[1:])
+        logger.info(f"CLI args: {vars(cli_args)}")
+
         app = QApplication(sys.argv)
         logger.info("QApplication создан")
 
         if sys.platform == 'win32':
             import ctypes
-            myappid = 'mycompany.myproduct.subproduct.version' 
+            myappid = 'mycompany.myproduct.subproduct.version'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         # Создаем пустой объект для контроллера
         logger.info("Создаю MainController...")
-        controller = MainController(None)
+        controller = MainController(None, cli_args=cli_args)
         logger.info("MainController создан")
 
         # Инициализация сборщика данных для дообучения

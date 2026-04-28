@@ -9,7 +9,6 @@ from telethon.tl.types import MessageMediaDocument, DocumentAttributeAudio
 from telethon.errors import SessionPasswordNeededError
 
 from utils.audio_converter import AudioConverter
-from handlers.audio_handler import AudioHandler
 from main_logger import logger
 from utils import SH
 import platform
@@ -258,7 +257,9 @@ class TelegramBotHandler:
                 path_to_file = absolute_wav_path
             else:
                 path_to_file = sound_absolute_path
-                await AudioHandler.handle_voice_file(file_path)
+                # Voice playback delegated to AudioController via event (avoids direct AudioHandler dep).
+                # If VoiceBlock is disabled, the event has no listeners and call is a no-op.
+                self.event_bus.emit(Events.Audio.PLAY_VOICE_FILE, {"file_path": file_path, "delete": True})
 
         elif response.text:
             logger.info(f"Ответ от бота (text): {response.text}")

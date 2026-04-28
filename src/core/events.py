@@ -499,6 +499,9 @@ class Events:
         LOCAL_UNINSTALL_MODEL = "local_uninstall_voice_model"
         GET_ALL_LOCAL_MODEL_CONFIGS = "get_all_local_model_configs"
 
+        # Воспроизведение готового файла (используется TG handler чтобы не тянуть AudioHandler)
+        PLAY_VOICE_FILE = "play_voice_file"
+
     class Speech:
         """События для распознавания речи и управления микрофоном"""
         GET_MIC_STATUS = "get_mic_status"

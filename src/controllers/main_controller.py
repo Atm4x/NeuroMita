@@ -5,8 +5,6 @@ from PyQt6.QtCore import QTimer
 
 from controllers.gui_controller import GuiController
 from controllers.audio_controller import AudioController
-from controllers.telegram_controller import TelegramController
-from controllers.capture_controller import CaptureController
 from controllers.model_controller import ModelController
 from controllers.character_controller import CharacterController
 from controllers.speech_controller import SpeechController
@@ -26,6 +24,14 @@ from controllers.protocols_controller import ProtocolsController
 from controllers.embedding_controller import EmbeddingController
 from controllers.ai_engine_controller import AIEngineController
 
+from controllers.blocks import (
+    BlockContext,
+    BlockRegistry,
+    PerceptionBlock,
+    RemindersBlock,
+    TelegramBlock,
+)
+
 from main_logger import logger
 from utils.ffmpeg_installer import install_ffmpeg
 from utils.pip_installer import PipInstaller
@@ -36,8 +42,9 @@ from controllers.server_controller_old import ServerControllerOld
 
 
 class MainController:
-    def __init__(self, view):
+    def __init__(self, view, *, cli_args=None):
         self.view = view
+        self.cli_args = cli_args
         self.event_bus = get_event_bus()
 
         self.dialog_active = False
@@ -47,8 +54,11 @@ class MainController:
 
         self.gui_controller = None
 
-        self.telegram_controller = TelegramController()
-        logger.notify("TelegramController успешно инициализирован.")
+        # Регистрируем опциональные блоки сейчас; инициализируем после загрузки settings.
+        self.block_registry = BlockRegistry()
+        self.block_registry.register(TelegramBlock())
+        self.block_registry.register(PerceptionBlock())
+        self.block_registry.register(RemindersBlock())
 
         try:
             target_folder = "Settings"
@@ -117,12 +127,8 @@ class MainController:
         self.embedding_controller = EmbeddingController()
         logger.notify("EmbeddingController успешно инициализирован.")
 
-        self.capture_controller = CaptureController(self.settings)
-        logger.notify("CaptureController успешно инициализирован.")
-
-        from controllers.reminder_controller import ReminderController
-        self.reminder_controller = ReminderController(self.settings)
-        logger.notify("ReminderController успешно инициализирован.")
+        # Инициализация опциональных блоков (Telegram/Perception/Reminders) — выключенных по умолчанию.
+        self._init_optional_blocks()
 
         self.speech_controller = SpeechController()
         logger.notify("SpeechController успешно инициализирован.")
@@ -136,6 +142,32 @@ class MainController:
 
         self._subscribe_to_events()
         logger.notify("MainController подписался на события")
+
+    def _init_optional_blocks(self):
+        ctx = BlockContext(
+            settings=self.settings,
+            event_bus=self.event_bus,
+            view=self.view,
+            cli_args=self.cli_args,
+            main_controller=self,
+        )
+        self.block_registry.initialize(ctx)
+
+    # ---- backwards-compat proxy properties (return None if block disabled) ----
+    @property
+    def telegram_controller(self):
+        blk = self.block_registry.get("telegram")
+        return blk.get("telegram_controller") if blk and blk.active else None
+
+    @property
+    def capture_controller(self):
+        blk = self.block_registry.get("perception")
+        return blk.get("capture_controller") if blk and blk.active else None
+
+    @property
+    def reminder_controller(self):
+        blk = self.block_registry.get("reminders")
+        return blk.get("reminder_controller") if blk and blk.active else None
 
     def _init_server_controller(self):
         use_new_api = self.settings.get('USE_NEW_API', True)
@@ -205,8 +237,10 @@ class MainController:
         except Exception as e:
             logger.error(f"Ошибка при остановке сервера: {e}", exc_info=True)
 
-        self.capture_controller.stop_screen_capture_thread()
-        self.capture_controller.stop_camera_capture_thread()
+        try:
+            self.block_registry.shutdown()
+        except Exception as e:
+            logger.error(f"Ошибка при остановке опциональных блоков: {e}", exc_info=True)
 
         self.audio_controller.delete_all_sound_files()
 

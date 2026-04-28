@@ -46,6 +46,23 @@ class AudioController:
         eb.subscribe(Events.Audio.DELETE_SOUND_FILES, self._on_delete_sound_files, weak=False)
         eb.subscribe(Events.Audio.GET_WAITING_ANSWER, self._on_get_waiting_answer, weak=False)
         eb.subscribe(Events.Audio.SET_WAITING_ANSWER, self._on_set_waiting_answer, weak=False)
+        eb.subscribe(Events.Audio.PLAY_VOICE_FILE, self._on_play_voice_file, weak=False)
+
+    def _on_play_voice_file(self, event: Event):
+        data = event.data or {}
+        file_path = data.get("file_path")
+        if not file_path:
+            return
+        delete = bool(data.get("delete", True))
+        try:
+            asyncio.run(AudioHandler.handle_voice_file(file_path, delete))
+        except RuntimeError:
+            # Уже есть запущенный loop — отдадим в фон через to_thread эквивалент
+            import threading
+            threading.Thread(
+                target=lambda: asyncio.run(AudioHandler.handle_voice_file(file_path, delete)),
+                daemon=True,
+            ).start()
 
     def _on_get_waiting_answer(self, event: Event):
         return self.waiting_answer
