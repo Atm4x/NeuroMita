@@ -18,10 +18,13 @@ class AudioController:
     не делает повторных запросов персонажа в рамках одного запроса.
     """
 
-    def __init__(self, main_controller):
-        self.main_controller = main_controller
-        self.settings = main_controller.settings
-        self.event_bus = get_event_bus()
+    def __init__(self, settings, event_bus=None):
+        # Backwards-compat: accept legacy MainController positional arg.
+        if hasattr(settings, "settings") and not hasattr(settings, "get"):
+            legacy_main = settings
+            settings = legacy_main.settings
+        self.settings = settings
+        self.event_bus = event_bus or get_event_bus()
 
         self.voiceover_method = self.settings.get("VOICEOVER_METHOD", "TG")
         self.current_local_voice_id = self.settings.get("NM_CURRENT_VOICEOVER", None)

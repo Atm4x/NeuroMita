@@ -4,32 +4,27 @@ from pathlib import Path
 from PyQt6.QtCore import QTimer
 
 from controllers.gui_controller import GuiController
-from controllers.audio_controller import AudioController
 from controllers.model_controller import ModelController
 from controllers.character_controller import CharacterController
-from controllers.speech_controller import SpeechController
 from controllers.settings_controller import SettingsController
 from controllers.chat_controller import ChatController
 from controllers.loop_controller import LoopController
 from controllers.task_controller import TaskController
 from controllers.api_presets_controller import ApiPresetsController
-from controllers.embedding_presets_controller import EmbeddingPresetsController
-from controllers.local_voice_controller import LocalVoiceController
 from controllers.prompt_controller import PromptController
 from controllers.history_controller import HistoryController
-from controllers.graph_controller import GraphController
-from controllers.voice_model_controller import VoiceModelController
 from controllers.install_controller import InstallController
 from controllers.protocols_controller import ProtocolsController
-from controllers.embedding_controller import EmbeddingController
-from controllers.ai_engine_controller import AIEngineController
 
 from controllers.blocks import (
+    AIEngineBlock,
     BlockContext,
     BlockRegistry,
     PerceptionBlock,
+    RAGBlock,
     RemindersBlock,
     TelegramBlock,
+    VoiceBlock,
 )
 
 from main_logger import logger
@@ -56,6 +51,9 @@ class MainController:
 
         # Регистрируем опциональные блоки сейчас; инициализируем после загрузки settings.
         self.block_registry = BlockRegistry()
+        self.block_registry.register(AIEngineBlock())
+        self.block_registry.register(VoiceBlock())
+        self.block_registry.register(RAGBlock())
         self.block_registry.register(TelegramBlock())
         self.block_registry.register(PerceptionBlock())
         self.block_registry.register(RemindersBlock())
@@ -85,20 +83,11 @@ class MainController:
         self.install_controller = InstallController()
         logger.notify("InstallController успешно инициализирован.")
 
-        self.ai_engine_controller = AIEngineController()
-        logger.notify("AIEngineController успешно инициализирован (separate process).")
-
-        self.local_voice_controller = LocalVoiceController()
-        logger.notify("LocalVoiceController успешно инициализирован.")
-
         self.task_controller = TaskController()
         logger.notify("TaskController успешно инициализирован.")
 
         self.history_controller = HistoryController()
         logger.notify("HistoryController успешно инициализирован.")
-
-        self.graph_controller = GraphController()
-        logger.notify("GraphController успешно инициализирован.")
 
         self.prompt_controller = PromptController()
         logger.notify("PromptController успешно инициализирован.")
@@ -109,36 +98,20 @@ class MainController:
         self.api_presets_controller = ApiPresetsController()
         logger.notify("ApiPresetsController успешно инициализирован.")
 
-        self.embedding_presets_controller = EmbeddingPresetsController()
-        logger.notify("EmbeddingPresetsController успешно инициализирован.")
-
-        self.audio_controller = AudioController(self)
-        logger.notify("AudioController успешно инициализирован.")
-
-        self.voice_model_controller = VoiceModelController(config_dir="Settings")
-        logger.notify("VoiceModelController (backend) успешно инициализирован.")
-
         self.character_controller = CharacterController(self.settings)
         logger.notify("CharacterController успешно инициализирован.")
 
         self.model_controller = ModelController(self.settings)
         logger.notify("ModelController успешно инициализирован.")
 
-        self.embedding_controller = EmbeddingController()
-        logger.notify("EmbeddingController успешно инициализирован.")
-
-        # Инициализация опциональных блоков (Telegram/Perception/Reminders) — выключенных по умолчанию.
+        # Инициализация опциональных блоков
+        # (AIEngine/Voice/RAG/Telegram/Perception/Reminders) — все выключены по умолчанию.
         self._init_optional_blocks()
-
-        self.speech_controller = SpeechController()
-        logger.notify("SpeechController успешно инициализирован.")
 
         self._init_server_controller()
 
         self.chat_controller = ChatController(self.settings)
         logger.notify("ChatController успешно инициализирован.")
-
-        self.audio_controller.delete_all_sound_files()
 
         self._subscribe_to_events()
         logger.notify("MainController подписался на события")
@@ -154,20 +127,53 @@ class MainController:
         self.block_registry.initialize(ctx)
 
     # ---- backwards-compat proxy properties (return None if block disabled) ----
+    def _block_ctrl(self, block_name: str, controller_name: str):
+        blk = self.block_registry.get(block_name)
+        return blk.get(controller_name) if blk and blk.active else None
+
     @property
     def telegram_controller(self):
-        blk = self.block_registry.get("telegram")
-        return blk.get("telegram_controller") if blk and blk.active else None
+        return self._block_ctrl("telegram", "telegram_controller")
 
     @property
     def capture_controller(self):
-        blk = self.block_registry.get("perception")
-        return blk.get("capture_controller") if blk and blk.active else None
+        return self._block_ctrl("perception", "capture_controller")
 
     @property
     def reminder_controller(self):
-        blk = self.block_registry.get("reminders")
-        return blk.get("reminder_controller") if blk and blk.active else None
+        return self._block_ctrl("reminders", "reminder_controller")
+
+    @property
+    def ai_engine_controller(self):
+        return self._block_ctrl("ai_engine", "ai_engine_controller")
+
+    @property
+    def audio_controller(self):
+        return self._block_ctrl("voice", "audio_controller")
+
+    @property
+    def local_voice_controller(self):
+        return self._block_ctrl("voice", "local_voice_controller")
+
+    @property
+    def voice_model_controller(self):
+        return self._block_ctrl("voice", "voice_model_controller")
+
+    @property
+    def speech_controller(self):
+        return self._block_ctrl("voice", "speech_controller")
+
+    @property
+    def embedding_controller(self):
+        return self._block_ctrl("rag", "embedding_controller")
+
+    @property
+    def embedding_presets_controller(self):
+        return self._block_ctrl("rag", "embedding_presets_controller")
+
+    @property
+    def graph_controller(self):
+        return self._block_ctrl("rag", "graph_controller")
 
     def _init_server_controller(self):
         use_new_api = self.settings.get('USE_NEW_API', True)
@@ -237,18 +243,12 @@ class MainController:
         except Exception as e:
             logger.error(f"Ошибка при остановке сервера: {e}", exc_info=True)
 
+        # block_registry.shutdown() корректно останавливает Voice (включая AudioHandler файлы)
+        # и AIEngine (через AIEngineBlock.shutdown).
         try:
             self.block_registry.shutdown()
         except Exception as e:
             logger.error(f"Ошибка при остановке опциональных блоков: {e}", exc_info=True)
-
-        self.audio_controller.delete_all_sound_files()
-
-        try:
-            if getattr(self, "ai_engine_controller", None):
-                self.ai_engine_controller.shutdown(timeout=5.0)
-        except Exception as e:
-            logger.error(f"Ошибка при остановке AI engine: {e}", exc_info=True)
 
         self.loop_controller.stop_loop()
 
