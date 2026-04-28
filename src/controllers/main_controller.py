@@ -1,9 +1,7 @@
 import os
 import time
 from pathlib import Path
-from PyQt6.QtCore import QTimer
 
-from controllers.gui_controller import GuiController
 from controllers.model_controller import ModelController
 from controllers.character_controller import CharacterController
 from controllers.settings_controller import SettingsController
@@ -20,6 +18,7 @@ from controllers.blocks import (
     AIEngineBlock,
     BlockContext,
     BlockRegistry,
+    GuiBlock,
     PerceptionBlock,
     RAGBlock,
     RemindersBlock,
@@ -57,6 +56,7 @@ class MainController:
         self.block_registry.register(TelegramBlock())
         self.block_registry.register(PerceptionBlock())
         self.block_registry.register(RemindersBlock())
+        self.block_registry.register(GuiBlock())
 
         try:
             target_folder = "Settings"
@@ -193,13 +193,17 @@ class MainController:
             logger.notify("ServerController (старый API) успешно инициализирован.")
 
     def update_view(self, view):
-        if not self.gui_controller:
-            self.view = view
-            self.gui_controller = GuiController(self, view)
-            logger.notify("GuiController успешно инициализирован.")
-            self.settings_controller.load_api_settings(False)
-
-            self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
+        gui_block = self.block_registry.get("gui")
+        if not gui_block or not gui_block.active:
+            logger.info("update_view: GuiBlock неактивен — окно не подключаем")
+            return
+        if "gui_controller" in gui_block.controllers:
+            return  # уже подключено
+        self.view = view
+        gui_block.attach_view(view)
+        self.gui_controller = gui_block.get("gui_controller")
+        self.settings_controller.load_api_settings(False)
+        self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
 
 
     def _subscribe_to_events(self):

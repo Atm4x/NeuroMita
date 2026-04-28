@@ -7,6 +7,7 @@ from .rag_block import RAGBlock
 from .telegram_block import TelegramBlock
 from .perception_block import PerceptionBlock
 from .reminders_block import RemindersBlock
+from .gui_block import GuiBlock
 
 __all__ = [
     "ControllerBlock",
@@ -18,4 +19,5 @@ __all__ = [
     "TelegramBlock",
     "PerceptionBlock",
     "RemindersBlock",
+    "GuiBlock",
 ]

@@ -9,10 +9,19 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, NormalizedName
 from packaging.version import parse as parse_version
 from main_logger import logger
-from PyQt6.QtWidgets import QApplication
 from typing import Set, List, Tuple, Optional, Deque
-from PyQt6.QtCore import QThread, QCoreApplication
 from collections import deque
+
+# PyQt6 опционален: в headless-режиме его может не быть в окружении / не нужен.
+try:
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QThread, QCoreApplication
+    _HAS_PYQT = True
+except Exception:
+    QApplication = None  # type: ignore
+    QThread = None  # type: ignore
+    QCoreApplication = None  # type: ignore
+    _HAS_PYQT = False
 
 
 class DependencyResolver:
@@ -516,6 +525,8 @@ class PipInstaller:
         state.last_status_emit = now
 
     def _pump_events(self):
+        if not _HAS_PYQT:
+            return
         app = QCoreApplication.instance()
         if app and QThread.currentThread() == app.thread():
             QApplication.processEvents()

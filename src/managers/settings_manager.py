@@ -1,7 +1,19 @@
 
-import qtawesome as qta
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
-from PyQt6.QtCore import Qt
+# PyQt6 + qtawesome нужны только для CollapsibleSection (GUI-виджет). В headless-
+# режиме SettingsManager используется без них. Импорт — опциональный.
+try:
+    import qtawesome as qta
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+    from PyQt6.QtCore import Qt
+    _HAS_PYQT = True
+except Exception:
+    qta = None  # type: ignore
+    QWidget = object  # type: ignore  (фолбэк-класс, чтобы можно было хотя бы импортировать модуль)
+    QVBoxLayout = None  # type: ignore
+    QHBoxLayout = None  # type: ignore
+    QLabel = None  # type: ignore
+    Qt = None  # type: ignore
+    _HAS_PYQT = False
 
 from main_logger import logger
 

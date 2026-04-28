@@ -375,21 +375,56 @@ def _parse_cli_args(argv):
     return args
 
 
+def _run_headless(controller):
+    """Headless event loop: ждём SIGINT/SIGTERM, затем корректное закрытие."""
+    import signal
+    import threading
+
+    stop_event = threading.Event()
+
+    def _on_signal(signum, _frame):
+        logger.info(f"Получен сигнал {signum}, завершаемся...")
+        stop_event.set()
+
+    for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, _on_signal)
+            except (ValueError, OSError):
+                pass
+
+    logger.success("Headless режим активен. Ctrl+C для выхода.")
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(timeout=1.0)
+    finally:
+        try:
+            controller.close_app()
+        except Exception as e:
+            logger.error(f"Ошибка при закрытии в headless: {e}", exc_info=True)
+
+
 if __name__ == "__main__":
     logger.success("Функция main() запущена")
     try:
         cli_args = _parse_cli_args(sys.argv[1:])
         logger.info(f"CLI args: {vars(cli_args)}")
 
-        app = QApplication(sys.argv)
-        logger.info("QApplication создан")
+        # Headless = --headless или --server-only
+        headless = bool(getattr(cli_args, "headless", False) or getattr(cli_args, "server_only", False))
 
-        if sys.platform == 'win32':
-            import ctypes
-            myappid = 'mycompany.myproduct.subproduct.version'
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        app = None
+        if not headless:
+            app = QApplication(sys.argv)
+            logger.info("QApplication создан")
 
-        # Создаем пустой объект для контроллера
+            if sys.platform == 'win32':
+                import ctypes
+                myappid = 'mycompany.myproduct.subproduct.version'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        else:
+            logger.info("--headless / --server-only: QApplication пропущен")
+
         logger.info("Создаю MainController...")
         controller = MainController(None, cli_args=cli_args)
         logger.info("MainController создан")
@@ -401,25 +436,27 @@ if __name__ == "__main__":
             logger.info("FineTuneCollector инициализирован")
         except Exception as _ft_init_err:
             logger.warning(f"FineTuneCollector не инициализирован: {_ft_init_err}")
-    
+
+        if headless:
+            _run_headless(controller)
+            sys.exit(0)
+
         logger.info("Создаю ChatGUI...")
-        main_win = ChatGUI(controller.settings)  # Передаем controller  settings
+        main_win = ChatGUI(controller.settings)
         logger.info("ChatGUI создан")
-        
+
         # Обновляем ссылку на реальный view в контроллере
         controller.update_view(main_win)
 
         main_win.load_chat_history()
-        
-        
+
         logger.info("Показываю главное окно...")
         main_win.show()
         logger.info("Запускаю app.exec()...")
 
-        
         # При завершении приложения останавливаем систему событий
         app.aboutToQuit.connect(lambda: get_event_bus().shutdown())
-        
+
         sys.exit(app.exec())
     except Exception as e:
         logger.error(f"Ошибка в main(): {e}", exc_info=True)
