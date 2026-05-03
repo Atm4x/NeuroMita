@@ -121,19 +121,34 @@ def check_gpu_provider() -> str:
 
 
 def get_cuda_devices():
-    cuda_devices = []
-    try:
-        import torch
-        if torch.cuda.is_available():
-            device_count = torch.cuda.device_count()
-            for i in range(int(device_count or 0)):
-                cuda_devices.append(f"cuda:{i}")
-    except ImportError:
-        logger.info("PyTorch не найден. Невозможно определить CUDA устройства через PyTorch.")
-    except Exception as e:
-        logger.info(f"Неожиданная ошибка при проверке CUDA устройств через PyTorch: {e}")
+    if check_gpu_provider() != "NVIDIA":
+        return []
 
-    return cuda_devices
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name",
+                "--format=csv,noheader",
+            ],
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.5,
+        ).strip()
+
+        devices = []
+        for line in (output or "").splitlines():
+            raw = str(line or "").strip()
+            if not raw:
+                continue
+            index_part = raw.split(",", 1)[0].strip()
+            if index_part.isdigit():
+                devices.append(f"cuda:{index_part}")
+        return devices
+    except Exception as e:
+        logger.info(f"Не удалось определить CUDA устройства через nvidia-smi: {e}")
+        return []
 
 
 def get_gpu_name_by_id(device_id):
@@ -146,15 +161,29 @@ def get_gpu_name_by_id(device_id):
             return None
         index = int(match.group(1))
 
-        import torch
-        if torch.cuda.is_available() and index < torch.cuda.device_count():
-            return torch.cuda.get_device_name(index)
-        return None
-    except ImportError:
-        logger.info("PyTorch не найден. Невозможно получить имя GPU.")
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name",
+                "--format=csv,noheader",
+            ],
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=2.5,
+        ).strip()
+
+        for line in (output or "").splitlines():
+            raw = str(line or "").strip()
+            if not raw or "," not in raw:
+                continue
+            idx_raw, name_raw = raw.split(",", 1)
+            if idx_raw.strip().isdigit() and int(idx_raw.strip()) == index:
+                name = name_raw.strip()
+                return name or None
         return None
     except Exception as e:
-        logger.info(f"Ошибка при получении имени GPU для {device_id}: {e}")
+        logger.info(f"Ошибка при получении имени GPU через nvidia-smi для {device_id}: {e}")
         return None
 
 

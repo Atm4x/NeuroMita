@@ -31,7 +31,13 @@ PROJECT_DIR = Path(__file__).parent
 env = load_env(PROJECT_DIR / "build.env")
 
 OUTPUT_DIR = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
-BUILD_MODE = env.get("BUILD_MODE", "full").lower()
+BUILD_MODE = (
+    os.environ.get("BUILD_MODE")
+    or env.get("BUILD_MODE", "full")
+    or "full"
+).lower()
+if BUILD_MODE == "full_delete":
+    BUILD_MODE = "full"
 
 # Фильтровать dot-папки (.cache, .git и т.п.) при копировании папок
 EXCLUDE_DOT_DIRS = env.get("BUILD_EXCLUDE_DOT_DIRS", "1") == "1"

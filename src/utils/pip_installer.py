@@ -3,7 +3,7 @@ PipInstaller 3.1 — упрощённый PTY/Pipes-раннер без снап
 """
 
 from __future__ import annotations
-import subprocess, sys, os, queue, threading, time, json, shutil, gc, importlib.util, re
+import subprocess, sys, os, queue, threading, time, json, shutil, gc, importlib.util, re, glob
 from pathlib import Path
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, NormalizedName
@@ -222,7 +222,12 @@ class PipInstaller:
         """Проверяет, является ли пакет защищенной зависимостью"""
         return package_canon in protected_deps
 
-    def uninstall_packages(self, packages: List[str], description="Удаление пакетов...") -> bool:
+    def uninstall_packages(
+        self,
+        packages: List[str],
+        description="Удаление пакетов...",
+        include_dependencies: bool = True,
+    ) -> bool:
         if not packages:
             self.update_log("Список пакетов для удаления пуст.")
             return True
@@ -245,10 +250,10 @@ class PipInstaller:
                 protected_deps.update(deps)
                 self.update_log(f"Защищенный пакет {prot_pkg} и его зависимости: {deps}")
 
-        candidates: Set[NormalizedName] = set()
-        for pkg in requested:
-            candidates.update(resolver.get_dependency_tree(str(pkg)))
-        candidates.update(requested)
+        candidates: Set[NormalizedName] = set(requested)
+        if include_dependencies:
+            for pkg in requested:
+                candidates.update(resolver.get_dependency_tree(str(pkg)))
         
         final_remove = sorted(candidates - protected_deps)
         
@@ -276,9 +281,13 @@ class PipInstaller:
                     "--target", str(self.libs_path_abs), str(pkg)
                 ]
                 success = self._run_pip_process(cmd, f"Удаление {pkg}")
+                leftovers_exist = any(os.path.exists(p) for p in self._artifact_paths_for_package(str(pkg)))
+                if success and leftovers_exist:
+                    self.update_log(f"{pkg}: после uv uninstall остались файлы, выполняю ручную зачистку...")
+                    success = self._manual_remove_package_artifacts(str(pkg))
                 if not success:
                     self.update_log(f"uv pip не смог удалить {pkg}, пробуем ручное удаление...")
-                    success = self._manual_remove(dist_path, str(pkg))
+                    success = self._manual_remove_package_artifacts(str(pkg))
                 if success and is_main_package:
                     main_packages_removed.append(str(pkg))
                 elif not success and not is_main_package:
@@ -300,6 +309,57 @@ class PipInstaller:
         else:
             self.update_log("ОШИБКА: Не удалось удалить ни одного основного пакета.")
             return False
+
+    def _artifact_paths_for_package(self, package_name: str) -> list[str]:
+        pkg = str(package_name or "").strip()
+        canon = canonicalize_name(pkg)
+        paths: list[str] = []
+
+        patterns = [
+            os.path.join(self.libs_path_abs, f"{pkg.replace('-', '_')}-*.dist-info"),
+            os.path.join(self.libs_path_abs, f"{pkg.replace('_', '-')}-*.dist-info"),
+        ]
+
+        module_names = {pkg.replace("-", "_"), pkg.replace("_", "-")}
+        if canon == "torch":
+            module_names.update({"torch", "torchgen"})
+            patterns.append(os.path.join(self.libs_path_abs, "torch-*.dist-info"))
+        elif canon == "torchvision":
+            module_names.add("torchvision")
+            patterns.append(os.path.join(self.libs_path_abs, "torchvision-*.dist-info"))
+        elif canon == "torchaudio":
+            module_names.add("torchaudio")
+            patterns.append(os.path.join(self.libs_path_abs, "torchaudio-*.dist-info"))
+
+        for pattern in patterns:
+            paths.extend(glob.glob(pattern))
+
+        for name in module_names:
+            if name:
+                paths.append(os.path.join(self.libs_path_abs, name))
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for p in paths:
+            pp = os.path.normcase(os.path.abspath(p))
+            if pp in seen:
+                continue
+            seen.add(pp)
+            deduped.append(p)
+        return deduped
+
+    def _manual_remove_package_artifacts(self, package_name: str) -> bool:
+        targets = [p for p in self._artifact_paths_for_package(package_name) if os.path.exists(p)]
+        if not targets:
+            return True
+
+        self._unload_module_from_sys(package_name)
+
+        success = True
+        for target in targets:
+            if not self._manual_remove(target, package_name):
+                success = False
+        return success
 
     def _manual_remove(self, path: str, pkg_name: str) -> bool:
         if not os.path.exists(path):

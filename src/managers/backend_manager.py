@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+import glob
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
@@ -78,6 +79,49 @@ class BackendManager:
                 if raw:
                     names.add(canonicalize_name(raw))
         return names
+
+    @classmethod
+    def _spec_name(cls, spec: str) -> str:
+        try:
+            return canonicalize_name(Requirement(spec).name)
+        except Exception:
+            raw = str(spec or "").split("[", 1)[0].split("=", 1)[0].split("<", 1)[0].strip()
+            return canonicalize_name(raw) if raw else ""
+
+    @classmethod
+    def _missing_specs(cls, specs: list[str]) -> list[str]:
+        installed = cls._installed_package_names()
+        missing: list[str] = []
+        for spec in specs:
+            name = cls._spec_name(spec)
+            if name and name not in installed:
+                missing.append(spec)
+        return missing
+
+    @classmethod
+    def _installed_torch_variant(cls) -> Optional[str]:
+        libs_dir = cls._libs_dir()
+        if os.path.isdir(libs_dir):
+            matches = glob.glob(os.path.join(libs_dir, "torch-*.dist-info"))
+            if matches:
+                matches.sort(key=os.path.getmtime, reverse=True)
+                dist_name = os.path.basename(matches[0])
+                version = dist_name[len("torch-"):-len(".dist-info")]
+                return "cuda" if "+cu" in version else "cpu"
+        return None
+
+    @classmethod
+    def _torch_install_mode(cls, backend: Backend) -> str:
+        installed = cls._installed_torch_variant()
+        if backend == Backend.CUDA:
+            if installed == "cuda":
+                return "skip"
+            if installed == "cpu":
+                return "reinstall"
+            return "install"
+        if installed is None:
+            return "install"
+        return "skip"
 
     @classmethod
     def is_backend_ready(cls, backend: Backend | str | None = None, *, include_models: bool = True) -> bool:
@@ -168,51 +212,59 @@ class BackendManager:
     @classmethod
     def _install_actions(cls, backend: Backend, *, include_models: bool = True) -> list[InstallAction]:
         actions: list[InstallAction] = []
+        core_missing = cls._missing_specs(cls._core_specs(backend))
 
-        if backend == Backend.CUDA:
+        if core_missing:
             actions.append(
                 InstallAction(
                     type="pip",
-                    description="Installing ONNX Runtime",
+                    description="Installing ONNX Runtime" if backend == Backend.CUDA else "Installing ONNX Runtime DirectML",
                     progress=10 if include_models else 20,
-                    packages=list(cls.CUDA_CORE_PACKAGES),
+                    packages=list(core_missing),
                     backend=backend,
                 )
             )
-            if include_models:
+
+        if include_models:
+            model_missing = cls._missing_specs(cls._model_specs(backend))
+            torch_name = cls._spec_name("torch")
+            non_torch_missing = [spec for spec in model_missing if cls._spec_name(spec) != torch_name]
+            torch_mode = cls._torch_install_mode(backend)
+
+            if torch_mode == "reinstall":
+                actions.append(
+                    InstallAction(
+                        type="call",
+                        description="Removing existing PyTorch packages",
+                        progress=35 if backend == Backend.CUDA else 45,
+                        fn=lambda *, pip_installer=None, **_kwargs: bool(
+                            pip_installer and pip_installer.uninstall_packages(
+                                ["torch", "torchvision", "torchaudio"],
+                                description="Removing existing PyTorch packages",
+                                include_dependencies=False,
+                            )
+                        ),
+                    )
+                )
+
+            torch_packages: list[str] = []
+            if torch_mode in ("install", "reinstall"):
+                torch_packages = list(cls._model_specs(backend))
+            elif non_torch_missing:
+                torch_packages = list(non_torch_missing)
+
+            if torch_packages:
                 actions.append(
                     InstallAction(
                         type="pip",
-                        description="Installing PyTorch CUDA 12.8",
-                        progress=45,
-                        packages=list(cls.CUDA_TORCH_PACKAGES),
-                        extra_args=list(cls.CUDA_EXTRA_ARGS),
+                        description="Installing PyTorch CUDA 12.8" if backend == Backend.CUDA else "Installing CPU PyTorch",
+                        progress=45 if backend == Backend.CUDA else 55,
+                        packages=torch_packages,
+                        extra_args=list(cls.CUDA_EXTRA_ARGS) if backend == Backend.CUDA else list(cls.ONNX_TORCH_EXTRA_ARGS),
                         backend=backend,
                     )
                 )
-            actions.append(cls._write_marker_action(backend))
-            return actions
 
-        actions.append(
-            InstallAction(
-                type="pip",
-                description="Installing ONNX Runtime DirectML",
-                progress=15 if include_models else 20,
-                packages=list(cls.ONNX_CORE_PACKAGES),
-                backend=backend,
-            )
-        )
-        if include_models:
-            actions.append(
-                InstallAction(
-                    type="pip",
-                    description="Installing CPU PyTorch",
-                    progress=55,
-                    packages=list(cls.ONNX_TORCH_PACKAGES),
-                    extra_args=list(cls.ONNX_TORCH_EXTRA_ARGS),
-                    backend=backend,
-                )
-            )
         actions.append(cls._write_marker_action(backend))
         return actions
 
@@ -276,6 +328,7 @@ class BackendManager:
                         pip_installer and pip_installer.uninstall_packages(
                             ["onnxruntime"],
                             description="Removing CUDA runtime packages",
+                            include_dependencies=False,
                         )
                     ),
                 )
@@ -290,6 +343,7 @@ class BackendManager:
                         pip_installer and pip_installer.uninstall_packages(
                             ["onnxruntime-directml"],
                             description="Removing ONNX runtime packages",
+                            include_dependencies=False,
                         )
                     ),
                 )
@@ -321,6 +375,7 @@ class BackendManager:
                         pip_installer and pip_installer.uninstall_packages(
                             ["onnxruntime", "torch", "torchvision", "torchaudio"],
                             description="Removing CUDA backend packages",
+                            include_dependencies=False,
                         )
                     ),
                 )
@@ -335,6 +390,7 @@ class BackendManager:
                         pip_installer and pip_installer.uninstall_packages(
                             ["onnxruntime-directml", "onnx", "torch", "torchvision", "torchaudio"],
                             description="Removing ONNX backend packages",
+                            include_dependencies=False,
                         )
                     ),
                 )

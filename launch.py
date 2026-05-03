@@ -7,6 +7,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,7 @@ def load_env(env_path: Path) -> dict:
 
 
 env = load_env(PROJECT_DIR / "build.env")
+BUILD_MODE = (env.get("BUILD_MODE", "fast") or "fast").strip().lower()
 
 OUTPUT_DIR = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
 
@@ -103,6 +105,7 @@ def resolve_backend() -> str:
 
 
 ACTIVE_BACKEND = resolve_backend()
+BUILD_MODE_FOR_BUILD = "full" if BUILD_MODE == "full_delete" else BUILD_MODE
 
 REQ_FILE = OUTPUT_DIR / "requirements.txt"
 HASH_FILE = OUTPUT_DIR / ".req_hash"
@@ -224,13 +227,31 @@ def ensure_launch_settings():
     print(f"ACTIVE_BACKEND={ACTIVE_BACKEND} записан в {SETTINGS_FILE}")
 
 
-def run(cmd: list, cwd: Path = None):
+def remove_output_dir_if_needed():
+    if BUILD_MODE != "full_delete":
+        return
+
+    print("=" * 50)
+    print("Шаг 0: полный сброс build output")
+    print("=" * 50)
+    print(f"Режим full_delete включён, удаляю папку: {OUTPUT_DIR}")
+
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)
+        print("Папка build output удалена.")
+    else:
+        print("Папка build output отсутствует, удалять нечего.")
+
+
+def run(cmd: list, cwd: Path = None, extra_env: dict | None = None):
     print(f"\n>>> {' '.join(str(c) for c in cmd)}")
     env_vars = os.environ.copy()
     env_vars.pop("VIRTUAL_ENV", None)
     env_vars["NEUROMITA_ACTIVE_BACKEND"] = ACTIVE_BACKEND
     existing_pythonpath = env_vars.get("PYTHONPATH", "").strip()
     env_vars["PYTHONPATH"] = str(LIB_DIR) if not existing_pythonpath else str(LIB_DIR) + os.pathsep + existing_pythonpath
+    if extra_env:
+        env_vars.update(extra_env)
     result = subprocess.run(cmd, cwd=cwd, env=env_vars)
     if result.returncode != 0:
         print(f"Ошибка (код {result.returncode}), прерываю.")
@@ -238,11 +259,16 @@ def run(cmd: list, cwd: Path = None):
 
 
 if __name__ == "__main__":
+    remove_output_dir_if_needed()
+
     # 1. Сборка
     print("=" * 50)
-    print("Шаг 1: сборка (fast)")
+    print(f"Шаг 1: сборка ({BUILD_MODE_FOR_BUILD})")
     print("=" * 50)
-    run([sys.executable, str(PROJECT_DIR / "build.py")])
+    run(
+        [sys.executable, str(PROJECT_DIR / "build.py")],
+        extra_env={"BUILD_MODE": BUILD_MODE_FOR_BUILD},
+    )
 
     # 2. Обновление базовых зависимостей если нужно
     if requirements_changed() or bootstrap_deps_missing():
