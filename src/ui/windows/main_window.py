@@ -1,6 +1,8 @@
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
 from styles.main_styles import get_stylesheet
+from styles.shell.launcher_shell import LauncherShellPalette, get_launcher_shell_stylesheet
+from styles.theme import get_theme
 from ui.pages.home_page import build_home_page
 from ui.pages.logs_page import build_logs_page
 from ui.pages.main_page_registry import MAIN_PAGE_ORDER, build_main_pages
@@ -18,7 +20,8 @@ class MainWindow(AppWindowBase):
         central_widget = QWidget()
         central_widget.setObjectName("LauncherRoot")
         self.setCentralWidget(central_widget)
-        self.setStyleSheet(get_stylesheet())
+        self._current_theme = self.settings.get("THEME", "dark")
+        self.setStyleSheet(get_stylesheet(theme_name=self._current_theme))
 
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -60,25 +63,17 @@ class MainWindow(AppWindowBase):
         self.switch_main_page("sandbox")
         self.resize(1560, 920)
 
-    def _init_settings_containers(self):
-        page = getattr(self, "settings_page", None)
-        if page is None:
-            return {}
-        return page.settings_containers
-
-    def _on_hide_animation_finished(self):
-        page = getattr(self, "settings_page", None)
-        if page is not None:
-            page.show_overview()
-        try:
-            self.settings_animation.finished.disconnect(self._on_hide_animation_finished)
-        except TypeError:
-            pass
-
-    def show_settings_category(self, category):
-        page = getattr(self, "settings_page", None)
-        if page is not None:
-            page.show_category(category)
+    def reapply_theme(self, theme_name: str | None = None):
+        name = theme_name or self.settings.get("THEME", "dark")
+        if name == self._current_theme:
+            return
+        self._current_theme = name
+        self.setStyleSheet(get_stylesheet(theme_name=name))
+        self.settings.set("THEME", name)
+        theme = get_theme(name=name)
+        palette = LauncherShellPalette.from_theme(theme)
+        if hasattr(self, "shell_sidebar"):
+            self.shell_sidebar.setStyleSheet(get_launcher_shell_stylesheet(palette))
 
     def switch_main_page(self, page_key):
         page = getattr(self, "page_map", {}).get(page_key)

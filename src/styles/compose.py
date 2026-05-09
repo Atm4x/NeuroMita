@@ -30,8 +30,8 @@ def build_main_window_qss() -> str:
     return "\n\n".join(part.strip("\n") for part in MAIN_WINDOW_QSS_PARTS if part.strip())
 
 
-def get_main_window_stylesheet(overrides: dict[str, str] | None = None) -> str:
-    theme = get_theme()
+def get_main_window_stylesheet(overrides: dict[str, str] | None = None, theme_name: str | None = None) -> str:
+    theme = get_theme(name=theme_name)
     if overrides:
         theme.update(overrides)
     return render_qss(build_main_window_qss(), theme)

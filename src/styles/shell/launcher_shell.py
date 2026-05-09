@@ -24,6 +24,28 @@ class LauncherShellPalette:
     danger: str = "#ff7a98"
     link: str = "#89dbff"
 
+    @classmethod
+    def from_theme(cls, theme: dict[str, str]) -> LauncherShellPalette:
+        return cls(
+            root_bg=theme["bg_root"],
+            panel_bg=f"rgba({theme['sidebar_bg_rgb']}, 0.995)",
+            panel_soft=f"rgba({theme['sidebar_panel_rgb']}, 0.98)",
+            card_bg=f"rgba({theme['sidebar_panel_rgb']}, 0.92)",
+            card_alt_bg=f"rgba({theme['settings_panel_rgb']}, 0.94)",
+            border=f"rgba({theme['accent_rgb']}, 0.16)",
+            border_strong=f"rgba({theme['accent_rgb']}, 0.30)",
+            text=theme["text"],
+            muted=theme["muted"],
+            accent=theme["accent"],
+            accent_soft=f"rgba({theme['accent_rgb']}, 0.14)",
+            accent_hover=theme["accent_hover"],
+            accent_pressed=theme["accent_pressed"],
+            success=theme["success"],
+            warning="#ffcf7d",
+            danger=theme["danger"],
+            link=theme["link"],
+        )
+
 
 PALETTE = LauncherShellPalette()
 
@@ -33,8 +55,8 @@ def resolve_launcher_asset(name: str) -> str | None:
     return str(asset_path) if asset_path.exists() else None
 
 
-def get_launcher_shell_stylesheet() -> str:
-    p = PALETTE
+def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -> str:
+    p = palette or PALETTE
     bg_rule = """
         background: qlineargradient(
             x1: 0, y1: 0, x2: 1, y2: 1,

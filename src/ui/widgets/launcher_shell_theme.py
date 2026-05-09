@@ -13,8 +13,8 @@ from styles.shell.launcher_shell import (
 )
 
 
-def apply_launcher_shell_theme(widget: QWidget) -> QWidget:
-    widget.setStyleSheet(get_launcher_shell_stylesheet())
+def apply_launcher_shell_theme(widget: QWidget, palette: LauncherShellPalette | None = None) -> QWidget:
+    widget.setStyleSheet(get_launcher_shell_stylesheet(palette))
     return widget
 
 

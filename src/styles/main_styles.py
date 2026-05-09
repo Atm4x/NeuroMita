@@ -4,8 +4,8 @@ from styles.compose import get_main_window_stylesheet
 from styles.theme import THEME, get_theme
 
 
-def get_stylesheet(overrides: dict[str, str] | None = None) -> str:
-    return get_main_window_stylesheet(overrides)
+def get_stylesheet(overrides: dict[str, str] | None = None, theme_name: str | None = None) -> str:
+    return get_main_window_stylesheet(overrides, theme_name=theme_name)
 
 
 __all__ = [

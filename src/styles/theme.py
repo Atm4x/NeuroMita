@@ -48,6 +48,62 @@ THEME = {
     "btn_disabled_fg": "#7c687a",
 }
 
+THEMES = {
+    "dark": THEME,
+    "ocean": {
+        "bg_root": "#0a101a",
+        "bg_window": "#0a101a",
+        "app_bg": "#080d16",
+        "app_bg_rgb": "8, 13, 22",
+        "sidebar_bg": "#0d1520",
+        "sidebar_bg_rgb": "13, 21, 32",
+        "sidebar_panel": "#0f1826",
+        "sidebar_panel_rgb": "15, 24, 38",
+        "sandbox_bg": "#060d15",
+        "sandbox_bg_rgb": "6, 13, 21",
+        "settings_panel_bg": "#0e1722",
+        "settings_panel_rgb": "14, 23, 34",
+        "text": "#e8ecf1",
+        "muted": "#8b9db5",
+        "panel_bg": "rgba(14, 23, 34, 0.96)",
+        "card_bg": "rgba(15, 24, 38, 0.96)",
+        "card_alt_bg": "rgba(14, 23, 34, 0.92)",
+        "card_border": "rgba(69, 183, 209, 0.18)",
+        "border_soft": "rgba(255,255,255,0.08)",
+        "outline": "rgba(255,255,255,0.05)",
+        "accent": "#45b7d1",
+        "accent_alt": "#5cc8e0",
+        "accent_rgb": "69, 183, 209",
+        "accent_rgb_alt": "92, 200, 224",
+        "accent_hover": "#5cc8e0",
+        "accent_pressed": "#3a9cb5",
+        "accent_border": "rgba(69, 183, 209, 0.46)",
+        "slider_progress": "#45b7d1",
+        "slider_progress_rgb": "69, 183, 209",
+        "chip_bg": "rgba(255,255,255,0.04)",
+        "chip_hover": "rgba(69, 183, 209, 0.12)",
+        "chip_pressed": "rgba(69, 183, 209, 0.18)",
+        "scroll_handle": "rgba(69, 183, 209, 0.26)",
+        "warn_bg": "rgba(255,120,120,0.08)",
+        "warn_border": "rgba(255,120,120,0.25)",
+        "warn_text": "#ffb4b4",
+        "success": "#5cdb8b",
+        "success_hover": "#75e6a0",
+        "success_pressed": "#4ac77a",
+        "danger": "#d64545",
+        "danger_hover": "#e25757",
+        "danger_pressed": "#bf3838",
+        "link": "#5cc8e0",
+        "btn_disabled_bg": "#1e2835",
+        "btn_disabled_fg": "#6a7a8e",
+    },
+}
 
-def get_theme() -> dict[str, str]:
-    return THEME.copy()
+DEFAULT_THEME = "dark"
+
+
+def get_theme(name: str | None = None) -> dict[str, str]:
+    if name is None:
+        from managers.settings_manager import SettingsManager
+        name = SettingsManager.get("THEME", DEFAULT_THEME)
+    return THEMES.get(name, THEMES[DEFAULT_THEME]).copy()
