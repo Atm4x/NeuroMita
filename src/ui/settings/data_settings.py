@@ -16,6 +16,22 @@ import qtawesome as qta
 
 from ui.gui_templates import create_section_header, SettingsBodyWidget
 from utils import getTranslationVariant as _
+from styles.theme import get_theme
+
+def _qss(stylesheet):
+    t = get_theme()
+    return (stylesheet
+        .replace("%%muted%%", t["muted"])
+        .replace("%%text%%", t["text"])
+        .replace("%%accent%%", t["accent"])
+        .replace("%%accent_hover%%", t["accent_hover"])
+        .replace("%%btn_disabled_bg%%", t["btn_disabled_bg"])
+        .replace("%%btn_disabled_fg%%", t["btn_disabled_fg"])
+        .replace("%%accent_rgb%%", t["accent_rgb"])
+        .replace("%%settings_panel_rgb%%", t["settings_panel_rgb"])
+        .replace("%%sidebar_panel_rgb%%", t["sidebar_panel_rgb"])
+        .replace("%%link%%", t["link"]))
+
 
 
 def setup_data_settings_controls(self, parent):
@@ -43,9 +59,7 @@ def setup_data_settings_controls(self, parent):
         "the full system prompt and history (~20 messages)."
     ))
     desc_label.setWordWrap(True)
-    desc_label.setStyleSheet(
-        "QLabel { background: transparent; border: none; color: #bca9bb; font-size: 11px; }"
-    )
+    desc_label.setStyleSheet(_qss("QLabel { background: transparent; border: none; color: %%muted%%; font-size: 11px; }"))
     info_layout.addWidget(desc_label)
 
     link_label = QLabel(_(
@@ -57,16 +71,14 @@ def setup_data_settings_controls(self, parent):
     ))
     link_label.setOpenExternalLinks(True)
     link_label.setWordWrap(True)
-    link_label.setStyleSheet(
-        "QLabel { background: transparent; border: none; color: #bca9bb; font-size: 11px; }"
-    )
+    link_label.setStyleSheet(_qss("QLabel { background: transparent; border: none; color: %%muted%%; font-size: 11px; }"))
     info_layout.addWidget(link_label)
 
     parent.addWidget(info_widget)
 
     # ── Collection toggle ─────────────────────────────────────────────────────
     chk = QCheckBox(_("Включить сбор данных", "Enable data collection"))
-    chk.setStyleSheet("background: transparent; border: none;")
+    chk.setStyleSheet(_qss("background: transparent; border: none;"))
     chk.setToolTip(_(
         "При включении каждый запрос к модели и ответ сохраняются "
         "в FineTuneData/ для последующего дообучения.",
@@ -101,25 +113,21 @@ def setup_data_settings_controls(self, parent):
     path_row.setContentsMargins(0, 2, 0, 2)
 
     path_lbl = QLabel(_("Папка:", "Folder:"))
-    path_lbl.setStyleSheet("color: #bca9bb; font-size: 11px; background: transparent; border: none;")
+    path_lbl.setStyleSheet(_qss("color: %%muted%%; font-size: 11px; background: transparent; border: none;"))
     path_lbl.setFixedWidth(60)
     path_row.addWidget(path_lbl)
 
     path_edit = QLineEdit(_get_current_data_dir())
     path_edit.setReadOnly(True)
-    path_edit.setStyleSheet(
-        "QLineEdit { background: transparent; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; "
-        "color: #bca9bb; font-size: 11px; padding: 6px 10px; }"
-    )
+    path_edit.setStyleSheet(_qss("QLineEdit { background: transparent; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; "
+        "color: %%muted%%; font-size: 11px; padding: 6px 10px; }"))
     path_row.addWidget(path_edit, stretch=1)
 
     browse_btn = QPushButton(_("Обзор...", "Browse..."))
     browse_btn.setFixedWidth(80)
-    browse_btn.setStyleSheet(
-        "QPushButton { background: #db6596; color: #ffffff; font-weight: 600; border: 1px solid rgba(219,101,150,0.46); border-radius: 10px; "
+    browse_btn.setStyleSheet(_qss("QPushButton { background: %%accent%%; color: white; font-weight: 600; border: 1px solid rgba(%%accent_rgb%%, 0.46); border-radius: 10px; "
         "font-size: 11px; padding: 7px 14px; }"
-        "QPushButton:hover { background: #e26e9e; }"
-    )
+        "QPushButton:hover { background: %%accent_hover%%; }"))
 
     def _on_browse():
         chosen = QFileDialog.getExistingDirectory(
@@ -155,7 +163,7 @@ def setup_data_settings_controls(self, parent):
     # ── Separator ─────────────────────────────────────────────────────────────
     sep1 = QFrame()
     sep1.setFrameShape(QFrame.Shape.HLine)
-    sep1.setStyleSheet("border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 4px 0;")
+    sep1.setStyleSheet(_qss("border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 4px 0;"))
     parent.addWidget(sep1)
 
     # ── Stats section ─────────────────────────────────────────────────────────
@@ -164,7 +172,7 @@ def setup_data_settings_controls(self, parent):
     # ── Separator ─────────────────────────────────────────────────────────────
     sep2 = QFrame()
     sep2.setFrameShape(QFrame.Shape.HLine)
-    sep2.setStyleSheet("border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 4px 0;")
+    sep2.setStyleSheet(_qss("border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 4px 0;"))
     parent.addWidget(sep2)
 
     # ── Export + Clear buttons in one row ─────────────────────────────────────
@@ -173,7 +181,7 @@ def setup_data_settings_controls(self, parent):
     btn_row.setContentsMargins(0, 0, 0, 0)
 
     export_btn = QPushButton(_("Экспортировать...", "Export..."))
-    export_btn.setIcon(qta.icon("fa6s.file-export", color="#ffffff"))
+    export_btn.setIcon(qta.icon("fa6s.file-export", color="white"))
     export_btn.setToolTip(_(
         "Открыть диалог экспорта с фильтрацией и выбором формата.",
         "Open export dialog with filtering and format selection."
@@ -182,7 +190,7 @@ def setup_data_settings_controls(self, parent):
     btn_row.addWidget(export_btn)
 
     clear_btn = QPushButton(_("Очистить данные...", "Clear data..."))
-    clear_btn.setIcon(qta.icon("fa6s.trash-can", color="#ffffff"))
+    clear_btn.setIcon(qta.icon("fa6s.trash-can", color="white"))
     clear_btn.setToolTip(_(
         "Удалить все накопленные файлы данных дообучения. Действие необратимо.",
         "Delete all accumulated fine-tuning data files. This action is irreversible."
@@ -205,10 +213,8 @@ class _LiveStatsWidget(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(
-            "QFrame { background: transparent; border: none; }"
-            "QLabel { background: transparent; border: none; color: #bca9bb; font-size: 11px; }"
-        )
+        self.setStyleSheet(_qss("QFrame { background: transparent; border: none; }"
+            "QLabel { background: transparent; border: none; color: %%muted%%; font-size: 11px; }"))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -217,21 +223,17 @@ class _LiveStatsWidget(QFrame):
         header_row.setSpacing(6)
 
         header = QLabel(_("Статистика", "Statistics"))
-        header.setStyleSheet(
-            "font-size: 12px; font-weight: bold; color: #f3edf6; "
-            "padding: 2px 0; background: transparent; border: none;"
-        )
+        header.setStyleSheet(_qss("font-size: 12px; font-weight: bold; color: %%text%%; "
+            "padding: 2px 0; background: transparent; border: none;"))
         header_row.addWidget(header)
         header_row.addStretch()
 
         refresh_btn = QPushButton(_("Обновить", "Refresh"))
-        refresh_btn.setIcon(qta.icon("fa6s.rotate", color="#ffffff"))
+        refresh_btn.setIcon(qta.icon("fa6s.rotate", color="white"))
         refresh_btn.setFixedHeight(22)
-        refresh_btn.setStyleSheet(
-            "QPushButton { background: #db6596; color: #ffffff; font-weight: 600; border: 1px solid rgba(219,101,150,0.46); border-radius: 10px; "
+        refresh_btn.setStyleSheet(_qss("QPushButton { background: %%accent%%; color: white; font-weight: 600; border: 1px solid rgba(%%accent_rgb%%, 0.46); border-radius: 10px; "
             "font-size: 10px; padding: 4px 10px; }"
-            "QPushButton:hover { background: #e26e9e; }"
-        )
+            "QPushButton:hover { background: %%accent_hover%%; }"))
         refresh_btn.clicked.connect(self._refresh)
         header_row.addWidget(refresh_btn)
 
@@ -252,9 +254,7 @@ class _LiveStatsWidget(QFrame):
 
         for text in self._build_lines():
             lbl = QLabel(text)
-            lbl.setStyleSheet(
-                "background: transparent; border: none; color: #bca9bb; font-size: 11px;"
-            )
+            lbl.setStyleSheet(_qss("background: transparent; border: none; color: %%muted%%; font-size: 11px;"))
             lbl.setWordWrap(True)
             self._stats_layout.addWidget(lbl)
 
@@ -300,7 +300,7 @@ class _MotivationImage(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background: transparent; border: none; margin-top: 8px;")
+        self.setStyleSheet(_qss("background: transparent; border: none; margin-top: 8px;"))
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)

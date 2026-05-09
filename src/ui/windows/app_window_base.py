@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 from PyQt6.QtCore import QSize
 from styles.main_styles import get_stylesheet
+from styles.theme import get_theme
 from utils import process_text_to_voice
 from utils import getTranslationVariant as _
 from main_logger import logger
@@ -1021,17 +1022,17 @@ class AppWindowBase(QMainWindow):
         title_label = QLabel(title)
         title_label.setObjectName('SectionTitle')
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet('''
-            QLabel#SectionTitle { font-size: 14px; font-weight: bold; color: #ffffff; padding: 5px 0; }
-        ''')
+        title_label.setStyleSheet(
+            'QLabel#SectionTitle { font-size: 14px; font-weight: bold; color: ' + get_theme()['text'] + '; padding: 5px 0; }'
+        )
         header_layout.addWidget(title_label)
         
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFrameShadow(QFrame.Shadow.Sunken)
-        separator.setStyleSheet('''
-            QFrame { background-color: #4a4a4a; max-height: 2px; margin: 0 10px; }
-        ''')
+        separator.setStyleSheet(
+            'QFrame { background-color: ' + get_theme()['outline'] + '; max-height: 2px; margin: 0 10px; }'
+        )
         header_layout.addWidget(separator)
         parent_layout.addWidget(header_widget)
         gui_templates.create_settings_direct(self, parent_layout, settings_config)

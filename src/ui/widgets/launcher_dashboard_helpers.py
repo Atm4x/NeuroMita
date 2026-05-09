@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from utils import _
 
 from ui.widgets.launcher_shell_theme import apply_launcher_shell_theme
+from styles.theme import get_theme
 
 
 Callback = Callable[[], None]
@@ -249,7 +250,7 @@ def _create_card_grid(cards: list[DashboardCard]) -> QGridLayout:
         top.setSpacing(8)
 
         icon = QLabel()
-        icon.setPixmap(qta.icon(card_data.icon_name, color="#ffd2ec").pixmap(18, 18))
+        icon.setPixmap(qta.icon(card_data.icon_name, color=get_theme()["icon"]).pixmap(18, 18))
         top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         title = QLabel(card_data.title)
@@ -360,7 +361,7 @@ def _create_action_button(action: DashboardAction) -> QPushButton:
     button = QPushButton(action.label)
     button.setObjectName("LauncherShellActionButton" if action.accent else "LauncherShellGhostButton")
     button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setIcon(qta.icon(action.icon_name, color="#ffffff" if action.accent else "#ffd2ec"))
+    button.setIcon(qta.icon(action.icon_name, color="#ffffff" if action.accent else get_theme()["icon"]))
     if action.tooltip:
         button.setToolTip(action.tooltip)
     if action.callback is not None:

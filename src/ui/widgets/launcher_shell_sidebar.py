@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 from utils import _
 
 from ui.widgets.launcher_shell_theme import apply_launcher_shell_theme, resolve_launcher_asset
+from styles.theme import get_theme
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,7 @@ class LauncherSidebarWidget(QFrame):
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setProperty("active", False)
-            button.setIcon(qta.icon(section.icon_name, color="#ffd2ec"))
+            button.setIcon(qta.icon(section.icon_name, color=get_theme()["icon"]))
             button.setText(section.title)
             button.setToolTip(section.subtitle or section.title)
             button.clicked.connect(lambda checked=False, key=section.key: self.request_page(key))
@@ -183,19 +184,19 @@ class LauncherSidebarWidget(QFrame):
             button = QPushButton("")
             button.setObjectName("LauncherShellSocialButton")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setIcon(qta.icon(icon_name, color="#ffd2ec"))
+            button.setIcon(qta.icon(icon_name, color=get_theme()["icon"]))
             button.setToolTip(title_text)
             button.setFixedSize(36, 36)
-            button.setStyleSheet("""
-                QPushButton#LauncherShellSocialButton {
+            button.setStyleSheet(f"""
+                QPushButton#LauncherShellSocialButton {{
                     background-color: rgba(255, 255, 255, 0.04);
                     border: 1px solid rgba(255, 255, 255, 0.05);
                     border-radius: 6px;
-                }
-                QPushButton#LauncherShellSocialButton:hover {
+                }}
+                QPushButton#LauncherShellSocialButton:hover {{
                     background-color: rgba(255, 255, 255, 0.08);
-                    border: 1px solid rgba(255, 210, 236, 0.3);
-                }
+                    border: 1px solid rgba({','.join(str(int(v)) for v in map(int, get_theme()['accent_rgb'].split(', ')))}, 0.3);
+                }}
             """)
             button.clicked.connect(lambda checked=False, value=key: self.social_requested.emit(value))
             row.addWidget(button)

@@ -8,6 +8,7 @@ from pathlib import Path
 import qtawesome as qta
 from PyQt6.QtCore import QPoint, QRectF, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPixmap
+from styles.theme import get_theme
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -58,19 +59,24 @@ class LauncherHomeBackground(QWidget):
 
             painter.drawPixmap(rect, self._bg, source)
         else:
-            painter.fillRect(rect, QColor("#09050f"))
+            t = get_theme()
+            app_rgb = tuple(int(v) for v in t["app_bg_rgb"].split(", "))
+            painter.fillRect(rect, QColor(*app_rgb, 250))
+
+        t = get_theme()
+        app_rgb = tuple(int(v) for v in t["app_bg_rgb"].split(", "))
 
         horizontal = QLinearGradient(rect.topLeft(), rect.topRight())
-        horizontal.setColorAt(0.0, QColor(10, 4, 8, 245))
-        horizontal.setColorAt(0.42, QColor(10, 4, 8, 170))
-        horizontal.setColorAt(0.74, QColor(10, 4, 8, 70))
-        horizontal.setColorAt(1.0, QColor(10, 4, 8, 10))
+        horizontal.setColorAt(0.0, QColor(*app_rgb, 245))
+        horizontal.setColorAt(0.42, QColor(*app_rgb, 170))
+        horizontal.setColorAt(0.74, QColor(*app_rgb, 70))
+        horizontal.setColorAt(1.0, QColor(*app_rgb, 10))
         painter.fillRect(rect, horizontal)
 
         vertical = QLinearGradient(rect.bottomLeft(), rect.topLeft())
-        vertical.setColorAt(0.0, QColor(10, 4, 8, 220))
-        vertical.setColorAt(0.38, QColor(10, 4, 8, 55))
-        vertical.setColorAt(1.0, QColor(10, 4, 8, 0))
+        vertical.setColorAt(0.0, QColor(*app_rgb, 220))
+        vertical.setColorAt(0.38, QColor(*app_rgb, 55))
+        vertical.setColorAt(1.0, QColor(*app_rgb, 0))
         painter.fillRect(rect, vertical)
 
 
@@ -185,7 +191,7 @@ class HomePage(LauncherHomeBackground):
 
         menu_button = QPushButton("")
         menu_button.setObjectName("LauncherHomeMenuButton")
-        menu_button.setIcon(qta.icon("fa6s.chevron-down", color="#ffd2ec"))
+        menu_button.setIcon(qta.icon("fa6s.chevron-down", color=get_theme()["icon"]))
         menu_button.setIconSize(QSize(14, 14))
         menu_button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         menu_button.clicked.connect(lambda: self.show_extra_menu(menu_button))

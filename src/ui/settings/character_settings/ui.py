@@ -10,6 +10,7 @@ import qtawesome as qta
 from ui.gui_templates import create_section_header, SettingsBodyWidget
 from managers.settings_manager import InnerCollapsibleSection
 from utils import getTranslationVariant as _
+from styles.theme import get_theme
 
 
 def _make_row(label_text: str, field_widget: QWidget, label_w: int) -> QWidget:
@@ -465,9 +466,9 @@ def build_character_settings_ui(self, parent_layout):
     )
     self.btn_purge_deleted.setIcon(qta.icon('fa5s.fire-alt', color='#ffffff'))
     self.btn_purge_deleted.setStyleSheet(
-        "QPushButton { background-color: #8b1a1a; color: #ffffff; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b22222; }"
-        "QPushButton:pressed { background-color: #6a0f0f; }"
+        "QPushButton { background-color: " + get_theme()["danger"] + "; color: white; border-radius: 4px; }"
+        "QPushButton:hover { background-color: " + get_theme()["danger_hover"] + "; }"
+        "QPushButton:pressed { background-color: " + get_theme()["danger_pressed"] + "; }"
     )
     self.btn_purge_deleted.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     _make_compact(self.btn_purge_deleted)

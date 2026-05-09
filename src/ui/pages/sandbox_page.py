@@ -25,6 +25,7 @@ from main_logger import logger
 from ui.chat.message_widget import AVATAR_MAP, _get_avatar_dir
 from ui.widgets.chat_panel import ChatPanel
 from ui.widgets.character_state_panel import CharacterStatePanel
+from styles.theme import get_theme
 from utils import _
 
 _MODEL_CONFIGURE_SENTINEL = "__configure_models__"
@@ -143,7 +144,7 @@ class SandboxPage(QWidget):
                 if not pm.isNull():
                     return _round_pixmap(pm, size)
         # Fallback icon
-        icon_pm = qta.icon("fa6s.user", color="#ffd2ec").pixmap(size - 4, size - 4)
+        icon_pm = qta.icon("fa6s.user", color=get_theme()["icon"]).pixmap(size - 4, size - 4)
         return _round_pixmap(icon_pm, size)
 
     def _refresh_character_avatar(self):
@@ -673,7 +674,7 @@ class SandboxPage(QWidget):
         if self._inspector_collapse_btn is None:
             return
         icon_name = "fa6s.angles-left" if self._inspector_collapsed else "fa6s.angles-right"
-        self._inspector_collapse_btn.setIcon(qta.icon(icon_name, color="#ffd6ee"))
+        self._inspector_collapse_btn.setIcon(qta.icon(icon_name, color=get_theme()["icon"]))
         self._inspector_collapse_btn.setIconSize(QSize(14, 14))
 
     # --------- Building blocks -----------
@@ -691,7 +692,7 @@ class SandboxPage(QWidget):
         if icon_name:
             icon_label = QLabel()
             icon_label.setObjectName("SandboxSelectorIcon")
-            icon_label.setPixmap(qta.icon(icon_name, color="#ffd2ec").pixmap(14, 14))
+            icon_label.setPixmap(qta.icon(icon_name, color=get_theme()["icon"]).pixmap(14, 14))
             title_row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         label = QLabel(title)
@@ -722,7 +723,7 @@ class SandboxPage(QWidget):
             if icon_name:
                 icon_label = QLabel()
                 icon_label.setObjectName("SandboxSelectorIcon")
-                icon_label.setPixmap(qta.icon(icon_name, color="#ffd2ec").pixmap(14, 14))
+                icon_label.setPixmap(qta.icon(icon_name, color=get_theme()["icon"]).pixmap(14, 14))
                 title_row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
             title = QLabel(title_text)
             title.setObjectName("SandboxInspectorTitle")
@@ -747,7 +748,7 @@ class SandboxPage(QWidget):
 
         icon_label = QLabel()
         icon_label.setObjectName("SandboxHeroIcon")
-        icon_label.setPixmap(qta.icon("fa6s.flask", color="#ff6db7").pixmap(22, 22))
+        icon_label.setPixmap(qta.icon("fa6s.flask", color=get_theme()["icon"]).pixmap(22, 22))
         headline_row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_label = QLabel(_("Песочница / Sandbox", "Sandbox"))

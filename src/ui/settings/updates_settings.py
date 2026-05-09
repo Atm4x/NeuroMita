@@ -23,6 +23,22 @@ from PyQt6.QtWidgets import (
 from main_logger import logger
 from ui.gui_templates import create_section_header
 from utils import getTranslationVariant as _
+from styles.theme import get_theme
+
+def _qss(stylesheet):
+    t = get_theme()
+    return (stylesheet
+        .replace("%%muted%%", t["muted"])
+        .replace("%%text%%", t["text"])
+        .replace("%%accent%%", t["accent"])
+        .replace("%%accent_hover%%", t["accent_hover"])
+        .replace("%%btn_disabled_bg%%", t["btn_disabled_bg"])
+        .replace("%%btn_disabled_fg%%", t["btn_disabled_fg"])
+        .replace("%%accent_rgb%%", t["accent_rgb"])
+        .replace("%%settings_panel_rgb%%", t["settings_panel_rgb"])
+        .replace("%%sidebar_panel_rgb%%", t["sidebar_panel_rgb"])
+        .replace("%%link%%", t["link"]))
+
 
 
 def setup_updates_settings_controls(self, parent):
@@ -324,20 +340,18 @@ def setup_updates_settings_controls(self, parent):
         py_ver = "?"
 
     ver_widget = QWidget()
-    ver_widget.setStyleSheet(
-        "QWidget { background: transparent; border: none; }"
-    )
+    ver_widget.setStyleSheet(_qss("QWidget { background: transparent; border: none; }"))
     ver_layout = QVBoxLayout(ver_widget)
     ver_layout.setContentsMargins(10, 8, 10, 8)
     ver_layout.setSpacing(2)
 
     lbl_py = QLabel(_("Python-часть: ", "Python part: ") + f"<b>{py_ver}</b>")
-    lbl_py.setStyleSheet("QLabel { background: transparent; border: none; color: #bca9bb; font-size: 11px; }")
+    lbl_py.setStyleSheet(_qss("QLabel { background: transparent; border: none; color: %%muted%%; font-size: 11px; }"))
     lbl_py.setTextFormat(Qt.TextFormat.RichText)
     ver_layout.addWidget(lbl_py)
 
     lbl_unity = QLabel(_("Unity-часть: ", "Unity part: ") + f"<b>{_current_unity_version()}</b>")
-    lbl_unity.setStyleSheet("QLabel { background: transparent; border: none; color: #bca9bb; font-size: 11px; }")
+    lbl_unity.setStyleSheet(_qss("QLabel { background: transparent; border: none; color: %%muted%%; font-size: 11px; }"))
     lbl_unity.setTextFormat(Qt.TextFormat.RichText)
     ver_layout.addWidget(lbl_unity)
     parent.addWidget(ver_widget)
@@ -345,23 +359,21 @@ def setup_updates_settings_controls(self, parent):
     # Channel
     channel_row = QWidget()
     channel_row.setObjectName("UpdatesChannelRow")
-    channel_row.setStyleSheet("QWidget#UpdatesChannelRow { background: transparent; }")
+    channel_row.setStyleSheet(_qss("QWidget#UpdatesChannelRow { background: transparent; }"))
     channel_layout = QHBoxLayout(channel_row)
     channel_layout.setContentsMargins(0, 4, 0, 0)
     channel_layout.setSpacing(8)
 
     channel_lbl = QLabel(_("Канал обновлений:", "Update channel:"))
-    channel_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    channel_lbl.setStyleSheet(_qss("QLabel { color: %%muted%%; font-size: 12px; }"))
     channel_layout.addWidget(channel_lbl)
 
     channel_combo = QComboBox()
-    channel_combo.setStyleSheet(
-        "QComboBox { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QComboBox:focus { border: 1px solid rgba(219,101,150,0.24); }"
+    channel_combo.setStyleSheet(_qss("QComboBox { background-color: rgba(%%settings_panel_rgb%%, 0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: %%text%%; padding: 7px 10px; }"
+        "QComboBox:focus { border: 1px solid rgba(%%accent_rgb%%, 0.24); }"
         "QComboBox::drop-down { border: none; width: 26px; }"
-        "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(219,101,150,0.24); color: #f3edf6; selection-background-color: rgba(219,101,150,0.30); }"
-    )
+        "QComboBox QAbstractItemView { background-color: rgba(%%sidebar_panel_rgb%%, 0.96); border: 1px solid rgba(%%accent_rgb%%, 0.24); color: %%text%%; selection-background-color: rgba(%%accent_rgb%%, 0.30); }"))
     channel_combo.addItems(["stable", "beta"])
     current_channel = self.settings.get("UPDATE_CHANNEL", "stable")
     idx = channel_combo.findText(current_channel)
@@ -421,22 +433,20 @@ def setup_updates_settings_controls(self, parent):
     # Tester code
     tester_row = QWidget()
     tester_row.setObjectName("UpdatesTesterRow")
-    tester_row.setStyleSheet("QWidget#UpdatesTesterRow { background: transparent; }")
+    tester_row.setStyleSheet(_qss("QWidget#UpdatesTesterRow { background: transparent; }"))
     tester_layout = QHBoxLayout(tester_row)
     tester_layout.setContentsMargins(0, 4, 0, 0)
     tester_layout.setSpacing(8)
 
     tester_lbl = QLabel(_("Код тестера:", "Tester code:"))
-    tester_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    tester_lbl.setStyleSheet(_qss("QLabel { color: %%muted%%; font-size: 12px; }"))
     tester_lbl.setFixedWidth(100)
     tester_layout.addWidget(tester_lbl)
 
     tester_entry = QLineEdit()
-    tester_entry.setStyleSheet(
-        "QLineEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QLineEdit:focus { border: 1px solid rgba(219,101,150,0.24); }"
-    )
+    tester_entry.setStyleSheet(_qss("QLineEdit { background-color: rgba(%%settings_panel_rgb%%, 0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: %%text%%; padding: 7px 10px; }"
+        "QLineEdit:focus { border: 1px solid rgba(%%accent_rgb%%, 0.24); }"))
     tester_entry.setEchoMode(QLineEdit.EchoMode.Password)
     tester_entry.setPlaceholderText(_("пароль для тестовых архивов", "password for test archives"))
     tester_entry.setText(self.settings.get("TESTER_CODE", ""))
@@ -458,22 +468,20 @@ def setup_updates_settings_controls(self, parent):
     # Unity install dir
     unity_row = QWidget()
     unity_row.setObjectName("UpdatesUnityRow")
-    unity_row.setStyleSheet("QWidget#UpdatesUnityRow { background: transparent; }")
+    unity_row.setStyleSheet(_qss("QWidget#UpdatesUnityRow { background: transparent; }"))
     unity_layout = QHBoxLayout(unity_row)
     unity_layout.setContentsMargins(0, 4, 0, 0)
     unity_layout.setSpacing(4)
 
     unity_lbl = QLabel(_("Папка Unity:", "Unity folder:"))
-    unity_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    unity_lbl.setStyleSheet(_qss("QLabel { color: %%muted%%; font-size: 12px; }"))
     unity_lbl.setFixedWidth(100)
     unity_layout.addWidget(unity_lbl)
 
     unity_entry = QLineEdit()
-    unity_entry.setStyleSheet(
-        "QLineEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QLineEdit:focus { border: 1px solid rgba(219,101,150,0.24); }"
-    )
+    unity_entry.setStyleSheet(_qss("QLineEdit { background-color: rgba(%%settings_panel_rgb%%, 0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: %%text%%; padding: 7px 10px; }"
+        "QLineEdit:focus { border: 1px solid rgba(%%accent_rgb%%, 0.24); }"))
     unity_entry.setPlaceholderText(_("по умолчанию: ../NeuroMita-Unity", "default: ../NeuroMita-Unity"))
     unity_entry.setText(self.settings.get("UNITY_INSTALL_DIR", ""))
     unity_layout.addWidget(unity_entry)
@@ -512,17 +520,15 @@ def setup_updates_settings_controls(self, parent):
 
     # Release info
     info_title = QLabel(_("Информация об обновлении", "Update information"))
-    info_title.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    info_title.setStyleSheet(_qss("QLabel { color: %%muted%%; font-size: 12px; }"))
     parent.addWidget(info_title)
 
     release_info = QTextEdit()
     release_info.setReadOnly(True)
     release_info.setMinimumHeight(180)
     release_info.setPlaceholderText(_("Сначала нажми «Проверить».", "Press 'Check' first."))
-    release_info.setStyleSheet(
-        "QTextEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-    )
+    release_info.setStyleSheet(_qss("QTextEdit { background-color: rgba(%%settings_panel_rgb%%, 0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: %%text%%; padding: 7px 10px; }"))
     parent.addWidget(release_info)
 
     # Progress + status
@@ -530,38 +536,32 @@ def setup_updates_settings_controls(self, parent):
     progress_bar.setRange(0, 100)
     progress_bar.setValue(0)
     progress_bar.setVisible(False)
-    progress_bar.setStyleSheet(
-        "QProgressBar { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; background: rgba(16,13,25,0.96); height: 14px; text-align: center; color: #bca9bb; font-size: 10px; }"
-        "QProgressBar::chunk { background: #db6596; border-radius: 3px; }"
-    )
+    progress_bar.setStyleSheet(_qss("QProgressBar { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; background: rgba(%%settings_panel_rgb%%, 0.96); height: 14px; text-align: center; color: %%muted%%; font-size: 10px; }"
+        "QProgressBar::chunk { background: %%accent%%; border-radius: 3px; }"))
     parent.addWidget(progress_bar)
 
     status_lbl = QLabel("")
     status_lbl.setWordWrap(True)
-    status_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 11px; padding: 2px 0; }")
+    status_lbl.setStyleSheet(_qss("QLabel { color: %%muted%%; font-size: 11px; padding: 2px 0; }"))
     parent.addWidget(status_lbl)
 
     # Action buttons
     buttons_row = QWidget()
     buttons_row.setObjectName("UpdatesButtonsRow")
-    buttons_row.setStyleSheet("QWidget#UpdatesButtonsRow { background: transparent; }")
+    buttons_row.setStyleSheet(_qss("QWidget#UpdatesButtonsRow { background: transparent; }"))
     buttons_layout = QHBoxLayout(buttons_row)
     buttons_layout.setContentsMargins(0, 0, 0, 0)
     buttons_layout.setSpacing(8)
 
     btn_check = QPushButton(_("Проверить обновления", "Check for updates"))
-    btn_check.setStyleSheet(
-        "QPushButton { background: #db6596; color: #ffffff; border: none; border-radius: 10px; padding: 7px 14px; font-weight: 600; }"
-        "QPushButton:hover { background: #e26e9e; }"
-        "QPushButton:disabled { background: #2b2230; color: #bca9bb; }"
-    )
+    btn_check.setStyleSheet(_qss("QPushButton { background: %%accent%%; color: white; border: none; border-radius: 10px; padding: 7px 14px; font-weight: 600; }"
+        "QPushButton:hover { background: %%accent_hover%%; }"
+        "QPushButton:disabled { background: %%btn_disabled_bg%%; color: %%muted%%; }"))
 
     btn_install = QPushButton(_("Установить обновления", "Install updates"))
-    btn_install.setStyleSheet(
-        "QPushButton { background: #db6596; color: #ffffff; border: none; border-radius: 10px; padding: 7px 14px; font-weight: 600; }"
-        "QPushButton:hover { background: #e26e9e; }"
-        "QPushButton:disabled { background: #2b2230; color: #bca9bb; }"
-    )
+    btn_install.setStyleSheet(_qss("QPushButton { background: %%accent%%; color: white; border: none; border-radius: 10px; padding: 7px 14px; font-weight: 600; }"
+        "QPushButton:hover { background: %%accent_hover%%; }"
+        "QPushButton:disabled { background: %%btn_disabled_bg%%; color: %%muted%%; }"))
 
     btn_check.clicked.connect(lambda: threading.Thread(target=_run_check_only, daemon=True).start())
     btn_install.clicked.connect(lambda: threading.Thread(target=_run_install, daemon=True).start())

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from core.events import Events
 from main_logger import logger
+from styles.theme import get_theme
 from ui.chat.chat_widget import ChatWidget
 from ui.widgets.image_preview_widget import ImagePreviewBar
 from ui.widgets.image_viewer_widget import ImageViewerWidget
@@ -66,7 +67,7 @@ class ChatPanel(QWidget):
         layout.setSpacing(14)
 
         heart = QLabel()
-        heart.setPixmap(qta.icon("fa6s.heart", color="#ff7eb6").pixmap(14, 14))
+        heart.setPixmap(qta.icon("fa6s.heart", color=get_theme()["icon"]).pixmap(14, 14))
         layout.addWidget(heart, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title = QLabel("")
@@ -79,7 +80,7 @@ class ChatPanel(QWidget):
 
         history_button = QPushButton(_("История", "History"))
         history_button.setObjectName("ChatStripGhostButton")
-        history_button.setIcon(qta.icon("fa6s.database", color="#ffd2ec"))
+        history_button.setIcon(qta.icon("fa6s.database", color=get_theme()["icon"]))
         history_button.setCursor(Qt.CursorShape.PointingHandCursor)
         history_button.setToolTip(_("Открыть базу истории персонажа", "Open character history database"))
         history_button.clicked.connect(self._open_character_history)
@@ -87,7 +88,7 @@ class ChatPanel(QWidget):
 
         refresh_button = QPushButton(_("Обновить", "Refresh"))
         refresh_button.setObjectName("ChatStripGhostButton")
-        refresh_button.setIcon(qta.icon("fa6s.rotate", color="#ffd2ec"))
+        refresh_button.setIcon(qta.icon("fa6s.rotate", color=get_theme()["icon"]))
         refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
         refresh_button.setToolTip(_("Загрузить историю чата", "Load chat history"))
         refresh_button.clicked.connect(self.gui.load_chat_history)
@@ -95,7 +96,7 @@ class ChatPanel(QWidget):
 
         clear_button = QPushButton(_("Очистить чат", "Clear chat"))
         clear_button.setObjectName("ChatStripGhostButton")
-        clear_button.setIcon(qta.icon("fa6s.trash", color="#ffd2ec"))
+        clear_button.setIcon(qta.icon("fa6s.trash", color=get_theme()["icon"]))
         clear_button.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_button.clicked.connect(self.gui.clear_chat_display)
         layout.addWidget(clear_button, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -126,7 +127,7 @@ class ChatPanel(QWidget):
         bar_layout.setContentsMargins(12, 6, 6, 6)
         bar_layout.setSpacing(4)
 
-        self.gui.attach_button = QPushButton(qta.icon("fa6s.paperclip", color="#a0a0b4", scale_factor=0.75), "")
+        self.gui.attach_button = QPushButton(qta.icon("fa6s.paperclip", color=get_theme()["icon_secondary"], scale_factor=0.75), "")
         self.gui.attach_button.setObjectName("ChatComposerIconBtn")
         self.gui.attach_button.clicked.connect(lambda: attach_images(self.gui))
         self.gui.attach_button.setFixedSize(32, 32)
@@ -140,7 +141,7 @@ class ChatPanel(QWidget):
         self.gui.user_entry.setFixedHeight(36)
         self.gui.user_entry.setPlaceholderText(_("Напиши что-нибудь Crazy Mita…", "Write something to Mita…"))
         self.gui.user_entry.setStyleSheet(
-            "QTextEdit { background-color: transparent; border: none; color: #f7edf5; padding: 4px 2px; }"
+            f"QTextEdit {{ background-color: transparent; border: none; color: {get_theme()['text']}; padding: 4px 2px; }}"
             "QTextEdit:focus { background-color: transparent; border: none; }"
         )
         self.gui.user_entry.textChanged.connect(lambda: adjust_input_height(self.gui))
@@ -148,7 +149,7 @@ class ChatPanel(QWidget):
         self.gui.user_entry.installEventFilter(self.gui)
         bar_layout.addWidget(self.gui.user_entry, 1)
 
-        self.gui.send_screen_button = QPushButton(qta.icon("fa6s.camera", color="#a0a0b4", scale_factor=0.75), "")
+        self.gui.send_screen_button = QPushButton(qta.icon("fa6s.camera", color=get_theme()["icon_secondary"], scale_factor=0.75), "")
         self.gui.send_screen_button.setObjectName("ChatComposerIconBtn")
         self.gui.send_screen_button.clicked.connect(lambda: send_screen_capture(self.gui))
         self.gui.send_screen_button.setFixedSize(32, 32)

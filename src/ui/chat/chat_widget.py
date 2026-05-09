@@ -133,15 +133,18 @@ class ChatWidget(QFrame):
         path = QPainterPath()
         path.addRoundedRect(rect, 18, 18)
 
+        t = get_theme()
+        def _rgb(key): return tuple(int(v) for v in t[key].split(", "))
+
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, QColor(16, 13, 25, 245))
-        gradient.setColorAt(0.55, QColor(12, 9, 21, 248))
-        gradient.setColorAt(1.0, QColor(8, 8, 18, 250))
+        gradient.setColorAt(0.0, QColor(*_rgb("settings_panel_rgb"), 245))
+        gradient.setColorAt(0.55, QColor(*_rgb("app_bg_rgb"), 248))
+        gradient.setColorAt(1.0, QColor(*_rgb("sandbox_bg_rgb"), 250))
         painter.fillPath(path, gradient)
 
         painter.save()
         painter.setClipPath(path)
-        painter.setPen(QPen(QColor(219, 101, 150, 14), 1))
+        painter.setPen(QPen(QColor(*_rgb("accent_rgb"), 14), 1))
         step = 32
         rl, rt, rr, rb = int(rect.left()), int(rect.top()), int(rect.right()), int(rect.bottom())
         for x in range(rl, rr, step):
@@ -150,7 +153,7 @@ class ChatWidget(QFrame):
             painter.drawLine(rl, y, rr, y)
         painter.restore()
 
-        painter.setPen(QPen(QColor(219, 101, 150, 105), 1.15))
+        painter.setPen(QPen(QColor(*_rgb("accent_rgb"), 105), 1.15))
         painter.drawPath(path)
 
     # ── Public API ──────────────────────────────────────────────────────────

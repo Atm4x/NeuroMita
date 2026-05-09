@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from ui.pages.settings.section_registry import SettingsSectionSpec, get_settings_section_specs
 from ui.widgets.settings_icon_button import SettingsIconButton
+from styles.theme import get_theme
 from utils import _
 
 _MODE_RANK = {"basic": 0, "advanced": 1, "full": 2}
@@ -81,7 +82,7 @@ class SettingsCategoryCard(QFrame):
         self.icon_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_box.setFixedSize(38, 38)
         self.icon_box.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.icon_box.setPixmap(qta.icon(spec.icon_name, color="#ffd7eb").pixmap(18, 18))
+        self.icon_box.setPixmap(qta.icon(spec.icon_name, color=get_theme()["icon"]).pixmap(18, 18))
         header_layout.addWidget(self.icon_box, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
@@ -153,7 +154,7 @@ class SettingsCategoryCard(QFrame):
         self.setProperty("expanded", self._expanded)
         self.header.setProperty("expanded", self._expanded)
         chevron = "fa6s.angle-up" if self._expanded else "fa6s.angle-down"
-        self.chevron_label.setPixmap(qta.icon(chevron, color="#f6d7ea").pixmap(16, 16))
+        self.chevron_label.setPixmap(qta.icon(chevron, color=get_theme()["icon"]).pixmap(16, 16))
         self._repolish()
         self._apply_body_state()
 
@@ -498,7 +499,7 @@ class SettingsPage(QWidget):
 
         icon_label = QLabel()
         icon_label.setObjectName("SettingsHeroIcon")
-        icon_label.setPixmap(qta.icon("fa6s.gear", color="#ff6db7").pixmap(22, 22))
+        icon_label.setPixmap(qta.icon("fa6s.gear", color=get_theme()["icon"]).pixmap(22, 22))
         headline_row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title = QLabel(_("Настройки", "Settings"))

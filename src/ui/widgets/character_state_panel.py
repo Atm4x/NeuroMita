@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from core.events import Events
 from main_logger import logger
+from styles.theme import get_theme
 from utils import _
 
 
@@ -173,7 +174,7 @@ class CharacterStatePanel(QWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(6)
         icon = QLabel()
-        icon.setPixmap(qta.icon("fa6s.heart-pulse", color="#ffd2ec").pixmap(14, 14))
+        icon.setPixmap(qta.icon("fa6s.heart-pulse", color=get_theme()["icon"]).pixmap(14, 14))
         title_row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         title = QLabel(_("Состояние персонажа", "Character state"))
         title.setObjectName("SandboxInspectorTitle")

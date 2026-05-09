@@ -161,25 +161,28 @@ class SettingsOverlay(QWidget):
         panel_path = QPainterPath()
         panel_path.addRoundedRect(rect, radius, radius)
 
+        t = get_theme()
+        def _rgb(key): return tuple(int(v) for v in t[key].split(", "))
+
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, QColor(16, 13, 25, 244))
-        gradient.setColorAt(0.55, QColor(12, 9, 21, 248))
-        gradient.setColorAt(1.0, QColor(8, 8, 18, 250))
+        gradient.setColorAt(0.0, QColor(*_rgb("settings_panel_rgb"), 244))
+        gradient.setColorAt(0.55, QColor(*_rgb("app_bg_rgb"), 248))
+        gradient.setColorAt(1.0, QColor(*_rgb("sandbox_bg_rgb"), 250))
         painter.fillPath(panel_path, gradient)
 
         painter.save()
         painter.setClipPath(panel_path)
-        painter.setPen(QPen(QColor(219, 101, 150, 18), 1))
+        painter.setPen(QPen(QColor(*_rgb("accent_rgb"), 18), 1))
         step = 26
         rl, rt, rr, rb, rh = int(rect.left()), int(rect.top()), int(rect.right()), int(rect.bottom()), int(rect.height())
         for x in range(rl - rh, rr + rh, step):
             painter.drawLine(x, rt, x + rh, rb)
-        painter.setPen(QPen(QColor(219, 101, 150, 10), 1))
+        painter.setPen(QPen(QColor(*_rgb("accent_rgb"), 10), 1))
         for y in range(rt, rb, step):
             painter.drawLine(rl, y, rr, y)
         painter.restore()
 
-        painter.setPen(QPen(QColor(219, 101, 150, 88), 1.2))
+        painter.setPen(QPen(QColor(*_rgb("accent_rgb"), 88), 1.2))
         painter.drawPath(panel_path)
 
         inner = rect.adjusted(10, 10, -10, -10)
