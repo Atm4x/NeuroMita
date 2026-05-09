@@ -38,6 +38,11 @@ class MainWindow(AppWindowBase):
         except Exception:
             current_lang = "ru"
         self.shell_sidebar.set_active_language(current_lang)
+
+        theme = get_theme(name=self._current_theme)
+        palette = LauncherShellPalette.from_theme(theme)
+        self.shell_sidebar.setStyleSheet(get_launcher_shell_stylesheet(palette))
+
         main_layout.addWidget(self.shell_sidebar)
 
         content_host = QFrame()

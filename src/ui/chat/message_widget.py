@@ -16,6 +16,7 @@ from PyQt6.QtGui import (
     QTextLayout, QTextOption, QAction,
 )
 from main_logger import logger
+from styles.theme import get_theme
 from utils import _
 
 def _get_avatar_dir() -> str:
@@ -492,10 +493,11 @@ class MessageWidget(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: rgba(16,13,25,0.96); color: #f3edf6; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 4px; }
-            QMenu::item { padding: 6px 20px; border-radius: 4px; }
-            QMenu::item:selected { background-color: rgba(219,101,150,0.20); }
+        t = get_theme()
+        menu.setStyleSheet(f"""
+            QMenu {{ background-color: {t['panel_bg']}; color: {t['text']}; border: 1px solid {t['border_soft']}; border-radius: 8px; padding: 4px; }}
+            QMenu::item {{ padding: 6px 20px; border-radius: 4px; }}
+            QMenu::item:selected {{ background-color: rgba({t['accent_rgb']}, 0.20); }}
         """)
 
         if self._role == "user":

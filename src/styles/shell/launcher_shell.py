@@ -16,6 +16,7 @@ class LauncherShellPalette:
     text: str = "#f3edf6"
     muted: str = "#bca9bb"
     accent: str = "#db6596"
+    accent_rgb: str = "219, 101, 150"
     accent_soft: str = "rgba(219, 101, 150, 0.14)"
     accent_hover: str = "#e26e9e"
     accent_pressed: str = "#cb5b89"
@@ -37,6 +38,7 @@ class LauncherShellPalette:
             text=theme["text"],
             muted=theme["muted"],
             accent=theme["accent"],
+            accent_rgb=theme["accent_rgb"],
             accent_soft=f"rgba({theme['accent_rgb']}, 0.14)",
             accent_hover=theme["accent_hover"],
             accent_pressed=theme["accent_pressed"],
@@ -104,7 +106,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
             stop: 1 rgba(12, 9, 21, 0.995)
         );
         border: none;
-        border-right: 1px solid rgba(219, 101, 150, 0.14);
+        border-right: 1px solid {p.accent_soft};
         border-radius: 0px;
     }}
     QFrame#LauncherShellNavHost,
@@ -182,7 +184,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
         color: {p.text};
     }}
     QPushButton#LauncherShellNavButton[active="true"] {{
-        background-color: rgba(219, 101, 150, 0.72);
+        background-color: rgba({p.accent_rgb}, 0.72);
         border: 1px solid {p.border_strong};
         color: {p.text};
     }}
@@ -190,7 +192,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
     QPushButton#LauncherShellPromoButton {{
         background-color: {p.accent};
         color: white;
-        border: 1px solid rgba(219, 101, 150, 0.42);
+        border: 1px solid rgba({p.accent_rgb}, 0.42);
         border-radius: 14px;
         padding: 10px 14px;
         font-family: "Segoe UI", "Arial", sans-serif;
@@ -263,7 +265,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
     QPushButton#LauncherShellLangPill {{
         background-color: rgba(255, 255, 255, 0.02);
         color: {p.text};
-        border: 1px solid rgba(219, 101, 150, 0.26);
+        border: 1px solid rgba({p.accent_rgb}, 0.26);
         border-radius: 12px;
         padding: 0;
         font-family: "Segoe UI", "Arial", sans-serif;
@@ -279,7 +281,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
     QPushButton#LauncherShellLangPill[active="true"] {{
         background-color: {p.accent};
         color: white;
-        border: 1px solid rgba(219, 101, 150, 0.42);
+        border: 1px solid rgba({p.accent_rgb}, 0.42);
     }}
     QLabel#LauncherShellVersionLabel {{
         color: {p.muted};
@@ -297,7 +299,7 @@ def get_launcher_shell_stylesheet(palette: LauncherShellPalette | None = None) -
         margin: 4px 0;
     }}
     QScrollBar::handle:vertical {{
-        background: rgba(219, 101, 150, 0.22);
+        background: rgba({p.accent_rgb}, 0.22);
         border-radius: 5px;
         min-height: 28px;
     }}
