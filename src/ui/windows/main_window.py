@@ -10,6 +10,7 @@ from ui.pages.news_page import build_news_page
 from ui.pages.news_support import get_news_content as load_news_content
 from ui.pages.news_support import get_news_releases as load_news_releases
 from ui.widgets.launcher_shell_sidebar import LauncherSidebarWidget
+from ui.widgets.launcher_shell_theme import apply_launcher_shell_theme
 from ui.widgets.settings_panel import apply_interface_mode
 from ui.windows.app_window_base import AppWindowBase
 from utils import _
@@ -79,6 +80,9 @@ class MainWindow(AppWindowBase):
         palette = LauncherShellPalette.from_theme(theme)
         if hasattr(self, "shell_sidebar"):
             self.shell_sidebar.setStyleSheet(get_launcher_shell_stylesheet(palette))
+        if hasattr(self, "page_map"):
+            for page in self.page_map.values():
+                apply_launcher_shell_theme(page, palette)
 
     def switch_main_page(self, page_key):
         page = getattr(self, "page_map", {}).get(page_key)
