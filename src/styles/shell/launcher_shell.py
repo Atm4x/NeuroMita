@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from styles.theme import get_theme
+
 
 @dataclass(frozen=True)
 class LauncherShellPalette:
@@ -49,7 +51,7 @@ class LauncherShellPalette:
         )
 
 
-PALETTE = LauncherShellPalette()
+PALETTE = LauncherShellPalette.from_theme(get_theme())
 
 
 def resolve_launcher_asset(name: str) -> str | None:

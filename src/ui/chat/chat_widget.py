@@ -16,7 +16,8 @@ from styles.main_styles import get_theme
 
 _THEME = get_theme()
 _PANEL_BG = f"rgba({_THEME['sandbox_bg_rgb']}, 0.96)"
-_PANEL_BG_COLOR = QColor(8, 8, 18, 245)
+_TYPING_MUTED_C = QColor(_THEME['muted'])
+_TYPING_MUTED_RGB = f"{_TYPING_MUTED_C.red()},{_TYPING_MUTED_C.green()},{_TYPING_MUTED_C.blue()}"
 
 MAX_DISPLAYED_MESSAGES = 100  # older widgets are deleted when this limit is exceeded
 
@@ -95,7 +96,7 @@ class ChatWidget(QFrame):
 
         self._typing_label = QLabel()
         self._typing_label.setStyleSheet(
-            "color: rgba(180,180,195,0.75); font-size: 9pt; "
+            f"color: rgba({_TYPING_MUTED_RGB},0.75); font-size: 9pt; "
             "background: transparent; border: none;"
         )
         typing_layout.addWidget(self._typing_label)

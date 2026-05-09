@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from utils import _
 
 from ui.widgets.launcher_shell_theme import apply_launcher_shell_theme
+from styles.shell.launcher_shell import LauncherShellPalette
 from styles.theme import get_theme
 
 
@@ -71,7 +72,7 @@ class LogItem:
 def create_shell_page_container() -> tuple[QWidget, QVBoxLayout]:
     root = QWidget()
     root.setObjectName("LauncherShellRoot")
-    apply_launcher_shell_theme(root)
+    apply_launcher_shell_theme(root, LauncherShellPalette.from_theme(get_theme()))
 
     backdrop = QFrame(root)
     backdrop.setObjectName("LauncherShellBackdrop")

@@ -39,43 +39,26 @@ TAIL_W = 8
 TAIL_H = 12
 BUBBLE_RADIUS = 12
 
-# Modern, balanced chat colors (Telegram/Discord inspired)
-ROLE_COLORS = {
-    "user":      "#ff7ab8",
-    "assistant": "#ff9cd2",
-    "system":    "#7bc6ff",
-    "think":     "#bdb4c7",
-}
-CARD_BG = {
-    "user":      QColor(171, 44, 102, 242),
-    "assistant": QColor(46, 24, 52, 244),
-    "system":    QColor(67, 122, 176, 42),
-    "think":     QColor(74, 58, 82, 72),
-}
-CARD_BORDER = {
-    "user":      QColor(255, 133, 188, 165),
-    "assistant": QColor(255, 132, 191, 70),
-    "system":    QColor(123, 198, 255, 70),
-    "think":     QColor(189, 180, 199, 42),
-}
-TEXT_COLOR = {
-    "user":      "#fff6fb",
-    "assistant": "#f3eaf3",
-    "system":    "#eef7ff",
-    "think":     "#cbc1d1",
-}
-NAME_COLOR = {
-    "user":      "#ffd7ea",
-    "assistant": "#ff8fc8",
-    "system":    "#7bc6ff",
-    "think":     "#bdb4c7",
-}
-TIME_COLOR = {
-    "user":      "rgba(255,255,255,0.55)",
-    "assistant": "rgba(255,255,255,0.42)",
-    "system":    "rgba(255,255,255,0.42)",
-    "think":     "rgba(255,255,255,0.28)",
-}
+import re
+
+def _parse_rgba_to_qcolor(rgba_str: str) -> QColor:
+    m = re.match(r"rgba\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)", rgba_str)
+    if m:
+        r, g, b, a = int(m[1]), int(m[2]), int(m[3]), float(m[4])
+        return QColor(r, g, b, int(a * 255))
+    return QColor(rgba_str)
+
+def _get_role_theme(role: str) -> dict:
+    t = get_theme()
+    prefix = f"msg_{role}"
+    return {
+        "color":  t.get(f"{prefix}_color", ""),
+        "bg":     _parse_rgba_to_qcolor(t.get(f"{prefix}_bg", "rgba(30,30,35,0.94)")),
+        "border": _parse_rgba_to_qcolor(t.get(f"{prefix}_border", "rgba(255,255,255,0.06)")),
+        "text":   t.get(f"{prefix}_text", ""),
+        "name":   t.get(f"{prefix}_name", ""),
+        "time":   t.get(f"{prefix}_time", ""),
+    }
 
 def _round_pixmap(pixmap: QPixmap, size: int) -> QPixmap:
     scaled = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
@@ -125,13 +108,14 @@ def _get_avatar_pixmap(character_name: str, role: str) -> QPixmap:
         if os.path.isfile(path):
             pm = QPixmap(path)
             if not pm.isNull(): return _round_pixmap(pm, AVATAR_SIZE)
-    return _placeholder_avatar(AVATAR_SIZE, ROLE_COLORS.get(role, "#A78BFA"), character_name)
+    return _placeholder_avatar(AVATAR_SIZE, _get_role_theme(role)["color"] or _get_role_theme("assistant")["color"], character_name)
 
 class BubbleFrame(QFrame):
     def __init__(self, role: str, tail_side: str | None = "left", parent=None):
         super().__init__(parent)
-        self._bg = CARD_BG.get(role, QColor(30, 30, 35, 240))
-        self._border = CARD_BORDER.get(role, QColor(255, 255, 255, 15))
+        rt = _get_role_theme(role)
+        self._bg = rt["bg"]
+        self._border = rt["border"]
         self._tail_side = tail_side
         left_margin = TAIL_W if tail_side == "left" else 0
         right_margin = TAIL_W if tail_side == "right" else 0
@@ -339,9 +323,10 @@ class MessageWidget(QWidget):
 
         self.setStyleSheet("background: transparent; border: none;")
 
-        label_color = NAME_COLOR.get(role, "#A78BFA")
-        text_color = TEXT_COLOR.get(role, "#EAEAEA")
-        time_color = TIME_COLOR.get(role, "rgba(255,255,255,0.35)")
+        rt = _get_role_theme(role)
+        label_color = rt["name"]
+        text_color = rt["text"]
+        time_color = rt["time"]
         is_user = (role == "user")
 
         outer = QHBoxLayout(self)
@@ -437,6 +422,7 @@ class MessageWidget(QWidget):
         try:
             import qtawesome as qta
             from PyQt6.QtWidgets import QPushButton, QHBoxLayout
+            it = get_theme()
             btn_container = QWidget(self._card)
             btn_container.setStyleSheet("background: transparent; border: none;")
             btn_layout = QHBoxLayout(btn_container)
@@ -444,7 +430,7 @@ class MessageWidget(QWidget):
             btn_layout.setSpacing(4)
 
             self._rate_up_btn = QPushButton(btn_container)
-            self._rate_up_btn.setIcon(qta.icon("fa5s.thumbs-up", color="#9CA3AF"))
+            self._rate_up_btn.setIcon(qta.icon("fa5s.thumbs-up", color=it['muted']))
             self._rate_up_btn.setFixedSize(16, 16)
             self._rate_up_btn.setFlat(True)
             self._rate_up_btn.setToolTip("👍 Хороший ответ")
@@ -452,7 +438,7 @@ class MessageWidget(QWidget):
             self._rate_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
             self._rate_down_btn = QPushButton(btn_container)
-            self._rate_down_btn.setIcon(qta.icon("fa5s.thumbs-down", color="#9CA3AF"))
+            self._rate_down_btn.setIcon(qta.icon("fa5s.thumbs-down", color=it['muted']))
             self._rate_down_btn.setFixedSize(16, 16)
             self._rate_down_btn.setFlat(True)
             self._rate_down_btn.setToolTip("👎 Плохой ответ")
@@ -474,16 +460,17 @@ class MessageWidget(QWidget):
             fc = FineTuneCollector.instance
             if fc: fc.update_rating(sample_id, rating)
 
-            _ACTIVE_UP   = "QPushButton { background: #10B981; border-radius: 4px; border: none; }"
-            _ACTIVE_DOWN = "QPushButton { background: #EF4444; border-radius: 4px; border: none; }"
+            it = get_theme()
+            _ACTIVE_UP   = f"QPushButton {{ background: {it['success']}; border-radius: 4px; border: none; }}"
+            _ACTIVE_DOWN = f"QPushButton {{ background: {it['danger']}; border-radius: 4px; border: none; }}"
             _INACTIVE    = "QPushButton { background: transparent; border: none; opacity: 0.5; }"
 
             if rating > 0:
-                self._rate_up_btn.setIcon(qta.icon("fa5s.thumbs-up", color="#FFFFFF"))
+                self._rate_up_btn.setIcon(qta.icon("fa5s.thumbs-up", color=it['text']))
                 self._rate_up_btn.setStyleSheet(_ACTIVE_UP)
                 self._rate_down_btn.setStyleSheet(_INACTIVE)
             else:
-                self._rate_down_btn.setIcon(qta.icon("fa5s.thumbs-down", color="#FFFFFF"))
+                self._rate_down_btn.setIcon(qta.icon("fa5s.thumbs-down", color=it['text']))
                 self._rate_down_btn.setStyleSheet(_ACTIVE_DOWN)
                 self._rate_up_btn.setStyleSheet(_INACTIVE)
 
@@ -556,8 +543,9 @@ class ImageWidget(QWidget):
         layout.setSpacing(0)
 
         frame = QFrame(self)
-        frame.setStyleSheet("""
-            QFrame { background-color: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0px; }
+        it = get_theme()
+        frame.setStyleSheet(f"""
+            QFrame {{ background-color: {it['outline']}; border: 1px solid {it['border_soft']}; border-radius: 8px; padding: 0px; }}
         """)
         frame_layout = QVBoxLayout(frame)
         frame_layout.setContentsMargins(0, 0, 0, 0)
@@ -574,7 +562,7 @@ class ImageWidget(QWidget):
             frame_layout.addWidget(img_label)
         else:
             err_label = QLabel("⚠️ " + _("Ошибка загрузки", "Load error"), frame)
-            err_label.setStyleSheet("color: #EF4444; padding: 12px; font-weight: bold;")
+            err_label.setStyleSheet(f"color: {it['danger']}; padding: 12px; font-weight: bold;")
             frame_layout.addWidget(err_label)
 
         layout.addWidget(frame)
@@ -606,8 +594,12 @@ class ThinkBlockWidget(QFrame):
         self.setObjectName("ThinkBlock")
         self.setMaximumWidth(max(100, max_bubble_width))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setStyleSheet("""
-            QFrame#ThinkBlock { background-color: rgba(156, 163, 175, 0.08); border: 1px solid rgba(156, 163, 175, 0.15); border-radius: 8px; }
+        t = get_theme()
+        muted = t['muted']
+        mute_c = QColor(muted)
+        muted_rgb = f"{mute_c.red()}, {mute_c.green()}, {mute_c.blue()}"
+        self.setStyleSheet(f"""
+            QFrame#ThinkBlock {{ background-color: rgba({muted_rgb}, 0.08); border: 1px solid rgba({muted_rgb}, 0.15); border-radius: 8px; }}
         """)
 
         layout = QVBoxLayout(self)
@@ -615,7 +607,7 @@ class ThinkBlockWidget(QFrame):
         layout.setSpacing(4)
 
         self._header = QLabel(self)
-        self._header.setStyleSheet(f"color: #9CA3AF; font-weight: bold; font-size: {self._font_sm}pt; background: transparent; border: none;")
+        self._header.setStyleSheet(f"color: {muted}; font-weight: bold; font-size: {self._font_sm}pt; background: transparent; border: none;")
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header.mousePressEvent = lambda e: self.toggle()
         if is_streaming: self._header.setText(f"▼ 💭 {speaker_name} думает.")
@@ -628,7 +620,9 @@ class ThinkBlockWidget(QFrame):
         self._content_label.setWordWrap(True)
         self._content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._content_label.setCursor(Qt.CursorShape.IBeamCursor)
-        self._content_label.setStyleSheet(f"color: rgba(234,234,234,0.7); font-size: {self._font_sm}pt; font-style: italic; background: transparent; border: none;")
+        text_c = QColor(t['text'])
+        text_rgb = f"{text_c.red()}, {text_c.green()}, {text_c.blue()}"
+        self._content_label.setStyleSheet(f"color: rgba({text_rgb}, 0.7); font-size: {self._font_sm}pt; font-style: italic; background: transparent; border: none;")
         self._content_label.setText(content_text)
         self._content_label.setVisible(not self._collapsed)
         layout.addWidget(self._content_label)
