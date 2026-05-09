@@ -9,6 +9,26 @@ from utils import getTranslationVariant as _
 import re
 from html import escape as html_escape
 from main_logger import logger
+from styles.theme import get_theme
+
+def _qss(stylesheet):
+    t = get_theme()
+    return (stylesheet
+        .replace("%%panel_bg%%", t["panel_bg"])
+        .replace("%%text%%", t["text"])
+        .replace("%%muted%%", t["muted"])
+        .replace("%%app_bg%%", t["app_bg"])
+        .replace("%%outline%%", t["outline"])
+        .replace("%%chip_hover%%", t["chip_hover"])
+        .replace("%%chip_bg%%", t["chip_bg"])
+        .replace("%%accent%%", t["accent"])
+        .replace("%%accent_hover%%", t["accent_hover"])
+        .replace("%%border_soft%%", t["border_soft"])
+        .replace("%%btn_disabled_bg%%", t["btn_disabled_bg"])
+        .replace("%%btn_disabled_fg%%", t["btn_disabled_fg"])
+        .replace("%%danger%%", t["danger"])
+        .replace("%%danger_hover%%", t["danger_hover"]))
+
 from collections import deque
 
 # Широкий регэксп: чистит и CSI-последовательности (\x1b[...),
@@ -37,33 +57,33 @@ class VoiceInstallationWindow(QDialog):
         self.setModal(True)
         self.setSizeGripEnabled(True)
 
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #ffffff; }
+        self.setStyleSheet(_qss("""
+            QDialog { background-color: %%panel_bg%%; }
+            QLabel { color: %%text%%; }
             QTextEdit {
-                background-color: #101010;
-                color: #cccccc;
-                border: 1px solid #333;
+                background-color: %%app_bg%%;
+                color: %%muted%%;
+                border: 1px solid %%outline%%;
             }
             QProgressBar {
-                border: 1px solid #555;
+                border: 1px solid %%outline%%;
                 border-radius: 5px;
-                background-color: #555555;
+                background-color: %%chip_hover%%;
                 text-align: center;
             }
             QProgressBar::chunk {
-                background-color: #4CAF50;
+                background-color: %%accent%%;
                 border-radius: 5px;
             }
             QPushButton {
-                background-color: #333333;
-                color: #ffffff;
+                background-color: %%chip_hover%%;
+                color: %%text%%;
                 border: none;
                 padding: 5px 10px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #555555; }
-        """)
+            QPushButton:hover { background-color: %%chip_hover%%; }
+        """))
 
         self._full_log_lines: list[str] = []
         self._display_lines: deque[str] = deque()
@@ -199,9 +219,9 @@ class VoiceInstallationWindow(QDialog):
         """Окраска строки для отображения (HTML). plain уже без ANSI."""
         low = plain.lower()
         if any(w in low for w in ("error", "ошибка", "failed", "traceback", "exception", "critical")):
-            return f'<span style="color:#ff5555;">{html_escape(plain)}</span>'
+            return f'<span style="color:%%danger%%;">{html_escape(plain)}</span>'
         elif any(w in low for w in ("warning", "предупреж", "warn")):
-            return f'<span style="color:#ffb86c;">{html_escape(plain)}</span>'
+            return f'<span style="color:%%warn_text%%;">{html_escape(plain)}</span>'
         else:
             return html_escape(plain)
 
@@ -296,23 +316,23 @@ class VoiceActionWindow(QDialog):
         self.setModal(True)
         self.setSizeGripEnabled(True)
 
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #ffffff; }
+        self.setStyleSheet(_qss("""
+            QDialog { background-color: %%panel_bg%%; }
+            QLabel { color: %%text%%; }
             QTextEdit {
-                background-color: #101010;
-                color: #cccccc;
-                border: 1px solid #333;
+                background-color: %%app_bg%%;
+                color: %%muted%%;
+                border: 1px solid %%outline%%;
             }
             QPushButton {
-                background-color: #333333;
-                color: #ffffff;
+                background-color: %%chip_hover%%;
+                color: %%text%%;
                 border: none;
                 padding: 5px 10px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #555555; }
-        """)
+            QPushButton:hover { background-color: %%chip_hover%%; }
+        """))
 
         self._full_log_lines: list[str] = []
         self._display_lines: deque[str] = deque()
@@ -421,9 +441,9 @@ class VoiceActionWindow(QDialog):
     def _colorize_line(self, plain: str) -> str:
         low = plain.lower()
         if any(w in low for w in ("error", "ошибка", "failed", "traceback", "exception", "critical")):
-            return f'<span style="color:#ff5555;">{html_escape(plain)}</span>'
+            return f'<span style="color:%%danger%%;">{html_escape(plain)}</span>'
         elif any(w in low for w in ("warning", "предупреж", "warn")):
-            return f'<span style="color:#ffb86c;">{html_escape(plain)}</span>'
+            return f'<span style="color:%%warn_text%%;">{html_escape(plain)}</span>'
         else:
             return html_escape(plain)
 
@@ -498,20 +518,20 @@ class VCRedistWarningDialog(QDialog):
         self.setModal(True)
         self.setMinimumSize(500, 250)
         
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #ffffff; }
+        self.setStyleSheet(_qss("""
+            QDialog { background-color: %%panel_bg%%; }
+            QLabel { color: %%text%%; }
             QPushButton {
-                background-color: #333333;
-                color: #ffffff;
+                background-color: %%chip_hover%%;
+                color: %%text%%;
                 border: none;
                 padding: 5px 10px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #555555; }
-            #RetryButton { background-color: #4CAF50; }
-            #RetryButton:hover { background-color: #45a049; }
-        """)
+            QPushButton:hover { background-color: %%chip_hover%%; }
+            #RetryButton { background-color: %%accent%%; }
+            #RetryButton:hover { background-color: %%accent_hover%%; }
+        """))
         
         self.choice = 'close'
         
@@ -519,7 +539,7 @@ class VCRedistWarningDialog(QDialog):
         
         title_label = QLabel(_("Ошибка импорта Triton (DLL Load Failed)", "Triton Import Error (DLL Load Failed)"))
         title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        title_label.setStyleSheet("color: orange;")
+        title_label.setStyleSheet(_qss("color: %%warn_text%%;"))
         layout.addWidget(title_label)
         
         info_text = _(
@@ -574,20 +594,20 @@ class TritonDependenciesDialog(QDialog):
         self.setModal(True)
         self.setMinimumSize(700, 350)
         
-        self.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; }
-            QLabel { color: #ffffff; }
+        self.setStyleSheet(_qss("""
+            QDialog { background-color: %%panel_bg%%; }
+            QLabel { color: %%text%%; }
             QPushButton {
-                background-color: #333333;
-                color: #ffffff;
+                background-color: %%chip_hover%%;
+                color: %%text%%;
                 border: none;
                 padding: 5px 10px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #555555; }
-            #ContinueButton { background-color: #4CAF50; }
-            #ContinueButton:hover { background-color: #45a049; }
-        """)
+            QPushButton:hover { background-color: %%chip_hover%%; }
+            #ContinueButton { background-color: %%accent%%; }
+            #ContinueButton:hover { background-color: %%accent_hover%%; }
+        """))
         
         self.choice = 'skip'
         self.dependencies_status = dependencies_status or {}
@@ -604,7 +624,7 @@ class TritonDependenciesDialog(QDialog):
         
         self.warning_label = QLabel(_("⚠️ Модели Fish Speech+ / + RVC требуют всех компонентов!", 
                                      "⚠️ Models Fish Speech+ / + RVC require all components!"))
-        self.warning_label.setStyleSheet("color: orange; font-weight: bold;")
+        self.warning_label.setStyleSheet(_qss("color: orange; font-weight: bold;"))
         cuda_found = self.dependencies_status.get('cuda_found', False)
         winsdk_found = self.dependencies_status.get('winsdk_found', False)
         msvc_found = self.dependencies_status.get('msvc_found', False)

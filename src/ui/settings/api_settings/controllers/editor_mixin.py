@@ -6,6 +6,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox, QInputDialog
 
 from ui.settings.api_settings.widgets import CustomPresetListItem
+from styles.theme import get_theme
 import qtawesome as qta
 
 from utils import _
@@ -95,10 +96,11 @@ class EditorMixin:
         v.cancel_button.setVisible(dirty)
 
         if dirty:
-            v.save_preset_button.setStyleSheet("""
-                QPushButton { background-color: #27ae60; color: white; font-weight: bold; border: none; padding: 8px; border-radius: 4px; }
-                QPushButton:hover { background-color: #229954; }
-                QPushButton:pressed { background-color: #1e8449; }
+            t = get_theme()
+            v.save_preset_button.setStyleSheet(f"""
+                QPushButton {{ background-color: {t['accent']}; color: white; font-weight: bold; border: none; padding: 8px; border-radius: 4px; }}
+                QPushButton:hover {{ background-color: {t['accent_hover']}; }}
+                QPushButton:pressed {{ background-color: {t['accent_pressed']}; }}
             """)
         else:
             v.save_preset_button.setStyleSheet("""

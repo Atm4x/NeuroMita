@@ -1,4 +1,4 @@
-﻿from ui.gui_templates import create_settings_section, create_section_header
+from ui.gui_templates import create_settings_section, create_section_header
 from utils import getTranslationVariant as _
 
 
@@ -140,3 +140,36 @@ def setup_general_settings_controls(self, parent):
         language_config,
         icon_name='fa5s.globe'
     )
+
+    from styles.theme import THEMES
+    from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
+
+    theme_keys = list(THEMES.keys())
+    theme_display = [_("Тёмная", "Dark"), _("Океан", "Ocean")]
+    current_theme_key = self.settings.get("THEME", "dark")
+    current_display_idx = theme_keys.index(current_theme_key) if current_theme_key in theme_keys else 0
+
+    theme_row = QWidget()
+    theme_row.setObjectName("SettingRow")
+    row_layout = QHBoxLayout(theme_row)
+    row_layout.setContentsMargins(0, 2, 0, 2)
+    row_layout.setSpacing(10)
+
+    theme_lbl = QLabel(_("Тема оформления", "Color theme"))
+    theme_lbl.setMinimumWidth(140)
+    theme_lbl.setMaximumWidth(140)
+    theme_lbl.setWordWrap(True)
+    theme_lbl.setToolTip(_(
+        "Цветовая схема всего приложения. Меняется мгновенно.",
+        "Application color scheme. Switches instantly.",
+    ))
+    row_layout.addWidget(theme_lbl)
+
+    theme_combo = QComboBox()
+    theme_combo.addItems(theme_display)
+    theme_combo.setCurrentIndex(current_display_idx)
+    theme_combo.currentIndexChanged.connect(
+        lambda idx: self.reapply_theme(theme_keys[idx]) if 0 <= idx < len(theme_keys) else None
+    )
+    row_layout.addWidget(theme_combo, 1)
+    parent.addWidget(theme_row)

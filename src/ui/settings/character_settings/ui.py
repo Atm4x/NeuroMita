@@ -7,13 +7,14 @@ from PyQt6.QtWidgets import (
 )
 import qtawesome as qta
 
-from ui.gui_templates import create_section_header
+from ui.gui_templates import create_section_header, SettingsBodyWidget
 from managers.settings_manager import InnerCollapsibleSection
 from utils import getTranslationVariant as _
+from styles.theme import get_theme
 
 
 def _make_row(label_text: str, field_widget: QWidget, label_w: int) -> QWidget:
-    row = QWidget()
+    row = SettingsBodyWidget()
     hl = QHBoxLayout(row)
     hl.setContentsMargins(0, 0, 0, 0)
     hl.setSpacing(6)
@@ -39,7 +40,7 @@ def _make_info_value_label(self, key: str) -> QLabel:
 
 
 def _make_separator() -> QWidget:
-    sep = QWidget()
+    sep = SettingsBodyWidget()
     sep.setFixedHeight(1)
     sep.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.12);")
@@ -55,7 +56,7 @@ def build_character_settings_ui(self, parent_layout):
     sidebar_w = getattr(self, "SETTINGS_SIDEBAR_WIDTH", 50)
     right_pad = max(scrollbar_guard, min(18, int(sidebar_w * 0.25)))
 
-    container = QWidget()
+    container = SettingsBodyWidget()
     container_lay = QVBoxLayout(container)
     container_lay.setContentsMargins(0, 0, right_pad, 0)
     container_lay.setSpacing(6)
@@ -66,12 +67,12 @@ def build_character_settings_ui(self, parent_layout):
     label_w = max(90, min(120, int(overlay_w * 0.3)))
     self.mic_label_width = label_w
 
-    root = QWidget()
+    root = SettingsBodyWidget()
     lay = QVBoxLayout(root)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
 
-    character_field = QWidget()
+    character_field = SettingsBodyWidget()
     ch_h = QHBoxLayout(character_field)
     ch_h.setContentsMargins(0, 0, 0, 0)
     ch_h.setSpacing(6)
@@ -81,7 +82,7 @@ def build_character_settings_ui(self, parent_layout):
     ch_h.addWidget(self.character_combobox, 1)
     lay.addWidget(_make_row(_("Персонажи", "Characters"), character_field, label_w))
 
-    prompt_field = QWidget()
+    prompt_field = SettingsBodyWidget()
     pr_h = QHBoxLayout(prompt_field)
     pr_h.setContentsMargins(0, 0, 0, 0)
     pr_h.setSpacing(6)
@@ -91,7 +92,7 @@ def build_character_settings_ui(self, parent_layout):
     pr_h.addWidget(self.prompt_pack_combobox, 1)
     lay.addWidget(_make_row(_("Набор промптов", "Prompt set"), prompt_field, label_w))
 
-    provider_field = QWidget()
+    provider_field = SettingsBodyWidget()
     pv_h = QHBoxLayout(provider_field)
     pv_h.setContentsMargins(0, 0, 0, 0)
     pv_h.setSpacing(6)
@@ -111,7 +112,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_reload_character_data.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     lay.addWidget(self.btn_reload_character_data)
 
-    mgmt_row = QWidget()
+    mgmt_row = SettingsBodyWidget()
     mg_h = QHBoxLayout(mgmt_row)
     mg_h.setContentsMargins(0, 0, 0, 0)
     mg_h.setSpacing(6)
@@ -214,7 +215,7 @@ def build_character_settings_ui(self, parent_layout):
     _mark_danger_hover(self.btn_clear_history)
     _make_compact(self.btn_clear_history)
 
-    row_char_1 = QWidget()
+    row_char_1 = SettingsBodyWidget()
     row_char_1_l = QHBoxLayout(row_char_1)
     row_char_1_l.setContentsMargins(0, 0, 0, 0)
     row_char_1_l.setSpacing(6)
@@ -234,7 +235,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_import_db.setObjectName("SecondaryButton")
     _make_compact(self.btn_import_db)
 
-    row_char_export = QWidget()
+    row_char_export = SettingsBodyWidget()
     row_char_export_l = QHBoxLayout(row_char_export)
     row_char_export_l.setContentsMargins(0, 0, 0, 0)
     row_char_export_l.setSpacing(6)
@@ -267,7 +268,7 @@ def build_character_settings_ui(self, parent_layout):
     _mark_danger_hover(self.btn_clear_all_histories)
     _make_compact(self.btn_clear_all_histories)
 
-    row_all_1 = QWidget()
+    row_all_1 = SettingsBodyWidget()
     row_all_1_l = QHBoxLayout(row_all_1)
     row_all_1_l.setContentsMargins(0, 0, 0, 0)
     row_all_1_l.setSpacing(6)
@@ -289,7 +290,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_import_db_global.setObjectName("SecondaryButton")
     _make_compact(self.btn_import_db_global)
 
-    row_all_export = QWidget()
+    row_all_export = SettingsBodyWidget()
     row_all_export_l = QHBoxLayout(row_all_export)
     row_all_export_l.setContentsMargins(0, 0, 0, 0)
     row_all_export_l.setSpacing(6)
@@ -342,7 +343,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_migrate_to_structured.setObjectName("SecondaryButton")
     _make_compact(self.btn_migrate_to_structured)
 
-    row_mig_char_1 = QWidget()
+    row_mig_char_1 = SettingsBodyWidget()
     row_mig_char_1_l = QHBoxLayout(row_mig_char_1)
     row_mig_char_1_l.setContentsMargins(0, 0, 0, 0)
     row_mig_char_1_l.setSpacing(6)
@@ -376,7 +377,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_reindex_all.setObjectName("SecondaryButton")
     _make_compact(self.btn_reindex_all)
 
-    row_mig_char_2 = QWidget()
+    row_mig_char_2 = SettingsBodyWidget()
     row_mig_char_2_l = QHBoxLayout(row_mig_char_2)
     row_mig_char_2_l.setContentsMargins(0, 0, 0, 0)
     row_mig_char_2_l.setSpacing(6)
@@ -416,7 +417,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_migrate_to_structured_all.setObjectName("SecondaryButton")
     _make_compact(self.btn_migrate_to_structured_all)
 
-    row_mig_all_1 = QWidget()
+    row_mig_all_1 = SettingsBodyWidget()
     row_mig_all_1_l = QHBoxLayout(row_mig_all_1)
     row_mig_all_1_l.setContentsMargins(0, 0, 0, 0)
     row_mig_all_1_l.setSpacing(6)
@@ -439,7 +440,7 @@ def build_character_settings_ui(self, parent_layout):
     self.btn_reindex_all_global.setObjectName("SecondaryButton")
     _make_compact(self.btn_reindex_all_global)
 
-    row_mig_all_2 = QWidget()
+    row_mig_all_2 = SettingsBodyWidget()
     row_mig_all_2_l = QHBoxLayout(row_mig_all_2)
     row_mig_all_2_l.setContentsMargins(0, 0, 0, 0)
     row_mig_all_2_l.setSpacing(6)
@@ -465,9 +466,9 @@ def build_character_settings_ui(self, parent_layout):
     )
     self.btn_purge_deleted.setIcon(qta.icon('fa5s.fire-alt', color='#ffffff'))
     self.btn_purge_deleted.setStyleSheet(
-        "QPushButton { background-color: #8b1a1a; color: #ffffff; border-radius: 4px; }"
-        "QPushButton:hover { background-color: #b22222; }"
-        "QPushButton:pressed { background-color: #6a0f0f; }"
+        "QPushButton { background-color: " + get_theme()["danger"] + "; color: white; border-radius: 4px; }"
+        "QPushButton:hover { background-color: " + get_theme()["danger_hover"] + "; }"
+        "QPushButton:pressed { background-color: " + get_theme()["danger_pressed"] + "; }"
     )
     self.btn_purge_deleted.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     _make_compact(self.btn_purge_deleted)

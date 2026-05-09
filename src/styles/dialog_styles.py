@@ -1,83 +1,90 @@
-# dialog_styles.py
+from __future__ import annotations
 
-def get_dialog_stylesheet():
-    return """
-        QDialog#ActionDialog {
-            background-color: #1e1e1e;
-            color: #dcdcdc;
-            border: 1px solid #4a4a4a;
-        }
-        
-        QDialog#ActionDialog QLabel {
-            background-color: transparent;
-            color: #dcdcdc;
-        }
+from styles.theme import get_theme
+from utils import render_qss
 
-        QDialog#ActionDialog QLabel#TitleLabel {
-            font-size: 11pt;
-            font-weight: bold;
-        }
+DIALOG_QSS_TEMPLATE = """
+    QDialog#ActionDialog {
+        background-color: {panel_bg};
+        color: {text};
+        border: 1px solid {outline};
+    }
 
-        QDialog#ActionDialog QLabel#WarningLabel {
-            font-weight: bold;
-            color: orange;
-        }
+    QDialog#ActionDialog QLabel {
+        background-color: transparent;
+        color: {text};
+    }
 
-        QDialog#ActionDialog QTextEdit#LogArea {
-            background-color: #101010;
-            color: #cccccc;
-            font-family: "Consolas", "Courier New", monospace;
-            font-size: 9pt;
-            border: 1px solid #4a4a4a;
-        }
+    QDialog#ActionDialog QLabel#TitleLabel {
+        font-size: 11pt;
+        font-weight: bold;
+    }
 
-        QDialog#ActionDialog QProgressBar {
-            border: 1px solid #555555;
-            border-radius: 2px;
-            text-align: center;
-            background-color: #555555;
-            color: #dcdcdc;
-            height: 12px;
-        }
+    QDialog#ActionDialog QLabel#WarningLabel {
+        font-weight: bold;
+        color: {warn_text};
+    }
 
-        QDialog#ActionDialog QProgressBar::chunk {
-            background-color: #4CAF50;
-            border-radius: 2px;
-        }
+    QDialog#ActionDialog QTextEdit#LogArea {
+        background-color: {app_bg};
+        color: {muted};
+        font-family: "Consolas", "Courier New", monospace;
+        font-size: 9pt;
+        border: 1px solid {border_soft};
+    }
 
-        QDialog#ActionDialog QPushButton {
-            background-color: #333333;
-            color: #ffffff;
-            border: 1px solid #555555;
-            padding: 5px 14px;
-            border-radius: 3px;
-        }
-        QDialog#ActionDialog QPushButton:hover {
-            background-color: #444444;
-            border-color: #666666;
-        }
-        QDialog#ActionDialog QPushButton:pressed {
-            background-color: #2a2a2a;
-        }
-        QDialog#ActionDialog QPushButton:disabled {
-            background-color: #252525;
-            color: #777777;
-            border-color: #444444;
-        }
-        
-        QDialog#ActionDialog QPushButton#RetryButton {
-            background-color: #4CAF50;
-            font-weight: bold;
-        }
-        QDialog#ActionDialog QPushButton#RetryButton:hover {
-            background-color: #5cb85c;
-        }
+    QDialog#ActionDialog QProgressBar {
+        border: 1px solid {border_soft};
+        border-radius: 2px;
+        text-align: center;
+        background-color: {chip_hover};
+        color: {text};
+        height: 12px;
+    }
 
-        QDialog#ActionDialog QPushButton#ContinueButton {
-            background-color: #4CAF50;
-            font-weight: bold;
-        }
-        QDialog#ActionDialog QPushButton#ContinueButton:hover {
-            background-color: #5cb85c;
-        }
-    """
+    QDialog#ActionDialog QProgressBar::chunk {
+        background-color: {accent};
+        border-radius: 2px;
+    }
+
+    QDialog#ActionDialog QPushButton {
+        background-color: {chip_hover};
+        color: {text};
+        border: 1px solid {border_soft};
+        padding: 5px 14px;
+        border-radius: 3px;
+    }
+    QDialog#ActionDialog QPushButton:hover {
+        background-color: {chip_pressed};
+        border-color: {accent_border};
+    }
+    QDialog#ActionDialog QPushButton:pressed {
+        background-color: {chip_bg};
+    }
+    QDialog#ActionDialog QPushButton:disabled {
+        background-color: {btn_disabled_bg};
+        color: {btn_disabled_fg};
+        border-color: {outline};
+    }
+
+    QDialog#ActionDialog QPushButton#RetryButton {
+        background-color: {accent};
+        font-weight: bold;
+    }
+    QDialog#ActionDialog QPushButton#RetryButton:hover {
+        background-color: {accent_hover};
+    }
+
+    QDialog#ActionDialog QPushButton#ContinueButton {
+        background-color: {accent};
+        font-weight: bold;
+    }
+    QDialog#ActionDialog QPushButton#ContinueButton:hover {
+        background-color: {accent_hover};
+    }
+"""
+
+
+def get_dialog_stylesheet(theme_name: str | None = None) -> str:
+    theme = get_theme(name=theme_name)
+    return render_qss(DIALOG_QSS_TEMPLATE, theme)
