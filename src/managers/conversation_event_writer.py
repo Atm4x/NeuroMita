@@ -217,4 +217,66 @@ class ConversationEventWriter:
         if user_event is not None:
             self._fanout_event(user_event, pts)
         self._fanout_event(assistant_event, pts)
+
+        try:
+            self._notify_conversation_session(
+                responder_character_id=responder_character_id,
+                sender=sender,
+                participants=pts,
+                assistant_text=str(assistant_text or ""),
+                assistant_target=assistant_target,
+                event_type=event_type,
+                structured_data=structured_data,
+                message_id=str(assistant_event.get("message_id") or ""),
+            )
+        except Exception as e:
+            logger.warning(f"[ConversationEventWriter] turn-record notify failed: {e}", exc_info=True)
+
         return str(assistant_event.get("message_id") or "")
+
+    def _notify_conversation_session(
+        self,
+        *,
+        responder_character_id: str,
+        sender: str,
+        participants: list[str],
+        assistant_text: str,
+        assistant_target: str,
+        event_type: str,
+        structured_data: dict | None,
+        message_id: str,
+    ) -> None:
+        # Извлекаем targets из structured response
+        targets: list[str] = []
+        if isinstance(structured_data, dict):
+            segs = structured_data.get("segments") or []
+            if isinstance(segs, list):
+                for seg in segs:
+                    if isinstance(seg, dict):
+                        t = seg.get("target")
+                        if t and str(t).strip() and str(t) != "Player":
+                            targets.append(str(t).strip())
+
+        non_player = [p for p in participants if p and p != "Player"]
+        is_gm = (responder_character_id == "GameMaster")
+        # Мульти-персонажный диалог = >1 не-игрока ИЛИ это вмешательство GM
+        if len(non_player) < 2 and not is_gm:
+            return
+
+        try:
+            from core.events import Events, get_event_bus
+            payload = {
+                "character_id": responder_character_id,
+                "sender": sender,
+                "participants": participants,
+                "response": assistant_text,
+                "target": assistant_target,
+                "targets": targets,
+                "message_id": message_id,
+                "event_type": event_type,
+                "is_game_master": is_gm,
+                "structured_data": structured_data,
+            }
+            get_event_bus().emit(Events.Conversation.TURN_RECORDED, payload)
+        except Exception as e:
+            logger.debug(f"[ConversationEventWriter] emit TURN_RECORDED failed: {e}")

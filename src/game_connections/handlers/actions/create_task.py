@@ -313,6 +313,23 @@ class CreateTaskAction:
 
             reason_text = reason_content or legacy_reason or "player_react"
 
+            # Прерывание цепочки мульти-персонажного диалога, если react достаточно «важный».
+            try:
+                from managers.mita_dialogue_orchestrator import MitaDialogueOrchestrator
+                MitaDialogueOrchestrator.instance().on_react(
+                    character_id=character_id,
+                    participants=participants,
+                    react_data={
+                        "reason_type": reason_type,
+                        "reason_content": reason_content or legacy_reason,
+                        "interrupt_priority": data.get("interrupt_priority"),
+                        "cancel_chain": data.get("cancel_chain"),
+                    },
+                    source="unity",
+                )
+            except Exception:
+                pass
+
             duration = data.get("duration", 0.0)
             current_info = context.get("currentInfo", "")
 

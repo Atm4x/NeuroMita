@@ -134,6 +134,16 @@ class MainController:
         self.chat_controller = ChatController(self.settings)
         logger.notify("ChatController успешно инициализирован.")
 
+        try:
+            from managers.mita_dialogue_orchestrator import MitaDialogueOrchestrator
+            from managers.game_master_orchestrator import GameMasterOrchestrator
+            self.mita_dialogue_orchestrator = MitaDialogueOrchestrator.instance()
+            self.gm_orchestrator = GameMasterOrchestrator.instance()
+            self.mita_dialogue_orchestrator.attach_gm_orchestrator(self.gm_orchestrator)
+            logger.notify("MitaDialogueOrchestrator + GameMasterOrchestrator успешно инициализированы.")
+        except Exception as e:
+            logger.error(f"Не удалось инициализировать оркестраторы диалогов: {e}", exc_info=True)
+
         self.audio_controller.delete_all_sound_files()
 
         self._subscribe_to_events()

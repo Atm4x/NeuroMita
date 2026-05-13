@@ -556,6 +556,23 @@ class SandboxPage(QWidget):
             if value_label is not None:
                 value_label.setText(str(self.gui._get_setting(key, fallback)))
 
+    def _on_sandbox_participants_changed(self, participants: list, gm_roles: dict):
+        try:
+            self.gui.current_participants = list(participants or [])
+            self.gui.current_gm_roles = dict(gm_roles or {})
+            active = {r for r, on in (gm_roles or {}).items() if on}
+            from managers.conversation_session import ConversationSessionManager
+            mgr = ConversationSessionManager.instance()
+            mgr.get_or_create(
+                participants,
+                source="sandbox",
+                gm_enabled=bool(active),
+                gm_active_roles=active,
+            )
+            logger.info(f"[SandboxPage] participants={participants} gm_roles={active}")
+        except Exception as e:
+            logger.warning(f"[SandboxPage] participants change failed: {e}", exc_info=True)
+
     def _on_rag_changed(self, label: str):
         try:
             from ui.settings.memory_profile import apply_memory_profile
@@ -836,6 +853,24 @@ class SandboxPage(QWidget):
         self.gui.chat_model_combobox.currentIndexChanged.connect(self._on_chat_model_changed)
         active_layout.addWidget(self.gui.chat_model_combobox)
         layout.addWidget(active_card)
+
+        # ── Multi-character participants + GameMaster roles ──
+        try:
+            from ui.chat.participant_selector import ParticipantSelector
+            participants_card, participants_layout = self._make_inspector_card(
+                _("Участники диалога", "Dialogue participants"), "fa6s.users"
+            )
+            self.gui.participant_selector = ParticipantSelector(self)
+            self.gui.participant_selector.participantsChanged.connect(self._on_sandbox_participants_changed)
+            participants_layout.addWidget(self.gui.participant_selector)
+            layout.addWidget(participants_card)
+            # Инициализация атрибутов
+            if not hasattr(self.gui, "current_participants"):
+                self.gui.current_participants = []
+            if not hasattr(self.gui, "current_gm_roles"):
+                self.gui.current_gm_roles = {}
+        except Exception as e:
+            logger.warning(f"[SandboxPage] не удалось встроить ParticipantSelector: {e}", exc_info=True)
 
         # ── Voice/ASR/RAG ──
         session_card, session_layout = self._make_inspector_card(_("Голос и память", "Voice & memory"), "fa6s.sliders")

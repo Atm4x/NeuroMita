@@ -696,6 +696,16 @@ class Events:
         RESTART_SERVICE = "ai_restart_service"
         SERVICE_RESTARTED = "ai_service_restarted"
 
+    class Conversation:
+        """События для управления сессиями мульти-персонажных диалогов и оркестратором GameMaster"""
+        SESSION_START = "conversation_session_start"
+        SESSION_END = "conversation_session_end"
+        TURN_RECORDED = "conversation_turn_recorded"
+        GM_INTERVENTION = "conversation_gm_intervention"
+        CHAIN_CANCELLED = "conversation_chain_cancelled"
+        REQUEST_NEXT_SPEAKER = "conversation_request_next_speaker"
+        PUSH_TO_UNITY = "conversation_push_to_unity"
+
     class EmbeddingPresets:
         """События для управления пресетами провайдеров эмбеддингов"""
         GET_PRESET_LIST = "embed_get_preset_list"

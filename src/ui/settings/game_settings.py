@@ -36,12 +36,100 @@ def setup_game_controls(self, parent):
          'tooltip': _('Пример: 3 Означает, что через каждые две фразы ГМ напишет свое сообщение',
                       'Example: 3 means that after 2 phrases GM will write his message')},
     ]
-    
+
     create_settings_section(
         self,
         parent,
         _("Настройки диалогов и GameMaster", "Dialogue and GameMaster Settings"),
         dialogue_config
+    )
+
+    gm_orchestrator_config = [
+        {'label': _('Оркестратор GameMaster включён', 'GameMaster orchestrator enabled'),
+         'key': 'GM_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
+         'tooltip': _('Включить новый Python-оркестратор ролей GameMaster',
+                      'Enable new Python orchestrator for GameMaster roles')},
+        {'label': _('Роль: Модератор (повторы, циклы)', 'Role: Moderator (repetition, loops)'),
+         'key': 'GM_ROLE_MODERATOR', 'type': 'checkbutton', 'default_checkbutton': True,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Роль: Нарратор (атмосфера)', 'Role: Narrator (atmosphere)'),
+         'key': 'GM_ROLE_NARRATOR', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Роль: Режиссёр (выбор оратора)', 'Role: Director (speaker selection)'),
+         'key': 'GM_ROLE_DIRECTOR', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Роль: Тренер (советы митам)', 'Role: Coach (hints to mitas)'),
+         'key': 'GM_ROLE_COACH', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Мин. интервал между вмешательствами, сек', 'Min cooldown between interventions, sec'),
+         'key': 'GM_MIN_COOLDOWN_SEC', 'type': 'entry', 'default': 5.0,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Макс. вмешательств за сессию', 'Max interventions per session'),
+         'key': 'GM_MAX_INTERVENTIONS_PER_SESSION', 'type': 'entry', 'default': 20,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Порог повторов (n-gram Jaccard)', 'Repetition threshold (n-gram Jaccard)'),
+         'key': 'GM_REPETITION_THRESHOLD', 'type': 'entry', 'default': 0.7,
+         'depends_on': 'GM_ROLE_MODERATOR'},
+        {'label': _('Окно проверки на циклы (ходов)', 'Loop detection window (turns)'),
+         'key': 'GM_LOOP_WINDOW', 'type': 'entry', 'default': 6,
+         'depends_on': 'GM_ROLE_MODERATOR'},
+        {'label': _('Порог схожести для циклов', 'Loop similarity threshold'),
+         'key': 'GM_LOOP_SIMILARITY', 'type': 'entry', 'default': 0.6,
+         'depends_on': 'GM_ROLE_MODERATOR'},
+        {'label': _('Таймаут паузы для нарратора, сек', 'Pause timeout for narrator, sec'),
+         'key': 'GM_PAUSE_TIMEOUT_SEC', 'type': 'entry', 'default': 30.0,
+         'depends_on': 'GM_ROLE_NARRATOR'},
+        {'label': _('Нарратор каждые N ходов', 'Narrator every N turns'),
+         'key': 'GM_NARRATOR_EVERY', 'type': 'entry', 'default': 5,
+         'depends_on': 'GM_ROLE_NARRATOR'},
+        {'label': _('Использовать отдельный пресет LLM для GM', 'Use separate LLM preset for GM'),
+         'key': 'GM_USE_SEPARATE_MODEL', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('ID пресета LLM для GM', 'GM LLM preset ID'),
+         'key': 'GM_MODEL_PRESET_ID', 'type': 'entry', 'default': '',
+         'depends_on': 'GM_USE_SEPARATE_MODEL'},
+        {'label': _('RAG для GameMaster', 'RAG for GameMaster'),
+         'key': 'GM_RAG_ENABLED', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('RAG top-K для GM', 'GM RAG top-K'),
+         'key': 'GM_RAG_TOP_K', 'type': 'entry', 'default': 3,
+         'depends_on': 'GM_RAG_ENABLED'},
+        {'label': _('Показывать нарратив GM в UI', 'Show GM narration in UI'),
+         'key': 'GM_SHOW_NARRATION', 'type': 'checkbutton', 'default_checkbutton': True,
+         'depends_on': 'GM_ENABLED'},
+        {'label': _('Объявлять следующего оратора', 'Announce next speaker'),
+         'key': 'GM_ANNOUNCE_SPEAKER', 'type': 'checkbutton', 'default_checkbutton': True,
+         'depends_on': 'GM_ROLE_DIRECTOR'},
+        {'label': _('Подсказки Coach видны игроку', 'Coach hints visible to player'),
+         'key': 'GM_COACH_VISIBLE_TO_PLAYER', 'type': 'checkbutton', 'default_checkbutton': False,
+         'depends_on': 'GM_ROLE_COACH'},
+    ]
+
+    create_settings_section(
+        self,
+        parent,
+        _("GameMaster — расширенные роли", "GameMaster — advanced roles"),
+        gm_orchestrator_config
+    )
+
+    mita_chain_config = [
+        {'label': _('Режим цепочки реплик мит', 'Mita chain mode'),
+         'key': 'MITADIALOGUE_CHAIN_MODE', 'type': 'combobox',
+         'options': ['immediate', 'adaptive', 'wait_display'],
+         'default': 'adaptive',
+         'tooltip': _('immediate — без пауз; adaptive — ждём окно прерывания; wait_display — ждём сигнал из Unity',
+                      'immediate — no pauses; adaptive — wait interrupt window; wait_display — wait Unity signal')},
+        {'label': _('Окно прерывания цепочки, сек', 'Chain interrupt window, sec'),
+         'key': 'MITADIALOGUE_INTERRUPT_WINDOW_SEC', 'type': 'entry', 'default': 3.0},
+        {'label': _('Макс. ходов мит без игрока', 'Max NPC turns without player'),
+         'key': 'MITADIALOGUE_MAX_AUTO_TURNS', 'type': 'entry', 'default': 3},
+    ]
+
+    create_settings_section(
+        self,
+        parent,
+        _("Цепочки реплик мит", "Mita chain settings"),
+        mita_chain_config
     )
     
     mod_config = [

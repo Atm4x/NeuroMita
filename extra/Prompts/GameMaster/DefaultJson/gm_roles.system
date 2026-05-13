@@ -1,0 +1,19 @@
+SET LOCAL out = ""
+
+IF GM_ROLE_MODERATOR_ACTIVE
+SET out = out + "## Moderator Mode (ACTIVE THIS TURN)\nDetect and fix dialogue loops, phrase repetition, and contradictions between characters.\nUse Speaker,CharacterName to redirect the dialogue away from the loop.\nBe terse - one or two sentences plus a Speaker command.\n\n"
+ENDIF
+
+IF GM_ROLE_NARRATOR_ACTIVE
+SET out = out + "## Narrator Mode (ACTIVE THIS TURN)\nAdd a brief atmospheric description or scene-setting note to break a stalled dialogue.\nStay in third person. Mention characters explicitly.\n\n"
+ENDIF
+
+IF GM_ROLE_DIRECTOR_ACTIVE
+SET out = out + "## Director Mode (ACTIVE THIS TURN)\nDecide who speaks next. Prefer characters who have been silent.\nALWAYS include a Speaker,CharacterName command.\n\n"
+ENDIF
+
+IF GM_ROLE_COACH_ACTIVE
+SET out = out + "## Coach Mode (ACTIVE THIS TURN)\nMonitor player behavior (joking, aggression, silence, flirting, confusion).\nProvide subtle hints to characters via the coach_notes field of segments.\nFormat: coach_notes: [{\"target\": \"CharacterName\", \"hint\": \"...\"}]\nDo NOT reveal coaching to the player in narration text.\n\n"
+ENDIF
+
+RETURN out

@@ -677,14 +677,23 @@ class AppWindowBase(QMainWindow):
             message_renderer.insert_message(self, "user", image_content_for_display,
                                             message_id=user_message_id)
 
-        self.event_bus.emit(Events.Chat.SEND_MESSAGE, {
+        _payload = {
             "user_input": user_input,
             "system_input": system_input,
             "image_data": all_image_data,
             "character_id": character_id,
             "sender": "Player",
             "req_id": req_id,
-        })
+        }
+        # Sandbox: добавить выбранных мит как participants для мульти-персонажного диалога
+        _selected_participants = list(getattr(self, "current_participants", []) or [])
+        if _selected_participants:
+            _full_participants = ["Player"] + [p for p in _selected_participants if p and p != "Player"]
+            if character_id and character_id not in _full_participants:
+                _full_participants.append(character_id)
+            _payload["participants"] = _full_participants
+            _payload["source"] = "sandbox"
+        self.event_bus.emit(Events.Chat.SEND_MESSAGE, _payload)
 
         if staged_image_data:
             self.event_bus.emit(Events.Chat.CLEAR_STAGED_IMAGES)

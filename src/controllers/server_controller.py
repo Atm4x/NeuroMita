@@ -112,6 +112,21 @@ class ServerController:
         eb.subscribe(Events.Server.SEND_TASK_UPDATE, self._on_send_task_update, weak=False)
 
         eb.subscribe(Events.Server.BROADCAST_ASR_TEXT, self._on_broadcast_asr_text, weak=False)
+        eb.subscribe(Events.Conversation.PUSH_TO_UNITY, self._on_conversation_push, weak=False)
+
+    def _on_conversation_push(self, event):
+        try:
+            data = event.data or {}
+            if not self.server:
+                return
+            self.server.schedule_conversation_push(
+                session_id=str(data.get("session_id") or ""),
+                push_type=str(data.get("push_type") or "gm_narration"),
+                character=str(data.get("character") or "GameMaster"),
+                data=data.get("data") or {},
+            )
+        except Exception as e:
+            logger.warning(f"[ServerController] conversation_push failed: {e}", exc_info=True)
 
     def _unsubscribe_from_events(self):
         if self.event_bus and not self._destroyed:
@@ -130,6 +145,10 @@ class ServerController:
 
             asr_evt = getattr(Events.Server, "BROADCAST_ASR_TEXT", "broadcast_asr_text")
             eb.unsubscribe(asr_evt, self._on_broadcast_asr_text)
+            try:
+                eb.unsubscribe(Events.Conversation.PUSH_TO_UNITY, self._on_conversation_push)
+            except Exception:
+                pass
 
     def _init_server(self):
         from game_connections.server import ChatServerNew

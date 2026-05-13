@@ -1,0 +1,21 @@
+[Current Dialogue State]
+Total turns: {TOTAL_TURNS}
+Turns since last player message: {TURNS_SINCE_PLAYER}
+Characters present:
+{PARTICIPANTS_WITH_STATS}
+
+Metrics:
+  repetition_score = {REPETITION_SCORE}
+  loop_detected    = {LOOP_DETECTED}
+  silence_sec      = {SILENCE_SEC}
+
+Active GM roles this turn: {ACTIVE_ROLES}
+
+Last GM interventions:
+{LAST_GM_INTERVENTIONS}
+
+Recent {RECENT_TURNS_COUNT} turns:
+{RECENT_TURNS}
+
+Decide whether and how to intervene. Use the roles above as your guide.
+When choosing the next speaker, prefer characters who have been silent.

@@ -289,6 +289,23 @@ class ChatServerNew:
     def schedule_broadcast_loaded_settings(self, body: Dict[str, Any]) -> None:
         self.schedule_broadcast_json({"type": "loaded_settings", "body": body})
 
+    def schedule_conversation_push(
+        self,
+        *,
+        session_id: str,
+        push_type: str,
+        character: str,
+        data: Dict[str, Any],
+    ) -> None:
+        payload = {
+            "type": "conversation_push",
+            "session_id": str(session_id or ""),
+            "push_type": str(push_type or "gm_narration"),
+            "character": str(character or "GameMaster"),
+            "data": data or {},
+        }
+        self.schedule_broadcast_json(payload)
+
     def schedule_broadcast_asr_text(self, text: str, engine: str = "", ts: float | None = None) -> None:
         payload = {
             "type": "asr_text",

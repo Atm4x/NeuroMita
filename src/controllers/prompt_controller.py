@@ -355,10 +355,64 @@ class PromptController:
 
         participants_lines = "\n".join(f"- {x}" for x in (participants or [])) if participants else "- (none)"
 
+        # Расширенный контекст из ConversationSession (если есть)
+        turn_number = 0
+        participants_detailed = ""
+        silent_list = ""
+        try:
+            from managers.conversation_session import ConversationSessionManager
+            mgr = ConversationSessionManager.instance()
+            # Берём сессию по составу (Sandbox или Unity — оба варианта проверяем)
+            sess = None
+            for src in ("unity", "sandbox"):
+                cand = mgr.get_or_create(participants, source=src)
+                if cand.total_turns > 0:
+                    sess = cand
+                    break
+            if sess is None:
+                sess = mgr.get_or_create(participants, source="unity")
+            turn_number = sess.total_turns + 1
+
+            last_spoke_at: dict[str, int] = {}
+            for t in list(sess.turns):
+                if t.speaker_id and t.speaker_id != "Player" and not t.is_gm_intervention:
+                    last_spoke_at[t.speaker_id] = t.turn_number
+
+            detailed_lines: list[str] = []
+            for p in participants:
+                # статы
+                stats_part = ""
+                try:
+                    res = self.event_bus.emit_and_wait(
+                        Events.Character.GET, {"character_id": p}, timeout=0.3
+                    )
+                    ch = res[0] if res else None
+                    if ch and hasattr(ch, "get_stats_dict"):
+                        s = ch.get_stats_dict() or {}
+                        stats_part = f" attitude={s.get('attitude','?')}, boredom={s.get('boredom','?')}, stress={s.get('stress','?')}"
+                except Exception:
+                    pass
+                last_at = last_spoke_at.get(p)
+                if last_at is None:
+                    last_part = " — has not spoken yet"
+                else:
+                    ago = sess.total_turns - last_at
+                    last_part = f" — last spoke {ago} turn(s) ago" if ago > 0 else " — just spoke"
+                detailed_lines.append(f"- {p}:{stats_part}{last_part}")
+            participants_detailed = "\n".join(detailed_lines) if detailed_lines else ""
+
+            silent = [p for p in participants if p not in last_spoke_at]
+            silent_list = ", ".join(silent) if silent else "(none)"
+        except Exception as e:
+            logger.debug(f"[PromptController] ConversationSession context unavailable: {e}")
+
         vars_to_set = {
             "CHARACTER_NAME": str(getattr(character, "name", "") or getattr(character, "char_id", "") or "Character"),
             "PARTICIPANTS_TEXT": participants_lines,
             "SENDER_NAME": str(sender or "Player"),
+            "TURN_NUMBER": str(turn_number),
+            "PARTICIPANTS_DETAILED": participants_detailed,
+            "SILENT_LIST": silent_list,
         }
 
         old_values: dict[str, object] = {}
