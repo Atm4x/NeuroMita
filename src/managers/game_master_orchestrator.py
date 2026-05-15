@@ -113,6 +113,7 @@ class GameMasterOrchestrator:
 
     def _invoke_gm(self, session: ConversationSession, roles_fired: list[str], metrics: dict) -> Optional[GameMasterIntervention]:
         context_text = self._render_dialogue_context(session, metrics, roles_fired)
+        narrator_visible = "narrator" in roles_fired
 
         # Включаем нужные роли как DSL-переменные НА самом GameMaster-персонаже,
         # чтобы gm_roles.system правильно отработал [IF GM_ROLE_*_ACTIVE].
@@ -130,17 +131,34 @@ class GameMasterOrchestrator:
         # Синхронный вызов через emit_and_wait — слишком много завязок;
         # вместо этого мы шлём обычный SEND_MESSAGE и доверяем
         # MitaDialogueOrchestrator поймать ответ на ON_SUCCESSFUL_RESPONSE с is_game_master=True.
+        try:
+            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": context_text}, sync=True)
+        except Exception:
+            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": context_text})
+
+        policy = {
+            "use_history_in_prompt": True,
+            "write_to_history": bool(narrator_visible),
+            "allow_voiceover": bool(narrator_visible),
+            "allow_streaming": bool(narrator_visible),
+            "echo_to_ui": bool(narrator_visible),
+            "use_pending_sysinfo": True,
+            "system_input_role": "system",
+        }
+
         payload = {
             "user_input": "",
             "character_id": "GameMaster",
             "sender": "Player",
             "participants": ["Player", *session.participants],
-            "system_input": context_text,
+            "system_input": "",
             "event_type": "gm_intervention",
             "is_game_master": True,
             "auto_continue": True,
             "session_id": session.session_id,
             "source": session.source,
+            "policy": policy,
+            "gm_roles_fired": list(roles_fired),
         }
 
         preset_id = str(SettingsManager.get("GM_MODEL_PRESET_ID", "") or "").strip()
@@ -193,14 +211,20 @@ class GameMasterOrchestrator:
         metrics: dict,
         roles_fired: list[str],
     ) -> str:
+        def _shrink(text: str, limit: int = 160) -> str:
+            text = " ".join(str(text or "").split())
+            if len(text) <= limit:
+                return text
+            return text[: max(0, limit - 1)].rstrip() + "…"
+
         template = self._load_template()
-        recent = list(session.turns)[-10:]
+        recent = list(session.turns)[-6:]
         recent_text = "\n".join(
-            f"  [{t.turn_number}] {t.speaker_id} -> {t.target_id or 'all'}: {t.text}"
+            f"  [{t.turn_number}] {t.speaker_id} -> {t.target_id or 'all'}: {_shrink(t.text)}"
             for t in recent if not t.is_gm_intervention
         ) or "  (no turns yet)"
-        gm_history = session.recent_gm_turns()
-        gm_text = "\n".join(f"  [{t.turn_number}] {t.text}" for t in gm_history) or "  (none)"
+        gm_history = session.recent_gm_turns()[-3:]
+        gm_text = "\n".join(f"  [{t.turn_number}] {_shrink(t.text, 120)}" for t in gm_history) or "  (none)"
 
         parts_with_stats: list[str] = []
         for p in session.participants:

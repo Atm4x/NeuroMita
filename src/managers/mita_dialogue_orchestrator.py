@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import re
 from typing import Any, Optional
 
 from core.events import Events, get_event_bus
@@ -56,6 +57,42 @@ class MitaDialogueOrchestrator:
 
     def attach_gm_orchestrator(self, gm_orchestrator: Any) -> None:
         self._gm_orchestrator = gm_orchestrator
+
+    @staticmethod
+    def _canon_actor_name(value: str) -> str:
+        return re.sub(r"[\s_\-]+", "", str(value or "").strip()).lower()
+
+    def _resolve_participant_id(self, session: ConversationSession, raw_value: str) -> Optional[str]:
+        candidate = str(raw_value or "").strip()
+        if not candidate or candidate == "Player":
+            return None
+
+        canon = self._canon_actor_name(candidate)
+        if not canon:
+            return None
+
+        for pid in session.participants:
+            if self._canon_actor_name(pid) == canon:
+                return pid
+
+        for pid in session.participants:
+            try:
+                res = self._bus.emit_and_wait(Events.Character.GET, {"character_id": pid}, timeout=0.3)
+                ch = res[0] if res else None
+            except Exception:
+                ch = None
+
+            aliases = [
+                pid,
+                getattr(ch, "char_id", ""),
+                getattr(ch, "name", ""),
+                getattr(ch, "short_name", ""),
+            ]
+            for alias in aliases:
+                if self._canon_actor_name(alias) == canon:
+                    return pid
+
+        return None
 
     # ── public API ───────────────────────────────────────────────────
 
@@ -124,11 +161,12 @@ class MitaDialogueOrchestrator:
                 return
 
             sess = self._sessions.get_or_create(non_player, source=source)
+            primary_target = self._resolve_participant_id(sess, str(targets[0])) if targets else None
 
             self._sessions.record_turn(
                 sess,
                 speaker_id=character_id,
-                target_id=(str(targets[0]) if targets else None),
+                target_id=primary_target,
                 text=response_text,
                 message_id=str(message_id) if message_id else None,
                 is_gm_intervention=is_gm,
@@ -136,7 +174,9 @@ class MitaDialogueOrchestrator:
 
             if is_gm:
                 self._apply_gm_response(sess, data)
-                if source == "unity":
+                gm_roles_fired = data.get("gm_roles_fired") or []
+                gm_visible = not gm_roles_fired or ("narrator" in gm_roles_fired)
+                if source == "unity" and gm_visible:
                     self._push_gm_to_unity(sess, data)
                 self._continue_chain(sess, source=source)
                 return
@@ -155,8 +195,9 @@ class MitaDialogueOrchestrator:
 
             # Добавляем targets из ответа в очередь
             for t in targets:
-                if t and t != "Player" and t != character_id:
-                    sess.append_pending_speaker(str(t))
+                resolved = self._resolve_participant_id(sess, str(t))
+                if resolved and resolved != character_id:
+                    sess.append_pending_speaker(resolved)
 
             # Если очередь пуста и включена авто-цепочка — выбираем следующего оратора
             auto_on = bool(SettingsManager.get("MITADIALOGUE_AUTO", False)) or bool(SettingsManager.get("MITA_DIALOGUE_AUTO", False))
@@ -201,20 +242,24 @@ class MitaDialogueOrchestrator:
             intervention = GameMasterOrchestrator.parse_gm_response(text)
 
         # Speaker,X команды → pending_speakers (приоритет — GM-указанный говорящий)
-        if intervention.next_speaker and intervention.next_speaker != "Player":
-            session.pending_speakers.insert(0, intervention.next_speaker)
+        resolved_next = self._resolve_participant_id(session, intervention.next_speaker or "")
+        if resolved_next:
+            session.pending_speakers = [s for s in session.pending_speakers if s != resolved_next]
+            session.pending_speakers.insert(0, resolved_next)
         for cmd in intervention.commands:
             if cmd.lower().startswith("speaker,"):
                 name = cmd.split(",", 1)[1].strip()
-                if name and name != "Player" and name != intervention.next_speaker:
-                    session.pending_speakers.append(name)
+                resolved = self._resolve_participant_id(session, name)
+                if resolved and resolved != resolved_next:
+                    session.append_pending_speaker(resolved)
 
         # Coach-хинты → pending_coach_hints
         for note in intervention.coach_notes:
             target = note.get("target")
             hint = note.get("hint")
-            if target and hint:
-                session.push_coach_hint(str(target), str(hint))
+            resolved_target = self._resolve_participant_id(session, str(target or ""))
+            if resolved_target and hint:
+                session.push_coach_hint(resolved_target, str(hint))
 
     def _push_gm_to_unity(self, session: ConversationSession, data: dict) -> None:
         structured = data.get("structured_data") or {}
@@ -235,7 +280,7 @@ class MitaDialogueOrchestrator:
         next_speaker = None
         for c in commands:
             if c.lower().startswith("speaker,"):
-                next_speaker = c.split(",", 1)[1].strip()
+                next_speaker = self._resolve_participant_id(session, c.split(",", 1)[1].strip())
                 break
         try:
             from managers.settings_manager import SettingsManager
@@ -289,6 +334,14 @@ class MitaDialogueOrchestrator:
     def _dispatch_next_message(self, session: ConversationSession, speaker_id: str, source: str) -> None:
         if cancel_ev_set(self._cancel_flags.get(session.session_id)):
             return
+
+        resolved_speaker_id = self._resolve_participant_id(session, speaker_id)
+        if not resolved_speaker_id:
+            logger.warning(
+                f"[MitaDialogueOrchestrator] next speaker '{speaker_id}' is not part of session {session.session_id}"
+            )
+            return
+        speaker_id = resolved_speaker_id
 
         coach_hints = session.consume_coach_hints(speaker_id)
         pending_infos = list(session.pending_system_infos)

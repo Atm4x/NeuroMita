@@ -58,7 +58,10 @@ class ConversationSession:
         self.pending_coach_hints.setdefault(character_id, []).append(hint)
 
     def append_pending_speaker(self, speaker_id: str) -> None:
-        if speaker_id and speaker_id != "Player":
+        speaker_id = str(speaker_id or "").strip()
+        if not speaker_id or speaker_id == "Player":
+            return
+        if speaker_id not in self.pending_speakers:
             self.pending_speakers.append(speaker_id)
 
     def next_pending_speaker(self) -> Optional[str]:

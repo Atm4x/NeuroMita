@@ -7,6 +7,7 @@ import json
 import datetime
 import re
 import copy
+import uuid
 from typing import Optional, Any
 import base64
 
@@ -928,7 +929,14 @@ class ModelController:
                 v = self.settings.get(f"CHAR_PROVIDER_{cname}", None)
             return str(v if v is not None else "Current")
 
-        if event_type == "react":
+        preset_override = data.get("model_preset_id")
+        preset_id = _resolve_label_to_preset_id(preset_override)
+
+        if preset_id is not None:
+            logger.info(
+                f"[ModelController] explicit model_preset_id={preset_override!r} -> preset_id={preset_id}"
+            )
+        elif event_type == "react":
             lvl = int(getattr(policy, "react_level", None) or 1)
 
             if lvl == 2:
@@ -1045,6 +1053,20 @@ class ModelController:
                     event_type=event_type,
                     task_uid=task_uid,
                     thinking=think_text or None,
+                )
+            elif char_id == "GameMaster" and event_type == "gm_intervention":
+                assistant_message_id = self._emit_turn_recorded_without_history(
+                    character_id=char_id,
+                    sender=sender,
+                    participants=participants,
+                    response_text=final_text,
+                    target=target,
+                    targets=targets,
+                    event_type=event_type,
+                    extra_payload={
+                        "gm_roles_fired": list(data.get("gm_roles_fired") or []),
+                        "source": data.get("source"),
+                    },
                 )
 
             self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
@@ -1366,6 +1388,23 @@ class ModelController:
                 structured_data=history_dict,
                 thinking=think_text or None,
             )
+        elif char_id == "GameMaster" and event_type == "gm_intervention":
+            history_dict = {k: v for k, v in result_dict.items()
+                            if not k.startswith("_") or k == "_raw_json"}
+            assistant_message_id = self._emit_turn_recorded_without_history(
+                character_id=char_id,
+                sender=sender,
+                participants=participants,
+                response_text=final_text,
+                target=target,
+                targets=targets,
+                event_type=event_type,
+                structured_data=history_dict,
+                extra_payload={
+                    "gm_roles_fired": list(data.get("gm_roles_fired") or []),
+                    "source": data.get("source"),
+                },
+            )
 
         self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
 
@@ -1628,6 +1667,38 @@ class ModelController:
             tool_depth=tool_depth + 1,
             structured_model_cls=structured_model_cls,
         )
+
+    def _emit_turn_recorded_without_history(
+        self,
+        *,
+        character_id: str,
+        sender: str,
+        participants: list[str],
+        response_text: str,
+        target: str,
+        targets: list[str] | None,
+        event_type: str,
+        structured_data: dict | None = None,
+        extra_payload: dict | None = None,
+    ) -> str:
+        message_id = f"out:{uuid.uuid4().hex}"
+        payload = {
+            "character_id": str(character_id or ""),
+            "sender": str(sender or "Player"),
+            "participants": list(participants or []),
+            "response": str(response_text or ""),
+            "target": str(target or "Player"),
+            "targets": list(targets or []),
+            "message_id": message_id,
+            "event_type": str(event_type or ""),
+            "is_game_master": (str(character_id or "") == "GameMaster"),
+            "structured_data": structured_data,
+            "source": extra_payload.get("source") if isinstance(extra_payload, dict) else None,
+        }
+        if isinstance(extra_payload, dict):
+            payload.update(extra_payload)
+        self.event_bus.emit(Events.Conversation.TURN_RECORDED, payload)
+        return message_id
 
     # ---------------------------------------------------------------------
     # Reload prompts
