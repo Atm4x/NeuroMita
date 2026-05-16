@@ -94,6 +94,19 @@ class MitaDialogueOrchestrator:
 
         return None
 
+    @staticmethod
+    def _describe_auto_chain_reason(reason: Optional[str], speaker_id: str, last_speaker: str) -> str:
+        reason_key = str(reason or "unspecified").strip().lower()
+        mapping = {
+            "direct_target": f"You were addressed directly, so reply as {speaker_id}.",
+            "gm_selected": f"The hidden GameMaster selected you to continue after {last_speaker}.",
+            "gm_command": "The hidden GameMaster explicitly queued you as the next speaker.",
+            "auto_round_robin": "You have been silent longer than the others, so you should react now.",
+            "react_interrupt": "A recent react/interrupt event requires you to respond in character now.",
+            "unspecified": f"It is your turn to keep the dialogue moving after {last_speaker}.",
+        }
+        return mapping.get(reason_key, mapping["unspecified"])
+
     # ── public API ───────────────────────────────────────────────────
 
     def on_react(self, character_id: str, participants: list[str], react_data: dict, source: str = "unity") -> str:
@@ -172,6 +185,9 @@ class MitaDialogueOrchestrator:
                 is_gm_intervention=is_gm,
             )
 
+            if character_id == "Player":
+                return
+
             if is_gm:
                 self._apply_gm_response(sess, data)
                 gm_roles_fired = data.get("gm_roles_fired") or []
@@ -197,14 +213,14 @@ class MitaDialogueOrchestrator:
             for t in targets:
                 resolved = self._resolve_participant_id(sess, str(t))
                 if resolved and resolved != character_id:
-                    sess.append_pending_speaker(resolved)
+                    sess.append_pending_speaker(resolved, reason="direct_target")
 
             # Если очередь пуста и включена авто-цепочка — выбираем следующего оратора
             auto_on = bool(SettingsManager.get("MITADIALOGUE_AUTO", False)) or bool(SettingsManager.get("MITA_DIALOGUE_AUTO", False))
             if not sess.pending_speakers and auto_on:
                 next_speaker = self._pick_next_speaker_round_robin(sess, exclude=character_id)
                 if next_speaker:
-                    sess.append_pending_speaker(next_speaker)
+                    sess.append_pending_speaker(next_speaker, reason="auto_round_robin")
                     logger.info(f"[MitaDialogueOrchestrator] auto-chain picks next speaker: {next_speaker}")
 
             self._continue_chain(sess, source=source)
@@ -245,13 +261,15 @@ class MitaDialogueOrchestrator:
         resolved_next = self._resolve_participant_id(session, intervention.next_speaker or "")
         if resolved_next:
             session.pending_speakers = [s for s in session.pending_speakers if s != resolved_next]
+            session.pending_speaker_reasons.pop(resolved_next, None)
             session.pending_speakers.insert(0, resolved_next)
+            session.pending_speaker_reasons[resolved_next] = "gm_selected"
         for cmd in intervention.commands:
             if cmd.lower().startswith("speaker,"):
                 name = cmd.split(",", 1)[1].strip()
                 resolved = self._resolve_participant_id(session, name)
                 if resolved and resolved != resolved_next:
-                    session.append_pending_speaker(resolved)
+                    session.append_pending_speaker(resolved, reason="gm_command")
 
         # Coach-хинты → pending_coach_hints
         for note in intervention.coach_notes:
@@ -305,7 +323,7 @@ class MitaDialogueOrchestrator:
             session.clear_pending()
             return
 
-        next_speaker = session.next_pending_speaker()
+        next_speaker, reason = session.next_pending_speaker()
         if not next_speaker:
             return
 
@@ -323,7 +341,7 @@ class MitaDialogueOrchestrator:
                         logger.debug(f"[MitaDialogueOrchestrator] chain cancelled before firing sid={session.session_id}")
                         return
                 # wait_display пока эквивалентен immediate; реализация — позже
-                self._dispatch_next_message(session, next_speaker, source=source)
+                self._dispatch_next_message(session, next_speaker, source=source, reason=reason)
             finally:
                 with self._lock:
                     if self._cancel_flags.get(session.session_id) is cancel_ev:
@@ -331,7 +349,13 @@ class MitaDialogueOrchestrator:
 
         threading.Thread(target=fire, name=f"MitaChain-{session.session_id}", daemon=True).start()
 
-    def _dispatch_next_message(self, session: ConversationSession, speaker_id: str, source: str) -> None:
+    def _dispatch_next_message(
+        self,
+        session: ConversationSession,
+        speaker_id: str,
+        source: str,
+        reason: Optional[str] = None,
+    ) -> None:
         if cancel_ev_set(self._cancel_flags.get(session.session_id)):
             return
 
@@ -355,6 +379,7 @@ class MitaDialogueOrchestrator:
             f"[AUTO_CHAIN]\n"
             f"It is now your ({speaker_id}) turn to respond in this multi-character dialogue.\n"
             f"The previous speaker was {last_speaker}. React to their latest message that appears in the history.\n"
+            f"{self._describe_auto_chain_reason(reason, speaker_id, last_speaker)}\n"
             f"You are NOT the Player and NOT {last_speaker} — respond as {speaker_id} in character. "
             f"Do not echo or impersonate the player."
         )
@@ -382,6 +407,7 @@ class MitaDialogueOrchestrator:
             "participants": ["Player", *session.participants],
             "system_input": system_input,
             "event_type": "auto_chain",
+            "auto_chain_reason": reason or "unspecified",
             "auto_continue": True,
             "source": source,
             "session_id": session.session_id,
@@ -389,6 +415,7 @@ class MitaDialogueOrchestrator:
         logger.info(
             f"[MitaDialogueOrchestrator] dispatch_next sid={session.session_id} "
             f"speaker={speaker_id} prev_speaker={last_speaker} "
+            f"reason={reason or 'unspecified'} "
             f"(coach_hints={len(coach_hints)}, infos={len(pending_infos)})"
         )
         self._bus.emit(Events.Chat.SEND_MESSAGE, payload)

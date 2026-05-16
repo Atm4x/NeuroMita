@@ -38,6 +38,7 @@ class ConversationSession:
     last_gm_intervention_at: float = 0.0
     gm_intervention_count: int = 0
     pending_speakers: list[str] = field(default_factory=list)
+    pending_speaker_reasons: dict[str, str] = field(default_factory=dict)
     pending_coach_hints: dict[str, list[str]] = field(default_factory=dict)
     pending_system_infos: list[str] = field(default_factory=list)
     last_event_at: float = field(default_factory=time.time)
@@ -57,18 +58,26 @@ class ConversationSession:
             return
         self.pending_coach_hints.setdefault(character_id, []).append(hint)
 
-    def append_pending_speaker(self, speaker_id: str) -> None:
+    def append_pending_speaker(self, speaker_id: str, reason: str = "unspecified") -> None:
         speaker_id = str(speaker_id or "").strip()
+        reason = str(reason or "unspecified").strip() or "unspecified"
         if not speaker_id or speaker_id == "Player":
             return
         if speaker_id not in self.pending_speakers:
             self.pending_speakers.append(speaker_id)
+        self.pending_speaker_reasons[speaker_id] = reason
 
-    def next_pending_speaker(self) -> Optional[str]:
-        return self.pending_speakers.pop(0) if self.pending_speakers else None
+    def next_pending_speaker(self) -> tuple[Optional[str], Optional[str]]:
+        if not self.pending_speakers:
+            return None, None
+        speaker_id = self.pending_speakers.pop(0)
+        reason = self.pending_speaker_reasons.pop(speaker_id, None)
+        return speaker_id, reason
 
     def clear_pending(self) -> None:
         self.pending_speakers.clear()
+        self.pending_speaker_reasons.clear()
+        self.pending_coach_hints.clear()
         self.pending_system_infos.clear()
 
 

@@ -79,7 +79,7 @@ class GameMasterOrchestrator:
             fire.append("moderator")
         if "narrator" in roles and (silence >= pause_thr or (session.total_turns > 0 and session.total_turns % narr_every == 0)):
             fire.append("narrator")
-        if "director" in roles:
+        if "director" in roles and self._should_fire_director(session, silence=silence, pause_threshold=pause_thr):
             fire.append("director")
         if "coach" in roles and self._detect_player_pattern(session):
             fire.append("coach")
@@ -191,6 +191,25 @@ class GameMasterOrchestrator:
             if bool(SettingsManager.get(f"GM_ROLE_{name.upper()}", name == "moderator")):
                 roles.add(name)
         return roles
+
+    def _should_fire_director(
+        self,
+        session: ConversationSession,
+        *,
+        silence: float,
+        pause_threshold: float,
+    ) -> bool:
+        mode = str(SettingsManager.get("GM_DIRECTOR_TRIGGER_MODE", "after_player_gap") or "after_player_gap").strip().lower()
+        if mode == "never":
+            return False
+        if mode == "always":
+            return True
+
+        min_turns = max(1, int(SettingsManager.get("GM_DIRECTOR_MIN_TURNS_SINCE_PLAYER", 2)))
+        if mode == "pause_or_gap":
+            return session.turn_count_since_player >= min_turns or silence >= pause_threshold
+
+        return session.turn_count_since_player >= min_turns
 
     def _detect_player_pattern(self, session: ConversationSession) -> bool:
         # Лёгкая эвристика: последние 3 реплики игрока короткие/повторяющиеся
@@ -329,10 +348,12 @@ class GameMasterOrchestrator:
 
         # Fallback: текст + поиск "Speaker,X" в тексте
         intervention.text = response_text
-        m = re.search(r"Speaker\s*,\s*([A-Za-z_][A-Za-z0-9_]*)", response_text)
+        m = re.search(r"Speaker\s*,\s*([^\r\n;]+)", response_text, flags=re.IGNORECASE)
         if m:
-            intervention.commands.append(f"Speaker,{m.group(1).strip()}")
-            intervention.next_speaker = m.group(1).strip()
+            speaker_name = m.group(1).strip().strip("\"'`").rstrip(" .,!?:")
+            if speaker_name:
+                intervention.commands.append(f"Speaker,{speaker_name}")
+                intervention.next_speaker = speaker_name
         return intervention
 
 

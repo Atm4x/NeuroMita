@@ -216,18 +216,34 @@ class ConversationEventWriter:
 
         if user_event is not None:
             self._fanout_event(user_event, pts)
+            if sender == "Player":
+                try:
+                    self._notify_conversation_session(
+                        character_id="Player",
+                        sender="Player",
+                        participants=pts,
+                        response_text=str(user_input or ""),
+                        response_target=responder_character_id,
+                        event_type=event_type,
+                        structured_data=None,
+                        message_id=str(user_event.get("message_id") or ""),
+                        targets_override=[responder_character_id] if responder_character_id else [],
+                    )
+                except Exception as e:
+                    logger.warning(f"[ConversationEventWriter] player turn notify failed: {e}", exc_info=True)
         self._fanout_event(assistant_event, pts)
 
         try:
             self._notify_conversation_session(
-                responder_character_id=responder_character_id,
+                character_id=responder_character_id,
                 sender=sender,
                 participants=pts,
-                assistant_text=str(assistant_text or ""),
-                assistant_target=assistant_target,
+                response_text=str(assistant_text or ""),
+                response_target=assistant_target,
                 event_type=event_type,
                 structured_data=structured_data,
                 message_id=str(assistant_event.get("message_id") or ""),
+                is_game_master=(responder_character_id == "GameMaster"),
             )
         except Exception as e:
             logger.warning(f"[ConversationEventWriter] turn-record notify failed: {e}", exc_info=True)
@@ -237,18 +253,20 @@ class ConversationEventWriter:
     def _notify_conversation_session(
         self,
         *,
-        responder_character_id: str,
+        character_id: str,
         sender: str,
         participants: list[str],
-        assistant_text: str,
-        assistant_target: str,
+        response_text: str,
+        response_target: str,
         event_type: str,
         structured_data: dict | None,
         message_id: str,
+        is_game_master: bool = False,
+        targets_override: list[str] | None = None,
     ) -> None:
         # Извлекаем targets из structured response
-        targets: list[str] = []
-        if isinstance(structured_data, dict):
+        targets: list[str] = list(targets_override or [])
+        if not targets and isinstance(structured_data, dict):
             segs = structured_data.get("segments") or []
             if isinstance(segs, list):
                 for seg in segs:
@@ -258,23 +276,22 @@ class ConversationEventWriter:
                             targets.append(str(t).strip())
 
         non_player = [p for p in participants if p and p != "Player"]
-        is_gm = (responder_character_id == "GameMaster")
         # Мульти-персонажный диалог = >1 не-игрока ИЛИ это вмешательство GM
-        if len(non_player) < 2 and not is_gm:
+        if len(non_player) < 2 and not is_game_master:
             return
 
         try:
             from core.events import Events, get_event_bus
             payload = {
-                "character_id": responder_character_id,
+                "character_id": character_id,
                 "sender": sender,
                 "participants": participants,
-                "response": assistant_text,
-                "target": assistant_target,
+                "response": response_text,
+                "target": response_target,
                 "targets": targets,
                 "message_id": message_id,
                 "event_type": event_type,
-                "is_game_master": is_gm,
+                "is_game_master": is_game_master,
                 "structured_data": structured_data,
             }
             get_event_bus().emit(Events.Conversation.TURN_RECORDED, payload)
