@@ -732,6 +732,7 @@ class ModelController:
 
         user_input = data.get("user_input", "") or ""
         visible_user_input = user_input
+        prompt_user_input = user_input
         system_input = data.get("system_input", "") or ""
         image_data = data.get("image_data", []) or []
         image_source = str(data.get("image_source") or "").strip().lower()
@@ -916,6 +917,15 @@ class ModelController:
 
         hidden_user_context = ""
 
+        def _append_prompt_user_context(base_text: str, addition: str) -> str:
+            base_text = str(base_text or "").strip()
+            addition = str(addition or "").strip()
+            if not addition:
+                return base_text
+            if not base_text:
+                return addition
+            return f"{base_text}\n\n{addition}"
+
         if model_image_data and bool(self.settings.get("IMAGE_DESCRIPTION_ENABLED", False)):
             _detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
 
@@ -945,7 +955,11 @@ class ModelController:
                 if len(model_image_data) > 1:
                     seq_desc = self.image_description_handler.describe_sequence(model_image_data, context_hint=_image_context_hint)
                     if seq_desc and not seq_desc.startswith("["):
-                        hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_seq}\n[Scene: {seq_desc}]"
+                        desc_payload = f"{_ctx_preamble_seq}\n[Scene: {seq_desc}]"
+                        if _is_mita_cam:
+                            hidden_user_context = f"[Hidden image context]\n{desc_payload}"
+                        else:
+                            prompt_user_input = _append_prompt_user_context(prompt_user_input, desc_payload)
                         image_descriptions = {_detail: seq_desc}
                         logger.info(f"[ModelController] Non-native sequence mode: {len(model_image_data)} frames described as one scene.")
                 else:
@@ -954,7 +968,11 @@ class ModelController:
                         desc_text = "\n".join(
                             f"[Image {i + 1}: {d}]" for i, d in enumerate(descriptions)
                         )
-                        hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_single}\n{desc_text}"
+                        desc_payload = f"{_ctx_preamble_single}\n{desc_text}"
+                        if _is_mita_cam:
+                            hidden_user_context = f"[Hidden image context]\n{desc_payload}"
+                        else:
+                            prompt_user_input = _append_prompt_user_context(prompt_user_input, desc_payload)
                         image_descriptions = {_detail: "\n".join(descriptions)}
                         logger.info(f"[ModelController] Non-native image mode: replaced {len(descriptions)} image(s) with text descriptions.")
                 model_image_data = []
@@ -968,7 +986,7 @@ class ModelController:
                     "character_id": char_id,
                     "character_ref": char,
                     "event_type": event_type,
-                    "user_input": user_input,
+                    "user_input": prompt_user_input,
                     "system_input": system_input,
                     "hidden_user_context": hidden_user_context,
                     "image_data": model_image_data,
