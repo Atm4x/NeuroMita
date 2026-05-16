@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.events import Events
@@ -11,15 +13,38 @@ from game_connections.handlers.registry import RequestContext
 logger = logging.getLogger(__name__)
 
 
-def _collect_context_images(context: dict) -> List:
+def _read_context_image(path: Any, cleanup_after_read: bool) -> bytes | None:
+    candidate = Path(str(path))
+    try:
+        data = candidate.read_bytes()
+    except Exception as exc:
+        logger.warning(f"[create_task] Cannot read image from path {path!r}: {exc}")
+        return None
+
+    if cleanup_after_read:
+        try:
+            candidate.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(f"[create_task] Cannot delete temporary image {path!r}: {exc}")
+
+    return data
+
+
+async def _collect_context_images(context: dict) -> List:
     """Merge image_base64_list strings + bytes read from image_paths into one list."""
     images: List = list(context.get("image_base64_list", []) or [])
-    for path in context.get("image_paths", []) or []:
-        try:
-            with open(str(path), "rb") as fh:
-                images.append(fh.read())
-        except Exception as exc:
-            logger.warning(f"[create_task] Cannot read image from path {path!r}: {exc}")
+    image_paths = list(context.get("image_paths", []) or [])
+    if not image_paths:
+        return images
+
+    cleanup_after_read = bool(context.get("cleanup_image_paths", False))
+    loaded_images = await asyncio.gather(*[
+        asyncio.to_thread(_read_context_image, path, cleanup_after_read)
+        for path in image_paths
+    ])
+    for image_bytes in loaded_images:
+        if image_bytes is not None:
+            images.append(image_bytes)
     return images
 
 
@@ -237,7 +262,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input=str(user_input or ""),
                 system_input=collected_sys,
-                images=_collect_context_images(context),
+                images=await _collect_context_images(context),
                 image_source=effective_image_source,
                 extra_task_data={"system_info": context.get("currentInfo", "")},
                 abort_reason="Failed to create task",
@@ -395,7 +420,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input="",
                 system_input="\n".join(react_lines),
-                images=_collect_context_images(context),
+                images=await _collect_context_images(context),
                 image_source=effective_image_source,
                 extra_task_data={"reason": reason_text, "duration": duration},
                 abort_reason="Failed to create react task",
@@ -414,7 +439,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input="",
                 system_input=system_input,
-                images=_collect_context_images(context),
+                images=await _collect_context_images(context),
                 image_source="mita_camera",
                 extra_task_data={"system_info": context.get("currentInfo", "")},
                 abort_reason="Failed to create snapshot task",
@@ -434,7 +459,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input="",
                 system_input=system_input,
-                images=_collect_context_images(context),
+                images=await _collect_context_images(context),
                 image_source=str(context.get("image_source") or ""),
                 extra_task_data={"system_info": context.get("currentInfo", "")},
                 abort_reason="Failed to create TV reaction task",
@@ -456,7 +481,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input="",
                 system_input=system_input,
-                images=_collect_context_images(context),
+                images=await _collect_context_images(context),
                 image_source="easel",
                 extra_task_data={"system_info": context.get("currentInfo", "")},
                 abort_reason="Failed to create easel drawing task",

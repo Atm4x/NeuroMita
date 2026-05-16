@@ -4,9 +4,12 @@ import base64
 import datetime
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
 from main_logger import logger
+
+_DRAWINGS_SAVE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="neuromita-drawings")
 
 
 class ConversationEventWriter:
@@ -202,6 +205,20 @@ class ConversationEventWriter:
         except Exception as e:
             logger.warning(f"[ConversationEventWriter] Failed to save easel drawing: {e}")
 
+    def _queue_drawings_save(self, image_data: list[Any], character_id: str) -> None:
+        drawing_bytes = [
+            bytes(img)
+            for img in image_data
+            if isinstance(img, (bytes, bytearray, memoryview))
+        ]
+        if not drawing_bytes:
+            return
+
+        try:
+            _DRAWINGS_SAVE_EXECUTOR.submit(self._save_drawings_to_disk, drawing_bytes, character_id)
+        except Exception as e:
+            logger.warning(f"[ConversationEventWriter] Failed to queue easel drawing save: {e}")
+
     def write_turn(
         self,
         *,
@@ -229,7 +246,7 @@ class ConversationEventWriter:
 
         # Persist player's easel drawings to a dedicated folder immediately on receipt.
         if event_type == "easel_drawing" and image_data:
-            self._save_drawings_to_disk(image_data, responder_character_id)
+            self._queue_drawings_save(image_data, responder_character_id)
 
         pts = self.normalize_participants(participants)
         if responder_character_id and responder_character_id not in pts:

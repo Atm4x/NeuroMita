@@ -882,7 +882,8 @@ class ModelController:
 
         # Non-native image fallback: describe images with a vision provider first,
         # then pass text descriptions to the main (non-vision) model instead of images.
-        original_image_data = image_data  # kept for history storage
+        original_image_data = list(image_data or [])
+        model_image_data = list(original_image_data)
         image_descriptions: dict[str, str] | None = None
 
         # Build context hint so the vision description model knows the image source.
@@ -915,7 +916,7 @@ class ModelController:
 
         hidden_user_context = ""
 
-        if image_data and bool(self.settings.get("IMAGE_DESCRIPTION_ENABLED", False)):
+        if model_image_data and bool(self.settings.get("IMAGE_DESCRIPTION_ENABLED", False)):
             _detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
 
             _is_mita_cam = image_source in ("mita_camera",) or event_type == "camera_snapshot_result"
@@ -941,14 +942,14 @@ class ModelController:
                 _ctx_preamble_seq = _ctx_preamble_single
 
             try:
-                if len(image_data) > 1:
-                    seq_desc = self.image_description_handler.describe_sequence(image_data, context_hint=_image_context_hint)
+                if len(model_image_data) > 1:
+                    seq_desc = self.image_description_handler.describe_sequence(model_image_data, context_hint=_image_context_hint)
                     if seq_desc and not seq_desc.startswith("["):
                         hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_seq}\n[Scene: {seq_desc}]"
                         image_descriptions = {_detail: seq_desc}
-                        logger.info(f"[ModelController] Non-native sequence mode: {len(image_data)} frames described as one scene.")
+                        logger.info(f"[ModelController] Non-native sequence mode: {len(model_image_data)} frames described as one scene.")
                 else:
-                    descriptions = self.image_description_handler.describe(image_data, context_hint=_image_context_hint)
+                    descriptions = self.image_description_handler.describe(model_image_data, context_hint=_image_context_hint)
                     if descriptions:
                         desc_text = "\n".join(
                             f"[Image {i + 1}: {d}]" for i, d in enumerate(descriptions)
@@ -956,7 +957,7 @@ class ModelController:
                         hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_single}\n{desc_text}"
                         image_descriptions = {_detail: "\n".join(descriptions)}
                         logger.info(f"[ModelController] Non-native image mode: replaced {len(descriptions)} image(s) with text descriptions.")
-                image_data = []  # don't send images to main model
+                model_image_data = []
             except Exception as _desc_exc:
                 logger.warning(f"[ModelController] Image description fallback failed: {_desc_exc}")
 
@@ -970,7 +971,7 @@ class ModelController:
                     "user_input": user_input,
                     "system_input": system_input,
                     "hidden_user_context": hidden_user_context,
-                    "image_data": image_data,
+                    "image_data": model_image_data,
                     "memory_limit": memory_limit,
                     "is_game_master": is_game_master,
                     "save_missed_history": save_missed_history,
