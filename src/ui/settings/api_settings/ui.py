@@ -13,13 +13,14 @@ from .widgets import (
     LabeledLineEditRow,
     LabeledTextEditRow,
     LabeledComboRow,
+    FallbackChainEditor,
 )
-from ui.gui_templates import create_section_header
+from ui.gui_templates import create_section_header, SettingsBodyWidget
 from managers.settings_manager import CollapsibleSection
 
 
 def build_api_settings_ui(self, parent_layout):
-    main_container = QWidget()
+    main_container = SettingsBodyWidget()
     main_layout = QVBoxLayout(main_container)
     main_layout.setContentsMargins(0, 0, 0, 0)
     main_layout.setSpacing(8)
@@ -101,7 +102,7 @@ def build_api_settings_ui(self, parent_layout):
     main_layout.addWidget(custom_presets_frame)
 
     # --- editor container ---
-    self.api_settings_container = QWidget()
+    self.api_settings_container = SettingsBodyWidget()
     api_container_layout = QVBoxLayout(self.api_settings_container)
     api_container_layout.setContentsMargins(0, 10, 0, 0)
     api_container_layout.setSpacing(8)
@@ -166,6 +167,15 @@ def build_api_settings_ui(self, parent_layout):
     self.reserve_keys_row = LabeledTextEditRow(_('Резервные ключи', 'Reserve keys'))
     api_container_layout.addWidget(self.reserve_keys_row)
 
+    # --- Collapsible fallback chain section ---
+    self.fallback_section = CollapsibleSection(
+        _("Резервные провайдеры/модели", "Fallback providers/models"), self, icon_name="fa5s.life-ring"
+    )
+    api_container_layout.addWidget(self.fallback_section)
+
+    self.fallback_editor = FallbackChainEditor()
+    self.fallback_section.add_widget(self.fallback_editor)
+
     # --- Collapsible protocol configuration section (UNDER inputs) ---
     self.protocol_section = CollapsibleSection(_("Конфигурация протокола", "Protocol configuration"), self, icon_name="fa5s.sliders-h")
     api_container_layout.addWidget(self.protocol_section)
@@ -214,7 +224,7 @@ def build_api_settings_ui(self, parent_layout):
     ]
     self.gen_override_widgets = {}
     for param_key, param_label, default_val in _gen_params:
-        row = QWidget()
+        row = SettingsBodyWidget()
         row_lay = QHBoxLayout(row)
         row_lay.setContentsMargins(0, 1, 0, 1)
         row_lay.setSpacing(6)
@@ -236,7 +246,7 @@ def build_api_settings_ui(self, parent_layout):
         self.gen_override_widgets[param_key] = (chk, val_edit)
 
     # enable_thinking override (boolean value)
-    et_row = QWidget()
+    et_row = SettingsBodyWidget()
     et_lay = QHBoxLayout(et_row)
     et_lay.setContentsMargins(0, 1, 0, 1)
     et_lay.setSpacing(6)

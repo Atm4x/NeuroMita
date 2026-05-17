@@ -50,6 +50,24 @@ class PresetsMixin:
             except Exception:
                 pass
 
+            try:
+                # all presets (custom first, then builtin templates) available as fallback targets
+                all_items = []
+                for p in custom:
+                    pid = getattr(p, "id", None)
+                    name = getattr(p, "name", "")
+                    if isinstance(pid, int):
+                        all_items.append((str(name), pid))
+                for p in builtin:
+                    pid = getattr(p, "id", None)
+                    name = getattr(p, "name", "")
+                    if isinstance(pid, int):
+                        all_items.append((f"[builtin] {name}", pid))
+                if hasattr(v, "fallback_editor"):
+                    v.fallback_editor.set_available_presets(all_items)
+            except Exception:
+                pass
+
             # templates combo
             v.template_combo.blockSignals(True)
             v.template_combo.clear()
@@ -211,6 +229,13 @@ class PresetsMixin:
             if isinstance(gen_overrides, dict):
                 self._write_generation_overrides(gen_overrides)
 
+            if hasattr(v, "fallback_editor"):
+                fb_value = state.get("fallbacks") if isinstance(state.get("fallbacks"), list) else preset.get("fallbacks") or []
+                v.fallback_editor.set_self_preset_id(int(preset_id))
+                v.fallback_editor.blockSignals(True)
+                v.fallback_editor.set_value(fb_value)
+                v.fallback_editor.blockSignals(False)
+
             v.api_url_row.set_enabled(base is None)
 
             self._apply_help_links(preset)
@@ -222,6 +247,7 @@ class PresetsMixin:
             v.provider_label.setText(f"{_('Пресет', 'Preset')}: {preset.get('name', '')}")
             v.api_settings_container.setVisible(True)
 
+            self.event_bus.emit(Events.ApiPresets.SET_CURRENT_PRESET_ID, {"id": int(preset_id)})
             self.event_bus.emit(Events.Settings.SAVE_SETTING, {"key": "LAST_API_PRESET_ID", "value": int(preset_id)})
 
             self._snapshot = self._get_snapshot()
