@@ -135,6 +135,7 @@ class CreateTaskAction:
                     "req_id": req_id,
                     "origin_message_id": origin_message_id,
                     "policy": policy_dict,
+                    "source": "unity",
                 })
             else:
                 await server._send_aborted_update(ctx.client_id, event_type, character_id, reason="Failed to create task", req_id=req_id)
@@ -197,6 +198,7 @@ class CreateTaskAction:
                     "req_id": req_id,
                     "origin_message_id": origin_message_id,
                     "policy": policy_dict,
+                    "source": "unity",
                 })
             else:
                 await server._send_aborted_update(ctx.client_id, event_type, character_id, reason="Failed to create idle task", req_id=req_id)
@@ -254,6 +256,7 @@ class CreateTaskAction:
                     "req_id": req_id,
                     "origin_message_id": origin_message_id,
                     "policy": policy_dict,
+                    "source": "unity",
                 })
             else:
                 await server._send_aborted_update(ctx.client_id, event_type, character_id, reason="Failed to flush system info", req_id=req_id)
@@ -392,6 +395,7 @@ class CreateTaskAction:
                     "req_id": req_id,
                     "origin_message_id": origin_message_id,
                     "policy": policy_dict,
+                    "source": "unity",
                 })
             else:
                 await server._send_aborted_update(ctx.client_id, event_type, character_id, reason="Failed to create react task", req_id=req_id)

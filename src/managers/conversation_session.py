@@ -5,7 +5,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, ClassVar, Iterable, Optional
 
 from main_logger import logger
 
@@ -58,13 +58,44 @@ class ConversationSession:
             return
         self.pending_coach_hints.setdefault(character_id, []).append(hint)
 
+    # Чем меньше число, тем выше приоритет (раньше говорит).
+    _REASON_PRIORITY: ClassVar[dict[str, int]] = {
+        "gm_selected": 0,
+        "gm_command": 0,
+        "direct_target": 1,
+        "react_interrupt": 1,
+        "auto_round_robin": 2,
+        "unspecified": 3,
+    }
+
     def append_pending_speaker(self, speaker_id: str, reason: str = "unspecified") -> None:
         speaker_id = str(speaker_id or "").strip()
         reason = str(reason or "unspecified").strip() or "unspecified"
         if not speaker_id or speaker_id == "Player":
             return
-        if speaker_id not in self.pending_speakers:
-            self.pending_speakers.append(speaker_id)
+
+        new_pri = self._REASON_PRIORITY.get(reason, 3)
+        if speaker_id in self.pending_speakers:
+            old_reason = self.pending_speaker_reasons.get(speaker_id, "unspecified")
+            old_pri = self._REASON_PRIORITY.get(old_reason, 3)
+            if new_pri < old_pri:
+                # Перемещаем в позицию согласно новому приоритету.
+                self.pending_speakers.remove(speaker_id)
+            else:
+                # Приоритет не выше — оставляем как было.
+                return
+
+        # Вставляем сразу после всех записей с не-большим приоритетом
+        # (FIFO внутри одного приоритета).
+        insert_at = len(self.pending_speakers)
+        for i, existing in enumerate(self.pending_speakers):
+            existing_pri = self._REASON_PRIORITY.get(
+                self.pending_speaker_reasons.get(existing, "unspecified"), 3
+            )
+            if new_pri < existing_pri:
+                insert_at = i
+                break
+        self.pending_speakers.insert(insert_at, speaker_id)
         self.pending_speaker_reasons[speaker_id] = reason
 
     def next_pending_speaker(self) -> tuple[Optional[str], Optional[str]]:
@@ -82,6 +113,11 @@ class ConversationSession:
 
 
 def _normalize_participants(value: Any) -> tuple[str, ...]:
+    """Нормализует список participants, сохраняя исходный порядок.
+
+    Порядок важен: round-robin и UI используют именно него. Для ключевания сессий
+    в ConversationSessionManager отдельно применяется sorted().
+    """
     if value is None:
         return tuple()
     if isinstance(value, str):
@@ -100,7 +136,12 @@ def _normalize_participants(value: Any) -> tuple[str, ...]:
             continue
         out.append(s)
         seen.add(s)
-    return tuple(sorted(out))
+    return tuple(out)
+
+
+def _participants_key(parts: tuple[str, ...]) -> tuple[str, ...]:
+    """Ключ для сравнения составов диалога — независимо от порядка."""
+    return tuple(sorted(parts))
 
 
 class ConversationSessionManager:
@@ -143,7 +184,9 @@ class ConversationSessionManager:
             except Exception:
                 gm_enabled = bool(gm_enabled)
                 gm_active_roles = set(gm_active_roles or ())
-        key = (source, parts)
+        # Ключуем по отсортированному составу — порядок участников не должен
+        # порождать разные сессии.
+        key = (source, _participants_key(parts))
         with self._lock:
             existing_sid = self._by_key.get(key)
             if existing_sid and existing_sid in self._sessions:
@@ -153,18 +196,18 @@ class ConversationSessionManager:
                     sess.gm_enabled = gm_enabled or bool(gm_active_roles)
                 return sess
             # «Похожий» состав — пересекается > 50% — переиспользуем, обновляя participants
-            for (src, existing_parts), sid in list(self._by_key.items()):
+            for (src, existing_parts_key), sid in list(self._by_key.items()):
                 if src != source or sid not in self._sessions:
                     continue
-                if not existing_parts or not parts:
+                if not existing_parts_key or not parts:
                     continue
-                overlap = len(set(existing_parts) & set(parts))
-                threshold = max(1, len(existing_parts) // 2)
-                if overlap >= threshold and abs(len(existing_parts) - len(parts)) <= 1:
+                overlap = len(set(existing_parts_key) & set(parts))
+                threshold = max(1, len(existing_parts_key) // 2)
+                if overlap >= threshold and abs(len(existing_parts_key) - len(parts)) <= 1:
                     sess = self._sessions[sid]
-                    del self._by_key[(src, existing_parts)]
+                    del self._by_key[(src, existing_parts_key)]
                     sess.participants = parts
-                    self._by_key[(source, parts)] = sid
+                    self._by_key[(source, _participants_key(parts))] = sid
                     if gm_active_roles is not None:
                         sess.gm_active_roles = set(gm_active_roles)
                         sess.gm_enabled = gm_enabled or bool(gm_active_roles)

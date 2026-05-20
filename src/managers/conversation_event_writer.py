@@ -181,6 +181,7 @@ class ConversationEventWriter:
         task_uid: str | None,
         structured_data: dict | None = None,
         thinking: str | None = None,
+        source: str | None = None,
     ) -> None:
         sender = str(sender or "Player")
         responder_character_id = str(responder_character_id or "").strip()
@@ -228,6 +229,7 @@ class ConversationEventWriter:
                         structured_data=None,
                         message_id=str(user_event.get("message_id") or ""),
                         targets_override=[responder_character_id] if responder_character_id else [],
+                        source=source,
                     )
                 except Exception as e:
                     logger.warning(f"[ConversationEventWriter] player turn notify failed: {e}", exc_info=True)
@@ -244,6 +246,7 @@ class ConversationEventWriter:
                 structured_data=structured_data,
                 message_id=str(assistant_event.get("message_id") or ""),
                 is_game_master=(responder_character_id == "GameMaster"),
+                source=source,
             )
         except Exception as e:
             logger.warning(f"[ConversationEventWriter] turn-record notify failed: {e}", exc_info=True)
@@ -263,6 +266,7 @@ class ConversationEventWriter:
         message_id: str,
         is_game_master: bool = False,
         targets_override: list[str] | None = None,
+        source: str | None = None,
     ) -> None:
         # Извлекаем targets из structured response
         targets: list[str] = list(targets_override or [])
@@ -294,6 +298,8 @@ class ConversationEventWriter:
                 "is_game_master": is_game_master,
                 "structured_data": structured_data,
             }
+            if source:
+                payload["source"] = source
             get_event_bus().emit(Events.Conversation.TURN_RECORDED, payload)
         except Exception as e:
             logger.debug(f"[ConversationEventWriter] emit TURN_RECORDED failed: {e}")

@@ -162,7 +162,7 @@ class MitaDialogueOrchestrator:
             message_id = data.get("message_id")
             targets = data.get("targets") or []
             is_gm = bool(data.get("is_game_master"))
-            source = str(data.get("source") or ("unity" if data.get("from_unity") else "sandbox"))
+            source_raw = str(data.get("source") or "").strip()
 
             if not character_id:
                 return
@@ -172,6 +172,22 @@ class MitaDialogueOrchestrator:
             if len(non_player) < 2 and not is_gm:
                 # Один на один с игроком — оркестрация не нужна
                 return
+
+            # Если source не указан, пытаемся найти существующую сессию по составу
+            # (unity → sandbox). Дефолтимся на 'unity', потому что мульти-мита сейчас
+            # запускается из Unity-стороны заметно чаще, чем из песочницы.
+            source = source_raw
+            if not source:
+                for candidate in ("unity", "sandbox"):
+                    cand_sess = self._sessions.get(self._sessions._by_key.get((candidate, tuple(sorted(non_player))), ""))
+                    if cand_sess is not None:
+                        source = candidate
+                        break
+                if not source:
+                    source = "unity"
+                logger.debug(
+                    f"[MitaDialogueOrchestrator] TURN_RECORDED без source — выбран '{source}' для participants={non_player}"
+                )
 
             sess = self._sessions.get_or_create(non_player, source=source)
             primary_target = self._resolve_participant_id(sess, str(targets[0])) if targets else None
@@ -191,7 +207,10 @@ class MitaDialogueOrchestrator:
             if is_gm:
                 self._apply_gm_response(sess, data)
                 gm_roles_fired = data.get("gm_roles_fired") or []
-                gm_visible = not gm_roles_fired or ("narrator" in gm_roles_fired)
+                # GM виден игроку только в narrator-режиме. Без gm_roles_fired
+                # (legacy/text) считаем интервенцию скрытой — соответствует policy,
+                # которую формирует GameMasterOrchestrator для не-narrator вызовов.
+                gm_visible = bool(gm_roles_fired) and ("narrator" in gm_roles_fired)
                 if source == "unity" and gm_visible:
                     self._push_gm_to_unity(sess, data)
                 self._continue_chain(sess, source=source)
@@ -257,13 +276,23 @@ class MitaDialogueOrchestrator:
         if intervention is None:
             intervention = GameMasterOrchestrator.parse_gm_response(text)
 
-        # Speaker,X команды → pending_speakers (приоритет — GM-указанный говорящий)
+        # Сбрасываем GM_ROLE_*_ACTIVE на GameMaster-character: они уже использованы
+        # при BUILD_PROMPT, дальше держать их «грязными» нельзя — следующая
+        # интервенция в другой сессии может прийти с другим набором ролей.
+        try:
+            res = self._bus.emit_and_wait(Events.Character.GET, {"character_id": "GameMaster"}, timeout=0.3)
+            gm_char = res[0] if res else None
+            if gm_char is not None and hasattr(gm_char, "set_variable"):
+                for r in ("moderator", "narrator", "director", "coach"):
+                    gm_char.set_variable(f"GM_ROLE_{r.upper()}_ACTIVE", False)
+        except Exception:
+            pass
+
+        # Speaker,X команды → pending_speakers (приоритет — GM-указанный говорящий).
+        # append_pending_speaker сам соблюдает порядок приоритетов (gm_selected/gm_command выше остальных).
         resolved_next = self._resolve_participant_id(session, intervention.next_speaker or "")
         if resolved_next:
-            session.pending_speakers = [s for s in session.pending_speakers if s != resolved_next]
-            session.pending_speaker_reasons.pop(resolved_next, None)
-            session.pending_speakers.insert(0, resolved_next)
-            session.pending_speaker_reasons[resolved_next] = "gm_selected"
+            session.append_pending_speaker(resolved_next, reason="gm_selected")
         for cmd in intervention.commands:
             if cmd.lower().startswith("speaker,"):
                 name = cmd.split(",", 1)[1].strip()
@@ -373,35 +402,36 @@ class MitaDialogueOrchestrator:
 
         last_speaker = _last_other_speaker(session, speaker_id) or "Player"
 
-        # Контекст авто-цепочки идёт в промпт через ADD_TEMPORARY_SYSTEM_INFO —
-        # минуя UI-эхо, но попадая в next BUILD_PROMPT.
-        chain_hint = (
-            f"[AUTO_CHAIN]\n"
-            f"It is now your ({speaker_id}) turn to respond in this multi-character dialogue.\n"
-            f"The previous speaker was {last_speaker}. React to their latest message that appears in the history.\n"
-            f"{self._describe_auto_chain_reason(reason, speaker_id, last_speaker)}\n"
-            f"You are NOT the Player and NOT {last_speaker} — respond as {speaker_id} in character. "
-            f"Do not echo or impersonate the player."
-        )
-        try:
-            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": chain_hint}, sync=True)
-        except Exception:
-            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": chain_hint})
+        # Контекст авто-цепочки — единым system_input блоком (event role).
+        # ВАЖНО: не используем фиктивный user_input, иначе он попадает в историю
+        # каждой миты как реальное сообщение пользователя и засоряет контекст.
+        chain_hint_parts = [
+            "[AUTO_CHAIN]",
+            f"It is now your turn to respond as {speaker_id} in this multi-character dialogue.",
+            f"The previous speaker was {last_speaker}. React to their latest message that appears in the dialogue history above.",
+            self._describe_auto_chain_reason(reason, speaker_id, last_speaker),
+            f"You are NOT the Player and NOT {last_speaker}. Stay strictly in character as {speaker_id}; do not impersonate anyone else.",
+        ]
+        chain_hint = "\n".join(chain_hint_parts)
 
-        # system_input — только UI-видимые подсказки (coach + pending infos)
-        system_input_parts: list[str] = []
+        system_input_parts: list[str] = [chain_hint]
         if coach_hints:
             system_input_parts.append("[COACH_HINTS]\n" + "\n".join(f"- {h}" for h in coach_hints))
         if pending_infos:
             system_input_parts.extend(pending_infos)
-        system_input = "\n\n".join(system_input_parts).strip()
+        system_input = "\n\n".join(p for p in system_input_parts if p).strip()
 
-        # Пользовательский ввод подделываем кратко: "your turn" — чтобы был user-turn в промпте.
-        # LLM лучше реагирует когда есть явный last user message.
-        user_input_stub = f"({last_speaker} только что говорил(а) — твоя очередь, {speaker_id}.)"
+        # Гарантируем, что system_input уйдёт в промпт с ролью 'event', а не
+        # сохранится в истории как user message. Policy включает system_input_role='event'
+        # и write_to_history=False для самой стаб-генерации (assistant ответ всё равно
+        # запишется через event_writer).
+        from core.request_policy import resolve_policy
+        chain_policy = resolve_policy(model_event_type="auto_chain")
+        chain_policy.system_input_role = "event"
+        chain_policy.use_pending_sysinfo = False
 
         payload = {
-            "user_input": user_input_stub,
+            "user_input": "",
             "character_id": speaker_id,
             "sender": last_speaker,
             "participants": ["Player", *session.participants],
@@ -411,6 +441,7 @@ class MitaDialogueOrchestrator:
             "auto_continue": True,
             "source": source,
             "session_id": session.session_id,
+            "policy": chain_policy.to_dict(),
         }
         logger.info(
             f"[MitaDialogueOrchestrator] dispatch_next sid={session.session_id} "

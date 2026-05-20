@@ -132,9 +132,16 @@ class GameMasterOrchestrator:
         # вместо этого мы шлём обычный SEND_MESSAGE и доверяем
         # MitaDialogueOrchestrator поймать ответ на ON_SUCCESSFUL_RESPONSE с is_game_master=True.
         try:
-            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": context_text}, sync=True)
+            self._bus.emit(
+                Events.Model.ADD_TEMPORARY_SYSTEM_INFO,
+                {"content": context_text, "character_id": "GameMaster"},
+                sync=True,
+            )
         except Exception:
-            self._bus.emit(Events.Model.ADD_TEMPORARY_SYSTEM_INFO, {"content": context_text})
+            self._bus.emit(
+                Events.Model.ADD_TEMPORARY_SYSTEM_INFO,
+                {"content": context_text, "character_id": "GameMaster"},
+            )
 
         policy = {
             "use_history_in_prompt": True,
@@ -346,9 +353,11 @@ class GameMasterOrchestrator:
         except (json.JSONDecodeError, TypeError):
             pass
 
-        # Fallback: текст + поиск "Speaker,X" в тексте
+        # Fallback: текст + поиск "Speaker,X" в тексте.
+        # Имя — только буквы/цифры/_/-, без пробелов внутри, чтобы не схватить
+        # "Speaker,Crazy ругается" целиком.
         intervention.text = response_text
-        m = re.search(r"Speaker\s*,\s*([^\r\n;]+)", response_text, flags=re.IGNORECASE)
+        m = re.search(r"Speaker\s*,\s*([A-Za-z0-9_\-]+)", response_text)
         if m:
             speaker_name = m.group(1).strip().strip("\"'`").rstrip(" .,!?:")
             if speaker_name:

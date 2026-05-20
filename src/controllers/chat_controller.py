@@ -304,6 +304,12 @@ class ChatController:
         req_id: str | None = None,
         origin_message_id: str | None = None,
         policy: dict | None = None,
+        source: str | None = None,
+        session_id: str | None = None,
+        auto_chain_reason: str | None = None,
+        is_game_master: bool = False,
+        gm_roles_fired: list[str] | None = None,
+        model_preset_id: Any = None,
     ):
         eff_policy = None
         try:
@@ -401,22 +407,35 @@ class ChatController:
                     "character_id": character_id or "",
                 }, sync=True)
 
+            generate_payload = {
+                "user_input": user_input,
+                "system_input": system_input,
+                "image_data": image_data,
+                "stream_callback": stream_callback_handler if is_streaming else None,
+                "message_id": task_uid,
+                "event_type": effective_event_type,
+                "character_id": character_id,
+                "sender": sender,
+                "participants": participants or [],
+                "req_id": req_id,
+                "origin_message_id": origin_message_id,
+                "policy": eff_policy.to_dict(),
+            }
+            if source:
+                generate_payload["source"] = source
+            if session_id:
+                generate_payload["session_id"] = session_id
+            if auto_chain_reason:
+                generate_payload["auto_chain_reason"] = auto_chain_reason
+            if is_game_master:
+                generate_payload["is_game_master"] = True
+            if gm_roles_fired:
+                generate_payload["gm_roles_fired"] = list(gm_roles_fired)
+            if model_preset_id is not None:
+                generate_payload["model_preset_id"] = model_preset_id
             response_result = self.event_bus.emit_and_wait(
                 Events.Model.GENERATE_RESPONSE,
-                {
-                    "user_input": user_input,
-                    "system_input": system_input,
-                    "image_data": image_data,
-                    "stream_callback": stream_callback_handler if is_streaming else None,
-                    "message_id": task_uid,
-                    "event_type": effective_event_type,
-                    "character_id": character_id,
-                    "sender": sender,
-                    "participants": participants or [],
-                    "req_id": req_id,
-                    "origin_message_id": origin_message_id,
-                    "policy": eff_policy.to_dict(),
-                },
+                generate_payload,
                 timeout=600.0
             )
 
@@ -605,6 +624,12 @@ class ChatController:
         req_id = data.get("req_id")
         origin_message_id = data.get("origin_message_id")
         policy = data.get("policy")
+        source = str(data.get("source") or "").strip() or None
+        session_id = str(data.get("session_id") or "").strip() or None
+        auto_chain_reason = str(data.get("auto_chain_reason") or "").strip() or None
+        is_game_master = bool(data.get("is_game_master", False))
+        gm_roles_fired = list(data.get("gm_roles_fired") or [])
+        model_preset_id = data.get("model_preset_id")
 
         if image_data:
             self.event_bus.emit(Events.Capture.UPDATE_LAST_IMAGE_REQUEST_TIME)
@@ -612,21 +637,29 @@ class ChatController:
         loop_res = self.event_bus.emit_and_wait(Events.Core.GET_EVENT_LOOP, timeout=1.0)
         loop = loop_res[0] if loop_res else None
 
+        _kwargs = dict(
+            user_input=user_input,
+            system_input=system_input,
+            image_data=image_data,
+            task_uid=task_uid,
+            event_type=event_type,
+            character_id=character_id,
+            sender=sender,
+            participants=participants,
+            req_id=req_id,
+            origin_message_id=origin_message_id,
+            policy=policy,
+            source=source,
+            session_id=session_id,
+            auto_chain_reason=auto_chain_reason,
+            is_game_master=is_game_master,
+            gm_roles_fired=gm_roles_fired,
+            model_preset_id=model_preset_id,
+        )
+
         if loop and loop.is_running():
             fut = asyncio.run_coroutine_threadsafe(
-                self.async_send_message(
-                    user_input=user_input,
-                    system_input=system_input,
-                    image_data=image_data,
-                    task_uid=task_uid,
-                    event_type=event_type,
-                    character_id=character_id,
-                    sender=sender,
-                    participants=participants,
-                    req_id=req_id,
-                    origin_message_id=origin_message_id,
-                    policy=policy,
-                ),
+                self.async_send_message(**_kwargs),
                 loop
             )
             try:
@@ -635,21 +668,7 @@ class ChatController:
                 logger.error(f"async_send_message failed: {e}", exc_info=True)
                 return None
         else:
-            return asyncio.run(
-                self.async_send_message(
-                    user_input=user_input,
-                    system_input=system_input,
-                    image_data=image_data,
-                    task_uid=task_uid,
-                    event_type=event_type,
-                    character_id=character_id,
-                    sender=sender,
-                    participants=participants,
-                    req_id=req_id,
-                    origin_message_id=origin_message_id,
-                    policy=policy,
-                )
-            )
+            return asyncio.run(self.async_send_message(**_kwargs))
 
     @staticmethod
     def _build_task_result(response_text: str, target: str, structured_data: dict | None = None, targets: list[str] | None = None) -> dict:

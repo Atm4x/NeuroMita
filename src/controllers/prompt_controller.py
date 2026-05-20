@@ -223,7 +223,10 @@ class PromptController:
 
         non_player_participants = [p for p in participants if p and p != "Player"]
         if len(non_player_participants) >= 2:
-            sys_txt = self._load_participants_system(character, non_player_participants, sender)
+            source_hint = str(data.get("source") or "").strip().lower() or None
+            sys_txt = self._load_participants_system(
+                character, non_player_participants, sender, source_hint=source_hint
+            )
             if sys_txt:
                 messages.append({"role": "system", "content": sys_txt})
 
@@ -349,7 +352,13 @@ class PromptController:
 
         return out
 
-    def _load_participants_system(self, character, participants: List[str], sender: str) -> Optional[str]:
+    def _load_participants_system(
+        self,
+        character,
+        participants: List[str],
+        sender: str,
+        source_hint: Optional[str] = None,
+    ) -> Optional[str]:
         if character is None or not hasattr(character, "dsl_interpreter") or character.dsl_interpreter is None:
             return None
 
@@ -362,15 +371,24 @@ class PromptController:
         try:
             from managers.conversation_session import ConversationSessionManager
             mgr = ConversationSessionManager.instance()
-            # Берём сессию по составу (Sandbox или Unity — оба варианта проверяем)
+            # Сначала пытаемся источник, переданный из payload. Затем — другой,
+            # чтобы не плодить параллельные сессии и не показывать модели стартовый turn=1
+            # вместо реального счётчика.
             sess = None
-            for src in ("unity", "sandbox"):
+            sources_to_try: list[str] = []
+            if source_hint in ("unity", "sandbox"):
+                sources_to_try.append(source_hint)
+                sources_to_try.append("sandbox" if source_hint == "unity" else "unity")
+            else:
+                sources_to_try.extend(("unity", "sandbox"))
+            for src in sources_to_try:
                 cand = mgr.get_or_create(participants, source=src)
                 if cand.total_turns > 0:
                     sess = cand
                     break
             if sess is None:
-                sess = mgr.get_or_create(participants, source="unity")
+                primary = source_hint if source_hint in ("unity", "sandbox") else "unity"
+                sess = mgr.get_or_create(participants, source=primary)
             turn_number = sess.total_turns + 1
 
             last_spoke_at: dict[str, int] = {}

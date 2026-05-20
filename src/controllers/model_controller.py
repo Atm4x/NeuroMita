@@ -223,10 +223,15 @@ class ModelController:
         self.game_state.update_from_event_data(event.data or {})
 
     def _on_add_temporary_system_info(self, event: Event):
-        content = (event.data or {}).get("content", "")
+        data = event.data or {}
+        content = data.get("content", "")
         if not content:
             return False
-        self._temporary_system_infos.append({"role": "system", "content": str(content)})
+        entry = {"role": "system", "content": str(content)}
+        target = str(data.get("character_id") or data.get("target_character_id") or "").strip()
+        if target:
+            entry["target_character_id"] = target
+        self._temporary_system_infos.append(entry)
         return True
 
     def _on_peek_temporary_system_infos(self, event: Event):
@@ -793,8 +798,23 @@ class ModelController:
 
         game_state = self.game_state.to_prompt_dict()
 
-        extra_system_infos = list(self._temporary_system_infos or [])
-        self._temporary_system_infos.clear()
+        # Делим temporary_system_infos: целевые попадают только нужной мите,
+        # общие — текущему запросу. Чужие целевые остаются в очереди.
+        matched: list[dict] = []
+        leftover: list[dict] = []
+        for entry in list(self._temporary_system_infos or []):
+            t = ""
+            if isinstance(entry, dict):
+                t = str(entry.get("target_character_id") or "").strip()
+            if not t or t == char_id:
+                # Не утекает character_id в роль/content
+                cleaned = dict(entry) if isinstance(entry, dict) else {"role": "system", "content": str(entry)}
+                cleaned.pop("target_character_id", None)
+                matched.append(cleaned)
+            else:
+                leftover.append(entry)
+        self._temporary_system_infos[:] = leftover
+        extra_system_infos = matched
 
         cfg = getattr(self.model, "cfg", None)
 
@@ -820,6 +840,7 @@ class ModelController:
         memory_limit = int(_cfg_get("memory_limit", 40))
         is_game_master = (char_id == "GameMaster")
         disable_history_compression = bool(data.get("disable_history_compression", False))
+        source = str(data.get("source") or "").strip() or None
 
         effective_capabilities = {}
         try:
@@ -881,6 +902,7 @@ class ModelController:
                     "participants": participants,
                     "policy": policy.to_dict(),
                     "capabilities": effective_capabilities,
+                    "source": source,
                 },
                 timeout=10.0
             )
@@ -1053,6 +1075,7 @@ class ModelController:
                     event_type=event_type,
                     task_uid=task_uid,
                     thinking=think_text or None,
+                    source=source,
                 )
             elif char_id == "GameMaster" and event_type == "gm_intervention":
                 assistant_message_id = self._emit_turn_recorded_without_history(
@@ -1065,7 +1088,7 @@ class ModelController:
                     event_type=event_type,
                     extra_payload={
                         "gm_roles_fired": list(data.get("gm_roles_fired") or []),
-                        "source": data.get("source"),
+                        "source": source,
                     },
                 )
 
@@ -1368,6 +1391,7 @@ class ModelController:
                 final_text,
             )
 
+        source = str(data.get("source") or "").strip() or None
         assistant_message_id = ""
         if policy.write_to_history:
             origin_message_id = str(data.get("origin_message_id") or "") or None
@@ -1387,6 +1411,7 @@ class ModelController:
                 task_uid=task_uid,
                 structured_data=history_dict,
                 thinking=think_text or None,
+                source=source,
             )
         elif char_id == "GameMaster" and event_type == "gm_intervention":
             history_dict = {k: v for k, v in result_dict.items()
@@ -1402,7 +1427,7 @@ class ModelController:
                 structured_data=history_dict,
                 extra_payload={
                     "gm_roles_fired": list(data.get("gm_roles_fired") or []),
-                    "source": data.get("source"),
+                    "source": source,
                 },
             )
 
@@ -1520,6 +1545,7 @@ class ModelController:
         first_assistant_message_id = ""
         if policy.write_to_history:
             origin_message_id = str(data.get("origin_message_id") or "") or None
+            tool_source = str(data.get("source") or "").strip() or None
             first_assistant_message_id = self.event_writer.write_turn(
                 responder_character_id=char_id,
                 sender=sender,
@@ -1534,6 +1560,7 @@ class ModelController:
                 task_uid=task_uid,
                 structured_data=result_dict,
                 thinking=think_text or None,
+                source=tool_source,
             )
 
         # Emit first response to UI (shows "I'll check that" message)
