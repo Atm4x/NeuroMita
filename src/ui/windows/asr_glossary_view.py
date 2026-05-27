@@ -78,8 +78,6 @@ class AsrGlossaryView(QWidget):
         self.asr_install_finished_signal.connect(self._on_install_finished_internal)
         self.asr_install_failed_signal.connect(self._on_install_failed_internal)
 
-        QTimer.singleShot(0, lambda: self.request_refresh.emit())
-
     def refresh(self):
         try:
             res = self.event_bus.emit_and_wait(Events.Speech.GET_ASR_MODELS_GLOSSARY, timeout=2.0)

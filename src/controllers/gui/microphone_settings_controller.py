@@ -90,8 +90,11 @@ class MicrophoneSettingsController(BaseController):
         self._load_vad_params()
 
         self.refresh_microphones()
-        self.refresh_engines()
-        QTimer.singleShot(400, lambda: self._ui(self.refresh_engines))
+        self.refresh_engines(check_install_status=False, include_backend_status=False)
+        QTimer.singleShot(
+            400,
+            lambda: self._ui(lambda: self.refresh_engines(check_install_status=False, include_backend_status=False))
+        )
 
         QTimer.singleShot(1200, lambda: self._ui(self._bind_if_ready))
 
@@ -256,10 +259,18 @@ class MicrophoneSettingsController(BaseController):
         except Exception as e:
             logger.error(f"GET_MICROPHONE_LIST emit error: {e}")
 
-    def refresh_engines(self, select_engine: str | None = None):
+    def refresh_engines(
+        self,
+        select_engine: str | None = None,
+        *,
+        check_install_status: bool = True,
+        include_backend_status: bool = True,
+    ):
         v = self.view
         if not v or not hasattr(v, "recognizer_combobox"):
             return
+        if isinstance(select_engine, bool):
+            select_engine = None
 
         req_id = int(getattr(v, "_asr_glossary_req_id", 0)) + 1
         v._asr_glossary_req_id = req_id
@@ -327,12 +338,16 @@ class MicrophoneSettingsController(BaseController):
                 if new_engine != prev_engine:
                     self._reset_init_status()
 
-                self._apply_asr_install_status(new_engine if engines else "")
+                if check_install_status:
+                    self._apply_asr_install_status(new_engine if engines else "")
 
             self._ui(apply)
 
         try:
-            self.event_bus.emit(Events.Speech.GET_ASR_MODELS_GLOSSARY, {"callback": cb})
+            self.event_bus.emit(Events.Speech.GET_ASR_MODELS_GLOSSARY, {
+                "callback": cb,
+                "include_backend_status": include_backend_status,
+            })
         except Exception as e:
             logger.error(f"GET_ASR_MODELS_GLOSSARY emit error: {e}")
 

@@ -507,6 +507,7 @@ class SpeechController:
     def _on_get_asr_models_glossary(self, event: Event):
         data = event.data or {}
         cb = data.get("callback")
+        include_backend_status = bool(data.get("include_backend_status", True))
 
         def compute():
             try:
@@ -570,12 +571,24 @@ class SpeechController:
                         "engine_settings": engine_settings,
                     }
 
-                    status = check_requirements(reqs, ctx=ctx) if reqs else {
+                    checked_reqs = reqs
+                    if not include_backend_status:
+                        checked_reqs = [
+                            req for req in reqs
+                            if str(getattr(req, "kind", "")).lower() != "backend"
+                        ]
+
+                    status = check_requirements(checked_reqs, ctx=ctx) if checked_reqs else {
                         "ok": True, "missing_required": [], "missing_optional": [], "details": []
                     }
                     component_id = ""
                     component_status = None
-                    if installable_registry is not None and ComponentCategory is not None and make_component_id is not None:
+                    if (
+                        include_backend_status
+                        and installable_registry is not None
+                        and ComponentCategory is not None
+                        and make_component_id is not None
+                    ):
                         try:
                             component_id = make_component_id(ComponentCategory.ASR, engine)
                             component = installable_registry.get(component_id)

@@ -8,13 +8,10 @@ from ui.windows.asr_glossary_view import AsrGlossaryView
 class AsrGlossaryGuiController(BaseController):
     def __init__(self, main_controller, view):
         self._dialog = None
-        self._glossary_view: AsrGlossaryView | None = AsrGlossaryView()
+        self._glossary_view: AsrGlossaryView | None = None
         super().__init__(main_controller, view)
 
         self._register_window_on_ready()
-
-        self._glossary_view.request_install.connect(self._request_install)
-        self._glossary_view.request_refresh.connect(self._request_refresh)
 
     def _register_window_on_ready(self):
         if not self.view or not hasattr(self.view, "window_manager") or self.view.window_manager is None:
@@ -29,6 +26,7 @@ class AsrGlossaryGuiController(BaseController):
 
     def _on_dialog_ready(self, dialog, payload: dict):
         self._dialog = dialog
+        self._ensure_glossary_view()
 
         if not self._glossary_view:
             return
@@ -59,6 +57,13 @@ class AsrGlossaryGuiController(BaseController):
     def _request_refresh(self):
         if self._glossary_view:
             self._glossary_view.refresh()
+
+    def _ensure_glossary_view(self):
+        if self._glossary_view is not None:
+            return
+        self._glossary_view = AsrGlossaryView()
+        self._glossary_view.request_install.connect(self._request_install)
+        self._glossary_view.request_refresh.connect(self._request_refresh)
 
     def _is_asr_task(self, data: dict) -> bool:
         if not isinstance(data, dict):
