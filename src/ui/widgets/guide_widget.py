@@ -46,13 +46,13 @@ class GuideWidget(QWidget):
         self._filtered_pages = []
         try:
             from managers.settings_manager import SettingsManager
-            from ui.widgets.settings_panel import normalize_mode
             saved = SettingsManager.get("GUIDE_LEVEL")
             if saved in ("basic", "advanced", "full"):
                 self._guide_level = saved
-            else:
-                iface = SettingsManager.get("INTERFACE_MODE")
-                self._guide_level = normalize_mode(iface)
+            # else: keep the constructor default ('basic'). The old fallback
+            # used the launcher's INTERFACE_MODE; that setting was removed
+            # when settings switched to per-section toggles, so we just
+            # default to the most digestible level.
         except Exception:
             pass
         self.setObjectName("GuideWidget")

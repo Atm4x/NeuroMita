@@ -366,10 +366,11 @@ class ChatGUI(QMainWindow):
         setup_chat_panel(self, main_layout)
         setup_settings_panel(self, main_layout)
         self._init_settings_containers()
-        # применить режим интерфейса (скрыть кнопки панели по уровню)
+        # Show/hide sidebar buttons based on the per-section toggles.
+        # Replaces the old INTERFACE_MODE (Basic/Advanced/Full) logic.
         try:
-            from ui.widgets.settings_panel import apply_interface_mode
-            apply_interface_mode(self, self.settings.get("INTERFACE_MODE") or _('Базовый', 'Basic'))
+            from ui.widgets.settings_panel import apply_section_visibility
+            apply_section_visibility(self)
         except Exception:
             pass
         self.resize(1200, 800)
@@ -384,6 +385,8 @@ class ChatGUI(QMainWindow):
             pass
 
     def _init_settings_containers(self):
+        from ui.widgets.tabbed_settings_page import TabbedSettingsPage
+
         callbacks = {
             "general":     general_settings.setup_general_settings_controls,
             "api":         api_settings.setup_api_controls,
@@ -399,27 +402,26 @@ class ChatGUI(QMainWindow):
         }
 
         for key, fn in callbacks.items():
-            scroll_area = QScrollArea()
-            scroll_area.setWidgetResizable(True)
-            scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-            scroll_area.setObjectName(f"ScrollArea_{key}")
-            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            
-            content_widget = QWidget()
-            content_widget.setObjectName(f"ContentWidget_{key}")
-            content_layout = QVBoxLayout(content_widget)
-            content_layout.setContentsMargins(10, 10, 10, 10)
-            content_layout.setSpacing(5)
+            # Each category page is now a TabbedSettingsPage. The page's
+            # `header_layout()` is what gets passed to the legacy
+            # setup_*_controls(...); direct addWidget calls land in the
+            # pre-tab header area, while create_settings_section() calls
+            # are detected via the layout's _tabbed_settings_page back-ref
+            # and become tabs.
+            page = TabbedSettingsPage()
+            page.setObjectName(f"SettingsPage_{key}")
+            header_layout = page.header_layout()
 
             if isinstance(fn, types.MethodType) and fn.__self__ is self:
-                fn(content_layout)
+                fn(header_layout)
             else:
-                fn(self, content_layout)
-            
-            content_layout.addStretch()
-            scroll_area.setWidget(content_widget)
-            self.settings_containers[key] = scroll_area
-            self.settings_overlay.add_container(scroll_area)
+                fn(self, header_layout)
+
+            # Note: no need for a trailing stretch — the tab page bodies
+            # are independently scrollable, and the header zone hugs its
+            # content.
+            self.settings_containers[key] = page
+            self.settings_overlay.add_container(page)
 
     def show_settings_category(self, category):
         self.settings_animation.stop()

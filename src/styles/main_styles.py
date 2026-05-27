@@ -313,6 +313,48 @@ QLabel#CollapsibleArrow, QLabel#CollapsibleTitle {
 }
 QWidget#CollapsibleContent { background-color: transparent; padding-top: 6px; }
 
+/* ========= Tabbed Settings Page ========= */
+QWidget#TabbedSettingsPage {
+    background-color: transparent;
+}
+QFrame#SettingsTabBar {
+    background-color: transparent;
+    border-bottom: 1px solid {border_soft};
+}
+QPushButton#SettingsTabButton {
+    background-color: transparent;
+    color: {muted};
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin: 0 2px 6px 2px;
+    font-weight: 600;
+    font-size: 11pt;
+    text-align: left;
+}
+QPushButton#SettingsTabButton:hover {
+    color: {text};
+    background-color: {chip_bg};
+}
+QPushButton#SettingsTabButton[active="true"] {
+    color: {text};
+    background-color: {chip_hover};
+    border: 1px solid {accent_border};
+    border-bottom: 2px solid {accent};
+}
+QScrollArea#SettingsTabPage,
+QScrollArea#SettingsTabPage > QWidget,
+QScrollArea#SettingsTabPage > QWidget > QWidget {
+    background-color: transparent;
+}
+QStackedWidget#SettingsTabStack {
+    background-color: transparent;
+}
+QWidget#SettingsTabPageBody {
+    background-color: transparent;
+}
+
 /* ========= Settings Sidebar ========= */
 QWidget#SettingsSidebar {
     background-color: {card_bg};

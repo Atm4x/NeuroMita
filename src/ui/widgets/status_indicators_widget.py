@@ -4,13 +4,18 @@ from utils import _
 
 
 def apply_capture_visibility(gui, mode=None):
-    """Показывать/скрывать индикаторы захвата экрана и камеры в зависимости от режима интерфейса."""
+    """Show/hide screen-capture / camera-capture status indicators.
+
+    These belong to the 'screen' settings section, so we mirror its
+    enabled-state. The `mode` argument is kept only for backwards
+    compatibility with old callers that passed an interface-mode string —
+    it's ignored.
+    """
     try:
-        from ui.widgets.settings_panel import normalize_mode
-        m = normalize_mode(mode or gui.settings.get('INTERFACE_MODE'))
+        from ui.widgets.settings_panel import is_section_enabled
+        visible = is_section_enabled("screen")
     except Exception:
-        m = 'basic'
-    visible = m in ('advanced', 'full')
+        visible = False
     for attr in ('screen_capture_status_checkbox', 'camera_capture_status_checkbox'):
         w = getattr(gui, attr, None)
         if w is not None:

@@ -2,38 +2,63 @@
 from utils import getTranslationVariant as _
 
 
-def _apply_interface_mode_cb(gui, value):
+def _on_section_toggled(gui, _value=None):
+    """Re-apply sidebar visibility whenever a section checkbox flips."""
     try:
-        from ui.widgets.settings_panel import apply_interface_mode
-        apply_interface_mode(gui, value)
+        from ui.widgets.settings_panel import apply_section_visibility
+        apply_section_visibility(gui)
     except Exception:
         pass
+
+
+def _build_section_visibility_config():
+    """Build the section-toggle checkbox list dynamically from the central
+    SECTION_DEFAULTS map so we can never go out of sync with the sidebar."""
+    from ui.widgets.settings_panel import (
+        SECTION_DEFAULTS,
+        SECTION_LABELS,
+        TOGGLEABLE_SECTIONS,
+        _section_key,
+    )
+    items = [
+        {
+            'label': _('Включите только те разделы, которыми пользуетесь — '
+                       'остальные иконки спрячутся из боковой панели.',
+                       'Enable only the sections you use — the rest are '
+                       'hidden from the sidebar.'),
+            'type': 'text',
+        },
+    ]
+    for cat in TOGGLEABLE_SECTIONS:
+        label, _icon = SECTION_LABELS.get(cat, (cat.capitalize(), None))
+        items.append({
+            'label': label,
+            'key': _section_key(cat),
+            'type': 'checkbutton',
+            'default_checkbutton': SECTION_DEFAULTS[cat],
+            'command': lambda _v, _gui=None: None,  # placeholder, wired in setup
+        })
+    return items
 
 
 def setup_general_settings_controls(self, parent):
     create_section_header(parent, _("Основные настройки", "General Settings"))
 
-    # ── Режим отображения настроек ──────────────────────────────────────────
-    interface_mode_config = [
-        {
-            'label': _('Режим интерфейса', 'Interface mode'),
-            'key': 'INTERFACE_MODE', 'type': 'combobox',
-            'options': [_('Базовый', 'Basic'), _('Продвинутый', 'Advanced'), _('Полный', 'Full')],
-            'default': _('Базовый', 'Basic'),
-            'command': lambda v: _apply_interface_mode_cb(self, v),
-            'tooltip': _(
-                'Базовый — только самое нужное.\n'
-                'Продвинутый — добавляет озвучку, микрофон и связь с игрой.\n'
-                'Полный — все разделы настроек.',
-                'Basic — essentials only.\n'
-                'Advanced — adds voice, mic and game connection.\n'
-                'Full — all settings sections.'),
-        },
-    ]
+    # ── Видимость разделов настроек ─────────────────────────────────────────
+    # Replaces the old "Interface mode" Basic/Advanced/Full dropdown.
+    # Each non-general category gets its own checkbox; toggling rebuilds
+    # the sidebar visibility on the spot.
+    visibility_config = _build_section_visibility_config()
+    # Wire the actual callback now that `self` is in scope. The placeholder
+    # in _build_section_visibility_config() keeps that helper free of
+    # closure-over-gui concerns.
+    for item in visibility_config:
+        if item.get('type') == 'checkbutton':
+            item['command'] = lambda _v, _gui=self: _on_section_toggled(_gui)
     create_settings_section(
         self, parent,
-        _('Режим отображения настроек', 'Settings UI mode'),
-        interface_mode_config,
+        _('Видимые разделы', 'Visible sections'),
+        visibility_config,
         icon_name='fa5s.sliders-h',
     )
 

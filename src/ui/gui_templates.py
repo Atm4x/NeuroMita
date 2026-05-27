@@ -7,8 +7,16 @@ from managers.settings_manager import CollapsibleSection, InnerCollapsibleSectio
 from utils import getTranslationVariant as _
 
 def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=None):
-    root = CollapsibleSection(title, gui, icon_name=icon_name)
-    parent_layout.addWidget(root)
+    # If the layout we were handed belongs to a TabbedSettingsPage (modern
+    # settings shell), each call adds a tab instead of an accordion. The
+    # legacy CollapsibleSection path is still kept for non-tabbed parents
+    # (e.g. embedded settings panels inside dialogs).
+    page = getattr(parent_layout, "_tabbed_settings_page", None)
+    if page is not None:
+        root = page.add_section(title, icon_name=icon_name)
+    else:
+        root = CollapsibleSection(title, gui, icon_name=icon_name)
+        parent_layout.addWidget(root)
     current_sub = None
 
     for cfg in cfg_list:
