@@ -1,4 +1,3 @@
-from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 from main_logger import logger
 from core.events import Events, Event
@@ -19,7 +18,7 @@ class DialogController(BaseController):
         if self.view and hasattr(self.view, 'show_info_message_signal') and self.view.show_info_message_signal:
             self.view.show_info_message_signal.emit({'title': title, 'message': message})
         elif self.view:
-            QTimer.singleShot(0, lambda: QMessageBox.information(self.view, title, message))
+            self._ui(lambda: QMessageBox.information(self.view, title, message))
 
     def _on_show_error_message(self, event: Event):
         title = event.data.get('title', 'Ошибка')
@@ -27,7 +26,7 @@ class DialogController(BaseController):
         if self.view and hasattr(self.view, 'show_error_message_signal') and self.view.show_error_message_signal:
             self.view.show_error_message_signal.emit({'title': title, 'message': message})
         elif self.view:
-            QTimer.singleShot(0, lambda: QMessageBox.critical(self.view, title, message))
+            self._ui(lambda: QMessageBox.critical(self.view, title, message))
             
     def _on_prompt_for_tg_code(self, event: Event):
         code_future = event.data.get('future')    
@@ -39,8 +38,8 @@ class DialogController(BaseController):
 
     def _on_show_eula_dialog(self, event: Event):
         if self.view and hasattr(self.view, '_show_eula_dialog'):
-            QTimer.singleShot(0, self.view._show_eula_dialog)
+            self._ui(self.view._show_eula_dialog)
             
     def _on_show_guide(self, event: Event):
         if self.view and hasattr(self.view, '_show_guide'):
-            QTimer.singleShot(0, self.view._show_guide)
+            self._ui(self.view._show_guide)

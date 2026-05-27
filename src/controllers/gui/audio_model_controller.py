@@ -2,9 +2,6 @@ from main_logger import logger
 from core.events import Events, Event
 from .base_controller import BaseController
 
-from PyQt6.QtCore import QTimer
-
-
 class AudioModelController(BaseController):
 
     def subscribe_to_events(self):
@@ -22,17 +19,17 @@ class AudioModelController(BaseController):
         if self.view and hasattr(self.view, "check_triton_dependencies_signal") and self.view.check_triton_dependencies_signal:
             self.view.check_triton_dependencies_signal.emit()
         elif self.view and hasattr(self.view, "check_triton_dependencies"):
-            self.view.check_triton_dependencies()
+            self._ui(self.view.check_triton_dependencies)
 
         if self.view and hasattr(self.view, "update_local_voice_combobox"):
-            QTimer.singleShot(0, self.view.update_local_voice_combobox)
+            self._ui(self.view.update_local_voice_combobox)
 
     def _on_update_model_loading_status(self, event: Event):
         status = event.data.get("status", "")
         if self.view and hasattr(self.view, "update_model_loading_status_signal") and self.view.update_model_loading_status_signal:
             self.view.update_model_loading_status_signal.emit(status)
         elif self.view and hasattr(self.view, "loading_status_label"):
-            QTimer.singleShot(0, lambda: self.view.loading_status_label.setText(status))
+            self._ui(lambda: self.view.loading_status_label.setText(status))
 
     def _on_finish_model_loading(self, event: Event):
         model_id = event.data.get("model_id")
@@ -44,4 +41,4 @@ class AudioModelController(BaseController):
         if self.view and hasattr(self.view, "cancel_model_loading_signal") and self.view.cancel_model_loading_signal:
             self.view.cancel_model_loading_signal.emit()
         elif self.view and hasattr(self.view, "cancel_model_loading") and hasattr(self.view, "loading_dialog"):
-            QTimer.singleShot(0, lambda: self.view.cancel_model_loading(self.view.loading_dialog))
+            self._ui(lambda: self.view.cancel_model_loading(self.view.loading_dialog))

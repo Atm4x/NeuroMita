@@ -25,7 +25,7 @@ class SystemController(BaseController):
             
     def check_and_install_ffmpeg(self):
         logger.info("SystemController: check_and_install_ffmpeg")
-        QTimer.singleShot(100, self._check_and_install_ffmpeg_impl)
+        self._ui(lambda: QTimer.singleShot(100, self._check_and_install_ffmpeg_impl))
         
     def _check_and_install_ffmpeg_impl(self):
         ffmpeg_path = Path(".") / "ffmpeg.exe"
@@ -40,17 +40,17 @@ class SystemController(BaseController):
             
     def _ffmpeg_install_thread_target(self):
         if self.view:
-            QTimer.singleShot(0, self.view._show_ffmpeg_installing_popup)
+            self._ui(self.view._show_ffmpeg_installing_popup)
 
         logger.info("Starting FFmpeg installation attempt...")
         success = install_ffmpeg()
         logger.info(f"FFmpeg installation attempt finished. Success: {success}")
 
         if self.view:
-            QTimer.singleShot(0, self.view._close_ffmpeg_installing_popup)
+            self._ui(self.view._close_ffmpeg_installing_popup)
 
         if not success and self.view:
-            QTimer.singleShot(0, self.view._show_ffmpeg_error_popup)
+            self._ui(self.view._show_ffmpeg_error_popup)
             
     def _on_update_debug_info(self, event: Event):
         logger.debug("SystemController: получено событие UPDATE_DEBUG_INFO")
@@ -62,5 +62,5 @@ class SystemController(BaseController):
         
     def _on_get_gui_window_id(self, event: Event):
         if self.view and hasattr(self.view, 'winId'):
-            return int(self.view.winId())
+            return self._ui_call(lambda: int(self.view.winId()), default=None, timeout=1.0)
         return None

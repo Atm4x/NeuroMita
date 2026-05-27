@@ -1,4 +1,3 @@
-from PyQt6.QtCore import QTimer
 from main_logger import logger
 from core.events import Events, Event
 from .base_controller import BaseController
@@ -63,7 +62,7 @@ class ChatController(BaseController):
     def update_token_count(self):
         logger.debug("ChatController: update_token_count")
         if self.view:
-            QTimer.singleShot(0, self.view.update_token_count)
+            self._ui(self.view.update_token_count)
         else:
             logger.error("ChatController: view не найден!")
 
@@ -134,7 +133,7 @@ class ChatController(BaseController):
         if hasattr(self.view, "insert_user_input_signal"):
             self.view.insert_user_input_signal.emit(text)
         elif self.view.user_entry:
-            QTimer.singleShot(0, lambda: self.view.user_entry.insertPlainText(text + " "))
+            self._ui(lambda: self.view.user_entry.insertPlainText(text + " "))
 
     def _on_check_user_entry_exists(self, event: Event):
         return bool(self.view and self.view.user_entry)

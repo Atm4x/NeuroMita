@@ -1,6 +1,4 @@
-﻿from PyQt6.QtCore import QTimer
-
-from core.events import Events, Event
+﻿from core.events import Events, Event
 from main_logger import logger
 from .base_controller import BaseController
 
@@ -53,7 +51,7 @@ class AsrGlossaryGuiController(BaseController):
 
         lay.addWidget(self._glossary_view)
 
-        QTimer.singleShot(0, self._glossary_view.refresh)
+        self._ui(self._glossary_view.refresh)
 
     def _request_install(self, engine_id: str):
         self.event_bus.emit(Events.Speech.INSTALL_ASR_MODEL, {"model": engine_id})
@@ -83,10 +81,12 @@ class AsrGlossaryGuiController(BaseController):
         model = self._task_model_id(data)
         if not model:
             return
-        self._glossary_view.on_install_progress(
-            model=str(model),
-            progress=int(data.get("progress", 0) or 0),
-            status=str(data.get("status", "") or "")
+        self._ui(
+            lambda: self._glossary_view.on_install_progress(
+                model=str(model),
+                progress=int(data.get("progress", 0) or 0),
+                status=str(data.get("status", "") or "")
+            )
         )
 
     def _on_install_finished(self, event: Event):
@@ -98,7 +98,7 @@ class AsrGlossaryGuiController(BaseController):
         model = self._task_model_id(data)
         if not model:
             return
-        self._glossary_view.on_install_finished(str(model))
+        self._ui(lambda: self._glossary_view.on_install_finished(str(model)))
 
     def _on_install_failed(self, event: Event):
         if not self._glossary_view:
@@ -109,4 +109,4 @@ class AsrGlossaryGuiController(BaseController):
         model = self._task_model_id(data)
         if not model:
             return
-        self._glossary_view.on_install_failed(str(model), str(data.get("error", "") or ""))
+        self._ui(lambda: self._glossary_view.on_install_failed(str(model), str(data.get("error", "") or "")))

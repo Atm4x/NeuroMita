@@ -1,4 +1,4 @@
-﻿from PyQt6.QtCore import QTimer, QEventLoop
+﻿from PyQt6.QtCore import QEventLoop
 
 from main_logger import logger
 from core.events import Events, Event
@@ -70,7 +70,7 @@ class VoiceModelGuiController(BaseController):
         self._dialog = dialog
         self._attach_view_to_dialog(dialog)
         if self._vm_view:
-            QTimer.singleShot(0, self._vm_view.refresh_all)
+            self._ui(self._vm_view.refresh_all)
 
     def _on_legacy_open_voice_models(self, event: Event):
         self.event_bus.emit(Events.GUI.SHOW_WINDOW, {"window_id": "ai_hub", "payload": {"category": "tts"}})
@@ -240,7 +240,7 @@ class VoiceModelGuiController(BaseController):
             logger.error(f"Ошибка сохранения настроек локальных моделей: {e}", exc_info=True)
 
         self._after_models_changed()
-        QTimer.singleShot(0, self._vm_view.refresh_all)
+        self._ui(self._vm_view.refresh_all)
 
     def _on_close_dialog(self, event: Event):
         self._on_save_settings(event)
@@ -249,7 +249,7 @@ class VoiceModelGuiController(BaseController):
     def _after_models_changed(self):
         self.event_bus.emit(Events.Audio.REFRESH_VOICE_MODULES)
         if self.view and hasattr(self.view, "update_local_voice_combobox"):
-            QTimer.singleShot(0, self.view.update_local_voice_combobox)
+            self._ui(self.view.update_local_voice_combobox)
 
         settings = getattr(self.main_controller, "settings", None)
         backend = self._backend()
@@ -279,7 +279,7 @@ class VoiceModelGuiController(BaseController):
                 pass
 
             if self.view and hasattr(self.view, "update_local_voice_combobox"):
-                QTimer.singleShot(0, self.view.update_local_voice_combobox)
+                self._ui(self.view.update_local_voice_combobox)
 
     def _on_update_description(self, event: Event):
         key = event.data
