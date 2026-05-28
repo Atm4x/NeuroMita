@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 import weakref
 from dataclasses import dataclass
 from queue import Queue, Empty
+import os
+import sys
 import time
 from main_logger import logger
 
@@ -167,15 +169,34 @@ class EventBus:
         """
         start_time = time.perf_counter() # <--- СТАРТ ТАЙМЕРА
         is_main_thread = (threading.current_thread() is threading.main_thread())
+        call_id = f"{int(time.time() * 1000)}-{threading.get_ident()}"
+        caller = "unknown"
+        try:
+            frame = sys._getframe(1)
+            caller = f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno} in {frame.f_code.co_name}"
+        except Exception:
+            pass
         
         results: List[Any] = []
         result_queue: Queue = Queue()
 
         def result_wrapper(callback):
+            callback_name = getattr(callback, "__qualname__", getattr(callback, "__name__", repr(callback)))
+
             def wrapper(*args, **kwargs):
+                callback_start = time.perf_counter()
+                logger.info(
+                    f"[emit_and_wait:callback:start] id={call_id} event='{event_name}' "
+                    f"callback='{callback_name}' thread='{threading.current_thread().name}'"
+                )
                 try:
                     result = callback(*args, **kwargs)
-                    result_queue.put(result)
+                    result_queue.put((callback_name, result))
+                    logger.info(
+                        f"[emit_and_wait:callback:done] id={call_id} event='{event_name}' "
+                        f"callback='{callback_name}' took={time.perf_counter() - callback_start:.4f}s "
+                        f"result_type='{type(result).__name__}'"
+                    )
                 except Exception as e:
                     logger.error("Произошла ошибка в событии, коллектим:")
 
@@ -190,14 +211,29 @@ class EventBus:
                         f"Ошибка в обработчике '{callback_name}' для {event_name_for_log}: {e}",
                         exc_info=True
                     )
-                    result_queue.put(None)
+                    result_queue.put((callback_name, None))
             return wrapper
 
         with self._lock:
             subscribers = self._get_active_subscribers(event_name)
 
         if not subscribers:
+            logger.info(
+                f"[emit_and_wait:no_subscribers] id={call_id} event='{event_name}' "
+                f"timeout={timeout} caller='{caller}' thread='{threading.current_thread().name}'"
+            )
             return results
+
+        subscriber_names = [
+            getattr(subscriber, "__qualname__", getattr(subscriber, "__name__", repr(subscriber)))
+            for subscriber in subscribers
+        ]
+        logger.info(
+            f"[emit_and_wait:start] id={call_id} event='{event_name}' timeout={timeout} "
+            f"subscribers={len(subscribers)} callbacks={subscriber_names} caller='{caller}' "
+            f"thread='{threading.current_thread().name}' main_thread={is_main_thread} "
+            f"data_type='{type(data).__name__}'"
+        )
 
         # Запуск задач
         for subscriber in subscribers:
@@ -212,9 +248,14 @@ class EventBus:
         while collected < target and (time.time() - wait_start) < float(timeout):
             try:
                 result = result_queue.get(timeout=0.05) # Чуть уменьшил шаг для отзывчивости
+                callback_name, result = result
                 if result is not None:
                     results.append(result)
                 collected += 1
+                logger.info(
+                    f"[emit_and_wait:result] id={call_id} event='{event_name}' "
+                    f"callback='{callback_name}' collected={collected}/{target}"
+                )
             except Empty:
                 continue
         
@@ -232,6 +273,18 @@ class EventBus:
                 # Если фоновый поток - просто инфо о медленной операции
                 logger.info(f"[BG SLOW] {msg}")
         # -----------------------------------------
+
+        if collected < target:
+            logger.warning(
+                f"[emit_and_wait:timeout] id={call_id} event='{event_name}' "
+                f"collected={collected}/{target} timeout={timeout} callbacks={subscriber_names} "
+                f"caller='{caller}' thread='{threading.current_thread().name}'"
+            )
+        else:
+            logger.info(
+                f"[emit_and_wait:done] id={call_id} event='{event_name}' "
+                f"collected={collected}/{target} took={duration:.4f}s results={len(results)}"
+            )
 
         return results
 
