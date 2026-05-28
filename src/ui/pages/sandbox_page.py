@@ -3,7 +3,7 @@ import threading
 
 import qtawesome as qta
 
-from PyQt6.QtCore import QSize, QTimer, Qt
+from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -74,6 +74,8 @@ def _round_pixmap(src: QPixmap, size: int) -> QPixmap:
 
 
 class SandboxPage(QWidget):
+    _asr_models_loaded = pyqtSignal(object)
+
     def __init__(self, gui):
         super().__init__(gui)
         self.gui = gui
@@ -94,12 +96,20 @@ class SandboxPage(QWidget):
         self._inspector_collapsed_width = 56
         self._inspector_tab_indexes = {}
 
+        self._asr_models_loaded.connect(self._execute_asr_ui_call)
         self._build_ui()
         self._sync_host_exports()
         self.on_activated()
 
     def _sync_host_exports(self):
         self.gui.sandbox_page = self
+
+    def _execute_asr_ui_call(self, fn):
+        try:
+            if callable(fn):
+                fn()
+        except Exception:
+            logger.exception("Failed to execute sandbox ASR UI callback")
 
     def _sync_combobox_text(self, combo, value: str):
         if combo is None:
@@ -373,7 +383,7 @@ class SandboxPage(QWidget):
                     items = []
             except Exception:
                 items = []
-            QTimer.singleShot(0, lambda r=items: _apply(r))
+            self._asr_models_loaded.emit(lambda r=items: _apply(r))
 
         try:
             t = threading.Thread(target=_worker, daemon=True)
