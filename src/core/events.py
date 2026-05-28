@@ -235,19 +235,18 @@ class EventBus:
             f"data_type='{type(data).__name__}'"
         )
 
-        # Запуск задач
-        for subscriber in subscribers:
-            wrapped = result_wrapper(subscriber)
-            self._wait_executor.submit(wrapped, Event(name=event_name, data=data))
-
-        # Сбор результатов
+        # Выполняем wait-запросы inline: второй ThreadPool приводил к starvation.
         collected = 0
         target = len(subscribers)
-        wait_start = time.time()
 
-        while collected < target and (time.time() - wait_start) < float(timeout):
+        for subscriber in subscribers:
+            wrapped = result_wrapper(subscriber)
+            wrapped(Event(name=event_name, data=data))
+
+        # Сбор результатов
+        while True:
             try:
-                result = result_queue.get(timeout=0.05) # Чуть уменьшил шаг для отзывчивости
+                result = result_queue.get_nowait()
                 callback_name, result = result
                 if result is not None:
                     results.append(result)
@@ -257,7 +256,7 @@ class EventBus:
                     f"callback='{callback_name}' collected={collected}/{target}"
                 )
             except Empty:
-                continue
+                break
         
         # --- ФИНАЛИЗАЦИЯ И ЛОГИРОВАНИЕ ВРЕМЕНИ ---
         duration = time.perf_counter() - start_time
