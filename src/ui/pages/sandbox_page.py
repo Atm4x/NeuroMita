@@ -363,7 +363,11 @@ class SandboxPage(QWidget):
 
         def _worker():
             try:
-                res = self.gui.event_bus.emit_and_wait(Events.Speech.GET_ASR_MODELS_GLOSSARY, timeout=5.0)
+                res = self.gui.event_bus.emit_and_wait(
+                    Events.Speech.GET_ASR_MODELS_GLOSSARY,
+                    {"include_backend_status": False},
+                    timeout=5.0,
+                )
                 items = res[0] if res else []
                 if not isinstance(items, list):
                     items = []
