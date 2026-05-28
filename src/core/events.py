@@ -200,8 +200,6 @@ class EventBus:
                 except Exception as e:
                     logger.error("Произошла ошибка в событии, коллектим:")
 
-                    callback_name = getattr(callback, "__qualname__", getattr(callback, "__name__", "unknown"))
-
                     event_name_for_log = "неизвестного события"
 
                     if args and isinstance(args[0], Event):
