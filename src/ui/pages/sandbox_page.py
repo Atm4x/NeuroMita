@@ -1364,7 +1364,9 @@ class SandboxPage(QWidget):
         chat_host = QFrame()
         chat_host.setObjectName("SandboxChatHost")
         chat_host_layout = QVBoxLayout(chat_host)
-        chat_host_layout.setContentsMargins(14, 14, 14, 14)
+        # Panel-less center: no inner padding so the chat column sits flush on
+        # the shell canvas (the enclosing box styling is removed in QSS).
+        chat_host_layout.setContentsMargins(0, 0, 0, 0)
         chat_host_layout.setSpacing(0)
         chat_host_layout.addWidget(self._chat_panel)
 

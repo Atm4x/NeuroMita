@@ -123,11 +123,18 @@ QFrame#SandboxWorkspaceHeader {
 
 /* Flatter look: neutral hairline borders instead of bright accent outlines
    so the stacked panels don't read as many competing framed boxes. */
-QFrame#SandboxSelectorDeck,
-QFrame#SandboxChatHost {
+QFrame#SandboxSelectorDeck {
     background-color: rgba({settings_panel_rgb}, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 18px;
+}
+
+/* Panel-less center: the chat column (header strip + messages + composer)
+   sits directly on the shell canvas, with no big enclosing container box. */
+QFrame#SandboxChatHost {
+    background: transparent;
+    border: none;
+    border-radius: 0px;
 }
 
 QWidget#ChatComposerWrapper {
@@ -480,10 +487,13 @@ QScrollArea#SandboxInspectorScroll {
     border: none;
 }
 
+/* Header reads as a flat title row with a hairline divider, matching the
+   panel-less center (no enclosing box). */
 QFrame#ChatConversationStrip {
-    background-color: rgba({settings_panel_rgb}, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 0px;
 }
 
 QLabel#ChatStripTitle {
