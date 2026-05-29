@@ -64,13 +64,12 @@ QWidget#SettingsWorkspaceContent {
     border: none;
 }
 
-QFrame#SettingsWorkspacePanel,
-QFrame#SettingsTabsCard,
+/* Rail cards are the only "card" layer on their side — keep them soft. */
 QFrame#SettingsStatusRailCard,
 QFrame#SettingsQuickActionsCard,
 QFrame#SettingsNoteCard {
-    background-color: rgba({settings_panel_rgb}, 0.94);
-    border: 1px solid rgba({accent_rgb}, 0.14);
+    background-color: rgba({settings_panel_rgb}, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 16px;
 }
 
@@ -84,8 +83,19 @@ QFrame#SettingsWorkspaceHeader {
     border: none;
 }
 
+/* Flatten the visual hierarchy: the outer workspace panel is no longer a
+   nested bordered box — it is just a transparent layout region so the tabs
+   strip and the section pages sit directly on the shell canvas. */
 QFrame#SettingsWorkspacePanel {
-    background-color: rgba({sandbox_bg_rgb}, 0.92);
+    background: transparent;
+    border: none;
+}
+
+/* Tabs read as a light toolbar strip rather than another framed card. */
+QFrame#SettingsTabsCard {
+    background-color: rgba(255, 255, 255, 0.03);
+    border: none;
+    border-radius: 14px;
 }
 
 QLabel#SettingsHeroIcon {
@@ -221,10 +231,13 @@ QWidget#SettingsSectionPageContent {
     border: none;
 }
 
+/* The page header is a flat title block with a single hairline divider,
+   not yet another framed panel stacked inside the workspace. */
 QFrame#SettingsSectionPageHeader {
-    background-color: rgba({settings_panel_rgb}, 0.94);
-    border: 1px solid rgba({accent_rgb}, 0.18);
-    border-radius: 16px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 0px;
 }
 
 QLabel#SettingsSectionPageTitle {
@@ -309,8 +322,8 @@ QFrame#SettingsSubsectionLine {
 }
 
 QWidget#SettingsPageRoot QWidget#CollapsibleSection {
-    background-color: rgba({settings_panel_rgb}, 0.70);
-    border: 1px solid rgba(255,255,255,0.08);
+    background-color: rgba({settings_panel_rgb}, 0.55);
+    border: 1px solid rgba(255,255,255,0.05);
     border-radius: 14px;
 }
 
