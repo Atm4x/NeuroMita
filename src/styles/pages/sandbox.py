@@ -85,17 +85,19 @@ QPushButton#ScrollToBottomButton:focus { outline:none; border:none; }
 
 CHAT_SCROLL_QSS = r"""
 /* ========= Chat scroll area (widget-based) ========= */
+/* Transparent so the message list blends into its SandboxChatHost surface
+   instead of stacking another opaque panel inside it. */
 QScrollArea#ChatScrollArea {
-    background-color: {panel_bg};
+    background: transparent;
     border: none;
     border-radius: 10px;
 }
 QScrollArea#ChatScrollArea::viewport {
-    background-color: {panel_bg};
+    background: transparent;
     border: none;
 }
 QWidget#ChatContainer {
-    background-color: {panel_bg};
+    background: transparent;
 }
 """
 
@@ -119,11 +121,13 @@ QFrame#SandboxWorkspaceHeader {
     border: none;
 }
 
+/* Flatter look: neutral hairline borders instead of bright accent outlines
+   so the stacked panels don't read as many competing framed boxes. */
 QFrame#SandboxSelectorDeck,
 QFrame#SandboxChatHost {
-    background-color: rgba({settings_panel_rgb}, 0.97);
-    border: 1px solid rgba({accent_rgb}, 0.16);
-    border-radius: 20px;
+    background-color: rgba({settings_panel_rgb}, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 18px;
 }
 
 QWidget#ChatComposerWrapper {
@@ -132,28 +136,29 @@ QWidget#ChatComposerWrapper {
 }
 
 QFrame#ChatComposerBar {
-    background-color: rgba({settings_panel_rgb}, 0.97);
-    border: 1px solid rgba({accent_rgb}, 0.22);
-    border-radius: 20px;
+    background-color: rgba({settings_panel_rgb}, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
 }
 
 QFrame#SandboxInspector {
-    background-color: rgba({sandbox_bg_rgb}, 0.94);
-    border: 1px solid rgba({accent_rgb}, 0.12);
-    border-radius: 20px;
+    background-color: rgba({sandbox_bg_rgb}, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 18px;
 }
 
 QFrame#ChatToolbarCard,
 QFrame#SandboxSelectorCard {
-    background-color: rgba({settings_panel_rgb}, 0.985);
-    border: 1px solid rgba({accent_rgb}, 0.18);
-    border-radius: 18px;
+    background-color: rgba({settings_panel_rgb}, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
 }
 
+/* Nested inside the inspector column — keep it nearly flat. */
 QFrame#SandboxInspectorCard {
-    background-color: rgba({settings_panel_rgb}, 0.95);
-    border: 1px solid rgba({accent_rgb}, 0.14);
-    border-radius: 16px;
+    background-color: rgba({settings_panel_rgb}, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 14px;
 }
 
 QLabel#SandboxHeroIcon {
@@ -236,8 +241,8 @@ QLabel#TokenCountLabel {
 }
 
 QWidget#ChatCharacterHistoryGroup {
-    background-color: rgba({settings_panel_rgb}, 0.97);
-    border: 1px solid rgba({accent_rgb}, 0.14);
+    background-color: rgba({settings_panel_rgb}, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 14px;
 }
 
@@ -262,9 +267,9 @@ QCheckBox#StatusIndicator::indicator:checked {
 
 QWidget#StatusIndicatorStrip,
 QWidget#InlineStatusIndicators {
-    background-color: rgba({settings_panel_rgb}, 0.95);
-    border: 1px solid rgba({accent_rgb}, 0.14);
-    border-radius: 18px;
+    background-color: rgba({settings_panel_rgb}, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
 }
 
 QWidget#StatusIndicatorChip {
@@ -462,7 +467,7 @@ QToolButton#SandboxInspectorToggle:hover {
 QPlainTextEdit#SandboxInspectorMonoText {
     background-color: rgba(8, 8, 18, 0.82);
     color: {text};
-    border: 1px solid rgba({accent_rgb}, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 10px;
     padding: 8px 10px;
     font-family: "Consolas", "Cascadia Mono", "Courier New", monospace;
@@ -476,8 +481,8 @@ QScrollArea#SandboxInspectorScroll {
 }
 
 QFrame#ChatConversationStrip {
-    background-color: rgba({settings_panel_rgb}, 0.95);
-    border: 1px solid rgba({accent_rgb}, 0.14);
+    background-color: rgba({settings_panel_rgb}, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 14px;
 }
 
