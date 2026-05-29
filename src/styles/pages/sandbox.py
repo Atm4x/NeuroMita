@@ -148,10 +148,13 @@ QFrame#ChatComposerBar {
     border-radius: 18px;
 }
 
+/* Panel-less inspector: no enclosing box — it hangs on the shell canvas and
+   is separated from the chat column by a single hairline divider. */
 QFrame#SandboxInspector {
-    background-color: rgba({sandbox_bg_rgb}, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 18px;
+    background: transparent;
+    border: none;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 0px;
 }
 
 QFrame#ChatToolbarCard,
@@ -161,11 +164,11 @@ QFrame#SandboxSelectorCard {
     border-radius: 16px;
 }
 
-/* Nested inside the inspector column — keep it nearly flat. */
+/* Nested inside the inspector column — flat, just a faint tint for grouping. */
 QFrame#SandboxInspectorCard {
-    background-color: rgba({settings_panel_rgb}, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 14px;
+    background-color: rgba(255, 255, 255, 0.02);
+    border: none;
+    border-radius: 12px;
 }
 
 QLabel#SandboxHeroIcon {
