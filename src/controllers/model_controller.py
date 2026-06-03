@@ -11,6 +11,7 @@ from typing import Optional, Any
 import base64
 
 from handlers.chat_handler import ChatModel
+from handlers.llm_providers.base import ImageInputNotSupportedError
 from utils import _
 from core.events import get_event_bus, Events, Event
 from main_logger import logger
@@ -1003,6 +1004,20 @@ class ModelController:
         prompt_data = prompt_res[0]
         combined_messages = prompt_data.get("messages", []) or []
 
+        # When image processing is disabled, or non-native description mode is on,
+        # the main model must never receive raw images — including ones already
+        # stored in history and reconstructed as image_url chunks. Strip them
+        # (substituting any stored description text) so a non-vision model can
+        # keep the conversation going instead of failing with HTTP 404.
+        _images_off = not bool(self.settings.get("ENABLE_IMAGE_ANALYSIS", True))
+        _nonnative = bool(self.settings.get("IMAGE_DESCRIPTION_ENABLED", False))
+        if _images_off or _nonnative:
+            try:
+                from handlers.llm_providers.message_transforms import strip_images_from_messages
+                combined_messages = strip_images_from_messages(combined_messages)
+            except Exception as _strip_exc:
+                logger.warning(f"[ModelController] strip_images_from_messages failed: {_strip_exc}")
+
         if event_type == "chat":
             self._cache_base_prompt(char_id, "chat", combined_messages)
 
@@ -1196,6 +1211,22 @@ class ModelController:
                 "think": think_text or None,
                 "message_id": assistant_message_id,
             }
+
+        except ImageInputNotSupportedError:
+            logger.error(
+                "[ModelController] Selected model does not support image input."
+            )
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                "error": _(
+                    "Модель не поддерживает изображения. Отключите «Разрешить обработку "
+                    "изображений» в настройках (Изображения и камера) или включите "
+                    "Non-native режим описания (отдельный vision-провайдер).",
+                    "This model does not support images. Turn off “Enable Image Analysis” "
+                    "in settings (Images & Camera), or enable Non-native description mode "
+                    "(a separate vision provider).",
+                )
+            })
+            return None
 
         except Exception as e:
             logger.error(f"Error during LLM generation/processing: {e}", exc_info=True)

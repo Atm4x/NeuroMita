@@ -10,6 +10,7 @@ from core.events import Events
 from utils import save_combined_messages
 
 from managers.api_preset_resolver import ApiPresetResolver, PresetSettings
+from handlers.llm_providers.base import ImageInputNotSupportedError
 
 
 class LLMRequestRunner:
@@ -93,6 +94,14 @@ class LLMRequestRunner:
                 )
                 if response_text:
                     return response_text
+            except ImageInputNotSupportedError:
+                # The model can't accept images — retrying is pointless.
+                # Abort the loop and propagate so the controller can advise.
+                logger.error(
+                    "Generation aborted: the selected model does not support image input. "
+                    "Not retrying."
+                )
+                raise
             except concurrent.futures.TimeoutError:
                 logger.error(f"Attempt {attempt} timed out after {request_timeout}s.")
             except Exception as e:

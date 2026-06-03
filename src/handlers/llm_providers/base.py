@@ -4,6 +4,14 @@ from typing import List, Dict, Callable, Optional, Any
 from abc import ABC, abstractmethod
 
 
+class ImageInputNotSupportedError(Exception):
+    """Raised when the provider rejects a request because the model cannot
+    accept image input (e.g. OpenRouter HTTP 404 'No endpoints found that
+    support image input'). Retrying is pointless, so the runner aborts and the
+    controller surfaces an actionable hint to the user."""
+    pass
+
+
 @dataclass
 class LLMRequest:
     model: str

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from main_logger import logger
-from handlers.llm_providers.base import BaseProvider, LLMRequest
+from handlers.llm_providers.base import BaseProvider, LLMRequest, ImageInputNotSupportedError
 from schemas.structured_response import StructuredResponse
 
 
@@ -157,6 +157,16 @@ class OpenAIHTTPProviderBase(BaseProvider):
             except Exception:
                 err = resp.text
             logger.error(f"[{self.name}] HTTP {resp.status_code}: {err}")
+
+            # Model can't accept images — retrying won't help. Signal the runner
+            # to abort and let the controller advise the user.
+            err_text = str(err).lower()
+            if resp.status_code == 404 and (
+                "image input" in err_text
+                or "no endpoints found that support image" in err_text
+            ):
+                raise ImageInputNotSupportedError(str(err))
+
             return None
 
         if req.stream:

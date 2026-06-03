@@ -11,7 +11,7 @@ from managers.llm_request_runner import LLMRequestRunner
 from managers.model_config_loader import ModelConfigLoader
 from managers.tools.tool_manager import ToolManager
 
-from handlers.llm_providers.base import LLMRequest
+from handlers.llm_providers.base import LLMRequest, ImageInputNotSupportedError
 from handlers.llm_providers.param_mapper import build_unified_generation_params
 
 from core.events import get_event_bus
@@ -188,6 +188,9 @@ class ChatModel:
                 retry_delay=retry_delay,
                 request_timeout=request_timeout,
             )
+        except ImageInputNotSupportedError:
+            # Propagate so ModelController can show an actionable hint to the user.
+            raise
         except Exception as e:
             logger.error(f"Runner failed unexpectedly: {e}", exc_info=True)
             return None, False

@@ -43,7 +43,15 @@ def setup_screen_analysis_controls(gui, parent_layout):
 
     # Первая CollapsibleSection
     screen_analysis_config = [
-        {'label': _('Разрешить обработку изображений', 'Enable Image Analysis'), 'key': 'ENABLE_IMAGE_ANALYSIS', 'type': 'checkbutton', 'default_checkbutton': True, 'hide': True},
+        {'label': _('Разрешить обработку изображений', 'Enable Image Analysis'), 'key': 'ENABLE_IMAGE_ANALYSIS', 'type': 'checkbutton', 'default_checkbutton': True,
+         'tooltip': _(
+             'Главный выключатель изображений. При выключении ни одна картинка не\n'
+             'отправляется модели — включая уже сохранённые в истории. Помогает,\n'
+             'когда выбранная модель не умеет обрабатывать изображения (ошибка 404).',
+             'Master image switch. When off, no image is sent to the model —\n'
+             'including ones already stored in history. Use this when the selected\n'
+             'model cannot process images (HTTP 404 error).'
+         )},
         {'label': _('Включить захват экрана', 'Enable Screen Capture'), 'key': 'ENABLE_SCREEN_ANALYSIS', 'type': 'checkbutton', 'default_checkbutton': False},
         {'label': _('Прикладывать кадры к сообщениям', 'Auto-attach frames'), 'key': 'AUTO_ATTACH_IMAGES', 'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'ENABLE_SCREEN_ANALYSIS'},
         {'label': _('Интервал захвата (сек)', 'Capture Interval (sec)'), 'key': 'SCREEN_CAPTURE_INTERVAL', 'type': 'entry', 'default': '5.0', 'validation': gui.validate_float_positive},
@@ -157,6 +165,19 @@ def setup_screen_analysis_controls(gui, parent_layout):
                 'Detailed — 4-6 sentences: all objects, colors, text, expressions, mood.'
             ),
         },
+        {
+            'label': _('Описать недостающие', 'Describe missing'),
+            'type': 'button',
+            'command': lambda: _run_description_backfill(gui),
+            'tooltip': _(
+                'Постфактум сгенерировать описания для всех изображений в истории,\n'
+                'у которых их ещё нет (по аналогии с индексацией недостающих векторов).\n'
+                'Использует выбранный выше vision-провайдер.',
+                'Generate descriptions for all history images that lack one yet\n'
+                '(analogous to reindexing missing embeddings).\n'
+                'Uses the vision provider selected above.'
+            ),
+        },
     ]
     create_settings_section(gui, parent_layout, _("Описание изображений", "Image Description"), image_description_config, icon_name="fa6s.comment-dots")
     # Detail depends on EITHER inline OR non-native mode being on (both use it)
@@ -167,6 +188,15 @@ def setup_screen_analysis_controls(gui, parent_layout):
 
     # Шестая CollapsibleSection — камера на голове Миты
     _setup_mita_camera_section(gui, parent_layout)
+
+
+def _run_description_backfill(gui) -> None:
+    """Backfill descriptions for history images that don't have one yet."""
+    try:
+        from ui.settings.image_description_backfill import run_image_description_backfill
+        run_image_description_backfill(gui)
+    except Exception as e:
+        logger.error(f"[screen_analysis_settings] description backfill failed: {e}", exc_info=True)
 
 
 def _wire_detail_dependency(gui) -> None:

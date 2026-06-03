@@ -37,6 +37,88 @@ def _summarize_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _best_image_description(msg: Dict[str, Any]) -> str:
+    """Pick the best stored description variant for a message, if any.
+
+    Descriptions are stored at message level in meta (`image_descriptions` dict
+    or legacy `image_description` string) and passed through by the history
+    reconstruction (see history_manager._reconstruct_message_from_db).
+    Preference: manual > detailed > normal > brief > first available.
+    """
+    desc_dict = msg.get("image_descriptions")
+    if isinstance(desc_dict, dict) and desc_dict:
+        return str(
+            desc_dict.get("manual")
+            or desc_dict.get("detailed")
+            or desc_dict.get("normal")
+            or desc_dict.get("brief")
+            or next(iter(desc_dict.values()), "")
+            or ""
+        ).strip()
+    legacy = msg.get("image_description")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy.strip()
+    return ""
+
+
+def strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Remove all image parts from messages so non-vision models don't choke.
+
+    Used when image processing is disabled (ENABLE_IMAGE_ANALYSIS off) or when
+    the non-native description mode is active — in both cases the main model
+    must never receive raw images, including ones reconstructed from history.
+
+    For each message:
+      • `image_url` chunks are dropped from list content;
+      • if the message has a stored description (image_descriptions / legacy),
+        it is injected once as a text chunk in place of the removed images so
+        the textual context is preserved;
+      • if list content becomes empty after stripping, it collapses to "".
+    Messages with plain string content are returned untouched.
+    """
+    out: List[Dict[str, Any]] = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+
+        content = m.get("content")
+        if not isinstance(content, list):
+            out.append(m)
+            continue
+
+        had_image = any(
+            isinstance(c, dict) and c.get("type") in ("image_url", "image")
+            for c in content
+        )
+        if not had_image:
+            out.append(m)
+            continue
+
+        kept = [
+            c for c in content
+            if not (isinstance(c, dict) and c.get("type") in ("image_url", "image"))
+        ]
+
+        desc = _best_image_description(m)
+        if desc:
+            has_text = any(isinstance(c, dict) and c.get("type") == "text" for c in kept)
+            placeholder = {"type": "text", "text": f"[Image description: {desc}]"}
+            # Put the description first when there's no other text, else append.
+            kept.insert(0, placeholder) if not has_text else kept.append(placeholder)
+
+        new_msg = dict(m)
+        if not kept:
+            new_msg["content"] = ""
+        elif len(kept) == 1 and isinstance(kept[0], dict) and kept[0].get("type") == "text":
+            new_msg["content"] = kept[0].get("text", "")
+        else:
+            new_msg["content"] = kept
+        out.append(new_msg)
+
+    return out
+
+
 def merge_system_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     system_parts: List[str] = []
     rest: List[Dict[str, Any]] = []

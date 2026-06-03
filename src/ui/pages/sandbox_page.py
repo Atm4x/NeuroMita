@@ -342,7 +342,7 @@ class SandboxPage(QWidget):
             if not use_voice:
                 voice_val = _("Выключено", "Off")
             elif method.lower() == "local":
-                model_id = str(get("LOCAL_VOICE_MODEL_ID", "") or "").strip()
+                model_id = str(get("NM_CURRENT_VOICEOVER", "") or "").strip()
                 voice_val = _("Локально", "Local") + (f": {self._local_voice_name(model_id)}" if model_id else "")
             else:
                 voice_val = "Telegram"
@@ -1157,6 +1157,25 @@ class SandboxPage(QWidget):
 
         # ── Захват ─────────────────────────────────────────────────────────
         capture_strip, capture_layout = self._make_strip(_("Захват", "Capture"), "fa6s.camera-retro")
+
+        # Master image switch (mirror of the settings checkbox). When off, no image
+        # — new or from history — is sent, so a non-vision model keeps working.
+        images_row, self._capture_images_cb = self._make_toggle_row(
+            _("Обработка изображений", "Image processing"),
+            lambda v: self._on_capture_toggle("ENABLE_IMAGE_ANALYSIS", v),
+            bool(self.gui._get_setting("ENABLE_IMAGE_ANALYSIS", True)),
+            tooltip=_(
+                "Главный выключатель изображений. При выключении модели не отправляется\n"
+                "ни одна картинка — включая уже сохранённые в истории. Помогает, когда\n"
+                "выбранная модель не умеет обрабатывать изображения (ошибка 404).",
+                "Master image switch. When off, no image is sent to the model —\n"
+                "including ones already stored in history. Use this when the selected\n"
+                "model cannot process images (HTTP 404 error)."
+            ),
+            with_dot=True,
+        )
+        capture_layout.addWidget(images_row)
+
         screen_row, self._capture_screen_cb = self._make_toggle_row(
             _("Захват экрана", "Screen capture"),
             lambda v: self._on_capture_toggle("ENABLE_SCREEN_ANALYSIS", v),
@@ -1443,6 +1462,7 @@ class SandboxPage(QWidget):
         and live via the SETTING_CHANGED subscription.)"""
         get = self.gui._get_setting
         pairs = (
+            ("_capture_images_cb", "ENABLE_IMAGE_ANALYSIS", True),
             ("_capture_screen_cb", "ENABLE_SCREEN_ANALYSIS", False),
             ("_capture_auto_attach_cb", "AUTO_ATTACH_IMAGES", False),
             ("_capture_camera_cb", "ENABLE_CAMERA_CAPTURE", False),
