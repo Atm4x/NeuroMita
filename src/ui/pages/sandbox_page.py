@@ -213,6 +213,8 @@ class SandboxPage(QWidget):
         self._voice_status_row = None
         self._mic_status_row = None
         self._rag_status_row = None
+        self._race23_status_row = None
+        self._race23_ping_btn = None
         # Capture rows carry a two-state dot (off/active) mirroring its switch —
         # keyed by the switch widget so _sync_toggles_from_settings can recolour.
         self._toggle_dots = {}
@@ -247,6 +249,43 @@ class SandboxPage(QWidget):
         self.gui.switch_main_page("settings")
         self.gui.show_settings_category(category)
 
+    def _on_race23_ping(self):
+        btn = getattr(self, "_race23_ping_btn", None)
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("...")
+        from game_connections.race23 import get_bridge_client
+        import threading
+
+        def _do_ping():
+            bridge = get_bridge_client()
+            if bridge is None:
+                ok, msg = False, "мост не инициализирован"
+            else:
+                ok = bridge.ping(timeout=5.0)
+                msg = "OK" if ok else "TIMEOUT"
+                from main_logger import logger
+                logger.info("[Race23] Ping: %s", msg)
+            self.gui.run_ui_task_signal.emit(lambda: self._on_ping_result(ok, msg))
+
+        threading.Thread(target=_do_ping, daemon=True).start()
+
+    def _on_ping_result(self, ok, msg):
+        from main_logger import logger
+        logger.info("[Race23] Ping result: %s", msg)
+        btn = getattr(self, "_race23_ping_btn", None)
+        if btn:
+            btn.setEnabled(True)
+            btn.setText(msg)
+            btn.setStyleSheet(
+                "color: #79e78c;" if ok else "color: #ff453a;"
+            )
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(3000, lambda: (
+                btn.setText(_("Пинг", "Ping")),
+                btn.setStyleSheet(""),
+            ))
+
     # --------- Status rows (voice / mic / RAG) -----------
     def _make_status_row(self, name_text: str, registry_attr: str, settings_key: str,
                          enable_key: str, tooltip: str) -> "_SandboxStatusRow":
@@ -280,6 +319,7 @@ class SandboxPage(QWidget):
             "USE_VOICEOVER": self._voice_status_row,
             "MIC_ACTIVE": self._mic_status_row,
             "RAG_ENABLED": self._rag_status_row,
+            "ENABLE_23RACE_BRIDGE": self._race23_status_row,
         }.get(enable_key)
         if row is not None:
             row.set_enabled_state(bool(checked))
@@ -360,6 +400,35 @@ class SandboxPage(QWidget):
             else:
                 rag_val = _("Выключен", "Disabled")
             self._rag_status_row.set_value(rag_val)
+
+        if self._race23_status_row is not None:
+            enabled = bool(get("ENABLE_23RACE_BRIDGE", False))
+            self._race23_status_row.set_enabled_state(enabled)
+            btn = getattr(self, "_race23_ping_btn", None)
+            if btn:
+                btn.setVisible(enabled)
+            if enabled:
+                try:
+                    from core.events import Events
+                    res = self.gui.event_bus.emit_and_wait(Events.Race23.BRIDGE_STATUS, timeout=0.5)
+                    if res and res[0]:
+                        status = res[0]
+                        connected = bool(status.get("connected", False))
+                        if connected:
+                            self._race23_status_row.setChecked(True)
+                            self._race23_status_row.set_value(_("Подключён", "Connected"))
+                        else:
+                            self._race23_status_row.setChecked(False)
+                            self._race23_status_row.set_value(_("Игра не найдена", "Game not found"))
+                    else:
+                        self._race23_status_row.setChecked(False)
+                        self._race23_status_row.set_value(_("Ожидание", "Waiting"))
+                except Exception:
+                    self._race23_status_row.setChecked(False)
+                    self._race23_status_row.set_value("?")
+            else:
+                self._race23_status_row.setChecked(False)
+                self._race23_status_row.set_value(_("Выключен", "Off"))
 
     def _local_voice_name(self, model_id: str) -> str:
         try:
@@ -1159,6 +1228,24 @@ class SandboxPage(QWidget):
             _("Открыть настройки RAG / памяти", "Open RAG / memory settings"),
         )
         status_layout.addWidget(self._rag_status_row)
+
+        self._race23_status_row = self._make_status_row(
+            "23 Race",
+            "race23_status_checkbox",
+            "game",
+            "ENABLE_23RACE_BRIDGE",
+            _("Открыть настройки 23 Race", "Open 23 Race settings"),
+        )
+        status_layout.addWidget(self._race23_status_row)
+
+        self._race23_ping_btn = QPushButton(_("Пинг", "Ping"))
+        self._race23_ping_btn.setObjectName("LauncherShellNavButton")
+        self._race23_ping_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._race23_ping_btn.setToolTip(_("Проверить связь с игрой", "Check game connection"))
+        self._race23_ping_btn.clicked.connect(self._on_race23_ping)
+        self._race23_ping_btn.setVisible(bool(self.gui._get_setting("ENABLE_23RACE_BRIDGE", False)))
+        status_layout.addWidget(self._race23_ping_btn)
+
         layout.addWidget(status_strip)
         self._panels["status"] = status_strip
 
@@ -1361,6 +1448,7 @@ class SandboxPage(QWidget):
         "USE_VOICEOVER", "VOICEOVER_METHOD", "LOCAL_VOICE_MODEL_ID", "NM_CURRENT_VOICEOVER",
         "MIC_ACTIVE", "RECOGNIZER_TYPE", "RAG_ENABLED", "RAG_EMBED_PRESET_ID",
         "RAG_EMBED_MODEL", "MEMORY_PROFILE",
+        "ENABLE_23RACE_BRIDGE", "ENABLE_23RACE_DIRECT_LUA", "BRIDGE_23RACE_PROGRAMMER_PRESET",
     })
     _BUDGET_KEYS = frozenset({"MAX_MODEL_TOKENS"})
     _MEMORY_KEYS = frozenset({"MODEL_MESSAGE_LIMIT", "MEMORY_CAPACITY"})
@@ -1378,6 +1466,10 @@ class SandboxPage(QWidget):
                 self.gui.update_status_colors()
             except Exception:
                 pass
+        if key == "ENABLE_23RACE_BRIDGE":
+            btn = getattr(self, "_race23_ping_btn", None)
+            if btn:
+                btn.setVisible(bool(self.gui._get_setting("ENABLE_23RACE_BRIDGE", False)))
         if key in self._BUDGET_KEYS:
             self._refresh_context_budget()
         if key in self._MEMORY_KEYS:
@@ -1397,6 +1489,7 @@ class SandboxPage(QWidget):
             "voice": self._voice_status_row,
             "microphone": self._mic_status_row,
             "models": self._rag_status_row,
+            "game": self._race23_status_row,
         }.get(str(info.get("category") or ""))
         if row is not None:
             row.set_indicator(info.get("state"))

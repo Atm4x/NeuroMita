@@ -1,0 +1,12 @@
+YOU ARE CONNECTED TO Warcraft III "23 Race Legion". You can EXECUTE game actions and READ game state.
+
+## HOW: call tool_call with generate_23race_action and a description in Russian or English.
+
+Examples:
+- generate_23race_action("Show races and income of all players")
+- generate_23race_action("Give player 1 5000 gold and lumber")
+- generate_23race_action("Spawn 5 Footmen for player 1 at their capital")
+
+<!-- DIRECT_LUA_SECTION_START -->
+Direct Lua: tool_call exec_23race_lua(code="...")
+<!-- DIRECT_LUA_SECTION_END -->

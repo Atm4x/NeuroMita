@@ -723,3 +723,12 @@ class Events:
         TEST_RESULT = "embed_test_result"
         PRESET_SAVED = "embed_preset_saved"
         PRESET_DELETED = "embed_preset_deleted"
+
+    class Race23:
+        """События для 23 Race bridge"""
+        EXEC_LUA = "race23_exec_lua"
+        RESULT_READY = "race23_result_ready"
+        GENERATE_ACTION = "race23_generate_action"
+        CODE_GENERATED = "race23_code_generated"
+        BRIDGE_STATUS = "race23_bridge_status"
+        BRIDGE_RESET = "race23_bridge_reset"

@@ -368,6 +368,78 @@ def _on_beat_install_failed(gui, event) -> None:
         },
     )
 
+
+def _create_race23_preset_selector(gui) -> QWidget:
+    frame = QWidget()
+    frame.setObjectName("SettingRow")
+    layout = QHBoxLayout(frame)
+    layout.setContentsMargins(0, 2, 0, 2)
+    layout.setSpacing(10)
+
+    label = QLabel(_("Программист", "Programmer"))
+    label.setMinimumWidth(140)
+    label.setMaximumWidth(140)
+    label.setWordWrap(True)
+
+    combo = QComboBox()
+    combo.setSizePolicy(
+        combo.sizePolicy().horizontalPolicy(),
+        combo.sizePolicy().verticalPolicy(),
+    )
+
+    def _save_preset(_text):
+        preset_id = combo.currentData()
+        if preset_id is not None:
+            gui._save_setting("BRIDGE_23RACE_PROGRAMMER_PRESET", preset_id)
+
+    combo.currentIndexChanged.connect(_save_preset)
+
+    layout.addWidget(label)
+    layout.addWidget(combo, 1)
+
+    gui.race23_preset_combo = combo
+    gui.race23_preset_combo_frame = frame
+    return frame
+
+
+def _populate_race23_preset_combo(gui) -> None:
+    combo = getattr(gui, "race23_preset_combo", None)
+    if combo is None:
+        return
+    try:
+        results = gui.event_bus.emit_and_wait(
+            Events.ApiPresets.GET_PRESET_LIST, timeout=2.0
+        )
+        meta = results[0] if results else {}
+        builtin = meta.get("builtin", []) if isinstance(meta, dict) else []
+        custom = meta.get("custom", []) if isinstance(meta, dict) else []
+        presets = custom if custom else builtin
+    except Exception:
+        presets = []
+
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        saved_id = gui._get_setting("BRIDGE_23RACE_PROGRAMMER_PRESET")
+        saved_id_int = None
+        try:
+            saved_id_int = int(saved_id) if saved_id is not None else None
+        except (TypeError, ValueError):
+            saved_id_int = None
+
+        for preset in presets:
+            pid = preset.id if hasattr(preset, "id") else preset.get("id")
+            pname = preset.name if hasattr(preset, "name") else preset.get("name", f"Preset {pid}")
+            combo.addItem(str(pname), pid)
+            if saved_id_int is not None and pid == saved_id_int:
+                combo.setCurrentIndex(combo.count() - 1)
+
+        if combo.count() == 0:
+            combo.addItem(_("Нет пресетов", "No presets"), -1)
+    finally:
+        combo.blockSignals(False)
+
+
 def setup_game_controls(self, parent) -> None:
     _ensure_beat_install_hooks(self)
 
@@ -596,4 +668,59 @@ def setup_game_controls(self, parent) -> None:
         _('Бит-синхронизация (Beat This)', 'Beat Sync (Beat This)'),
         beat_sync_config
     )
+
+    # ── 23 Race Bridge ─────────────────────────────────────────────────────
+    race23_config = [
+        {
+            'label': _('Включить мост 23 Race', 'Enable 23 Race bridge'),
+            'key': 'ENABLE_23RACE_BRIDGE',
+            'type': 'checkbutton',
+            'default_checkbutton': False,
+            'tooltip': _(
+                'Позволяет Мите исполнять Lua-код в карте «23 Race Legion» и читать состояние игры.',
+                'Allows Mita to execute Lua code in the "23 Race Legion" map and read game state.',
+            ),
+        },
+        {
+            'label': _('Прямое исполнение Lua', 'Direct Lua execution'),
+            'key': 'ENABLE_23RACE_DIRECT_LUA',
+            'type': 'checkbutton',
+            'default_checkbutton': False,
+            'depends_on': 'ENABLE_23RACE_BRIDGE',
+            'tooltip': _(
+                'Мита может напрямую писать Lua-код (exec_23race_lua). Без этой галки — только через программиста.',
+                'Mita can write Lua code directly (exec_23race_lua). Without this — only via programmer.',
+            ),
+        },
+        {
+            'type': 'widget',
+            'factory': _create_race23_preset_selector,
+        },
+        {
+            'label': _('Постфикс моста', 'Bridge postfix'),
+            'key': 'BRIDGE_23RACE_POSTFIX',
+            'type': 'entry',
+            'default': 'mita',
+            'depends_on': 'ENABLE_23RACE_BRIDGE',
+            'tooltip': _(
+                'Постфикс для изоляции seq-номеров от других агентов. Менять, только если другой агент использует мост.',
+                'Postfix to isolate seq numbers from other agents. Change only if another agent uses the bridge.',
+            ),
+        },
+        {
+            'label': _('Статус моста:', 'Bridge status:'),
+            'type': 'text',
+        },
+    ]
+
+    create_settings_section(
+        self,
+        parent,
+        _('23 Race Bridge', '23 Race Bridge'),
+        race23_config,
+    )
+
+    # Populate preset combo after section is built
+    _populate_race23_preset_combo(self)
+
     _refresh_beat_sync_status(self)

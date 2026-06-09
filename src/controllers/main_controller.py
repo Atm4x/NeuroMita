@@ -33,6 +33,7 @@ from utils.pip_installer import PipInstaller
 from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
 from controllers.server_controller import ServerController
+from controllers.race_23_controller import Race23Controller
 
 
 class MainController:
@@ -133,6 +134,9 @@ class MainController:
         logger.notify("SpeechController успешно инициализирован.")
 
         self._init_server_controller()
+
+        self.race_23_controller = Race23Controller(self.settings)
+        logger.notify("Race23Controller успешно инициализирован.")
 
         self.chat_controller = ChatController(self.settings)
         logger.notify("ChatController успешно инициализирован.")

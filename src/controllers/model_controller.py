@@ -29,7 +29,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "exec_23race_lua", "generate_23race_action"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -37,6 +37,8 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "exec_23race_lua": False,
+    "generate_23race_action": False,
 }
 
 
@@ -103,8 +105,12 @@ class ModelController:
 
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
+        from managers.tools.builtin.exec_23race_lua import Exec23RaceLuaTool
+        from managers.tools.builtin.generate_23race_action import Generate23RaceActionTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
         self.model.tool_manager.register(ReminderTool())
+        self.model.tool_manager.register(Exec23RaceLuaTool())
+        self.model.tool_manager.register(Generate23RaceActionTool())
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()
@@ -1118,6 +1124,14 @@ class ModelController:
             n for n in _ALL_TOOLS_LIST
             if self.settings.get(f"TOOL_ENABLED_{n}", _DEFAULT_TOOL_ENABLED.get(n, False))
         ]
+
+        if self.settings.get("ENABLE_23RACE_BRIDGE", False):
+            if "generate_23race_action" not in _enabled_tools:
+                _enabled_tools.append("generate_23race_action")
+            if self.settings.get("ENABLE_23RACE_DIRECT_LUA", False):
+                if "exec_23race_lua" not in _enabled_tools:
+                    _enabled_tools.append("exec_23race_lua")
+
         if not _enabled_tools:
             _tools_on = False
 
@@ -1634,6 +1648,33 @@ class ModelController:
     # Structured Output processing
     # ---------------------------------------------------------------------
 
+    @staticmethod
+    def _repair_tool_call_json(visible_raw: str) -> str:
+        if not visible_raw.strip().startswith('{'):
+            return visible_raw
+        if '"tool_call"' not in visible_raw:
+            return visible_raw
+        import json as _json
+        try:
+            obj = _json.loads(visible_raw)
+        except Exception:
+            return visible_raw
+        if not obj.get("tool_call"):
+            return visible_raw
+        needs = {}
+        if "attitude_change" not in obj:
+            needs["attitude_change"] = 0
+        if "boredom_change" not in obj:
+            needs["boredom_change"] = 0
+        if "stress_change" not in obj:
+            needs["stress_change"] = 0
+        if "custom_fields" not in obj:
+            needs["custom_fields"] = {}
+        if needs:
+            obj.update(needs)
+            return _json.dumps(obj, ensure_ascii=False)
+        return visible_raw
+
     def _process_structured_output(
         self,
         visible_raw: str,
@@ -1664,13 +1705,13 @@ class ModelController:
         structured_model_cls=None,
     ) -> dict | None:
         try:
+            visible_raw = self._repair_tool_call_json(visible_raw)
             structured = parse_structured_response(visible_raw, model_cls=structured_model_cls)
         except StructuredResponseParseError as e:
             logger.error(
                 f"[ModelController] Failed to parse structured response for {char_id}: {e}. "
                 f"Falling back to legacy processing."
             )
-            # Fallback to legacy tag-based processing
             processed = char.process_response_nlp_commands(
                 visible_raw, self.settings.get("SAVE_MISSED_MEMORY", False)
             )
@@ -1920,6 +1961,8 @@ class ModelController:
         preset_id: int | None,
         enabled_tools: list,
         tool_depth: int,
+        image_source: str = "",
+        image_descriptions: dict | None = None,
         structured_model_cls=None,
     ) -> dict | None:
         """
