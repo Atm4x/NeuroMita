@@ -148,25 +148,34 @@ class Race23Controller:
         if not description:
             return "[generate_23race_action] Пустое описание."
 
-        try:
-            lua_code = self._generate_lua(description)
-        except Exception as e:
-            logger.error(f"[Race23] Code generation failed: {e}", exc_info=True)
-            return f"[generate_23race_action] Ошибка генерации кода: {e}"
+        MAX_PROGRAMMER_ATTEMPTS = 3
+        lua_code = None
+        last_error = None
 
-        if not lua_code:
-            return "[generate_23race_action] Нейросеть не сгенерировала код."
+        for attempt in range(MAX_PROGRAMMER_ATTEMPTS):
+            try:
+                lua_code = self._generate_lua(description, lua_code, last_error)
+            except Exception as e:
+                logger.error(f"[Race23] Code generation failed (attempt {attempt+1}): {e}", exc_info=True)
+                return f"[generate_23race_action] Ошибка генерации кода: {e}"
 
-        try:
-            ok, result = self.bridge_client.exec_lua(lua_code, timeout=30.0, retries=1)
-        except Exception as e:
-            return f"[generate_23race_action] Ошибка исполнения: {e}"
+            if not lua_code:
+                return "[generate_23race_action] Нейросеть не сгенерировала код."
 
-        if not ok:
-            return f"[generate_23race_action] Код:\n---\n{lua_code}\n---\nОшибка в игре: {result}"
-        return f"[generate_23race_action] Код:\n---\n{lua_code}\n---\nРезультат:\n{result}"
+            try:
+                ok, result = self.bridge_client.exec_lua(lua_code, timeout=30.0)
+            except Exception as e:
+                return f"[generate_23race_action] Ошибка исполнения: {e}"
 
-    def _generate_lua(self, description):
+            if ok:
+                return f"[generate_23race_action] Результат:\n{result}"
+
+            last_error = result
+            logger.warning(f"[Race23] Lua error (attempt {attempt+1}/{MAX_PROGRAMMER_ATTEMPTS}): {last_error[:200]}")
+
+        return f"[generate_23race_action] Код после {MAX_PROGRAMMER_ATTEMPTS} попыток:\n---\n{lua_code}\n---\nОшибка в игре: {last_error}"
+
+    def _generate_lua(self, description, previous_code=None, previous_error=None):
         system_prompt = _read_prompt("Common/23race_programmer_prompt.txt")
         if not system_prompt:
             logger.warning("[Race23] Programmer prompt file not found")
@@ -189,6 +198,8 @@ class Race23Controller:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        if previous_code and previous_error:
+            messages.append({"role": "user", "content": "This code:\n```lua\n" + previous_code + "\n```\nFailed with error: " + previous_error + "\n\nFix it and return ONLY the corrected ```lua\n...\n``` block."})
         messages.append({"role": "user", "content": description})
 
         caps = dict(preset.capabilities or {})
