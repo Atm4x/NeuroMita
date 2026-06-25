@@ -262,9 +262,26 @@ class PromptController:
         )
 
         try:
+            # Словарь перевода ID комнат в названия (основан на enum Rooms)
+            _ROOM_NAMES = {
+                0: "Kitchen",
+                1: "Main Hall",
+                2: "Bedroom",
+                3: "Toilet",
+                4: "Basement",
+                -1: "Unknown",
+            }
+
+            room_player_id = game_state.get("roomPlayer", -1)
+            room_mita_id = game_state.get("roomMita", -1)
+
+            player_room_str = _ROOM_NAMES.get(room_player_id, f"Room {room_player_id}")
+            mita_room_str = _ROOM_NAMES.get(room_mita_id, f"Room {room_mita_id}")
+
             character.set_variable("GAME_DISTANCE", float(game_state.get("distance", 0.0)))
-            character.set_variable("GAME_ROOM_PLAYER", game_state.get("roomPlayer", -1))
-            character.set_variable("GAME_ROOM_MITA", game_state.get("roomMita", -1))
+            character.set_variable("GAME_ROOM_PLAYER", player_room_str)
+            character.set_variable("GAME_ROOM_MITA", mita_room_str)
+
             character.set_variable("GAME_NEAR_OBJECTS", game_state.get("nearObjects", ""))
             character.set_variable("GAME_ACTUAL_INFO", game_state.get("actualInfo", ""))
         except Exception as e:
