@@ -397,9 +397,32 @@ from main_logger import logger
 from PyQt6.QtWidgets import QApplication
 import sys
 
+
+def _consume_startup_mode(argv: list[str]) -> str:
+    mode = str(os.environ.get("NEUROMITA_STARTUP_MODE", "full") or "full").strip().lower()
+    remaining = [argv[0]]
+
+    for arg in argv[1:]:
+        low = str(arg or "").strip().lower()
+        if low == "--gui-only":
+            mode = "gui_only"
+            continue
+        if low.startswith("--startup-mode="):
+            mode = low.split("=", 1)[1] or mode
+            continue
+        remaining.append(arg)
+
+    argv[:] = remaining
+
+    if mode in {"gui-only", "gui_only", "ui-only", "ui_only"}:
+        return "gui_only"
+    return "full"
+
+
 if __name__ == "__main__":
     logger.success("Функция main() запущена")
     try:
+        startup_mode = _consume_startup_mode(sys.argv)
         app = QApplication(sys.argv)
         logger.info("QApplication создан")
 
@@ -414,18 +437,19 @@ if __name__ == "__main__":
 
         # Создаем пустой объект для контроллера
         logger.info("Создаю MainController...")
-        controller = MainController(None)
+        controller = MainController(None, startup_mode=startup_mode)
         logger.info("MainController создан")
 
         # Инициализация сборщика данных для дообучения
-        try:
-            from managers.finetune_collector import FineTuneCollector
-            from managers.generation_input_collector import GenerationInputCollector
-            FineTuneCollector.instance = FineTuneCollector()
-            GenerationInputCollector.instance = GenerationInputCollector()
-            logger.info("FineTuneCollector инициализирован")
-        except Exception as _ft_init_err:
-            logger.warning(f"FineTuneCollector не инициализирован: {_ft_init_err}")
+        if startup_mode == "full":
+            try:
+                from managers.finetune_collector import FineTuneCollector
+                from managers.generation_input_collector import GenerationInputCollector
+                FineTuneCollector.instance = FineTuneCollector()
+                GenerationInputCollector.instance = GenerationInputCollector()
+                logger.info("FineTuneCollector инициализирован")
+            except Exception as _ft_init_err:
+                logger.warning(f"FineTuneCollector не инициализирован: {_ft_init_err}")
     
         logger.info("Создаю MainWindow...")
         main_win = MainWindow(controller.settings)

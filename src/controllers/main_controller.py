@@ -1,53 +1,31 @@
 import os
 import time
-from pathlib import Path
-from PyQt6.QtCore import QTimer
 
+from controllers.gui_fallback_controller import GuiFallbackController
 from controllers.gui_controller import GuiController
-from controllers.audio_controller import AudioController
-from controllers.telegram_controller import TelegramController
-from controllers.capture_controller import CaptureController
-from controllers.model_controller import ModelController
-from controllers.character_controller import CharacterController
-from controllers.speech_controller import SpeechController
 from controllers.settings_controller import SettingsController
-from controllers.chat_controller import ChatController
-from controllers.loop_controller import LoopController
-from controllers.task_controller import TaskController
-from controllers.api_presets_controller import ApiPresetsController
-from controllers.embedding_presets_controller import EmbeddingPresetsController
-from controllers.local_voice_controller import LocalVoiceController
-from controllers.prompt_controller import PromptController
-from controllers.history_controller import HistoryController
-from controllers.graph_controller import GraphController
-from controllers.voice_model_controller import VoiceModelController
-from controllers.install_controller import InstallController
-from controllers.installable_controller import InstallableController
-from controllers.protocols_controller import ProtocolsController
-from controllers.embedding_controller import EmbeddingController
-from controllers.ai_engine_controller import AIEngineController
 
 from main_logger import logger
-from utils.ffmpeg_installer import install_ffmpeg
 from utils.pip_installer import PipInstaller
 from core.events import get_event_bus, Events, Event, shutdown_event_bus
 
-from controllers.server_controller import ServerController
-
 
 class MainController:
-    def __init__(self, view):
+    def __init__(self, view, startup_mode: str = "full"):
         self.view = view
         self.event_bus = get_event_bus()
+        self.startup_mode = self._normalize_startup_mode(startup_mode)
+        self.backend_enabled = self.startup_mode == "full"
 
         self.dialog_active = False
+        self.gui_fallback_controller = None
+        self.loop_controller = None
 
-        self.loop_controller = LoopController()
         logger.notify("LoopController успешно инициализирован.")
 
         self.gui_controller = None
 
-        self.telegram_controller = TelegramController()
+        self.telegram_controller = None
         logger.notify("TelegramController успешно инициализирован.")
 
         try:
@@ -60,6 +38,41 @@ class MainController:
         except Exception as e:
             logger.info("Не удалось удачно получить из системных переменных все данные", e)
             self.settings = SettingsController("Settings/settings.json").settings
+
+        if not self.backend_enabled:
+            self.gui_fallback_controller = GuiFallbackController(self.settings)
+            logger.notify("GuiFallbackController initialized for GUI-only startup mode.")
+            self._subscribe_to_events()
+            logger.notify("MainController initialized in GUI-only mode.")
+            return
+
+        from controllers.ai_engine_controller import AIEngineController
+        from controllers.api_presets_controller import ApiPresetsController
+        from controllers.audio_controller import AudioController
+        from controllers.capture_controller import CaptureController
+        from controllers.character_controller import CharacterController
+        from controllers.chat_controller import ChatController
+        from controllers.embedding_controller import EmbeddingController
+        from controllers.embedding_presets_controller import EmbeddingPresetsController
+        from controllers.graph_controller import GraphController
+        from controllers.history_controller import HistoryController
+        from controllers.install_controller import InstallController
+        from controllers.installable_controller import InstallableController
+        from controllers.local_voice_controller import LocalVoiceController
+        from controllers.loop_controller import LoopController
+        from controllers.model_controller import ModelController
+        from controllers.prompt_controller import PromptController
+        from controllers.protocols_controller import ProtocolsController
+        from controllers.server_controller import ServerController
+        from controllers.speech_controller import SpeechController
+        from controllers.task_controller import TaskController
+        from controllers.telegram_controller import TelegramController
+        from controllers.voice_model_controller import VoiceModelController
+
+        self.loop_controller = LoopController()
+        logger.notify("LoopController initialized for full startup mode.")
+        self.telegram_controller = TelegramController()
+        logger.notify("TelegramController initialized for full startup mode.")
 
         try:
             self.pip_installer = PipInstaller(
@@ -142,6 +155,13 @@ class MainController:
         self._subscribe_to_events()
         logger.notify("MainController подписался на события")
 
+    @staticmethod
+    def _normalize_startup_mode(startup_mode: str | None) -> str:
+        mode = str(startup_mode or "full").strip().lower()
+        if mode in {"gui-only", "gui_only", "ui-only", "ui_only"}:
+            return "gui_only"
+        return "full"
+
     def _init_server_controller(self):
         # Старый серверный API (ServerControllerOld / server_old.py) удалён —
         # всегда используем новый. Настройка USE_NEW_API больше ни на что не
@@ -149,6 +169,7 @@ class MainController:
         if getattr(self, 'server_controller', None):
             return
 
+        from controllers.server_controller import ServerController
         self.server_controller = ServerController()
         logger.notify("ServerController (новый API) успешно инициализирован.")
 
@@ -157,7 +178,8 @@ class MainController:
             self.view = view
             self.gui_controller = GuiController(self, view)
             logger.notify("GuiController успешно инициализирован.")
-            self.settings_controller.load_api_settings(False)
+            if self.backend_enabled:
+                self.settings_controller.load_api_settings(False)
 
             self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
 
@@ -195,10 +217,14 @@ class MainController:
         except Exception as e:
             logger.error(f"Ошибка при остановке сервера: {e}", exc_info=True)
 
-        self.capture_controller.stop_screen_capture_thread()
-        self.capture_controller.stop_camera_capture_thread()
+        capture_controller = getattr(self, "capture_controller", None)
+        if capture_controller is not None:
+            capture_controller.stop_screen_capture_thread()
+            capture_controller.stop_camera_capture_thread()
 
-        self.audio_controller.delete_all_sound_files()
+        audio_controller = getattr(self, "audio_controller", None)
+        if audio_controller is not None:
+            audio_controller.delete_all_sound_files()
 
         try:
             if getattr(self, "ai_engine_controller", None):
@@ -206,7 +232,8 @@ class MainController:
         except Exception as e:
             logger.error(f"Ошибка при остановке AI engine: {e}", exc_info=True)
 
-        self.loop_controller.stop_loop()
+        if self.loop_controller is not None:
+            self.loop_controller.stop_loop()
 
         try:
             shutdown_event_bus()
