@@ -176,6 +176,11 @@ class MainController:
     def update_view(self, view):
         if not self.gui_controller:
             self.view = view
+            try:
+                setattr(view, "backend_enabled", bool(self.backend_enabled))
+                setattr(view, "startup_mode", self.startup_mode)
+            except Exception:
+                pass
             self.gui_controller = GuiController(self, view)
             logger.notify("GuiController успешно инициализирован.")
             if self.backend_enabled:

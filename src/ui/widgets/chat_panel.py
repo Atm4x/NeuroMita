@@ -247,6 +247,11 @@ def update_send_button_state(gui):
     if not getattr(gui, "user_entry", None) or not getattr(gui, "send_button", None):
         return
 
+    if not bool(getattr(gui, "backend_enabled", True)):
+        gui.send_button.setEnabled(False)
+        gui.send_button.setToolTip(_("Бэкенд отключён в режиме gui-only", "Backend is disabled in gui-only mode"))
+        return
+
     has_text = bool(gui.user_entry.toPlainText().strip())
     has_images = bool(getattr(gui, "staged_image_data", []))
 
@@ -260,6 +265,7 @@ def update_send_button_state(gui):
         has_auto_images = has_auto_images or bool(camera_frames and camera_frames[0])
 
     gui.send_button.setEnabled(has_text or has_images or has_auto_images)
+    gui.send_button.setToolTip(_("Отправить сообщение", "Send message"))
 
 
 def init_image_preview(gui):
