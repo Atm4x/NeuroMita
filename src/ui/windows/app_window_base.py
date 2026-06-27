@@ -204,7 +204,7 @@ class AppWindowBase(QMainWindow):
         self.prepare_stream_signal.connect(self._on_stream_start)
         self.finish_stream_signal.connect(self._on_stream_finish)
 
-        self.update_status_colors()
+        QTimer.singleShot(0, self.update_status_colors)
         QTimer.singleShot(1000, self._check_eula_and_guide)
 
         self.last_voice_model_selected = None

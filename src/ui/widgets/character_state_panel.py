@@ -268,7 +268,6 @@ class CharacterStatePanel(QWidget):
         except Exception:
             pass
 
-        self.refresh(rebuild=True)
 
     # ─────────────────────────────────────────────────────────────
     def _on_toggle_all(self, checked: bool) -> None:
