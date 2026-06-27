@@ -180,12 +180,10 @@ class AppWindowBase(QMainWindow):
         self.hide_status_signal.connect(self._hide_status_slot)
         self.pulse_error_signal.connect(self._pulse_error_slot)
 
+        self.settings_animation = None
         self.setup_ui()
         self.chat_delegate = ChatMessageDelegate()
-        
-        self.settings_animation = QPropertyAnimation(self.settings_overlay, b"maximumWidth")
-        self.settings_animation.setDuration(250)
-        self.settings_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self._ensure_settings_animation()
 
         self.chat_window.installEventFilter(self)
 
@@ -210,6 +208,22 @@ class AppWindowBase(QMainWindow):
         self.last_voice_model_selected = None
         self.current_local_voice_id = None
         self.model_loading_cancelled = False
+
+    def _ensure_settings_animation(self):
+        target = getattr(self, "settings_overlay", None) or self.centralWidget()
+        if target is None:
+            return None
+
+        if self.settings_animation is None:
+            self.settings_animation = QPropertyAnimation(target, b"maximumWidth")
+            self.settings_animation.setDuration(250)
+            self.settings_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            return self.settings_animation
+
+        if self.settings_animation.targetObject() is not target:
+            self.settings_animation.stop()
+            self.settings_animation.setTargetObject(target)
+        return self.settings_animation
 
     def _window_specs(self) -> dict:
         return {

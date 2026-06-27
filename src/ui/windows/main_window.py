@@ -71,6 +71,7 @@ class MainWindow(AppWindowBase):
         page = factory(self)
         self.page_map[page_key] = page
         self.page_stack.addWidget(page)
+        self._ensure_settings_animation()
         return page
 
     def _init_settings_containers(self):
@@ -84,12 +85,13 @@ class MainWindow(AppWindowBase):
         if page is not None:
             page.show_overview()
         try:
-            self.settings_animation.finished.disconnect(self._on_hide_animation_finished)
+            if self.settings_animation is not None:
+                self.settings_animation.finished.disconnect(self._on_hide_animation_finished)
         except TypeError:
             pass
 
     def show_settings_category(self, category, *, force: bool = False, subsection=None):
-        page = getattr(self, "settings_page", None)
+        page = self._ensure_main_page("settings")
         if page is not None:
             page.show_category(category, force=force, subsection=subsection)
 
