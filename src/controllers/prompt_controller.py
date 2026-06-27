@@ -261,15 +261,6 @@ class PromptController:
             else resolve_policy(model_event_type=str(event_type or "chat"))
         )
 
-        try:
-            character.set_variable("GAME_DISTANCE", float(game_state.get("distance", 0.0)))
-            character.set_variable("GAME_ROOM_PLAYER", game_state.get("roomPlayer", -1))
-            character.set_variable("GAME_ROOM_MITA", game_state.get("roomMita", -1))
-            character.set_variable("GAME_NEAR_OBJECTS", game_state.get("nearObjects", ""))
-            character.set_variable("GAME_ACTUAL_INFO", game_state.get("actualInfo", ""))
-        except Exception as e:
-            logger.warning(f"[PromptController] Не удалось обновить игровые переменные для {char_id}: {e}")
-
         game_state_prompt_content: Optional[str] = None
         try:
             if character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
@@ -283,6 +274,12 @@ class PromptController:
             character, event_type, separate_prompts, policy=policy,
             capabilities=capabilities,
         )
+
+        # Вывод Actual Info из Unity
+        actual_info = game_state.get("actualInfo", "")
+        if actual_info and str(actual_info).strip():
+            volatile_system_messages.insert(0, {"role": "system", "content": f"Other info: {actual_info}"})
+
         messages.extend(stable_system_messages)
 
         history_limited: List[Dict[str, Any]] = []
