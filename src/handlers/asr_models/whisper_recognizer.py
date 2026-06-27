@@ -506,7 +506,7 @@ class WhisperRecognizer(SpeechRecognizerInterface):
 
                         text = await self.transcribe(audio_to_process, sample_rate)
                         if text:
-                            await handle_voice_callback(text)
+                            await handle_voice_callback(text, audio_to_process, sample_rate)
                         else:
                             await self._save_failed_audio(audio_to_process, sample_rate)
 

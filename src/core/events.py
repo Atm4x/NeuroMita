@@ -542,6 +542,12 @@ class Events:
         ASR_MODEL_INIT_STARTED = "asr_model_init_started"
         GET_ASR_MODELS_GLOSSARY = "get_asr_models_glossary"
         GET_ASR_ENGINES_LIST = "get_asr_engines_list"
+
+        # Верификация спикера (засчитывать только голос пользователя)
+        ENROLL_SPEAKER = "enroll_speaker"            # записать образец голоса
+        SPEAKER_ENROLLED = "speaker_enrolled"        # образец записан (из воркера)
+        RESET_SPEAKER_PROFILE = "reset_speaker_profile"
+        GET_SPEAKER_STATUS = "get_speaker_status"
         
 
     class Capture:

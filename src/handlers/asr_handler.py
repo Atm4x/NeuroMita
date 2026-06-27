@@ -61,12 +61,20 @@ def _on_ai_engine_event(event: Event):
     if data.get("service") != "asr":
         return
     ev = str(data.get("event") or "")
-    if ev != "text":
-        return
     payload = data.get("data") if isinstance(data.get("data"), dict) else {}
-    text = str(payload.get("text") or "").strip()
-    if text:
-        get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {"text": text})
+
+    if ev == "text":
+        text = str(payload.get("text") or "").strip()
+        if text:
+            get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {"text": text})
+        return
+
+    if ev == "enrolled":
+        get_event_bus().emit(
+            getattr(Events.Speech, "SPEAKER_ENROLLED", "speaker_enrolled"),
+            {"ok": bool(payload.get("ok"))},
+        )
+        return
 
 
 _ASR_ENGINE_BRIDGE_REGISTERED = False
@@ -104,6 +112,11 @@ class SpeechRecognition:
     VOSK_SAMPLE_RATE = 16000
     CHUNK_SIZE = 512
     VAD_THRESHOLD = 0.5
+
+    # Верификация спикера (засчитывать только голос пользователя). Значения
+    # проставляет SpeechController из настроек перед запуском распознавания.
+    SPEAKER_VERIFY_ENABLED = False
+    SPEAKER_VERIFY_THRESHOLD = 0.70
     VAD_SILENCE_TIMEOUT_SEC = 0.15
     VAD_PRE_BUFFER_DURATION_SEC = 0.3
     MAX_SPEECH_DURATION_SEC = 30.0
@@ -423,6 +436,10 @@ class SpeechRecognition:
                     "microphone_index": int(device_id or 0),
                     "engine_settings": settings,
                     "vad": vad,
+                    "speaker": {
+                        "enabled": bool(SpeechRecognition.SPEAKER_VERIFY_ENABLED),
+                        "threshold": float(SpeechRecognition.SPEAKER_VERIFY_THRESHOLD),
+                    },
                 })
                 try:
                     # Загрузка модели на CUDA (GigaAM/Whisper + инициализация

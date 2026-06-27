@@ -14,13 +14,14 @@ from .base_controller import BaseController
 
 class MicrophoneSettingsController(BaseController):
     def __init__(self, main_controller, view):
-        self._bound_sig: tuple[int, int, int, int, int, int] | None = None
+        self._bound_sig: tuple[int, ...] | None = None
         super().__init__(main_controller, view)
 
     def subscribe_to_events(self):
         eb = self.event_bus
         eb.subscribe(Events.Install.TASK_FINISHED, self._on_install_finished, weak=False)
         eb.subscribe(Events.Install.TASK_FAILED, self._on_install_failed, weak=False)
+        eb.subscribe(Events.Speech.SPEAKER_ENROLLED, self._on_speaker_enrolled_refresh, weak=False)
 
         self._ui(self._bind_if_ready)
 
@@ -36,6 +37,11 @@ class MicrophoneSettingsController(BaseController):
             "mic_active_checkbox",
             "mic_instant_checkbox",
             "mic_mute_while_speaking_checkbox",
+            "speaker_verify_checkbox",
+            "speaker_enroll_button",
+            "speaker_reset_button",
+            "speaker_threshold_spinbox",
+            "speaker_status_label",
             "vad_apply_button",
         )
         for n in need:
@@ -82,6 +88,20 @@ class MicrophoneSettingsController(BaseController):
 
         safe_disconnect(v.mic_mute_while_speaking_checkbox.stateChanged, self._on_mute_while_speaking_toggled)
         v.mic_mute_while_speaking_checkbox.stateChanged.connect(self._on_mute_while_speaking_toggled)
+
+        safe_disconnect(v.speaker_verify_checkbox.stateChanged, self._on_speaker_verify_toggled)
+        v.speaker_verify_checkbox.stateChanged.connect(self._on_speaker_verify_toggled)
+
+        safe_disconnect(v.speaker_enroll_button.clicked, self._on_speaker_enroll_clicked)
+        v.speaker_enroll_button.clicked.connect(self._on_speaker_enroll_clicked)
+
+        safe_disconnect(v.speaker_reset_button.clicked, self._on_speaker_reset_clicked)
+        v.speaker_reset_button.clicked.connect(self._on_speaker_reset_clicked)
+
+        safe_disconnect(v.speaker_threshold_spinbox.valueChanged, self._on_speaker_threshold_changed)
+        v.speaker_threshold_spinbox.valueChanged.connect(self._on_speaker_threshold_changed)
+
+        self._refresh_speaker_status()
 
         if hasattr(v, "asr_manage_button") and v.asr_manage_button:
             safe_disconnect(v.asr_manage_button.clicked, self._open_asr_glossary)
@@ -447,6 +467,48 @@ class MicrophoneSettingsController(BaseController):
 
     def _on_mute_while_speaking_toggled(self, state: int):
         self._save_setting("MIC_MUTE_WHILE_SPEAKING", bool(state))
+
+    def _on_speaker_verify_toggled(self, state: int):
+        self._save_setting("SPEAKER_VERIFY_ENABLED", bool(state))
+
+    def _on_speaker_enroll_clicked(self):
+        self.event_bus.emit(Events.Speech.ENROLL_SPEAKER, {})
+
+    def _on_speaker_reset_clicked(self):
+        self.event_bus.emit(Events.Speech.RESET_SPEAKER_PROFILE, {})
+        self._refresh_speaker_status()
+
+    def _on_speaker_threshold_changed(self, value: float):
+        self._save_setting("SPEAKER_VERIFY_THRESHOLD", round(float(value), 2))
+
+    def _on_speaker_enrolled_refresh(self, _event: Event):
+        self._ui(self._refresh_speaker_status)
+
+    def _refresh_speaker_status(self):
+        v = self.view
+        if not v or not hasattr(v, "speaker_status_label"):
+            return
+        available = False
+        enrolled = False
+        try:
+            res = self.event_bus.emit_and_wait(Events.Speech.GET_SPEAKER_STATUS, timeout=1.0)
+            data = res[0] if res else {}
+            if isinstance(data, dict):
+                available = bool(data.get("available"))
+                enrolled = bool(data.get("enrolled"))
+        except Exception:
+            pass
+
+        if not available:
+            text = _("Модель не установлена (AI Hub → ASR)", "Model not installed (AI Hub → ASR)")
+        elif enrolled:
+            text = _("Голос записан", "Voice enrolled")
+        else:
+            text = _("Голос не записан", "Voice not enrolled")
+        try:
+            v.speaker_status_label.setText(text)
+        except Exception:
+            pass
 
     def _is_asr_task(self, data: dict) -> bool:
         if not isinstance(data, dict):

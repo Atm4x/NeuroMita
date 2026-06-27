@@ -76,6 +76,11 @@ class SpeechController:
         eb.subscribe(Events.Speech.SET_INSTANT_SEND_STATUS, self._on_set_instant_send_status, weak=False)
         eb.subscribe(Events.Speech.SPEECH_TEXT_RECOGNIZED, self._on_speech_text_recognized, weak=False)
         eb.subscribe(Events.Audio.MITA_SPEAKING_WINDOW, self._on_mita_speaking_window, weak=False)
+
+        eb.subscribe(Events.Speech.ENROLL_SPEAKER, self._on_enroll_speaker, weak=False)
+        eb.subscribe(Events.Speech.RESET_SPEAKER_PROFILE, self._on_reset_speaker_profile, weak=False)
+        eb.subscribe(Events.Speech.GET_SPEAKER_STATUS, self._on_get_speaker_status, weak=False)
+        eb.subscribe(Events.Speech.SPEAKER_ENROLLED, self._on_speaker_enrolled, weak=False)
         eb.subscribe(Events.Speech.GET_MIC_STATUS, self._on_get_mic_status, weak=False)
         eb.subscribe(Events.Speech.GET_USER_INPUT, self._on_get_user_input, weak=False)
 
@@ -132,6 +137,12 @@ class SpeechController:
             SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC = float(self.settings.get("VAD_SILENCE_TIMEOUT_SEC", SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC))
             SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC = float(self.settings.get("VAD_PRE_BUFFER_DURATION_SEC", SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC))
             SpeechRecognition.MAX_SPEECH_DURATION_SEC = float(self.settings.get("MAX_SPEECH_DURATION_SEC", SpeechRecognition.MAX_SPEECH_DURATION_SEC))
+        except Exception:
+            pass
+
+        try:
+            SpeechRecognition.SPEAKER_VERIFY_ENABLED = bool(self.settings.get("SPEAKER_VERIFY_ENABLED", False))
+            SpeechRecognition.SPEAKER_VERIFY_THRESHOLD = float(self.settings.get("SPEAKER_VERIFY_THRESHOLD", 0.70))
         except Exception:
             pass
 
@@ -222,6 +233,19 @@ class SpeechController:
                 SpeechRecognition.MAX_SPEECH_DURATION_SEC = float(value)
             except Exception:
                 pass
+
+        elif key in ("SPEAKER_VERIFY_ENABLED", "SPEAKER_VERIFY_THRESHOLD"):
+            try:
+                if key == "SPEAKER_VERIFY_ENABLED":
+                    SpeechRecognition.SPEAKER_VERIFY_ENABLED = bool(value)
+                else:
+                    SpeechRecognition.SPEAKER_VERIFY_THRESHOLD = float(value)
+            except Exception:
+                pass
+            # Конфиг спикера передаётся воркеру при старте — чтобы применить
+            # на лету, перезапускаем активное распознавание.
+            if self.mic_recognition_active:
+                self.events_bus.emit(Events.Speech.RESTART_SPEECH_RECOGNITION, {'device_id': self.device_id})
 
     def _start_maybe_install_async(self):
         """Run the (potentially slow) ASR start off the caller's thread.
@@ -406,6 +430,105 @@ class SpeechController:
 
     def _is_mita_speaking(self) -> bool:
         return self._mita_speaking or time.monotonic() < self._mita_speaking_until
+
+    # ——— верификация спикера
+    def _on_enroll_speaker(self, _event: Event):
+        """Записать образец голоса пользователя из следующей фразы.
+
+        Требует активного распознавания (образец берётся из live-потока ASR) и
+        нейронного движка (не google) — там, где работает верификатор."""
+        if not self.mic_recognition_active:
+            self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
+                'title': _('Включите микрофон', 'Enable microphone'),
+                'message': _(
+                    'Сначала включите распознавание (нейронный движок), затем запишите голос и произнесите фразу.',
+                    'Enable recognition (a neural engine) first, then record your voice and say a phrase.'
+                )
+            })
+            return
+
+        try:
+            from handlers.asr_models.speaker_verifier import SpeakerVerifier
+            available = bool(SpeakerVerifier.is_available())
+        except Exception:
+            available = False
+        if not available:
+            self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
+                'title': _('Требуется установка', 'Installation required'),
+                'message': _(
+                    'Установите компонент «Распознавание спикера» в AI Hub (раздел ASR).',
+                    'Install the "Speaker verification" component in AI Hub (ASR section).'
+                )
+            })
+            self.events_bus.emit(Events.GUI.SHOW_WINDOW, {"window_id": "ai_hub", "payload": {"category": "asr"}})
+            return
+
+        eng = SpeechRecognition._get_ai_engine()
+        if not eng:
+            self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
+                'title': _('Недоступно', 'Unavailable'),
+                'message': _(
+                    'Запись голоса доступна только с нейронными движками (GigaAM/Whisper), не с Google.',
+                    'Voice enrollment is available only with neural engines (GigaAM/Whisper), not Google.'
+                )
+            })
+            return
+
+        try:
+            eng.call("asr", "enroll_next", {})
+            logger.info("Speaker enrollment: ждём следующую фразу пользователя...")
+        except Exception as e:
+            logger.error(f"Speaker enroll error: {e}")
+
+    def _on_speaker_enrolled(self, event: Event):
+        ok = bool((event.data or {}).get("ok"))
+        if ok:
+            logger.info("Speaker enrollment: образец голоса сохранён.")
+            self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
+                'title': _('Готово', 'Done'),
+                'message': _('Голос записан. Теперь можно включить «Только мой голос».',
+                             'Voice recorded. You can now enable "Only my voice".')
+            })
+        else:
+            self.events_bus.emit(Events.GUI.SHOW_INFO_MESSAGE, {
+                'title': _('Не получилось', 'Failed'),
+                'message': _('Не удалось записать голос. Скажите фразу подлиннее и попробуйте снова.',
+                             'Could not record the voice. Say a longer phrase and try again.')
+            })
+
+    def _on_reset_speaker_profile(self, _event: Event):
+        # Удаляем профиль и в основном процессе (на случай неактивного воркера),
+        # и просим воркер сбросить кэш в памяти.
+        try:
+            from handlers.asr_models.speaker_verifier import SpeakerVerifier
+            SpeakerVerifier().reset()
+        except Exception as e:
+            logger.error(f"Speaker reset error: {e}")
+        try:
+            eng = SpeechRecognition._get_ai_engine()
+            if eng:
+                eng.call("asr", "speaker_reset", {})
+        except Exception:
+            pass
+
+    def _on_get_speaker_status(self, event: Event):
+        data = event.data or {}
+        cb = data.get("callback")
+        try:
+            from handlers.asr_models.speaker_verifier import SpeakerVerifier, profile_exists
+            res = {
+                "available": bool(SpeakerVerifier.is_available()),
+                "enrolled": bool(profile_exists()),
+            }
+        except Exception:
+            res = {"available": False, "enrolled": False}
+        if cb:
+            try:
+                cb(res, None)
+            except Exception:
+                pass
+            return None
+        return res
 
     def _on_speech_text_recognized(self, event: Event):
         text = (event.data or {}).get('text', '').strip()

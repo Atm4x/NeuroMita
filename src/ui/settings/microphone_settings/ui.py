@@ -107,6 +107,44 @@ def build_microphone_settings_ui(self, parent_layout):
     ))
     root_lay.addWidget(make_row(_("Не слышать Миту", "Ignore Mita's voice"), self.mic_mute_while_speaking_checkbox, label_w))
 
+    # Верификация спикера — засчитывать только голос пользователя.
+    self.speaker_verify_checkbox = QCheckBox("")
+    self.speaker_verify_checkbox.setChecked(bool(self.settings.get("SPEAKER_VERIFY_ENABLED", False)))
+    self.speaker_verify_checkbox.setToolTip(_(
+        "Засчитывать только ваш голос (по нейросети). Нужно один раз записать образец. "
+        "Работает с нейронными движками (GigaAM/Whisper), не с Google.",
+        "Recognize only your voice (neural). Requires a one-time enrollment. "
+        "Works with neural engines (GigaAM/Whisper), not Google."
+    ))
+    root_lay.addWidget(make_row(_("Только мой голос", "Only my voice"), self.speaker_verify_checkbox, label_w))
+
+    self.speaker_enroll_button = QPushButton(_("Записать мой голос", "Record my voice"))
+    self.speaker_enroll_button.setToolTip(_(
+        "Нажмите и произнесите фразу — голос будет сохранён как образец.",
+        "Click and say a phrase — your voice will be saved as a reference."
+    ))
+    root_lay.addWidget(make_row(_("Образец голоса", "Voice sample"), self.speaker_enroll_button, label_w))
+
+    self.speaker_reset_button = QPushButton(_("Сбросить голос", "Reset voice"))
+    self.speaker_reset_button.setToolTip(_("Удалить записанный образец голоса.", "Delete the recorded voice sample."))
+    root_lay.addWidget(make_row("", self.speaker_reset_button, label_w))
+
+    self.speaker_threshold_spinbox = QDoubleSpinBox()
+    self.speaker_threshold_spinbox.setRange(0.50, 0.95)
+    self.speaker_threshold_spinbox.setSingleStep(0.01)
+    self.speaker_threshold_spinbox.setDecimals(2)
+    self.speaker_threshold_spinbox.setValue(float(self.settings.get("SPEAKER_VERIFY_THRESHOLD", 0.70)))
+    self.speaker_threshold_spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+    self.speaker_threshold_spinbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    self.speaker_threshold_spinbox.setToolTip(_(
+        "Порог похожести голоса: выше — строже (можно отсечь и себя), ниже — мягче.",
+        "Voice similarity threshold: higher is stricter (may reject you too), lower is softer."
+    ))
+    root_lay.addWidget(make_row(_("Порог голоса", "Voice threshold"), self.speaker_threshold_spinbox, label_w))
+
+    self.speaker_status_label = QLabel("—")
+    root_lay.addWidget(make_row(_("Статус голоса", "Voice status"), self.speaker_status_label, label_w))
+
     # 5) Статус (как раньше) — под кнопками
     self.asr_init_status = QLabel("—")
     root_lay.addWidget(make_row(_("Статус", "Status"), self.asr_init_status, label_w))

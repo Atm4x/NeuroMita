@@ -28,6 +28,11 @@ class ASRService:
         self._pip_installer = None
         self._logger = None
 
+        # Верификация спикера (засчитывать только голос пользователя).
+        self._speaker = None                 # SpeakerVerifier | None
+        self._speaker_enabled: bool = False
+        self._enroll_next: bool = False      # следующий сегмент — образец голоса
+
     async def shutdown(self):
         await self._stop_live_internal()
 
@@ -39,6 +44,35 @@ class ASRService:
 
         if m == "get_status":
             return {"running": bool(self._active)}
+
+        if m == "enroll_next":
+            # Следующий распознанный сегмент будет использован как образец
+            # голоса пользователя (см. _handle_text). Требует активного ASR.
+            self._enroll_next = True
+            return True
+
+        if m == "speaker_reset":
+            try:
+                from handlers.asr_models.speaker_verifier import SpeakerVerifier
+                ok = SpeakerVerifier().reset()
+            except Exception:
+                ok = False
+            if self._speaker is not None:
+                try:
+                    self._speaker.reset()
+                except Exception:
+                    pass
+            return bool(ok)
+
+        if m == "get_speaker_status":
+            try:
+                from handlers.asr_models.speaker_verifier import SpeakerVerifier, profile_exists
+                return {
+                    "available": bool(SpeakerVerifier.is_available()),
+                    "enrolled": bool(profile_exists()),
+                }
+            except Exception:
+                return {"available": False, "enrolled": False}
 
         if m == "start_live":
             engine_id = str(payload.get("engine_id") or "google").strip()
@@ -52,6 +86,9 @@ class ASRService:
             silence_timeout = float(vad_cfg.get("silence_timeout", 0.15) or 0.15)
             pre_buffer_duration = float(vad_cfg.get("pre_buffer_duration", 0.3) or 0.3)
             max_speech_duration = float(vad_cfg.get("max_speech_duration", 30.0) or 30.0)
+
+            spk_cfg = payload.get("speaker") if isinstance(payload.get("speaker"), dict) else {}
+            self._setup_speaker(spk_cfg)
 
             await self._stop_live_internal()
 
@@ -118,8 +155,32 @@ class ASRService:
         self._active = True
         self.emit_event("status", {"running": True})
 
-        async def _handle_text(text: str):
+        async def _handle_text(text, audio=None, sample_rate=16000):
             t = (text or "").strip()
+
+            # Энроллмент: текущий сегмент — образец голоса пользователя.
+            if self._enroll_next and audio is not None and self._speaker is not None:
+                self._enroll_next = False
+                ok = False
+                try:
+                    ok = bool(self._speaker.enroll(audio, sample_rate))
+                except Exception:
+                    ok = False
+                self.emit_event("enrolled", {"ok": ok})
+                # Образец в чат не отправляем.
+                return
+
+            # Гейт: засчитываем только голос пользователя. На неопределённости
+            # (accept() вернул None — нет профиля / коротко / нет модели) —
+            # пропускаем, чтобы не съесть речь.
+            if self._speaker_enabled and self._speaker is not None and audio is not None:
+                try:
+                    decision = self._speaker.accept(audio, sample_rate)
+                except Exception:
+                    decision = None
+                if decision is False:
+                    return
+
             if t:
                 self.emit_event("text", {"text": t})
 
@@ -173,6 +234,44 @@ class ASRService:
 
         self._unload_vad_model()
         self.emit_event("status", {"running": False})
+
+    def _setup_speaker(self, cfg: dict):
+        """Подготовить верификатор спикера по конфигу из start_live payload."""
+        self._speaker_enabled = bool(cfg.get("enabled"))
+        try:
+            threshold = float(cfg.get("threshold") or 0.0)
+        except Exception:
+            threshold = 0.0
+
+        # Энроллмент нужен даже при выключенном гейте, поэтому создаём
+        # верификатор, если модель в принципе доступна.
+        try:
+            from handlers.asr_models.speaker_verifier import SpeakerVerifier
+            if not SpeakerVerifier.is_available():
+                self._speaker = None
+                if self._logger is None:
+                    from main_logger import logger as _logger
+                    self._logger = _logger
+                if self._speaker_enabled:
+                    self._logger.warning(
+                        "Speaker verification включена, но resemblyzer не установлен — "
+                        "поставьте компонент «Распознавание спикера» в AI Hub (раздел ASR)."
+                    )
+                return
+            if self._logger is None:
+                from main_logger import logger as _logger
+                self._logger = _logger
+            kwargs = {"logger": self._logger}
+            if threshold > 0:
+                kwargs["threshold"] = threshold
+            self._speaker = SpeakerVerifier(**kwargs)
+        except Exception as e:
+            self._speaker = None
+            try:
+                from main_logger import logger as _logger
+                _logger.error(f"Speaker verifier setup failed: {e}")
+            except Exception:
+                pass
 
     async def _get_vad_model(self):
         if self._vad_model is not None:
