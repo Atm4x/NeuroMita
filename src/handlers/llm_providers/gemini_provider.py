@@ -206,6 +206,16 @@ class GeminiProvider(BaseProvider):
         if gen_cfg:
             data["generationConfig"] = gen_cfg
 
+        # Встроенный поиск Gemini (Grounding with Google Search).
+        if req.extra.get("gemini_google_search"):
+            data.setdefault("tools", []).append({"google_search": {}})
+            if caps.get("structured_output", False):
+                logger.warning(
+                    "[GeminiProvider] google_search включён вместе со structured output. "
+                    "Совместимо только на Gemini 3+; на моделях 2.5 и ниже запрос вернёт ошибку."
+                )
+            logger.info("[GeminiProvider] Google Search grounding enabled (tools:[google_search])")
+
         need_stream = req.stream
 
         headers = {"Content-Type": "application/json"}

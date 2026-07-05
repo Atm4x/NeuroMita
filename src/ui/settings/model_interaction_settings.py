@@ -122,6 +122,17 @@ def setup_model_interaction_controls(self, parent):
                      'If toggle is off — budget is dynamic (default). '
                      'Requires "Enable thinking mode" to be enabled.')},
 
+        {'label': _('Встроенный поиск Gemini (grounding)', 'Gemini built-in search (grounding)'),
+         'key': 'GEMINI_GOOGLE_SEARCH', 'type': 'checkbutton', 'default_checkbutton': False,
+         'tooltip': _('Включает нативный поиск Google внутри модели Gemini (Grounding with Google Search). '
+                      'Модель сама решает, когда сходить в поиск. Это НЕ наш тул "Google поиск" (тому нужен API-ключ). '
+                      'Совмещение со структурированным ответом работает только на Gemini 3+; '
+                      'на моделях 2.5 и ниже запрос вернётся с ошибкой.',
+                      'Enables Google native search inside the Gemini model (Grounding with Google Search). '
+                      'The model decides on its own when to search. This is NOT our "Google Search" tool (that needs an API key). '
+                      'Combining it with structured output works only on Gemini 3+; '
+                      'on 2.5 and older models the request will fail.')},
+
         {'label': _('Штраф присутствия', 'Presence penalty'),
         'key': 'MODEL_PRESENCE_PENALTY',
         'type': 'entry',
