@@ -59,9 +59,10 @@ Yandex XML (актуально для рус.), ddgs/DDG (уже есть).
       ошибке/пусто откатывается на DDG-цепочку. Поле URL в UI. Публичные инстансы часто
       блокируют JSON для ботов — фича для своего/доверенного инстанса.
 
-- [ ] **P5. Tavily-тул** (opt-in, ключ; лучшее качество за деньги/free-tier).
-      Новый `tavily_search` тул: `api.tavily.com/search`, ключ `TAVILY_API_KEY`.
-      Регистрация + галка `TOOL_ENABLED_tavily` + поле ключа в UI. Автоскип без ключа.
+- [x] **P5. Tavily-тул** (opt-in, ключ; лучшее качество за деньги/free-tier).
+      `tavily_search`: `api.tavily.com/search` (Bearer `TAVILY_API_KEY`), выжимки + опц.
+      краткий ответ (`TAVILY_INCLUDE_ANSWER`), `search_depth` basic/advanced. Регистрация +
+      галка `TOOL_ENABLED_tavily_search` + поле ключа в UI. Без ключа — внятная ошибка.
 
 - [ ] **P6. Единый формат выдачи + доку** (полировка).
       Привести `google_search` к общему формату (`link` → `url`), краткий раздел в

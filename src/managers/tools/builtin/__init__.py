@@ -4,5 +4,6 @@ from .google_search import GoogleSearchTool
 from .web_read import WebPageReaderTool
 from .web_search import WebSearchTool
 from .wikipedia_search import WikipediaSearchTool
+from .tavily_search import TavilySearchTool
 
-__all__ = ["CalculatorTool", "WebPageReaderTool", "WebSearchTool", "GoogleSearchTool", "WikipediaSearchTool"]
+__all__ = ["CalculatorTool", "WebPageReaderTool", "WebSearchTool", "GoogleSearchTool", "WikipediaSearchTool", "TavilySearchTool"]
