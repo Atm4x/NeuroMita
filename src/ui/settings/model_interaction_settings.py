@@ -184,6 +184,12 @@ def setup_model_interaction_controls(self, parent):
         {'label': _('Google поиск', 'Google Search'), 'key': 'TOOL_ENABLED_google_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Включить инструмент "Google Search" (требует API ключ)', 'Enable the Google Search tool (requires API key)')},
+        {'label': _('Википедия', 'Wikipedia'), 'key': 'TOOL_ENABLED_wikipedia_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Включить инструмент "Википедия": быстрые фактические выжимки со ссылками. '
+                      'Бесплатно, без ключа и лимитов.',
+                      'Enable the Wikipedia tool: quick factual summaries with links. '
+                      'Free, no key or limits.')},
         {'label': _('Чтение страниц', 'Web Reader'), 'key': 'TOOL_ENABLED_web_reader',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Включить инструмент "Чтение веб-страниц"', 'Enable the Web Reader tool')},

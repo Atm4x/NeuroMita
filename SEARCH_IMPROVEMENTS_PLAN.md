@@ -48,9 +48,10 @@ Yandex XML (актуально для рус.), ddgs/DDG (уже есть).
 
 Порядок: от простого/самодостаточного к более крупному. Каждая — коммит+пуш.
 
-- [ ] **P3. Wikipedia-тул** (keyless, быстрые факты).
-      Новый `wikipedia_search` тул: REST API Википедии (`ru`+`en`), summary + ссылка.
-      Регистрация в `tool_manager`, `_ALL_TOOLS_LIST`, галка в UI. Бесплатно, без лимитов.
+- [x] **P3. Wikipedia-тул** (keyless, быстрые факты).
+      `wikipedia_search`: MediaWiki API (`generator=search` + intro-extracts), язык из
+      настроек `WIKIPEDIA_LANG` (ru) с фолбэком на en, обрезка выжимки. Зарегистрирован,
+      галка `TOOL_ENABLED_wikipedia_search` в UI.
 
 - [ ] **P4. SearXNG-бэкенд для `web_search`** (главный апгрейд качества без ключей).
       Настройка `WEB_SEARCH_SEARXNG_URL` (инстанс). Если задан — запрос к SearXNG
