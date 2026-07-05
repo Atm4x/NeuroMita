@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import requests
 
@@ -31,6 +32,15 @@ class GeminiProvider(BaseProvider):
         if "gemma" in m and "gemini" not in m:
             return False
         return True
+
+    def _native_search_supports_structured(self, model: str) -> bool:
+        """Умеет ли модель совмещать встроенный поиск (grounding) со structured output.
+        Gemini 3+ умеет; 2.5 и ниже — нет (controlled generation несовместим с поиском)."""
+        m = (model or "").lower()
+        match = re.search(r"gemini-(\d+)", m)
+        if match:
+            return int(match.group(1)) >= 3
+        return False
 
     def _system_parts_to_text(self, system_parts: list) -> str:
         chunks = []
@@ -188,33 +198,40 @@ class GeminiProvider(BaseProvider):
         gen_cfg = self._map_unified_params_to_generation_config(req.extra, req.model)
 
         caps = req.capabilities or {}
+        use_native_search = bool(req.extra.get("native_web_search"))
+        # На части моделей встроенный поиск несовместим с controlled generation
+        # (responseSchema/mimeType). Тогда отдаём JSON только через промпт + мягкий парсер.
+        search_blocks_structured = use_native_search and not self._native_search_supports_structured(req.model)
+
         if caps.get("structured_output", False):
-            gen_cfg["responseMimeType"] = "application/json"
-            mode = caps.get("structured_output_mode", "gemini_schema")
-            if mode != "gemini_prompt":
-                model_cls = req.structured_model or StructuredResponse
-                has_custom = bool(caps.get("has_custom_params")) or bool(caps.get("custom_params"))
-                excl = set() if has_custom else {"custom_fields"}
-                if not caps.get("schema_reasoning", True):
-                    excl.add("reasoning")
-                schema = model_cls.gemini_schema_dict(exclude_fields=excl or None)
-                gen_cfg["responseJsonSchema"] = schema
-                logger.debug("[GeminiProvider] Structured output: responseJsonSchema passed (gemini_schema mode)")
+            if search_blocks_structured:
+                logger.warning(
+                    "[GeminiProvider] Встроенный поиск несовместим со structured output на модели %s — "
+                    "JSON только через промпт (без responseSchema/mimeType), парсер добирает.",
+                    req.model,
+                )
             else:
-                logger.debug("[GeminiProvider] Structured output: prompt-guided only (gemini_prompt mode)")
+                gen_cfg["responseMimeType"] = "application/json"
+                mode = caps.get("structured_output_mode", "gemini_schema")
+                if mode != "gemini_prompt":
+                    model_cls = req.structured_model or StructuredResponse
+                    has_custom = bool(caps.get("has_custom_params")) or bool(caps.get("custom_params"))
+                    excl = set() if has_custom else {"custom_fields"}
+                    if not caps.get("schema_reasoning", True):
+                        excl.add("reasoning")
+                    schema = model_cls.gemini_schema_dict(exclude_fields=excl or None)
+                    gen_cfg["responseJsonSchema"] = schema
+                    logger.debug("[GeminiProvider] Structured output: responseJsonSchema passed (gemini_schema mode)")
+                else:
+                    logger.debug("[GeminiProvider] Structured output: prompt-guided only (gemini_prompt mode)")
 
         if gen_cfg:
             data["generationConfig"] = gen_cfg
 
-        # Встроенный поиск Gemini (Grounding with Google Search).
-        if req.extra.get("gemini_google_search"):
+        # Встроенный веб-поиск модели (у Gemini — Grounding with Google Search).
+        if use_native_search:
             data.setdefault("tools", []).append({"google_search": {}})
-            if caps.get("structured_output", False):
-                logger.warning(
-                    "[GeminiProvider] google_search включён вместе со structured output. "
-                    "Совместимо только на Gemini 3+; на моделях 2.5 и ниже запрос вернёт ошибку."
-                )
-            logger.info("[GeminiProvider] Google Search grounding enabled (tools:[google_search])")
+            logger.info("[GeminiProvider] Встроенный веб-поиск включён (google_search grounding)")
 
         need_stream = req.stream
 

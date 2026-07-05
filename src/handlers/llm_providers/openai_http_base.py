@@ -187,6 +187,10 @@ class OpenAIHTTPProviderBase(BaseProvider):
             session_id = str((req.extra or {}).get("openrouter_session_id") or "").strip()
             if session_id:
                 payload["session_id"] = session_id
+            # Встроенный веб-поиск OpenRouter (плагин web). Работает препроцессингом,
+            # совместим со structured output — отдельного fallback не требует.
+            if bool((req.extra or {}).get("native_web_search")):
+                payload.setdefault("plugins", []).append({"id": "web"})
 
         if self._supports_structured_output(req):
             rf_mode = (req.capabilities or {}).get("structured_output_mode", "json_schema")

@@ -72,10 +72,10 @@ def build_unified_generation_params(
     if (bool(settings.get("USE_GEMINI_THINKING_BUDGET")) or "gemini_thinking_budget" in force_params) and gemini_thinking_budget is not None:
         params["gemini_thinking_budget"] = int(gemini_thinking_budget)
 
-    # Встроенный поиск Gemini (Grounding with Google Search). Глобальная галка,
-    # провайдер сам добавит tools:[{google_search:{}}] в тело запроса.
-    if bool(settings.get("GEMINI_GOOGLE_SEARCH", False)):
-        params["gemini_google_search"] = True
+    # Встроенный в модель веб-поиск (Gemini grounding, OpenRouter web-плагин и т.п.).
+    # Провайдер-специфичный маппинг делают сами провайдеры по этому единому флагу.
+    if bool(settings.get("NATIVE_WEB_SEARCH", False)):
+        params["native_web_search"] = True
 
     params = filter_jsonable_params(params)
     params = _strip_nuls_in_strings(params)

@@ -122,16 +122,18 @@ def setup_model_interaction_controls(self, parent):
                      'If toggle is off — budget is dynamic (default). '
                      'Requires "Enable thinking mode" to be enabled.')},
 
-        {'label': _('Встроенный поиск Gemini (grounding)', 'Gemini built-in search (grounding)'),
-         'key': 'GEMINI_GOOGLE_SEARCH', 'type': 'checkbutton', 'default_checkbutton': False,
-         'tooltip': _('Включает нативный поиск Google внутри модели Gemini (Grounding with Google Search). '
-                      'Модель сама решает, когда сходить в поиск. Это НЕ наш тул "Google поиск" (тому нужен API-ключ). '
-                      'Совмещение со структурированным ответом работает только на Gemini 3+; '
-                      'на моделях 2.5 и ниже запрос вернётся с ошибкой.',
-                      'Enables Google native search inside the Gemini model (Grounding with Google Search). '
-                      'The model decides on its own when to search. This is NOT our "Google Search" tool (that needs an API key). '
-                      'Combining it with structured output works only on Gemini 3+; '
-                      'on 2.5 and older models the request will fail.')},
+        {'label': _('Встроенный поиск модели', 'Model built-in search'),
+         'key': 'NATIVE_WEB_SEARCH', 'type': 'checkbutton', 'default_checkbutton': False,
+         'tooltip': _('Включает веб-поиск, встроенный в саму модель: у Gemini — Grounding with Google Search, '
+                      'у OpenRouter — плагин web. Модель сама решает, когда искать. '
+                      'Это НЕ наш тул "Google поиск" (тому нужен отдельный API-ключ). '
+                      'На Gemini 2.5 и ниже поиск несовместим со структурированным ответом — там мы автоматически '
+                      'переходим на промпт-JSON (без принудительной схемы). На Gemini 3+ и OpenRouter ограничений нет.',
+                      'Enables web search built into the model itself: Gemini — Grounding with Google Search, '
+                      'OpenRouter — the web plugin. The model decides on its own when to search. '
+                      'This is NOT our "Google Search" tool (that needs a separate API key). '
+                      'On Gemini 2.5 and older, search is incompatible with structured output — there we automatically '
+                      'fall back to prompt-JSON (no forced schema). On Gemini 3+ and OpenRouter there are no limits.')},
 
         {'label': _('Штраф присутствия', 'Presence penalty'),
         'key': 'MODEL_PRESENCE_PENALTY',
