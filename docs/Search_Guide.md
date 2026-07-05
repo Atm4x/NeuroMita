@@ -45,6 +45,10 @@
 выжимки и опциональный краткий ответ. Точнее `web_search`. Бесплатный лимит ~1000/мес.
 Ключ — на tavily.com.
 
+### brave_search — Brave Search (нужен ключ, есть free-tier)
+Галка **«Brave поиск»** + поле **`BRAVE_API_KEY`**. Свой независимый индекс (не Google),
+приватный, качество хорошее. Бесплатный лимит ~2000/мес. Ключ — на brave.com/search/api.
+
 ### google_search — Google Custom Search (нужны ключ + CSE)
 Галка **«Google поиск»** + поля **`GOOGLE_API_KEY`** и **`GOOGLE_CSE_ID`**.
 Официальный API Google, но урезанный (100 запросов/день бесплатно) и требует настройки

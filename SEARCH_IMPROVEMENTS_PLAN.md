@@ -68,6 +68,11 @@ Yandex XML (актуально для рус.), ddgs/DDG (уже есть).
       `google_search`: `link` → `url` (единый формат `{title, url, snippet}` для всех тулов).
       Гайд [docs/Search_Guide.md](docs/Search_Guide.md) — все варианты поиска и как включить.
 
+- [x] **P7. Brave-тул** (opt-in, ключ; свой индекс, free ~2000/мес).
+      `brave_search`: `api.search.brave.com` (`X-Subscription-Token` = `BRAVE_API_KEY`),
+      country/lang из `WEB_SEARCH_REGION`, freshness d/w/m/y. Регистрация + галка
+      `TOOL_ENABLED_brave_search` + поле ключа в UI. Без ключа — внятная ошибка.
+
 ## Архитектурные заметки
 
 - Добавление тула: класс в `src/managers/tools/builtin/` → экспорт в `builtin/__init__.py`

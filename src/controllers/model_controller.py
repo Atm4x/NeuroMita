@@ -29,12 +29,13 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "tavily_search", "wikipedia_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "tavily_search", "brave_search", "wikipedia_search", "web_reader", "memory_search", "reminder"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
     "google_search": False,
     "tavily_search": False,
+    "brave_search": False,
     "wikipedia_search": False,
     "web_reader": False,
     "memory_search": True,

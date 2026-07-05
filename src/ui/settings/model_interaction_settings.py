@@ -196,6 +196,12 @@ def setup_model_interaction_controls(self, parent):
                       'Точнее web_search, но требует ключ TAVILY_API_KEY (есть бесплатный лимит ~1000/мес).',
                       'Enable the Tavily tool: AI-focused search (clean snippets + short answer). '
                       'More accurate than web_search, but requires TAVILY_API_KEY (free tier ~1000/mo).')},
+        {'label': _('Brave поиск', 'Brave Search'), 'key': 'TOOL_ENABLED_brave_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Включить инструмент "Brave Search": независимый индекс (не Google), приватный. '
+                      'Требует ключ BRAVE_API_KEY (есть бесплатный лимит ~2000/мес).',
+                      'Enable the Brave Search tool: independent index (not Google), privacy-friendly. '
+                      'Requires BRAVE_API_KEY (free tier ~2000/mo).')},
         {'label': _('Чтение страниц', 'Web Reader'), 'key': 'TOOL_ENABLED_web_reader',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Включить инструмент "Чтение веб-страниц"', 'Enable the Web Reader tool')},
@@ -252,6 +258,8 @@ def setup_model_interaction_controls(self, parent):
         {'label': _('GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
         {'label': _('TAVILY API KEY'), 'key': 'TAVILY_API_KEY', 'type': 'entry',
+         'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
+        {'label': _('BRAVE API KEY'), 'key': 'BRAVE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
 
         {'type': 'end'},

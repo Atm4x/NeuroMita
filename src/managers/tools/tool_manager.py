@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Any, Optional
 
 from managers.tools.base import Tool
-from managers.tools.builtin import CalculatorTool, WebSearchTool, WebPageReaderTool, GoogleSearchTool, WikipediaSearchTool, TavilySearchTool
+from managers.tools.builtin import CalculatorTool, WebSearchTool, WebPageReaderTool, GoogleSearchTool, WikipediaSearchTool, TavilySearchTool, BraveSearchTool
 from managers.tools.dialects.registry import ToolDialectRegistry
 
 
@@ -22,6 +22,7 @@ class ToolManager:
         self.register(WebPageReaderTool())
         self.register(WikipediaSearchTool())
         self.register(TavilySearchTool())
+        self.register(BraveSearchTool())
 
     def register(self, tool: Tool):
         self._tools[tool.name] = tool
