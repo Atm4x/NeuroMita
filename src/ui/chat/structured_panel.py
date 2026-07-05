@@ -2,9 +2,12 @@
 StructuredOutputPanel — compact debug display of structured AI response data.
 """
 
+import html
 import json
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy
 from PyQt6.QtCore import Qt
+
+from utils import getTranslationVariant as _
 
 # Modern Dashboard Colors
 CLR_BADGE_BG      = "rgba(255, 255, 255, 0.05)"
@@ -42,6 +45,11 @@ CLR_GRAPH_BORDER  = "rgba(56, 189, 248, 0.2)"
 CLR_GRAPH_BG      = "rgba(56, 189, 248, 0.05)"
 CLR_GRAPH_HEADER  = "#38BDF8"
 CLR_GRAPH_TEXT    = "#BAE6FD"
+
+CLR_SOURCE_BORDER = "rgba(129, 140, 248, 0.2)"
+CLR_SOURCE_BG     = "rgba(129, 140, 248, 0.05)"
+CLR_SOURCE_HEADER = "#818CF8"
+CLR_SOURCE_LINK   = "#A5B4FC"
 
 def _fmt_val(v: float) -> str: return "±0" if v == 0 else f"+{v:.2g}" if v > 0 else f"{v:.2g}"
 def _val_color(v: float) -> str: return CLR_POSITIVE if v > 0 else CLR_NEGATIVE if v < 0 else CLR_NEUTRAL
@@ -195,6 +203,38 @@ class GraphBlock(QFrame):
             layout.addWidget(lbl)
 
 
+class SourcesBlock(QFrame):
+    """Источники встроенного веб-поиска модели (grounding). Кликабельные ссылки."""
+    def __init__(self, sources: list, font_sm: int, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"QFrame {{ background-color: {CLR_SOURCE_BG}; border: 1px solid {CLR_SOURCE_BORDER}; border-radius: 8px; margin: 2px 0px; }}")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
+
+        header = QLabel("\U0001f50d " + _("источники", "sources"), self)
+        header.setStyleSheet(f"color: {CLR_SOURCE_HEADER}; font-weight: bold; font-size: {font_sm}pt; background: transparent; border: none;")
+        layout.addWidget(header)
+
+        for i, src in enumerate(sources, 1):
+            if not isinstance(src, dict):
+                continue
+            url = str(src.get("url") or "").strip()
+            if not url:
+                continue
+            title = str(src.get("title") or url).strip()
+            safe_title = html.escape(title)
+            safe_url = html.escape(url, quote=True)
+            lbl = QLabel(f'{i}. <a href="{safe_url}" style="color:{CLR_SOURCE_LINK}; text-decoration:none;">{safe_title}</a>', self)
+            lbl.setWordWrap(True)
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setOpenExternalLinks(True)
+            lbl.setToolTip(url)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            lbl.setStyleSheet(f"color: {CLR_SOURCE_LINK}; font-size: {font_sm}pt; background: transparent; border: none; padding-left: 4px;")
+            layout.addWidget(lbl)
+
+
 class ToolCallBlock(QFrame):
     def __init__(self, tool_name: str, tool_args: dict, font_sm: int, parent=None):
         super().__init__(parent)
@@ -286,6 +326,10 @@ class StructuredOutputPanel(QFrame):
         entities, relations = data.get("entities") or [], data.get("relations") or []
         if entities or relations:
             layout.addWidget(GraphBlock(entities, relations, self._font_sm, layout.parentWidget()))
+
+        sources = data.get("sources") or []
+        if sources:
+            layout.addWidget(SourcesBlock(sources, self._font_sm, layout.parentWidget()))
 
     def _build_json_view(self, layout: QVBoxLayout, data: dict):
         raw = data.get("_raw_json") or json.dumps({k: v for k, v in data.items() if k != "_raw_json"}, ensure_ascii=False, indent=2)

@@ -309,6 +309,7 @@ class GeminiProvider(BaseProvider):
                 model=(response_data.get("modelVersion") if isinstance(response_data, dict) else None) or req.model,
                 provider_name=self.name,
                 raw=response_data if isinstance(response_data, dict) else {},
+                sources=self._extract_sources(response_data) if isinstance(response_data, dict) else [],
             )
         except Exception as e:
             logger.error(f"Ошибка парсинга Gemini response: {e}", exc_info=True)
@@ -327,6 +328,8 @@ class GeminiProvider(BaseProvider):
         decoder = json.JSONDecoder()
         usage = None
         response_model = None
+        sources: list = []
+        seen_sources: set = set()
 
         try:
             for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
@@ -337,6 +340,11 @@ class GeminiProvider(BaseProvider):
                         if response_model is None and isinstance(result, dict):
                             response_model = result.get("modelVersion")
                         usage = usage or self._extract_usage(result)
+                        if isinstance(result, dict):
+                            for s in self._extract_sources(result):
+                                if s["url"] not in seen_sources:
+                                    seen_sources.add(s["url"])
+                                    sources.append(s)
 
                         parts = (
                             result.get("candidates", [{}])[0]
@@ -368,6 +376,7 @@ class GeminiProvider(BaseProvider):
                 usage=usage,
                 model=response_model,
                 provider_name=self.name,
+                sources=sources,
             )
         except Exception as e:
             # Обрыв/ошибка посреди стрима — не маскируем под успех, кидаем ошибку,
@@ -375,6 +384,32 @@ class GeminiProvider(BaseProvider):
             provider_error = coerce_provider_error(self.name, e, url=getattr(response, "url", None))
             logger.error(f"[GeminiProvider] stream error: {provider_error.to_console_summary()}", exc_info=True)
             raise provider_error from e
+
+    def _extract_sources(self, response_data) -> list:
+        """Источники встроенного поиска (grounding) из ответа Gemini.
+        Возвращает [{"title":..., "url":...}] без дублей, с сохранением порядка."""
+        out: list = []
+        try:
+            for cand in (response_data.get("candidates") or []):
+                if not isinstance(cand, dict):
+                    continue
+                gm = cand.get("groundingMetadata") or cand.get("grounding_metadata") or {}
+                chunks = gm.get("groundingChunks") or gm.get("grounding_chunks") or []
+                for ch in chunks:
+                    web = (ch or {}).get("web") or {}
+                    uri = web.get("uri") or web.get("url")
+                    if uri:
+                        out.append({"title": str(web.get("title") or uri), "url": str(uri)})
+        except Exception:
+            pass
+        seen: set = set()
+        dedup: list = []
+        for s in out:
+            if s["url"] in seen:
+                continue
+            seen.add(s["url"])
+            dedup.append(s)
+        return dedup
 
     def _extract_usage(self, response_data):
         if not isinstance(response_data, dict):

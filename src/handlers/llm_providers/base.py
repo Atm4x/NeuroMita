@@ -96,6 +96,8 @@ class LLMResponse:
     finish_reason: Optional[str] = None
     error_message: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    # Источники встроенного веб-поиска модели (grounding): [{"title":..., "url":...}]
+    sources: List[Dict[str, str]] = field(default_factory=list)
 
 
 def _to_int(value: Any) -> int:

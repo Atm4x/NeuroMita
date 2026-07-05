@@ -1471,6 +1471,7 @@ class ModelController:
                     image_descriptions=image_descriptions,
                     structured_model_cls=structured_model_cls,
                     sample_id=sample_id,
+                    sources=getattr(llm_response, "sources", None) or [],
                 )
 
             inline_graph_json: Optional[str] = None
@@ -1732,6 +1733,7 @@ class ModelController:
         image_descriptions: dict[str, str] | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        sources: list | None = None,
     ) -> dict | None:
         try:
             structured = parse_structured_response(visible_raw, model_cls=structured_model_cls)
@@ -1845,6 +1847,9 @@ class ModelController:
         result_dict.pop("reasoning", None)
         # Attach raw LLM JSON for the debug panel (not saved to history)
         result_dict["_raw_json"] = visible_raw
+        # Источники встроенного поиска модели (grounding) — в историю и в панель.
+        if sources:
+            result_dict["sources"] = list(sources)
         final_text = result_dict["response"]
 
         targets: list[str] = []

@@ -335,7 +335,26 @@ class OpenAIHTTPProviderBase(BaseProvider):
             provider_name=self.name,
             finish_reason=finish_reason,
             raw=data if isinstance(data, dict) else {},
+            sources=self._extract_sources(message),
         )
+
+    def _extract_sources(self, message: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Источники встроенного веб-поиска (OpenRouter web-плагин): message.annotations[].url_citation.
+        Возвращает [{"title":..., "url":...}] без дублей."""
+        out: List[Dict[str, str]] = []
+        seen: set = set()
+        try:
+            for ann in (message.get("annotations") or []):
+                if not isinstance(ann, dict) or ann.get("type") != "url_citation":
+                    continue
+                cit = ann.get("url_citation") or {}
+                url = cit.get("url")
+                if url and url not in seen:
+                    seen.add(url)
+                    out.append({"title": str(cit.get("title") or url), "url": str(url)})
+        except Exception:
+            pass
+        return out
 
     def _handle_stream(
         self,
