@@ -63,7 +63,7 @@ class GoogleSearchTool(Tool):
             for item in items:
                 results.append({
                     "title": item.get("title"),
-                    "link": item.get("link"),
+                    "url": item.get("link"),
                     "snippet": item.get("snippet")
                 })
 
