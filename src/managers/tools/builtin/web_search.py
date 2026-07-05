@@ -2,6 +2,7 @@
 import json
 import time
 
+import requests
 from ddgs import DDGS
 
 from managers.tools.base import Tool
@@ -13,6 +14,9 @@ _DEFAULT_REGION = "ru-ru"
 # Цепочка фолбэка: сперва агрегирующий auto, затем явные наборы движков.
 # Валидные движки ddgs: bing, brave, google, mojeek, wikipedia, yandex.
 _BACKEND_CHAIN = ["auto", "google, bing, brave", "mojeek, yandex, wikipedia"]
+
+_SAFESEARCH_SEARX = {"off": 0, "moderate": 1, "on": 2}
+_TIMELIMIT_SEARX = {"d": "day", "w": "week", "m": "month", "y": "year"}
 
 
 class WebSearchTool(Tool):
@@ -60,7 +64,21 @@ class WebSearchTool(Tool):
         safesearch = str(SettingsManager.get("WEB_SEARCH_SAFESEARCH", "off") or "off")
         timelimit = timelimit if timelimit in ("d", "w", "m", "y") else None
 
-        results, failed = self._search_with_fallback(query, max_results, region, safesearch, timelimit)
+        # Приоритетный источник — SearXNG (если задан инстанс), иначе DDG-цепочка.
+        searxng_url = str(SettingsManager.get("WEB_SEARCH_SEARXNG_URL", "") or "").strip()
+        failed = False
+        results = []
+        if searxng_url:
+            try:
+                results = self._search_searxng(searxng_url, query, max_results, region, safesearch, timelimit)
+            except Exception as e:
+                failed = True
+                logger.warning(f"[web_search] SearXNG '{searxng_url}' -> {type(e).__name__}: {e}; фолбэк на DDG")
+
+        if not results:
+            results, ddg_failed = self._search_with_fallback(query, max_results, region, safesearch, timelimit)
+            failed = failed or ddg_failed
+
         formatted = self._format(results)
 
         if not formatted:
@@ -97,6 +115,31 @@ class WebSearchTool(Tool):
                 time.sleep(0.5 * (attempt + 1))  # мягкий бэкофф между попытками
         return [], any_error
 
+    def _search_searxng(self, base_url, query, max_results, region, safesearch, timelimit):
+        """Запрос к SearXNG (JSON API). Возвращает список результатов в формате движка."""
+        base = base_url.rstrip("/")
+        endpoint = base if base.endswith("/search") else base + "/search"
+
+        # region 'ru-ru' -> language 'ru-RU'; safesearch/timelimit -> формат SearXNG.
+        parts = str(region or "").split("-")
+        language = f"{parts[0].lower()}-{parts[1].upper()}" if len(parts) == 2 and parts[1] else (parts[0].lower() or "all")
+
+        params = {
+            "q": query,
+            "format": "json",
+            "language": language,
+            "safesearch": _SAFESEARCH_SEARX.get(safesearch, 0),
+            "categories": "general",
+            "pageno": 1,
+        }
+        if timelimit in _TIMELIMIT_SEARX:
+            params["time_range"] = _TIMELIMIT_SEARX[timelimit]
+
+        resp = requests.get(endpoint, params=params, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        data = resp.json()
+        return (data.get("results") or [])[:max_results]
+
     def _format(self, results):
         out = []
         seen = set()
@@ -108,7 +151,7 @@ class WebSearchTool(Tool):
                 continue
             seen.add(url)
 
-            snippet = (r.get("body") or r.get("snippet") or r.get("description") or "").strip()
+            snippet = (r.get("body") or r.get("snippet") or r.get("content") or r.get("description") or "").strip()
             if len(snippet) > _MAX_SNIPPET:
                 snippet = snippet[:_MAX_SNIPPET].rstrip() + " …"
 

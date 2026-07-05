@@ -53,10 +53,11 @@ Yandex XML (актуально для рус.), ddgs/DDG (уже есть).
       настроек `WIKIPEDIA_LANG` (ru) с фолбэком на en, обрезка выжимки. Зарегистрирован,
       галка `TOOL_ENABLED_wikipedia_search` в UI.
 
-- [ ] **P4. SearXNG-бэкенд для `web_search`** (главный апгрейд качества без ключей).
-      Настройка `WEB_SEARCH_SEARXNG_URL` (инстанс). Если задан — запрос к SearXNG
-      (`/search?format=json`) как приоритетный источник, иначе текущая DDG-цепочка.
-      Поле URL в UI + тултип с пояснением (публичный инстанс или локальный).
+- [x] **P4. SearXNG-бэкенд для `web_search`** (главный апгрейд качества без ключей).
+      `WEB_SEARCH_SEARXNG_URL` — если задан, `web_search` идёт в SearXNG (`/search?format=json`,
+      маппинг region→language, safesearch, time_range) как приоритетный источник, при
+      ошибке/пусто откатывается на DDG-цепочку. Поле URL в UI. Публичные инстансы часто
+      блокируют JSON для ботов — фича для своего/доверенного инстанса.
 
 - [ ] **P5. Tavily-тул** (opt-in, ключ; лучшее качество за деньги/free-tier).
       Новый `tavily_search` тул: `api.tavily.com/search`, ключ `TAVILY_API_KEY`.

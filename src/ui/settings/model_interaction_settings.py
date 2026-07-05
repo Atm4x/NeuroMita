@@ -193,6 +193,14 @@ def setup_model_interaction_controls(self, parent):
         {'label': _('Чтение страниц', 'Web Reader'), 'key': 'TOOL_ENABLED_web_reader',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Включить инструмент "Чтение веб-страниц"', 'Enable the Web Reader tool')},
+        {'label': _('SearXNG URL (для web_search)', 'SearXNG URL (for web_search)'),
+         'key': 'WEB_SEARCH_SEARXNG_URL', 'type': 'entry', 'default': '',
+         'tooltip': _('URL инстанса SearXNG (напр. http://localhost:8080). Если задан — web_search '
+                      'использует его как основной источник (качественнее и приватнее), с фолбэком на '
+                      'DuckDuckGo. Инстанс должен отдавать JSON (format=json). Пусто = только DuckDuckGo.',
+                      'SearXNG instance URL (e.g. http://localhost:8080). If set, web_search uses it as the '
+                      'primary source (better quality and privacy), falling back to DuckDuckGo. The instance '
+                      'must allow JSON output (format=json). Empty = DuckDuckGo only.')},
         {'label': _('Поиск воспоминаний', 'Memory Search'), 'key': 'TOOL_ENABLED_memory_search',
          'type': 'checkbutton', 'default_checkbutton': True, 'depends_on': 'TOOLS_ON',
          'tooltip': _(
