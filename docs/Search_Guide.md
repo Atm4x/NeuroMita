@@ -46,10 +46,11 @@
 выжимки и опциональный краткий ответ. Точнее `web_search`. Бесплатный лимит ~1000/мес.
 Ключ — на <https://app.tavily.com/home>
 
-### brave_search — Brave Search (нужен ключ, есть free-tier)
+### brave_search — Brave Search (нужен ключ, платный)
 Галка **«Brave поиск»** + поле **`BRAVE_API_KEY`**. Свой независимый индекс (не Google),
-приватный, качество хорошее. Бесплатный лимит ~2000/мес.
-Ключ — на <https://api-dashboard.search.brave.com/>
+приватный, качество хорошее. ⚠️ С февраля 2026 честного бесплатного тарифа для новых
+пользователей больше нет: $5 кредита/мес (~1000 запросов), дальше от $5 за 1000, нужна
+привязка карты. Ключ — на <https://api-dashboard.search.brave.com/>
 
 ### google_search — Google Custom Search (нужны ключ + CSE)
 Галка **«Google поиск»** + поля **`GOOGLE_API_KEY`** и **`GOOGLE_CSE_ID`**.

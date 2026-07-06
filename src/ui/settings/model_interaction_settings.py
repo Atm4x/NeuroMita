@@ -258,8 +258,10 @@ def setup_model_interaction_controls(self, parent):
 
         {'label': _('Brave поиск', 'Brave Search'), 'key': 'TOOL_ENABLED_brave_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Независимый индекс (не Google), приватный. Бесплатный лимит ~2000/мес.',
-                      'Independent index (not Google), privacy-friendly. Free tier ~2000/mo.')},
+         'tooltip': _('Независимый индекс (не Google), приватный. Платный: с февраля 2026 честного '
+                      'free-tier для новых нет — $5 кредита/мес (~1000 запросов), нужна привязка карты.',
+                      'Independent index (not Google), privacy-friendly. Paid: since Feb 2026 no genuine '
+                      'free tier for new users — $5/mo credit (~1000 queries), card required.')},
         {'label': _('    ↳ BRAVE API KEY', '    ↳ BRAVE API KEY'), 'key': 'BRAVE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
         {'label': _('        🔑 Получить ключ: <a href="https://api-dashboard.search.brave.com/">api-dashboard.search.brave.com</a>',
