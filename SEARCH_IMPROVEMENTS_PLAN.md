@@ -73,6 +73,12 @@ Yandex XML (актуально для рус.), ddgs/DDG (уже есть).
       country/lang из `WEB_SEARCH_REGION`, freshness d/w/m/y. Регистрация + галка
       `TOOL_ENABLED_brave_search` + поле ключа в UI. Без ключа — внятная ошибка.
 
+- [x] **P8. Выделить поиск в UI отдельной группой.**
+      Новая подсекция «🔍 Поиск в интернете» (отдельно от «Инструменты»): вводный текст,
+      бесплатные тулы (web_search + вложенный SearXNG URL, wikipedia, web_reader), разделитель
+      «— Требуют API-ключ —», затем keyed-тулы, где ключ идёт прямо под своим тулом
+      (Brave→BRAVE_API_KEY, Tavily→TAVILY_API_KEY, Google→GOOGLE_API_KEY/CSE_ID).
+
 ## Архитектурные заметки
 
 - Добавление тула: класс в `src/managers/tools/builtin/` → экспорт в `builtin/__init__.py`

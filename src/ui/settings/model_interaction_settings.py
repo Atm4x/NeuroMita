@@ -178,41 +178,6 @@ def setup_model_interaction_controls(self, parent):
         {'label': _('Калькулятор', 'Calculator'), 'key': 'TOOL_ENABLED_calculator',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Включить инструмент "Калькулятор"', 'Enable the Calculator tool')},
-        {'label': _('Поиск в интернете', 'Web Search'), 'key': 'TOOL_ENABLED_web_search',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Поиск в сети" (DuckDuckGo)', 'Enable the Web Search tool (DuckDuckGo)')},
-        {'label': _('Google поиск', 'Google Search'), 'key': 'TOOL_ENABLED_google_search',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Google Search" (требует API ключ)', 'Enable the Google Search tool (requires API key)')},
-        {'label': _('Википедия', 'Wikipedia'), 'key': 'TOOL_ENABLED_wikipedia_search',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Википедия": быстрые фактические выжимки со ссылками. '
-                      'Бесплатно, без ключа и лимитов.',
-                      'Enable the Wikipedia tool: quick factual summaries with links. '
-                      'Free, no key or limits.')},
-        {'label': _('Tavily поиск', 'Tavily Search'), 'key': 'TOOL_ENABLED_tavily_search',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Tavily": поиск, заточенный под ИИ (чистые выжимки + краткий ответ). '
-                      'Точнее web_search, но требует ключ TAVILY_API_KEY (есть бесплатный лимит ~1000/мес).',
-                      'Enable the Tavily tool: AI-focused search (clean snippets + short answer). '
-                      'More accurate than web_search, but requires TAVILY_API_KEY (free tier ~1000/mo).')},
-        {'label': _('Brave поиск', 'Brave Search'), 'key': 'TOOL_ENABLED_brave_search',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Brave Search": независимый индекс (не Google), приватный. '
-                      'Требует ключ BRAVE_API_KEY (есть бесплатный лимит ~2000/мес).',
-                      'Enable the Brave Search tool: independent index (not Google), privacy-friendly. '
-                      'Requires BRAVE_API_KEY (free tier ~2000/mo).')},
-        {'label': _('Чтение страниц', 'Web Reader'), 'key': 'TOOL_ENABLED_web_reader',
-         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
-         'tooltip': _('Включить инструмент "Чтение веб-страниц"', 'Enable the Web Reader tool')},
-        {'label': _('SearXNG URL (для web_search)', 'SearXNG URL (for web_search)'),
-         'key': 'WEB_SEARCH_SEARXNG_URL', 'type': 'entry', 'default': '',
-         'tooltip': _('URL инстанса SearXNG (напр. http://localhost:8080). Если задан — web_search '
-                      'использует его как основной источник (качественнее и приватнее), с фолбэком на '
-                      'DuckDuckGo. Инстанс должен отдавать JSON (format=json). Пусто = только DuckDuckGo.',
-                      'SearXNG instance URL (e.g. http://localhost:8080). If set, web_search uses it as the '
-                      'primary source (better quality and privacy), falling back to DuckDuckGo. The instance '
-                      'must allow JSON output (format=json). Empty = DuckDuckGo only.')},
         {'label': _('Поиск воспоминаний', 'Memory Search'), 'key': 'TOOL_ENABLED_memory_search',
          'type': 'checkbutton', 'default_checkbutton': True, 'depends_on': 'TOOLS_ON',
          'tooltip': _(
@@ -253,13 +218,62 @@ def setup_model_interaction_controls(self, parent):
              'system — system role only (may be ignored by Gemini).\n'
              'user — user role only with [SYSTEM INFO] tag.')},
 
-        {'label': _('GOOGLE API KEY'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
+        {'type': 'end'},
+
+        # --- Поиск в интернете (отдельная группа) ---
+        {'label': _('🔍 Поиск в интернете', '🔍 Web Search'), 'type': 'subsection'},
+        {'label': _('Инструменты веб-поиска. Работают при включённом «Вызов инструментов». '
+                    'Бесплатные — без ключа; для остальных впишите ключ прямо под тулом.',
+                    'Web search tools. Work when "Tools use" is enabled. Free ones need no key; '
+                    'for the others enter the key right under the tool.'), 'type': 'text'},
+
+        {'label': _('Поиск в интернете (DuckDuckGo)', 'Web Search (DuckDuckGo)'), 'key': 'TOOL_ENABLED_web_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Бесплатный мета-поиск (DuckDuckGo). Без ключа. Можно улучшить, указав SearXNG ниже.',
+                      'Free meta-search (DuckDuckGo). No key. Can be upgraded via SearXNG below.')},
+        {'label': _('    ↳ SearXNG URL (апгрейд web_search)', '    ↳ SearXNG URL (web_search upgrade)'),
+         'key': 'WEB_SEARCH_SEARXNG_URL', 'type': 'entry', 'default': '',
+         'depends_on': 'TOOLS_ON',
+         'tooltip': _('URL инстанса SearXNG (напр. http://localhost:8080). Если задан — web_search '
+                      'использует его как основной источник (качественнее и приватнее), с фолбэком на '
+                      'DuckDuckGo. Инстанс должен отдавать JSON (format=json). Пусто = только DuckDuckGo. '
+                      'SearXNG нужно поднять отдельно (напр. через Docker).',
+                      'SearXNG instance URL (e.g. http://localhost:8080). If set, web_search uses it as the '
+                      'primary source (better quality and privacy), falling back to DuckDuckGo. The instance '
+                      'must allow JSON output (format=json). Empty = DuckDuckGo only. '
+                      'SearXNG must be hosted separately (e.g. via Docker).')},
+        {'label': _('Википедия', 'Wikipedia'), 'key': 'TOOL_ENABLED_wikipedia_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Быстрые фактические выжимки со ссылками. Бесплатно, без ключа и лимитов.',
+                      'Quick factual summaries with links. Free, no key or limits.')},
+        {'label': _('Чтение страниц', 'Web Reader'), 'key': 'TOOL_ENABLED_web_reader',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Скачивает и чистит конкретную страницу по URL (через Jina). Хорошо в паре с поиском.',
+                      'Downloads and cleans a specific page by URL (via Jina). Good paired with search.')},
+
+        {'label': _('— Требуют API-ключ —', '— Require an API key —'), 'type': 'text'},
+
+        {'label': _('Brave поиск', 'Brave Search'), 'key': 'TOOL_ENABLED_brave_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Независимый индекс (не Google), приватный. Бесплатный лимит ~2000/мес.',
+                      'Independent index (not Google), privacy-friendly. Free tier ~2000/mo.')},
+        {'label': _('    ↳ BRAVE API KEY', '    ↳ BRAVE API KEY'), 'key': 'BRAVE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
+        {'label': _('Tavily поиск', 'Tavily Search'), 'key': 'TOOL_ENABLED_tavily_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Поиск, заточенный под ИИ (чистые выжимки + краткий ответ). Точнее web_search. '
+                      'Бесплатный лимит ~1000/мес.',
+                      'AI-focused search (clean snippets + short answer). More accurate than web_search. '
+                      'Free tier ~1000/mo.')},
+        {'label': _('    ↳ TAVILY API KEY', '    ↳ TAVILY API KEY'), 'key': 'TAVILY_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('TAVILY API KEY'), 'key': 'TAVILY_API_KEY', 'type': 'entry',
+        {'label': _('Google поиск', 'Google Search'), 'key': 'TOOL_ENABLED_google_search',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _('Официальный Google Custom Search. Урезан (100 запросов/день бесплатно), нужны ключ и CSE ID.',
+                      'Official Google Custom Search. Limited (100 queries/day free), needs key and CSE ID.')},
+        {'label': _('    ↳ GOOGLE API KEY', '    ↳ GOOGLE API KEY'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('BRAVE API KEY'), 'key': 'BRAVE_API_KEY', 'type': 'entry',
+        {'label': _('    ↳ GOOGLE CSE ID', '    ↳ GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
 
         {'type': 'end'},
