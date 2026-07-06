@@ -242,6 +242,9 @@ def setup_model_interaction_controls(self, parent):
                       'primary source (better quality and privacy), falling back to DuckDuckGo. The instance '
                       'must allow JSON output (format=json). Empty = DuckDuckGo only. '
                       'SearXNG must be hosted separately (e.g. via Docker).')},
+        {'label': _('        📦 Как поднять: <a href="https://docs.searxng.org/admin/installation-docker.html">docs.searxng.org (Docker)</a>',
+                    '        📦 How to host: <a href="https://docs.searxng.org/admin/installation-docker.html">docs.searxng.org (Docker)</a>'),
+         'type': 'text'},
         {'label': _('Википедия', 'Wikipedia'), 'key': 'TOOL_ENABLED_wikipedia_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Быстрые фактические выжимки со ссылками. Бесплатно, без ключа и лимитов.',
@@ -259,6 +262,9 @@ def setup_model_interaction_controls(self, parent):
                       'Independent index (not Google), privacy-friendly. Free tier ~2000/mo.')},
         {'label': _('    ↳ BRAVE API KEY', '    ↳ BRAVE API KEY'), 'key': 'BRAVE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
+        {'label': _('        🔑 Получить ключ: <a href="https://api-dashboard.search.brave.com/">api-dashboard.search.brave.com</a>',
+                    '        🔑 Get a key: <a href="https://api-dashboard.search.brave.com/">api-dashboard.search.brave.com</a>'),
+         'type': 'text'},
         {'label': _('Tavily поиск', 'Tavily Search'), 'key': 'TOOL_ENABLED_tavily_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Поиск, заточенный под ИИ (чистые выжимки + краткий ответ). Точнее web_search. '
@@ -267,6 +273,9 @@ def setup_model_interaction_controls(self, parent):
                       'Free tier ~1000/mo.')},
         {'label': _('    ↳ TAVILY API KEY', '    ↳ TAVILY API KEY'), 'key': 'TAVILY_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
+        {'label': _('        🔑 Получить ключ: <a href="https://app.tavily.com/home">app.tavily.com</a>',
+                    '        🔑 Get a key: <a href="https://app.tavily.com/home">app.tavily.com</a>'),
+         'type': 'text'},
         {'label': _('Google поиск', 'Google Search'), 'key': 'TOOL_ENABLED_google_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Официальный Google Custom Search. Урезан (100 запросов/день бесплатно), нужны ключ и CSE ID.',
@@ -275,6 +284,11 @@ def setup_model_interaction_controls(self, parent):
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
         {'label': _('    ↳ GOOGLE CSE ID', '    ↳ GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
+        {'label': _('        🔑 Ключ: <a href="https://console.cloud.google.com/apis/credentials">console.cloud.google.com</a>'
+                    ' · CSE ID: <a href="https://programmablesearchengine.google.com/controlpanel/all">programmablesearchengine.google.com</a>',
+                    '        🔑 Key: <a href="https://console.cloud.google.com/apis/credentials">console.cloud.google.com</a>'
+                    ' · CSE ID: <a href="https://programmablesearchengine.google.com/controlpanel/all">programmablesearchengine.google.com</a>'),
+         'type': 'text'},
 
         {'type': 'end'},
     ]

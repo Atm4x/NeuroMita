@@ -48,6 +48,11 @@ def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=No
             # (в не-русских локалях их нет — иначе текст уезжает за край).
             lbl.setWordWrap(True)
             lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            # Поддержка кликабельных ссылок в тексте (<a href>); для обычного текста — безвредно.
+            lbl.setOpenExternalLinks(True)
+            lbl.setTextInteractionFlags(
+                Qt.TextInteractionFlag.LinksAccessibleByMouse | Qt.TextInteractionFlag.TextSelectableByMouse
+            )
             register_if_tr(lbl, cfg['label'])
             (current_sub or root).add_widget(lbl)
             continue
