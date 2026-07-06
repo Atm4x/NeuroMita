@@ -35,6 +35,7 @@
 например `http://localhost:8080`), `web_search` будет ходить в ваш инстанс SearXNG
 (качественнее и приватнее), а на DuckDuckGo откатываться только при сбое. Инстанс должен
 отдавать JSON (`format=json`); публичные инстансы часто это блокируют — лучше поднять свой.
+Как поднять (Docker): <https://docs.searxng.org/admin/installation-docker.html>
 
 ### wikipedia_search — Википедия (бесплатно, без ключа)
 Галка **«Википедия»**. Быстрые фактические выжимки со ссылками (кто/что/когда).
@@ -43,16 +44,18 @@
 ### tavily_search — Tavily (нужен ключ, есть free-tier)
 Галка **«Tavily поиск»** + поле **`TAVILY_API_KEY`**. Поиск, заточенный под ИИ: чистые
 выжимки и опциональный краткий ответ. Точнее `web_search`. Бесплатный лимит ~1000/мес.
-Ключ — на tavily.com.
+Ключ — на <https://app.tavily.com/home>
 
 ### brave_search — Brave Search (нужен ключ, есть free-tier)
 Галка **«Brave поиск»** + поле **`BRAVE_API_KEY`**. Свой независимый индекс (не Google),
-приватный, качество хорошее. Бесплатный лимит ~2000/мес. Ключ — на brave.com/search/api.
+приватный, качество хорошее. Бесплатный лимит ~2000/мес.
+Ключ — на <https://api-dashboard.search.brave.com/>
 
 ### google_search — Google Custom Search (нужны ключ + CSE)
 Галка **«Google поиск»** + поля **`GOOGLE_API_KEY`** и **`GOOGLE_CSE_ID`**.
 Официальный API Google, но урезанный (100 запросов/день бесплатно) и требует настройки
-Custom Search Engine.
+Custom Search Engine. Ключ — на <https://console.cloud.google.com/apis/credentials>,
+CSE ID — на <https://programmablesearchengine.google.com/controlpanel/all>
 
 ### web_reader — чтение страниц
 Галка **«Чтение страниц»**. Не ищет, а скачивает и чистит конкретную страницу по URL
