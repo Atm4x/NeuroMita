@@ -43,8 +43,8 @@
 
 ### tavily_search — Tavily (нужен ключ, есть free-tier)
 Галка **«Tavily поиск»** + поле **`TAVILY_API_KEY`**. Поиск, заточенный под ИИ: чистые
-выжимки и опциональный краткий ответ. Точнее `web_search`. Бесплатный лимит ~1000/мес.
-Ключ — на <https://app.tavily.com/home>
+выжимки и опциональный краткий ответ. Точнее `web_search`. Бесплатно ~1000 кредитов/мес,
+без привязки карты (forever-free). Ключ — на <https://app.tavily.com/home>
 
 ### brave_search — Brave Search (нужен ключ, платный)
 Галка **«Brave поиск»** + поле **`BRAVE_API_KEY`**. Свой независимый индекс (не Google),

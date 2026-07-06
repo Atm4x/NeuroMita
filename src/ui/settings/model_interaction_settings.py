@@ -270,9 +270,9 @@ def setup_model_interaction_controls(self, parent):
         {'label': _('Tavily поиск', 'Tavily Search'), 'key': 'TOOL_ENABLED_tavily_search',
          'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
          'tooltip': _('Поиск, заточенный под ИИ (чистые выжимки + краткий ответ). Точнее web_search. '
-                      'Бесплатный лимит ~1000/мес.',
+                      'Бесплатно ~1000 кредитов/мес, без привязки карты.',
                       'AI-focused search (clean snippets + short answer). More accurate than web_search. '
-                      'Free tier ~1000/mo.')},
+                      'Free ~1000 credits/mo, no card required.')},
         {'label': _('    ↳ TAVILY API KEY', '    ↳ TAVILY API KEY'), 'key': 'TAVILY_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
         {'label': _('        🔑 Получить ключ: <a href="https://app.tavily.com/home">app.tavily.com</a>',
