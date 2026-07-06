@@ -8,12 +8,10 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
 
 from main_logger import logger
+from update_contours import get_test_contour_badge, resolve_update_source
 from utils.release_assets import raw_release_has_launcher_assets
 from ui.widgets.launcher_dashboard_helpers import DashboardAction, NewsItem
 from utils import _
-
-
-NEWS_REPO = "Atm4x/NeuroMita"
 
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -28,9 +26,18 @@ _MD_DECORATION_RE = re.compile(r"[*_~`>#]")
 _fetch_lock = threading.Lock()
 
 
+def current_news_repo(gui) -> str:
+    return resolve_update_source(getattr(gui, "settings", None)).repo
+
+
+def current_test_badge(gui, *, lang: str = "ru") -> str:
+    return get_test_contour_badge(getattr(gui, "settings", None), lang=lang)
+
+
 def invalidate_news_releases(gui) -> None:
     gui._news_releases_cache = None
     gui._news_release_cards_cache = None
+    gui._news_releases_cache_repo = None
 
 
 def load_news_releases_async(gui, on_ready: Callable[[list[dict[str, Any]]], None]) -> None:
@@ -89,15 +96,17 @@ def load_news_releases_async(gui, on_ready: Callable[[list[dict[str, Any]]], Non
 
 
 def get_news_releases(gui) -> list[dict[str, Any]]:
+    repo = current_news_repo(gui)
     cached = getattr(gui, "_news_releases_cache", None)
-    if cached is not None:
+    cached_repo = getattr(gui, "_news_releases_cache_repo", None)
+    if cached is not None and cached_repo == repo:
         return cached
 
     try:
         import requests
 
         response = requests.get(
-            f"https://api.github.com/repos/{NEWS_REPO}/releases",
+            f"https://api.github.com/repos/{repo}/releases",
             timeout=10,
             headers={"Accept": "application/vnd.github+json"},
         )
@@ -105,17 +114,20 @@ def get_news_releases(gui) -> list[dict[str, Any]]:
             logger.info(f"[news] Failed to fetch releases: HTTP {response.status_code}")
             gui._news_releases_cache = []
             gui._news_release_cards_cache = []
+            gui._news_releases_cache_repo = repo
             return []
 
         raw_data = response.json() or []
         data = [item for item in raw_data if raw_release_has_launcher_assets(item)]
         gui._news_releases_cache = data
-        gui._news_release_cards_cache = _prepare_release_cards(data)
+        gui._news_release_cards_cache = _prepare_release_cards(data, repo=repo)
+        gui._news_releases_cache_repo = repo
         return data
     except Exception as exc:
         logger.info(f"[news] Failed to fetch releases: {exc}")
         gui._news_releases_cache = []
         gui._news_release_cards_cache = []
+        gui._news_releases_cache_repo = repo
         return []
 
 
@@ -168,8 +180,8 @@ def _build_release_preview(body: str, *, limit: int = 280) -> tuple[str, bool]:
     return summary, has_details
 
 
-def _prepare_release_cards(releases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    repo_url = f"https://github.com/{NEWS_REPO}/releases"
+def _prepare_release_cards(releases: list[dict[str, Any]], *, repo: str) -> list[dict[str, Any]]:
+    repo_url = f"https://github.com/{repo}/releases"
     prepared: list[dict[str, Any]] = []
     for release in releases:
         tag_name = str(release.get("tag_name") or "")
@@ -191,11 +203,14 @@ def _prepare_release_cards(releases: list[dict[str, Any]]) -> list[dict[str, Any
 
 def _get_prepared_release_cards(gui) -> list[dict[str, Any]]:
     cached = getattr(gui, "_news_release_cards_cache", None)
-    if cached is not None:
+    cached_repo = getattr(gui, "_news_releases_cache_repo", None)
+    repo = current_news_repo(gui)
+    if cached is not None and cached_repo == repo:
         return cached
     releases = get_news_releases(gui)
-    prepared = _prepare_release_cards(releases)
+    prepared = _prepare_release_cards(releases, repo=repo)
     gui._news_release_cards_cache = prepared
+    gui._news_releases_cache_repo = repo
     return prepared
 
 
@@ -342,7 +357,7 @@ def build_release_news_items(gui, *, limit: int | None = 8) -> list[NewsItem]:
         summary = str(release.get("summary") or "").strip() or build_release_summary("")
         published = str(release.get("published") or "")[:10]
         tag = str(release.get("tag") or "RELEASE")
-        url = str(release.get("url") or f"https://github.com/{NEWS_REPO}/releases")
+        url = str(release.get("url") or f"https://github.com/{current_news_repo(gui)}/releases")
         items.append(
             NewsItem(
                 name,

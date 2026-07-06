@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 import ui.pages.news_page as news_page_module
 from ui.pages.news_support import _build_release_preview, build_release_news_items
+from update_contours import resolve_update_source
 
 
 def _app() -> QApplication:
@@ -40,8 +41,11 @@ def test_build_release_preview_keeps_summary_short():
 
 
 def test_build_release_news_items_uses_prepared_cache():
+    repo = resolve_update_source({"UPDATE_CONTOUR": "test"}).repo
     gui = SimpleNamespace(
+        settings={"UPDATE_CONTOUR": "test"},
         _news_releases_cache=None,
+        _news_releases_cache_repo=repo,
         _news_release_cards_cache=[
             {
                 "name": "v1.2.3",
@@ -65,8 +69,10 @@ def test_build_release_news_items_uses_prepared_cache():
 def test_news_page_shows_loading_message_while_background_fetch_runs(monkeypatch):
     app = _app()
     host = QWidget()
+    host.settings = {"UPDATE_CONTOUR": "test"}
     host._news_releases_cache = None
     host._news_release_cards_cache = None
+    host._news_releases_cache_repo = None
 
     def _fake_async(gui, on_ready):
         return None

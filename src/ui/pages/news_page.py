@@ -6,8 +6,9 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
 from ui.pages.news_support import (
-    NEWS_REPO,
     build_release_news_items,
+    current_news_repo,
+    current_test_badge,
     get_news_content,
     get_news_releases,
     invalidate_news_releases,
@@ -43,7 +44,15 @@ class NewsPage(QWidget):
         self.gui.news_page = self
 
     def _build_page_widget(self, *, loading: bool = False) -> QWidget:
-        repo_url = f"https://github.com/{NEWS_REPO}/releases"
+        repo = current_news_repo(self.gui)
+        repo_url = f"https://github.com/{repo}/releases"
+        test_badge = current_test_badge(self.gui)
+        subtitle = _(
+            "Лента публичных релизов с GitHub ({repo}): changelog, бета-сборки и ссылки на полные заметки.",
+            "GitHub release feed ({repo}): changelog, beta builds and links to full notes.",
+        ).format(repo=repo)
+        if test_badge:
+            subtitle = f"{subtitle}\n{test_badge}"
         if loading:
             items = [
                 NewsItem(
@@ -60,10 +69,7 @@ class NewsPage(QWidget):
             items = build_release_news_items(self.gui)
         return create_news_page(
             title=_("Релизы NeuroMita", "NeuroMita releases"),
-            subtitle=_(
-                "Лента публичных релизов с GitHub ({repo}): changelog, бета-сборки и ссылки на полные заметки.",
-                "GitHub release feed ({repo}): changelog, beta builds and links to full notes.",
-            ).format(repo=NEWS_REPO),
+            subtitle=subtitle,
             items=items,
             header_actions=[
                 DashboardAction(_("Обновить", "Refresh"), callback=self.refresh_content, icon_name="fa6s.rotate-right"),

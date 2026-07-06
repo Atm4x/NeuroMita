@@ -24,6 +24,17 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+from update_contours import (
+    INSTALLED_SOURCES_KEY,
+    TESTER_CODES_KEY,
+    TESTER_CODE_KEY,
+    build_installed_source_record,
+    get_installed_source,
+    get_selected_update_contour,
+    get_tester_codes,
+    is_source_mismatch,
+    resolve_update_source,
+)
 from utils.archive_utils import PasswordError, extract_archive, format_bytes, make_logger, wipe_dir
 from utils.release_assets import (
     Release,
@@ -37,6 +48,105 @@ from utils.release_assets import (
 
 _USER_AGENT = "NeuroMita-Updater/2.0"
 _LOG_PREFIX = "[updater]"
+
+
+def _settings_path(base_dir: Optional[str] = None) -> Path:
+    if base_dir is None:
+        base_dir = str(Path(sys.argv[0]).parent)
+    return Path(base_dir) / "Settings" / "settings.json"
+
+
+def _load_settings_payload(base_dir: Optional[str] = None, settings=None) -> dict:
+    if isinstance(settings, dict):
+        return dict(settings)
+    if settings is not None:
+        raw = getattr(settings, "settings", None)
+        if isinstance(raw, dict):
+            return dict(raw)
+        getter = getattr(settings, "get", None)
+        if callable(getter):
+            try:
+                return {
+                    "UPDATE_CONTOUR": getter("UPDATE_CONTOUR", None),
+                    "UPDATE_CHANNEL": getter("UPDATE_CHANNEL", None),
+                    TESTER_CODE_KEY: getter(TESTER_CODE_KEY, None),
+                    TESTER_CODES_KEY: getter(TESTER_CODES_KEY, None),
+                    INSTALLED_SOURCES_KEY: getter(INSTALLED_SOURCES_KEY, None),
+                }
+            except Exception:
+                pass
+
+    path = _settings_path(base_dir)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _persist_settings_patch(base_dir: Optional[str], patch: dict) -> None:
+    path = _settings_path(base_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = {}
+    data.update(patch)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=4)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, path)
+
+
+def _persist_installed_source(base_dir: Optional[str], component: str, record: dict) -> None:
+    payload = _load_settings_payload(base_dir)
+    source_map = payload.get(INSTALLED_SOURCES_KEY)
+    if not isinstance(source_map, dict):
+        source_map = {}
+    source_map = dict(source_map)
+    source_map[str(component or "").strip().lower()] = dict(record)
+    _persist_settings_patch(base_dir, {INSTALLED_SOURCES_KEY: source_map})
+
+
+def _password_candidates(settings=None, tester_code: Optional[str] = None) -> list[Optional[str]]:
+    codes = get_tester_codes(settings, explicit=tester_code)
+    return codes or [None]
+
+
+def _install_full_archive_with_passwords(
+    archive: Path,
+    base_path: Path,
+    passwords: list[Optional[str]],
+    log,
+    *,
+    mode: str,
+    preserve_prompts: bool,
+) -> Optional[str]:
+    last_error: Optional[PasswordError] = None
+    for password in passwords:
+        try:
+            _install_full_archive(
+                archive,
+                base_path,
+                password,
+                log,
+                mode=mode,
+                preserve_prompts=preserve_prompts,
+            )
+            return password
+        except PasswordError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def _copy_file_over(src: Path, dst: Path, log) -> bool:
@@ -185,8 +295,8 @@ def _install_full_archive(
 
 # ── Repo / version helpers ────────────────────────────────────────────────────
 
-def _get_repo() -> str:
-    return os.environ.get("UPDATE_REPO", "Atm4x/NeuroMita")
+def _get_repo(settings=None, contour: str | None = None) -> str:
+    return resolve_update_source(settings=settings, contour=contour).repo
 
 
 def _get_current_version() -> str:
@@ -369,36 +479,61 @@ def _fetch_latest_unity_release_asset(
     return find_latest_unity_asset(releases, channel)
 
 
+def _selected_source_context(base_dir: Optional[str] = None, settings=None, contour: str | None = None):
+    payload = _load_settings_payload(base_dir, settings=settings)
+    selected_contour = get_selected_update_contour(payload, contour=contour)
+    source = resolve_update_source(payload, contour=selected_contour)
+    return payload, selected_contour, source
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_python_update_info(
     base_dir: Optional[str] = None,
     channel: str = "stable",
+    settings=None,
+    contour: str | None = None,
 ) -> dict:
     """Return current/latest Python update information without installing."""
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
     local_version = _get_current_version()
     channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    installed_source = get_installed_source(settings_payload, "python")
+    source_mismatch = is_source_mismatch(source, installed_source)
 
     release = _select_release(repo, channel)
     if release is None:
         return {
             "ok": False,
             "component": "python",
+            "repo": repo,
+            "selected_contour": selected_contour,
             "current_version": local_version,
             "error": "Could not reach GitHub to check for updates",
         }
 
     remote_tag = str(release.tag or "")
-    available = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    version_newer = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    available = bool(version_newer or source_mismatch)
+    reason = "source_mismatch" if source_mismatch and not version_newer else ("newer_version" if version_newer else "")
     return {
         "ok": True,
         "component": "python",
         "repo": repo,
         "channel": channel,
+        "selected_contour": selected_contour,
+        "requires_tester_code": bool(source.requires_tester_code),
         "current_version": local_version,
         "latest_version": remote_tag,
         "available": available,
+        "source_mismatch": source_mismatch,
+        "update_reason": reason,
+        "installed_source": installed_source,
         "prerelease": bool(release.prerelease),
         "name": str(release.name or ""),
         "body": str(release.body or ""),
@@ -411,9 +546,16 @@ def get_unity_update_info(
     base_dir: Optional[str] = None,
     unity_dir: Optional[str] = None,
     channel: str = "stable",
+    settings=None,
+    contour: str | None = None,
 ) -> dict:
     """Return current/latest Unity update information without installing."""
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
     channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
 
     if base_dir is None:
@@ -427,27 +569,38 @@ def get_unity_update_info(
         if version_file.exists()
         else "0.0.0.0"
     )
+    installed_source = get_installed_source(settings_payload, "unity")
+    source_mismatch = is_source_mismatch(source, installed_source)
 
     release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
     if release is None:
         return {
             "ok": False,
             "component": "unity",
+            "repo": repo,
+            "selected_contour": selected_contour,
             "current_version": local_version,
             "error": "Could not find a Unity release asset to check for updates",
         }
 
     remote_tag = str(release.tag or "")
-    available = bool(remote_tag) and (_is_newer(remote_tag, local_version) or not install_complete)
+    version_newer = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    available = bool(version_newer or source_mismatch or not install_complete)
+    reason = "source_mismatch" if source_mismatch and not version_newer else ("missing_install" if not install_complete and not version_newer else ("newer_version" if version_newer else ""))
     return {
         "ok": True,
         "component": "unity",
         "repo": repo,
         "channel": channel,
+        "selected_contour": selected_contour,
+        "requires_tester_code": bool(source.requires_tester_code),
         "current_version": local_version,
         "latest_version": remote_tag,
         "available": available,
         "install_complete": install_complete,
+        "source_mismatch": source_mismatch,
+        "update_reason": reason,
+        "installed_source": installed_source,
         "prerelease": bool(release.prerelease),
         "name": str(release.name or ""),
         "body": str(release.body or ""),
@@ -466,6 +619,8 @@ def check_for_updates(
     restart_on_success: bool = True,
     update_mode: str = "diff",
     preserve_prompts: bool = False,
+    settings=None,
+    contour: str | None = None,
 ) -> bool:
     """Check for Python-part updates. Apply automatically if AUTO_UPDATE=1.
 
@@ -491,18 +646,25 @@ def check_for_updates(
     """
     log = make_logger(logger, _LOG_PREFIX)
 
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
     local_version = _get_current_version()
+    installed_source = get_installed_source(settings_payload, "python")
+    source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE", "0") == "1"
     channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
-    tester_code = tester_code or os.environ.get("TESTER_CODE") or None
+    password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
     update_mode = (update_mode or os.environ.get("UPDATE_MODE", "diff")).lower()
     if update_mode not in ("diff", "full"):
         update_mode = "diff"
     preserve_prompts = preserve_prompts or os.environ.get("UPDATE_PRESERVE_PROMPTS", "0") == "1"
 
-    log(f"Checking for updates ({repo}, channel={channel}, mode={update_mode}) ...")
+    log(f"Checking for updates ({repo}, contour={selected_contour}, channel={channel}, mode={update_mode}) ...")
 
     release = _select_release(repo, channel)
     if release is None:
@@ -513,11 +675,19 @@ def check_for_updates(
     if not remote_tag:
         return
 
-    if not _is_newer(remote_tag, local_version):
+    is_newer = _is_newer(remote_tag, local_version)
+    if not is_newer and not source_mismatch:
         log(f"Up to date: {local_version}")
         return
 
-    log(f"New version available: {remote_tag} (current: {local_version})", "notify")
+    if source_mismatch and not is_newer:
+        log(
+            f"Selected contour differs from installed Python source "
+            f"({installed_source.get('repo', '?')} -> {repo}). Sync available.",
+            "notify",
+        )
+    else:
+        log(f"New version available: {remote_tag} (current: {local_version})", "notify")
 
     if not auto_update:
         log("Auto-update is disabled (AUTO_UPDATE=0). Set AUTO_UPDATE=1 in features.env to enable.")
@@ -568,9 +738,13 @@ def check_for_updates(
             try:
                 # Патч по своей природе аддитивный — всегда накладываем diff'ом
                 # (наложение поверх, без wipe), режим full к нему не применяем.
-                _install_full_archive(
-                    temp_archive, base_path, tester_code, log,
-                    mode="diff", preserve_prompts=preserve_prompts,
+                _install_full_archive_with_passwords(
+                    temp_archive,
+                    base_path,
+                    password_candidates,
+                    log,
+                    mode="diff",
+                    preserve_prompts=preserve_prompts,
                 )
             except Exception as e:
                 log(f"Patch failed ({e}), falling back to full update ...", "warning")
@@ -582,17 +756,38 @@ def check_for_updates(
                 full_archive = dl_dir / full_asset.name
                 log(f"Downloading full release {full_asset.name} ...")
                 _download(full_asset.url, full_archive, on_progress=on_progress)
-                _install_full_archive(
-                    full_archive, base_path, tester_code, log,
-                    mode=update_mode, preserve_prompts=preserve_prompts,
+                _install_full_archive_with_passwords(
+                    full_archive,
+                    base_path,
+                    password_candidates,
+                    log,
+                    mode=update_mode,
+                    preserve_prompts=preserve_prompts,
                 )
                 full_archive.unlink(missing_ok=True)
         else:
-            _install_full_archive(
-                temp_archive, base_path, tester_code, log,
-                mode=update_mode, preserve_prompts=preserve_prompts,
+            _install_full_archive_with_passwords(
+                temp_archive,
+                base_path,
+                password_candidates,
+                log,
+                mode=update_mode,
+                preserve_prompts=preserve_prompts,
             )
             temp_archive.unlink(missing_ok=True)
+
+        _persist_installed_source(
+            base_dir,
+            "python",
+            build_installed_source_record(
+                "python",
+                source,
+                tag=remote_tag,
+                asset_name=python_asset.name,
+                published_at=str(release.published_at or ""),
+                release_name=str(release.name or ""),
+            ),
+        )
 
         if restart_on_success:
             log(f"Update {remote_tag} installed successfully. Restarting ...", "success")
@@ -611,7 +806,7 @@ def check_for_updates(
         # Архив валидный, пароль не установлен — не выкидываем, юзер вернётся
         # с TESTER_CODE и не качает заново. base_path при ошибке не стёрт,
         # так как распаковка идёт во временную папку до wipe.
-        log("Archive is password-protected. Set TESTER_CODE in settings to unlock.", "error")
+        log("Archive is password-protected. Add a fresh tester code in settings to unlock it.", "error")
         log(f"Archive kept for retry: {temp_archive}")
     except Exception as e:
         log(f"Update failed: {e}", "error")
@@ -630,6 +825,8 @@ def check_for_unity_updates(
     on_extract_progress: Optional[Callable[[int, int], None]] = None,
     auto_update: Optional[bool] = None,
     stop_event=None,
+    settings=None,
+    contour: str | None = None,
 ) -> None:
     """Check for Unity-part updates. Apply automatically if AUTO_UPDATE_UNITY=1.
 
@@ -652,11 +849,18 @@ def check_for_unity_updates(
     """
     log = make_logger(logger, _LOG_PREFIX)
 
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
+    installed_source = get_installed_source(settings_payload, "unity")
+    source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE_UNITY", "0") == "1"
     channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
-    tester_code = tester_code or os.environ.get("TESTER_CODE") or None
+    password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
 
     if base_dir is None:
         base_dir = str(Path(sys.argv[0]).parent)
@@ -672,7 +876,7 @@ def check_for_unity_updates(
         else "0.0.0.0"
     )
 
-    log(f"Checking Unity updates ({repo}, channel={channel}) ...")
+    log(f"Checking Unity updates ({repo}, contour={selected_contour}, channel={channel}) ...")
 
     release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
     if release is None:
@@ -683,13 +887,21 @@ def check_for_unity_updates(
     if not remote_tag:
         return
 
-    if not _is_newer(remote_tag, local_version) and install_complete:
+    is_newer = _is_newer(remote_tag, local_version)
+    if not is_newer and install_complete and not source_mismatch:
         log(f"Unity up to date: {local_version}")
         return
     if not install_complete:
         log("Unity installation is incomplete or missing executable. Reinstalling current release.", "warning")
 
-    log(f"New Unity version available: {remote_tag} (current: {local_version})", "notify")
+    if source_mismatch and is_newer is False:
+        log(
+            f"Selected contour differs from installed Unity source "
+            f"({installed_source.get('repo', '?')} -> {repo}). Sync available.",
+            "notify",
+        )
+    else:
+        log(f"New Unity version available: {remote_tag} (current: {local_version})", "notify")
 
     if not auto_update:
         log("Unity auto-update is disabled (AUTO_UPDATE_UNITY=0). Enable in settings.")
@@ -740,15 +952,45 @@ def check_for_unity_updates(
         log("Stage 1/3: cleaning target directory")
         wipe_dir(unity_path, logger=logger)
         log("Stage 2/3: extracting archive")
-        extract_archive(temp_archive, unity_path, tester_code, logger=logger, on_extract_progress=on_extract_progress)
+        last_password_error: Optional[PasswordError] = None
+        extracted = False
+        for password in password_candidates:
+            try:
+                extract_archive(
+                    temp_archive,
+                    unity_path,
+                    password,
+                    logger=logger,
+                    on_extract_progress=on_extract_progress,
+                )
+                extracted = True
+                break
+            except PasswordError as exc:
+                last_password_error = exc
+        if not extracted:
+            if last_password_error is not None:
+                raise last_password_error
+            raise PasswordError("No valid tester code was accepted for the Unity archive.")
         log("Stage 3/3: writing installed version marker")
         unity_path.mkdir(parents=True, exist_ok=True)
         version_file.write_text(remote_tag, encoding="utf-8")
         temp_archive.unlink(missing_ok=True)
+        _persist_installed_source(
+            base_dir,
+            "unity",
+            build_installed_source_record(
+                "unity",
+                source,
+                tag=remote_tag,
+                asset_name=unity_name,
+                published_at=str(release.published_at or ""),
+                release_name=str(release.name or ""),
+            ),
+        )
         log(f"Unity update {remote_tag} installed successfully.", "success")
     except PasswordError:
         # Архив валидный, просто нет пароля — оставляем для следующей попытки.
-        log("Unity archive is password-protected. Set TESTER_CODE in settings.", "error")
+        log("Unity archive is password-protected. Add a fresh tester code in settings.", "error")
         log(f"Archive kept for retry: {temp_archive}")
     except Exception as e:
         log(f"Unity update failed: {e}", "error")

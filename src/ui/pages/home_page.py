@@ -30,6 +30,7 @@ _UPDATE_CHECK_THROTTLE_SEC = 600
 
 from core.events import Events
 from main_logger import logger
+from update_contours import build_tester_code_settings, get_test_contour_badge, get_tester_codes, resolve_update_source
 from ui.pages.news_support import build_release_news_items, load_news_releases_async
 from ui.widgets.launcher_dashboard_helpers import NewsItem
 from utils import _
@@ -136,6 +137,7 @@ class HomePage(LauncherHomeBackground):
         self._update_info_unity = None
         self._update_check_inflight = False
         self._menu_button = None
+        self._contour_badge_label = None
         self.primary_button = None
         self.progress_bar = None
         self.progress_label = None
@@ -192,6 +194,11 @@ class HomePage(LauncherHomeBackground):
         )
         subtitle.setObjectName("LauncherHomeSubtitle")
         left_column.addWidget(subtitle)
+        contour_badge = QLabel("")
+        contour_badge.setObjectName("LauncherHomeContourBadge")
+        contour_badge.setVisible(False)
+        self._contour_badge_label = contour_badge
+        left_column.addWidget(contour_badge)
         # left_column.addWidget(self._build_home_update_chip())
 
         logo_wrap = QWidget()
@@ -334,7 +341,27 @@ class HomePage(LauncherHomeBackground):
         return card
 
     def _effective_tester_code(self) -> str:
-        return str(self.gui.settings.get("TESTER_CODE", "") or "").strip()
+        codes = get_tester_codes(self.gui.settings)
+        return codes[0] if codes else ""
+
+    def _selected_update_source(self):
+        return resolve_update_source(self.gui.settings)
+
+    def _save_tester_codes(self, explicit_code: str | None) -> None:
+        payload = build_tester_code_settings(explicit_code, existing=self.gui.settings)
+        try:
+            self.gui._save_setting("TESTER_CODE", payload.get("TESTER_CODE", ""))
+            self.gui._save_setting("TESTER_CODES", payload.get("TESTER_CODES", []))
+        except Exception:
+            pass
+
+    def _refresh_contour_badge(self) -> None:
+        badge = self._contour_badge_label
+        if badge is None:
+            return
+        text = get_test_contour_badge(self.gui.settings)
+        badge.setText(text)
+        badge.setVisible(bool(text))
 
     def _prompt_tester_code(self) -> str | None:
         """Запросить код тестера модалкой. None — пользователь отменил."""
@@ -355,10 +382,7 @@ class HomePage(LauncherHomeBackground):
         code = str(code or "").strip()
         if not code:
             return None
-        try:
-            self.gui._save_setting("TESTER_CODE", code)
-        except Exception:
-            pass
+        self._save_tester_codes(code)
         return code
 
     def _refresh_update_state(self, force: bool = False):
@@ -386,8 +410,8 @@ class HomePage(LauncherHomeBackground):
                 base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
                 unity_dir = self.gui.settings.get("UNITY_INSTALL_DIR") or None
 
-                py_info = get_python_update_info(base_dir=base_dir, channel=channel)
-                unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel)
+                py_info = get_python_update_info(base_dir=base_dir, channel=channel, settings=self.gui.settings)
+                unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel, settings=self.gui.settings)
                 self._queue_ui_call(lambda: self._apply_update_state(py_info, unity_info))
             except Exception as exc:
                 logger.warning(f"[home_update] background check failed: {exc}")
@@ -660,12 +684,12 @@ class HomePage(LauncherHomeBackground):
     def _lock_suffix(self) -> str:
         # Подсказка про код тестера, когда действие потянет зашифрованный архив.
         # Без эмодзи-замка (qtawesome-иконка замка вешается на саму кнопку).
-        if not self._effective_tester_code():
+        if self._selected_update_source().requires_tester_code and not self._effective_tester_code():
             return _(" (нужен код тестера)", " (tester code needed)")
         return ""
 
     def _needs_tester_code(self) -> bool:
-        return not self._effective_tester_code()
+        return self._selected_update_source().requires_tester_code and not self._effective_tester_code()
 
     def _has_pending_python_restart(self) -> bool:
         return bool(self._get_pending_python_restart_version())
@@ -794,6 +818,7 @@ class HomePage(LauncherHomeBackground):
         self.refresh_primary_label()
 
     def on_activated(self):
+        self._refresh_contour_badge()
         self.refresh_status_cards()
         self.refresh_news_content()
         self._refresh_update_state()
@@ -879,8 +904,8 @@ class HomePage(LauncherHomeBackground):
                 base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
                 unity_dir = self.gui.settings.get("UNITY_INSTALL_DIR") or None
 
-                py_info = get_python_update_info(base_dir=base_dir, channel=channel)
-                unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel)
+                py_info = get_python_update_info(base_dir=base_dir, channel=channel, settings=self.gui.settings)
+                unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel, settings=self.gui.settings)
 
                 # Обновляем чекбоксы на карточках и баннер-обнову.
                 self.gui._home_update_check_ts = time.monotonic()
@@ -1077,7 +1102,7 @@ class HomePage(LauncherHomeBackground):
                 from updater import check_for_unity_updates, get_unity_update_info
 
                 channel = self.gui.settings.get("UPDATE_CHANNEL", "stable")
-                tester_code = self.gui.settings.get("TESTER_CODE") or None
+                tester_code = self._effective_tester_code() or None
                 base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
                 unity_dir = self.gui.settings.get("UNITY_INSTALL_DIR") or None
 
@@ -1086,7 +1111,7 @@ class HomePage(LauncherHomeBackground):
                     f"unity_dir={unity_dir}, tester_code={'set' if tester_code else 'empty'}"
                 )
 
-                info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel)
+                info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel, settings=self.gui.settings)
                 logger.info(f"[home_install] update info: {info}")
                 if not info or not info.get("ok"):
                     err = (info or {}).get("error") or _("неизвестная ошибка", "unknown error")
@@ -1117,6 +1142,7 @@ class HomePage(LauncherHomeBackground):
                     on_extract_progress=on_extract_progress,
                     auto_update=True,
                     stop_event=cancel_event,
+                    settings=self.gui.settings,
                 )
                 logger.info("[home_install] check_for_unity_updates finished")
 
@@ -1299,6 +1325,7 @@ class HomePage(LauncherHomeBackground):
                         restart_on_success=False,
                         update_mode=(self.gui.settings.get("UPDATE_MODE", "diff") or "diff"),
                         preserve_prompts=bool(self.gui.settings.get("UPDATE_PRESERVE_PROMPTS", True)),
+                        settings=self.gui.settings,
                     ))
 
                 if want_unity and not cancel_event.is_set():
@@ -1315,6 +1342,7 @@ class HomePage(LauncherHomeBackground):
                         on_extract_progress=on_extract_progress,
                         auto_update=True,
                         stop_event=cancel_event,
+                        settings=self.gui.settings,
                     )
 
                 if cancel_event.is_set():

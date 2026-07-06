@@ -191,6 +191,7 @@ try:
             auto_update=True,
             update_mode=_upd_settings.get("UPDATE_MODE", "diff"),
             preserve_prompts=bool(_upd_settings.get("UPDATE_PRESERVE_PROMPTS", True)),
+            settings=_upd_settings,
         )
 
     if _unity_startup_update:
@@ -201,6 +202,7 @@ try:
             channel=_upd_settings.get("UPDATE_CHANNEL", "stable"),
             tester_code=_upd_settings.get("TESTER_CODE") or None,
             auto_update=True,
+            settings=_upd_settings,
         )
 except Exception as _upd_err:
     logger.warning(f"Update check failed: {_upd_err}")

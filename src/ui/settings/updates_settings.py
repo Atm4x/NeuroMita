@@ -23,7 +23,17 @@ from PyQt6.QtWidgets import (
 )
 
 from main_logger import logger
+from update_contours import (
+    RELEASE_CONTOUR,
+    TEST_CONTOUR,
+    UPDATE_CONTOUR_KEY,
+    build_tester_code_settings,
+    get_test_contour_badge,
+    get_tester_codes,
+    resolve_update_source,
+)
 from ui.gui_templates import create_section_header
+from ui.pages.news_support import invalidate_news_releases
 from ui.widgets.tr_combobox import TRQComboBox
 from utils import getTranslationVariant as _
 from localization.live import tr_set
@@ -70,6 +80,19 @@ def setup_updates_settings_controls(self, parent):
         except Exception:
             logger.warning("[updates_ui] Failed to read Unity version", exc_info=True)
         return "?"
+
+    def _selected_source():
+        return resolve_update_source(self.settings)
+
+    def _effective_tester_code() -> str:
+        codes = get_tester_codes(self.settings)
+        return codes[0] if codes else ""
+
+    def _save_tester_codes(explicit_code: str | None) -> None:
+        payload = build_tester_code_settings(explicit_code, existing=self.settings)
+        logger.info("[updates_ui] TESTER_CODES updated")
+        _persist_setting("TESTER_CODE", payload.get("TESTER_CODE", ""))
+        _persist_setting("TESTER_CODES", payload.get("TESTER_CODES", []))
 
     def _pending_python_restart_version() -> str:
         return str(getattr(self, "_pending_python_restart_version", "") or "").strip()
@@ -123,6 +146,29 @@ def setup_updates_settings_controls(self, parent):
         lbl_py.setText(_("Python-часть: ", "Python part: ") + f"<b>{py_ver}</b>{py_suffix}")
         lbl_unity.setText(_("Unity-часть: ", "Unity part: ") + f"<b>{_current_unity_version()}</b>")
 
+    def _reset_update_context() -> None:
+        invalidate_news_releases(self)
+        try:
+            release_info.clear()
+        except Exception:
+            pass
+        try:
+            status_lbl.clear()
+        except Exception:
+            pass
+
+    def _refresh_contour_state() -> None:
+        source = _selected_source()
+        badge_text = get_test_contour_badge(self.settings)
+        contour_badge.setText(badge_text)
+        contour_badge.setVisible(bool(badge_text))
+        tester_row.setVisible(bool(source.requires_tester_code))
+        tester_hint.setVisible(bool(source.requires_tester_code))
+        if source.requires_tester_code:
+            tester_entry.setText(_effective_tester_code())
+        else:
+            tester_entry.clear()
+
     def _set_status(msg: str):
         logger.info(f"[updates_ui] {msg}")
         _dispatch.schedule(lambda: status_lbl.setText(msg))
@@ -174,6 +220,10 @@ def setup_updates_settings_controls(self, parent):
             current_version = _pending_python_restart_version() or current_version
             available = False
         prerelease = bool(info.get("prerelease"))
+        selected_contour = str(info.get("selected_contour") or "").strip().lower()
+        selected_repo = str(info.get("repo") or "").strip()
+        installed_source = info.get("installed_source") if isinstance(info.get("installed_source"), dict) else {}
+        source_mismatch = bool(info.get("source_mismatch"))
         name = str(info.get("name") or "")
         published_at = str(info.get("published_at") or "")
         body = str(info.get("body") or "").strip()
@@ -182,10 +232,24 @@ def setup_updates_settings_controls(self, parent):
 
         lines = [
             title,
+            f"{_('Контур', 'Contour')}: {(_('Релизный', 'Release') if selected_contour == RELEASE_CONTOUR else _('Тестовый', 'Test'))}",
+            f"{_('Репозиторий', 'Repository')}: {selected_repo or '?'}",
             f"{_('Текущая версия', 'Current version')}: {current_version}",
             f"{_('Последняя версия', 'Latest version')}: {latest_version}",
             f"{_('Доступно обновление', 'Update available')}: {(_('да', 'yes') if available else _('нет', 'no'))}",
         ]
+        if source_mismatch:
+            lines.append(
+                _(
+                    "Источник отличается от установленного: {installed_repo} -> {selected_repo}. Синхронизация доступна даже при одинаковом теге или если релизный контур старее.",
+                    "The source differs from the installed one: {installed_repo} -> {selected_repo}. Sync stays available even when tags match or the release contour is older.",
+                ).format(
+                    installed_repo=str(installed_source.get("repo") or "?"),
+                    selected_repo=selected_repo or "?",
+                )
+            )
+        elif info.get("requires_tester_code"):
+            lines.append(_("Для этого контура нужен код тестера.", "This contour requires a tester code."))
         if prerelease:
             lines.append(_("Канал содержит prerelease.", "Channel contains prerelease."))
         if name:
@@ -225,8 +289,8 @@ def setup_updates_settings_controls(self, parent):
                 f"[updates_ui] Check-only params: channel={channel}, base_dir={base_dir}, unity_dir={unity_dir}"
             )
 
-            py_info = get_python_update_info(base_dir=base_dir, channel=channel)
-            unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel)
+            py_info = get_python_update_info(base_dir=base_dir, channel=channel, settings=self.settings)
+            unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel, settings=self.settings)
             if _has_pending_python_restart():
                 py_info = dict(py_info or {})
                 py_info["current_version"] = _pending_python_restart_version() or py_info.get("current_version") or "?"
@@ -283,7 +347,7 @@ def setup_updates_settings_controls(self, parent):
             )
 
             channel = self.settings.get("UPDATE_CHANNEL", "stable")
-            tester_code = self.settings.get("TESTER_CODE") or None
+            tester_code = _effective_tester_code() or None
             base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
             unity_dir = self.settings.get("UNITY_INSTALL_DIR") or None
 
@@ -292,8 +356,8 @@ def setup_updates_settings_controls(self, parent):
                 f"tester_code={'set' if tester_code else 'empty'}"
             )
 
-            py_info = get_python_update_info(base_dir=base_dir, channel=channel)
-            unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel)
+            py_info = get_python_update_info(base_dir=base_dir, channel=channel, settings=self.settings)
+            unity_info = get_unity_update_info(base_dir=base_dir, unity_dir=unity_dir, channel=channel, settings=self.settings)
             if _has_pending_python_restart():
                 py_info = dict(py_info or {})
                 py_info["current_version"] = _pending_python_restart_version() or py_info.get("current_version") or "?"
@@ -336,6 +400,7 @@ def setup_updates_settings_controls(self, parent):
                     restart_on_success=False,
                     update_mode=(self.settings.get("UPDATE_MODE", "diff") or "diff"),
                     preserve_prompts=bool(self.settings.get("UPDATE_PRESERVE_PROMPTS", True)),
+                    settings=self.settings,
                 ))
 
             if bool(unity_info.get("available")):
@@ -348,6 +413,7 @@ def setup_updates_settings_controls(self, parent):
                     tester_code=tester_code,
                     on_progress=_on_progress,
                     auto_update=True,
+                    settings=self.settings,
                 )
 
             _refresh_version_labels()
@@ -389,8 +455,12 @@ def setup_updates_settings_controls(self, parent):
             _set_status_level(f"{_('Ошибка запуска Unity', 'Unity launch error')}: {e}", "error")
 
     def _ensure_tester_code() -> bool:
+        if not _selected_source().requires_tester_code:
+            return True
+
         current = tester_entry.text().strip()
         if current:
+            _save_tester_codes(current)
             return True
 
         code, ok = QInputDialog.getText(
@@ -419,7 +489,7 @@ def setup_updates_settings_controls(self, parent):
             return False
 
         tester_entry.setText(code)
-        _save_tester()
+        _save_tester_codes(code)
         return True
 
     # Current versions
@@ -467,6 +537,64 @@ def setup_updates_settings_controls(self, parent):
         except Exception:
             pass
 
+    # Contour
+    contour_row = QWidget()
+    contour_row.setObjectName("UpdatesContourRow")
+    contour_row.setStyleSheet("QWidget#UpdatesContourRow { background: transparent; }")
+    contour_layout = QHBoxLayout(contour_row)
+    contour_layout.setContentsMargins(0, 4, 0, 0)
+    contour_layout.setSpacing(8)
+
+    contour_lbl = tr_set(QLabel(), "Контур обновлений:", "Update contour:")
+    contour_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    contour_layout.addWidget(contour_lbl)
+
+    contour_combo = QComboBox()
+    contour_combo.setStyleSheet(
+        "QComboBox { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: #f3edf6; padding: 7px 10px; }"
+        "QComboBox:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
+        "QComboBox::drop-down { border: none; width: 26px; }"
+        "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(183, 75, 125,0.24); color: #f3edf6; selection-background-color: rgba(183, 75, 125,0.30); }"
+    )
+    contour_combo.addItem(_("Тестовый", "Test"), TEST_CONTOUR)
+    contour_combo.addItem(_("Релизный", "Release"), RELEASE_CONTOUR)
+    current_contour = str(self.settings.get(UPDATE_CONTOUR_KEY, TEST_CONTOUR) or TEST_CONTOUR).strip().lower()
+    contour_idx = contour_combo.findData(current_contour)
+    if contour_idx >= 0:
+        contour_combo.setCurrentIndex(contour_idx)
+    tr_set(
+        contour_combo,
+        "Тестовый - релизы из репозитория разработки, архивы могут быть с паролем.\n"
+        "Релизный - публичные релизы без пароля.",
+        "Test - releases from the development repository; archives may require a password.\n"
+        "Release - public releases without a password.",
+        "setToolTip",
+    )
+    contour_layout.addWidget(contour_combo)
+
+    contour_badge = QLabel("")
+    contour_badge.setStyleSheet(
+        "QLabel { color: #ffffff; background-color: rgba(183,75,125,0.34); border: 1px solid rgba(183,75,125,0.40); "
+        "border-radius: 9px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
+    )
+    contour_badge.setVisible(False)
+    contour_layout.addWidget(contour_badge)
+    contour_layout.addStretch()
+    parent.addWidget(contour_row)
+
+    def _save_contour():
+        value = contour_combo.currentData() or TEST_CONTOUR
+        current_value = str(self.settings.get(UPDATE_CONTOUR_KEY, TEST_CONTOUR) or TEST_CONTOUR).strip().lower()
+        if value == current_value:
+            return
+        logger.info(f"[updates_ui] UPDATE_CONTOUR -> {value}")
+        _persist_setting(UPDATE_CONTOUR_KEY, value)
+        _refresh_contour_state()
+        _reset_update_context()
+
+    contour_combo.activated.connect(lambda _index: QTimer.singleShot(0, _save_contour))
+
     # Channel
     channel_row = QWidget()
     channel_row.setObjectName("UpdatesChannelRow")
@@ -502,6 +630,7 @@ def setup_updates_settings_controls(self, parent):
             return
         logger.info(f"[updates_ui] UPDATE_CHANNEL -> {text}")
         _persist_setting("UPDATE_CHANNEL", text)
+        _reset_update_context()
 
     channel_combo.activated.connect(lambda _index: QTimer.singleShot(0, lambda: _save_channel(channel_combo.currentText())))
     channel_layout.addWidget(channel_combo)
@@ -626,19 +755,29 @@ def setup_updates_settings_controls(self, parent):
     )
     tester_entry.setEchoMode(QLineEdit.EchoMode.Password)
     tr_set(tester_entry, "пароль для тестовых архивов", "password for test archives", "setPlaceholderText")
-    tester_entry.setText(self.settings.get("TESTER_CODE", ""))
+    tester_entry.setText(_effective_tester_code())
     tr_set(tester_entry, "Пароль для распаковки зашифрованных тестовых архивов.",
             "Password to unpack encrypted tester archives.", "setToolTip")
 
     def _save_tester():
-        logger.info("[updates_ui] TESTER_CODE updated")
-        _persist_setting("TESTER_CODE", tester_entry.text())
+        _save_tester_codes(tester_entry.text())
 
     tester_entry.editingFinished.connect(_save_tester)
     tester_layout.addWidget(tester_entry)
     parent.addWidget(tester_row)
 
+    tester_hint = QLabel(
+        _(
+            "Пароль нужен только в тестовом контуре. Последние коды сохраняются в истории и перебираются автоматически.",
+            "A password is only needed in the test contour. Recent codes are kept in history and retried automatically.",
+        )
+    )
+    tester_hint.setWordWrap(True)
+    tester_hint.setStyleSheet("QLabel { color: #bca9bb; font-size: 11px; padding: 0 0 2px 0; }")
+    parent.addWidget(tester_hint)
+
     self._tester_code_entry = tester_entry
+    _refresh_contour_state()
 
     # Unity install dir
     unity_row = QWidget()
