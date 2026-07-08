@@ -29,7 +29,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "notes"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -37,6 +37,7 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "notes": False,
 }
 
 
@@ -103,8 +104,10 @@ class ModelController:
 
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
+        from managers.tools.builtin.notes_tool import NotesTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
         self.model.tool_manager.register(ReminderTool())
+        self.model.tool_manager.register(NotesTool())
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()

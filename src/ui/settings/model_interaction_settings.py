@@ -190,6 +190,17 @@ def setup_model_interaction_controls(self, parent):
              'Поддерживает относительные даты: "через 2 часа", "завтра в 18:00".',
              'Mita can add, view and delete reminders via tool. '
              'Supports relative dates: "through 2 hours", "tomorrow at 18:00".')},
+        {'label': _('Заметки', 'Notes'), 'key': 'TOOL_ENABLED_notes',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _(
+             'Мита может вести заметки в markdown-файлах: создавать, дополнять, '
+             'искать и править. Файлы лежат в папке Notes/ — их можно открыть в редакторе. '
+             'Удобно для баг-репортов, TODO и наблюдений. '
+             'Это единственная тула, которая пишет на диск.',
+             'Mita can keep notes in markdown files: create, append, search and edit. '
+             'Files live in the Notes/ folder and can be opened in any editor. '
+             'Useful for bug reports, TODOs and observations. '
+             'This is the only tool that writes to disk.')},
 
         {'label': _('Макс. глубина цепочки тулов', 'Max tool chain depth'),
          'key': 'TOOL_MAX_DEPTH', 'type': 'entry',
