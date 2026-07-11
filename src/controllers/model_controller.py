@@ -1032,10 +1032,11 @@ class ModelController:
         char_name = getattr(char, "name", "") or ""
         preset_id = preset_id_override
 
+        rag_context = ""
         _rag_skip = event_type in ("compress", "graph_extract") or policy.react_level == 1
         if bool(self.settings.get("RAG_ENABLED", False)) and not _rag_skip:
             prompt_set_path = getattr(char, "base_data_path", None)
-            system_input = self.process_rag(char_id, system_input, user_input, prompt_set_path=prompt_set_path)
+            rag_context = self.process_rag(char_id, system_input, user_input, prompt_set_path=prompt_set_path)
 
         if event_type in ("compress", "graph_extract"):
             messages = []
@@ -1222,6 +1223,7 @@ class ModelController:
             "event_type": event_type,
             "user_input": user_input,
             "system_input": system_input,
+            "rag_context": rag_context,
             "hidden_user_context": hidden_user_context,
             "image_data": image_data,
             "memory_limit": memory_limit,
@@ -1514,8 +1516,13 @@ class ModelController:
 
     def process_rag(self, char_id, system_input, user_input, prompt_set_path=None):
         # ---------------------------------------------------------------------
-        # RAG выполняется ДО BUILD_PROMPT
-        # результаты кладутся в system prompt
+        # RAG выполняется ДО BUILD_PROMPT.
+        # Возвращает готовый RAG-блок ОТДЕЛЬНОЙ строкой (не приклеивается к
+        # system_input): в prompt_controller он кладётся самостоятельным
+        # сообщением ПЕРЕД событием/репликой, чтобы фактическая инструкция
+        # (событие или сообщение игрока) оставалась последней в контексте.
+        # system_input здесь используется только как запрос для поиска, когда
+        # реплики игрока нет (idle/timeout/reminder).
         # Templates can be customized per prompt set via Structural/ files:
         #   rag_memory_item.txt, rag_history_item.txt, rag_wrapper.txt
         from utils.template_loader import load_optional_template
@@ -1621,14 +1628,13 @@ class ModelController:
                         if forgotten_count > 0:
                             rag_block += f"\nForgotten pool: {forgotten_count} memories"
 
-                        separator = "\n\n" if system_input else ""
-                        system_input = f"{system_input}{separator}{rag_block}"
                         logger.info(
-                            f"[{char_id}] RAG blocks injected into system_input "
+                            f"[{char_id}] RAG blocks built as separate message "
                             f"(mem={len(mem_lines)}, hist={len(hist_lines)}, graph={len(graph_lines)}).")
+                        return rag_block
             except Exception as e:
                 logger.warning(f"[{char_id}] Failed to run RAG (ignored): {e}", exc_info=True)
-        return system_input
+        return ""
 
     # ---------------------------------------------------------------------
     # Structured Output processing

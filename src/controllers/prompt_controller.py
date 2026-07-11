@@ -237,6 +237,7 @@ class PromptController:
         event_type: str = data.get("event_type", "chat")
         user_input: str = data.get("user_input", "") or ""
         system_input: str = data.get("system_input", "") or ""
+        rag_context: str = data.get("rag_context", "") or ""
         hidden_user_context: str = data.get("hidden_user_context", "") or ""
         image_data = data.get("image_data") or []
 
@@ -351,6 +352,12 @@ class PromptController:
                 f"Day of week: {current_time.strftime('%A')}"
             )
         })
+
+        # RAG-контекст (воспоминания/past_context/граф) — отдельным сообщением
+        # ПЕРЕД событием/репликой, чтобы фактическая инструкция оставалась
+        # последней в контексте (модель сильнее опирается на конец).
+        if rag_context:
+            messages.append({"role": "system", "content": rag_context})
 
         event_types_as_event_role = {"idle_timeout", "idle", "timer", "reminder"}
 
