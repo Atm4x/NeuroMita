@@ -70,4 +70,22 @@ API_TEMPLATES_DATA = [
         "models_url": "https://io.net/docs/guides/intelligence/exploring-ai-models",
         "key_url": "https://ai.io.net/ai/api-keys",
     },
+    {
+        "id": 5,
+        "name": "KodikRouter",
+        "pricing": "mixed",
+        "url": "https://api.kodikrouter.ru/v1/chat/completions",
+        "default_model": "openai/gpt-oss-20b:free",
+        "known_models": [
+            "poolside/laguna-m.1:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "openai/gpt-oss-20b:free",
+        ],
+        "protocol_id": "openrouter_default",
+        "test_url": "https://api.kodikrouter.ru/v1/models",
+        "filter_fn": "kodikrouter_filter",
+        "documentation_url": "https://kodikrouter.ru/docs/base",
+        "models_url": "https://kodikrouter.ru/models",
+        "key_url": "https://kodikrouter.ru/keys",
+    },
 ]

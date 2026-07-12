@@ -7,6 +7,8 @@ def apply_filter(filter_fn: str, data: dict) -> dict:
         return openrouter_filter(data)
     if filter_fn == "aiio_filter":
         return aiio_filter(data)
+    if filter_fn == "kodikrouter_filter":
+        return kodikrouter_filter(data)
     return data
 
 
@@ -191,3 +193,31 @@ def aiio_filter(data: dict) -> dict:
         })
         
     return {'models': final_list}
+
+
+def kodikrouter_filter(data: dict) -> dict:
+    """
+    Фильтр для KodikRouter. Модели уже приходят с префиксами,
+    поэтому просто формируем список словарей.
+    """
+    if 'data' not in data:
+        return data
+
+    raw_models = data['data']
+    result = []
+
+    for model in raw_models:
+        if not isinstance(model, dict):
+            continue
+        model_id = model.get('id', '').strip()
+        if not model_id:
+            continue
+
+        is_free = ':free' in model_id.lower()
+        result.append({
+            'id': model_id,
+            'name': model.get('name') or model_id,
+            'is_free': is_free,
+        })
+
+    return {'models': result}
