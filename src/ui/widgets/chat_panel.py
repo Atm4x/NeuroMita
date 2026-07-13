@@ -8,6 +8,7 @@ from PyQt6.QtCore import QBuffer, QEvent, QIODevice, QPoint, Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -38,6 +39,72 @@ from ui.widgets.chat_panel_presentation import (
 from ui.widgets.image_preview_widget import ImagePreviewBar
 from ui.widgets.mita_status_widget import MitaStatusWidget
 from utils import _
+
+
+class _SessionSelector(QComboBox):
+    """Compact save (session) picker. Repopulates on open, switches on selection.
+
+    Talks to SessionService directly (guarded): if it isn't registered — e.g. the
+    GUI-only fallback runtime — the selector stays hidden."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ChatStripSessionSelector")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        tr_set(self, "Сейв (сессия)", "Save (session)", "setToolTip")
+        self.setMinimumWidth(120)
+        self.activated.connect(self._on_activated)
+        self.refresh()
+
+    def _service(self):
+        try:
+            from core.services import use
+            from services.contracts import SessionService
+            return use(SessionService)
+        except Exception:
+            return None
+
+    def refresh(self) -> None:
+        svc = self._service()
+        if svc is None:
+            self.hide()
+            return
+        try:
+            sessions = svc.list_sessions()
+            current = svc.current()
+        except Exception:
+            self.hide()
+            return
+        self.blockSignals(True)
+        self.clear()
+        current_index = 0
+        for i, s in enumerate(sessions):
+            sid = str(s.get("session_id", ""))
+            label = sid if sid != "default" else _("Основной (default)", "Main (default)")
+            self.addItem(label, sid)
+            if sid == current:
+                current_index = i
+        if self.count():
+            self.setCurrentIndex(current_index)
+        self.blockSignals(False)
+        self.setVisible(self.count() > 0)
+
+    def showPopup(self) -> None:  # noqa: N802 (Qt signature)
+        self.refresh()
+        super().showPopup()
+
+    def _on_activated(self, index: int) -> None:
+        svc = self._service()
+        if svc is None:
+            return
+        sid = self.itemData(index)
+        if not sid:
+            return
+        try:
+            if sid != svc.current():
+                svc.switch(str(sid))
+        except Exception:
+            pass
 
 
 class ChatPanel(QWidget):
@@ -268,6 +335,9 @@ class ChatPanel(QWidget):
         layout.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         self._conversation_title_label = title
         layout.addStretch(1)
+
+        self._session_selector = _SessionSelector()
+        layout.addWidget(self._session_selector, 0, Qt.AlignmentFlag.AlignVCenter)
 
         history_button = QPushButton()
         tr_set(history_button, "История", "History", "setText")

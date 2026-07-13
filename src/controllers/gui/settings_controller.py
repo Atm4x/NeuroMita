@@ -8,6 +8,8 @@ class SettingsController(BaseController):
         self.event_bus.subscribe(Events.GUI.UPDATE_CHAT_FONT_SIZE, self._on_update_chat_font_size, weak=False)
         self.event_bus.subscribe(Events.GUI.RELOAD_CHAT_HISTORY, self._on_reload_chat_history, weak=False)
         self.event_bus.subscribe(Events.GUI.REMOVE_LAST_CHAT_WIDGETS, self._on_remove_last_chat_widgets, weak=False)
+        # Смена сейва (в т.ч. инициированная игрой): перечитать чат и состояние персонажа.
+        self.event_bus.subscribe(Events.Session.CHANGED, self._on_session_changed, weak=False)
         self._subscribe_settings(
             self._on_setting_changed,
             keys=(
@@ -38,6 +40,18 @@ class SettingsController(BaseController):
             self.view.load_chat_history_signal.emit()
         elif self.view and hasattr(self.view, 'load_chat_history'):
             self.view.load_chat_history()
+
+    def _on_session_changed(self, event: Event):
+        # Персонажи уже перечитаны SessionManager.switch — обновляем GUI:
+        # чат текущей сессии и панели состояния персонажа (переменные изменились).
+        try:
+            self._on_reload_chat_history(event)
+        except Exception as exc:
+            logger.error(f"[SettingsController] reload chat on session change failed: {exc}", exc_info=True)
+        try:
+            self.event_bus.emit(Events.Character.CURRENT_CHANGED, {})
+        except Exception:
+            pass
 
     def _on_remove_last_chat_widgets(self, event: Event):
         count = int((event.data or {}).get("count", 1))
