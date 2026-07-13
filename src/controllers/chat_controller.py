@@ -453,6 +453,17 @@ class ChatController:
                     "character_id": character_id or "",
                 }, delivery=EventDelivery.ORDERED)
 
+            # Снимок производного состояния до хода: перегенерация/удаление последнего
+            # ответа откатят по нему переменные и память, а не только текст.
+            pre_turn_state = None
+            if eff_policy.echo_to_ui:
+                _snap_char = self._get_character_ref(character_id)
+                if _snap_char is not None:
+                    try:
+                        pre_turn_state = _snap_char.capture_turn_state()
+                    except Exception:
+                        pre_turn_state = None
+
             result: ChatGenerationResult | None = use(GenerationService).generate_chat(
                 ChatGenerationRequest(
                     character_id=character_id,
@@ -501,6 +512,15 @@ class ChatController:
                 return None
 
             effective_character_name = self._resolve_character_name(effective_character_id)
+
+            # Персистим снимок хода под message_id ответа (для отката перегенерацией).
+            if pre_turn_state is not None and assistant_message_id:
+                try:
+                    _snap_char = self._get_character_ref(character_id)
+                    if _snap_char is not None:
+                        _snap_char.save_turn_state(assistant_message_id, pre_turn_state)
+                except Exception:
+                    pass
 
             if is_streaming and eff_policy.echo_to_ui:
                 # Мы НЕ вызываем PREPARE_STREAM_UI здесь, так как он будет вызван
@@ -784,10 +804,11 @@ class ChatController:
             logger.warning(f"[ChatController] DELETE_MESSAGES_FROM: персонаж '{character_id}' не найден")
             return
 
+        history_data = character.history_manager.load_history()
+        messages = history_data.get("messages", [])
+
         if edit_mode:
             # Find the message text before deleting
-            history_data = character.history_manager.load_history()
-            messages = history_data.get("messages", [])
             target_msg = next((m for m in messages if m.get("message_id") == message_id), None)
             if target_msg:
                 content = target_msg.get("content", "")
@@ -798,11 +819,35 @@ class ChatController:
                             text = item.get("text") or item.get("content", "")
                             break
                 character.history_manager.delete_messages_from(message_id)
+                self._rollback_derived_state(character, messages, message_id)
                 self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
                 self.event_bus.emit(Events.GUI.INSERT_TEXT_TO_INPUT, text)
         else:
             character.history_manager.delete_messages_from(message_id)
+            self._rollback_derived_state(character, messages, message_id)
             self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
+
+    def _rollback_derived_state(self, character, messages, from_message_id: str) -> bool:
+        """Откатывает переменные/память к состоянию перед удаляемым ходом.
+
+        Находит первый assistant-ответ, начиная с from_message_id, и восстанавливает
+        снимок, снятый перед этим ходом (см. Character.capture_turn_state)."""
+        if character is None or not messages or not hasattr(character, "restore_turn_state"):
+            return False
+        try:
+            start = 0
+            for i, m in enumerate(messages):
+                if str(m.get("message_id") or "") == str(from_message_id or ""):
+                    start = i
+                    break
+            for m in messages[start:]:
+                if m.get("role") == "assistant":
+                    mid = str(m.get("message_id") or "")
+                    if mid and character.restore_turn_state(mid):
+                        return True
+        except Exception as e:
+            logger.warning(f"[ChatController] rollback derived state failed: {e}")
+        return False
 
     def _on_regenerate(self, event: Event):
         data = event.data or {}
@@ -859,6 +904,7 @@ class ChatController:
                 character.history_manager.delete_messages_from(message_id)
             else:
                 character.history_manager.delete_messages_from_row(assistant.get("_history_row_id"))
+            self._rollback_derived_state(character, messages, str(assistant.get("message_id") or ""))
             widgets_to_remove = self._count_widgets_for_slice(messages[last_assistant_idx:])
             self.event_bus.emit(Events.GUI.REMOVE_LAST_CHAT_WIDGETS, {"count": widgets_to_remove})
             self.event_bus.emit(Events.Chat.SEND_MESSAGE, {
@@ -876,6 +922,7 @@ class ChatController:
         else:
             character.history_manager.delete_messages_from_row(cut_message.get("_history_row_id"))
 
+        self._rollback_derived_state(character, messages, str(messages[last_assistant_idx].get("message_id") or ""))
         widgets_to_remove = self._count_widgets_for_slice(messages[cut_idx:])
         self.event_bus.emit(Events.GUI.REMOVE_LAST_CHAT_WIDGETS, {"count": widgets_to_remove})
 

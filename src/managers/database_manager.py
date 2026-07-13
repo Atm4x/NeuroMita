@@ -647,6 +647,29 @@ class DatabaseManager:
                ON session_checkpoints(parent_session_id, created_at)'''
         )
 
+        # Снимок производного состояния перед ходом (переменные + метки памяти),
+        # чтобы перегенерация/удаление последнего ответа откатывали не только текст,
+        # но и attitude/stress/флаги и добавленную/забытую память. Ключ — message_id ответа.
+        cursor.execute(
+            '''
+               CREATE TABLE IF NOT EXISTS turn_state_snapshots (
+                   session_id TEXT NOT NULL DEFAULT 'default',
+                   character_id TEXT NOT NULL,
+                   message_id TEXT NOT NULL,
+                   variables_json TEXT,
+                   memory_max_eternal_id INTEGER,
+                   memory_forgotten_json TEXT,
+                   memory_deleted_json TEXT,
+                   created_at TEXT,
+                   PRIMARY KEY (session_id, character_id, message_id)
+               )
+           '''
+        )
+        cursor.execute(
+            '''CREATE INDEX IF NOT EXISTS idx_turn_snapshots_scope
+               ON turn_state_snapshots(session_id, character_id, created_at)'''
+        )
+
         conn.commit()
         conn.close()
 

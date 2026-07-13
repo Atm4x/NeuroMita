@@ -354,6 +354,99 @@ class MemoryManager(CharacterScopedService):
     def save_memories(self):
         pass
 
+    # ------------------------------------------------------------------
+    # Turn-state rollback (для перегенерации/удаления последнего ответа)
+    # ------------------------------------------------------------------
+    def snapshot_state(self) -> dict:
+        """Снимок состояния памяти (session, character): граница eternal_id и множества
+        забытых/удалённых. По нему restore_state() откатывает добавления/забывания хода."""
+        self._ensure_memories_schema()
+        cols = self._mem_cols()
+        state = {"max": -1, "forgotten": [], "deleted": []}
+        conn = self.db.get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT COALESCE(MAX(eternal_id), -1) FROM memories WHERE character_id=?{self._session_and()}",
+                (self.storage_key, *self._session_params()),
+            )
+            state["max"] = int(cur.fetchone()[0] or -1)
+            if "is_forgotten" in cols:
+                cur.execute(
+                    f"SELECT eternal_id FROM memories WHERE character_id=?{self._session_and()} "
+                    f"AND is_forgotten=1 AND eternal_id IS NOT NULL",
+                    (self.storage_key, *self._session_params()),
+                )
+                state["forgotten"] = [int(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+            if "is_deleted" in cols:
+                cur.execute(
+                    f"SELECT eternal_id FROM memories WHERE character_id=?{self._session_and()} "
+                    f"AND is_deleted=1 AND eternal_id IS NOT NULL",
+                    (self.storage_key, *self._session_params()),
+                )
+                state["deleted"] = [int(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+        except Exception as e:
+            logging.warning(f"[MemoryManager] snapshot_state failed: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return state
+
+    def restore_state(self, state: dict) -> None:
+        """Возвращает память к снимку snapshot_state(): память, добавленную после границы,
+        помечает удалённой; существующей (eternal_id <= max) выставляет флаги как в снимке."""
+        if not isinstance(state, dict):
+            return
+        self._ensure_memories_schema()
+        cols = self._mem_cols()
+        max_eid = int(state.get("max", -1))
+        forgotten = {int(x) for x in (state.get("forgotten") or [])}
+        deleted = {int(x) for x in (state.get("deleted") or [])}
+        conn = self.db.get_connection()
+        try:
+            cur = conn.cursor()
+            if "is_deleted" in cols:
+                cur.execute(
+                    f"UPDATE memories SET is_deleted=1 WHERE character_id=?{self._session_and()} AND eternal_id > ?",
+                    (self.storage_key, *self._session_params(), max_eid),
+                )
+            if "is_forgotten" in cols:
+                self._restore_flag_set(cur, "is_forgotten", forgotten, max_eid)
+            if "is_deleted" in cols:
+                self._restore_flag_set(cur, "is_deleted", deleted, max_eid)
+            conn.commit()
+        except Exception as e:
+            logging.warning(f"[MemoryManager] restore_state failed: {e}", exc_info=True)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        try:
+            self._calculate_total_characters()
+        except Exception:
+            pass
+
+    def _restore_flag_set(self, cur, col: str, ids: set, max_eid: int) -> None:
+        """Для eternal_id <= max_eid выставляет col=1 где eternal_id в ids, иначе 0."""
+        base = f" WHERE character_id=?{self._session_and()} AND eternal_id <= ? AND eternal_id IS NOT NULL"
+        cur.execute(
+            f"UPDATE memories SET {col}=0{base}",
+            (self.storage_key, *self._session_params(), max_eid),
+        )
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            cur.execute(
+                f"UPDATE memories SET {col}=1{base} AND eternal_id IN ({placeholders})",
+                (self.storage_key, *self._session_params(), max_eid, *ids),
+            )
+
     def add_memory(self, content, date=None, priority="Normal", memory_type="fact", skip_if_exists=False, entities=None):
         """Add a new memory. Returns the eternal_id of the created memory, or None."""
         if skip_if_exists and content:

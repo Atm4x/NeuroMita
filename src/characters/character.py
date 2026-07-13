@@ -246,6 +246,57 @@ class Character:
             self.history_manager.update_variables_batch(to_flush)
         self._dirty_vars.clear()
 
+    def capture_turn_state(self) -> Dict[str, Any]:
+        """Снимок производного состояния перед ходом: копия переменных + метки памяти.
+        Используется для отката при перегенерации/удалении последнего ответа."""
+        memory_state: Dict[str, Any] = {}
+        try:
+            if getattr(self, "memory_system", None) is not None:
+                memory_state = self.memory_system.snapshot_state()
+        except Exception:
+            memory_state = {}
+        return {"variables": dict(self.variables), "memory": memory_state}
+
+    def save_turn_state(self, message_id: str, state: Dict[str, Any]) -> None:
+        """Персистит снимок хода (ключ — message_id ответа) и подрезает старые."""
+        if not message_id or not isinstance(state, dict):
+            return
+        try:
+            self.history_manager.save_turn_snapshot(
+                message_id, state.get("variables") or {}, state.get("memory") or {}
+            )
+            self.history_manager.prune_turn_snapshots()
+        except Exception as e:
+            logger.warning(f"[{self.char_id}] save_turn_state failed: {e}")
+
+    def restore_turn_state(self, message_id: str) -> bool:
+        """Откатывает переменные и память к снимку перед ходом message_id.
+        Возвращает True, если снимок нашёлся и применён."""
+        snap = None
+        try:
+            snap = self.history_manager.load_turn_snapshot(message_id)
+        except Exception:
+            snap = None
+        if not snap:
+            return False
+        try:
+            variables = snap.get("variables") or {}
+            self.history_manager.replace_all_variables(variables)
+            self.variables = dict(variables)
+            self._dirty_vars.clear()
+        except Exception as e:
+            logger.warning(f"[{self.char_id}] restore_turn_state variables failed: {e}")
+        try:
+            if getattr(self, "memory_system", None) is not None:
+                self.memory_system.restore_state(snap.get("memory") or {})
+                try:
+                    self.memory_system.load_memories()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"[{self.char_id}] restore_turn_state memory failed: {e}")
+        return True
+
     def consume_pending_targets(self) -> list[str]:
         targets = getattr(self, "_pending_targets", [])
         self._pending_targets = []

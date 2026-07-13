@@ -1282,6 +1282,137 @@ class HistoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Turn-state snapshots (откат переменных при перегенерации/удалении хода)
+    # ------------------------------------------------------------------
+    def save_turn_snapshot(self, message_id: str, variables: dict, memory_state: dict) -> None:
+        """Сохраняет снимок производного состояния перед ходом; ключ — message_id ответа."""
+        if not message_id:
+            return
+        from datetime import datetime as _dt
+        try:
+            variables_json = json.dumps(variables or {}, ensure_ascii=False)
+            mem = memory_state or {}
+            forgotten_json = json.dumps([int(x) for x in (mem.get("forgotten") or [])])
+            deleted_json = json.dumps([int(x) for x in (mem.get("deleted") or [])])
+            max_eid = int(mem.get("max", -1))
+        except Exception:
+            return
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO turn_state_snapshots
+                    (session_id, character_id, message_id, variables_json,
+                     memory_max_eternal_id, memory_forgotten_json, memory_deleted_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, character_id, message_id) DO UPDATE SET
+                    variables_json=excluded.variables_json,
+                    memory_max_eternal_id=excluded.memory_max_eternal_id,
+                    memory_forgotten_json=excluded.memory_forgotten_json,
+                    memory_deleted_json=excluded.memory_deleted_json,
+                    created_at=excluded.created_at
+                """,
+                (self.session_id, self.storage_key, str(message_id), variables_json,
+                 max_eid, forgotten_json, deleted_json, _dt.now().isoformat()),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[HistoryManager] save_turn_snapshot failed: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def load_turn_snapshot(self, message_id: str) -> dict | None:
+        if not message_id:
+            return None
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT variables_json, memory_max_eternal_id, memory_forgotten_json, memory_deleted_json
+                FROM turn_state_snapshots
+                WHERE session_id=? AND character_id=? AND message_id=?
+                """,
+                (self.session_id, self.storage_key, str(message_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "variables": json.loads(row[0]) if row[0] else {},
+                "memory": {
+                    "max": int(row[1]) if row[1] is not None else -1,
+                    "forgotten": json.loads(row[2]) if row[2] else [],
+                    "deleted": json.loads(row[3]) if row[3] else [],
+                },
+            }
+        except Exception as e:
+            logger.warning(f"[HistoryManager] load_turn_snapshot failed: {e}")
+            return None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def prune_turn_snapshots(self, keep: int = 30) -> None:
+        """Держит не более keep последних снимков на (session, character)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM turn_state_snapshots
+                WHERE session_id=? AND character_id=? AND message_id NOT IN (
+                    SELECT message_id FROM turn_state_snapshots
+                    WHERE session_id=? AND character_id=?
+                    ORDER BY created_at DESC LIMIT ?
+                )
+                """,
+                (self.session_id, self.storage_key, self.session_id, self.storage_key, int(keep)),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[HistoryManager] prune_turn_snapshots failed: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def replace_all_variables(self, variables: dict) -> None:
+        """Полностью заменяет переменные (session, character) переданным набором:
+        убирает добавленные за ход ключи и восстанавливает прежние значения."""
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            if self._variables_has_session_col(cursor):
+                cursor.execute(
+                    "DELETE FROM variables WHERE session_id=? AND character_id=?",
+                    (self.session_id, self.storage_key),
+                )
+            else:
+                cursor.execute("DELETE FROM variables WHERE character_id=?", (self.storage_key,))
+            for key, value in (variables or {}).items():
+                self._upsert_variable(cursor, key, json.dumps(value, ensure_ascii=False))
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[HistoryManager] replace_all_variables failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     def save_missed_history(self, missed_messages: list):
         for msg in missed_messages or []:
             if not isinstance(msg, dict):
