@@ -1,16 +1,19 @@
 """SessionManagerDialog — управление сейвами (сессиями) и их чекпоинтами из песочницы.
 
-Ходит напрямую в SessionService (как _SessionSelector). Мутирующие операции
-(переключение сейва, копирование, удаление, чекпоинты, откат) блокируются, когда
-подключена игра: тогда сейвами/чекпоинтами управляет клиент Unity, а Python-БД
-меняется только по его командам — иначе БД и папка сейва Unity разойдутся.
+Ходит напрямую в SessionService (как _SessionSelector). Списки с контекстным меню
+(правый клик), у каждого сейва/чекпоинта можно задать комментарий и цвет.
+Мутирующие операции (переключение, копирование, удаление, чекпоинты, откат)
+блокируются, когда подключена игра: тогда сейвами управляет клиент Unity, иначе
+Python-БД и папка сейва Unity разойдутся. Списки при этом остаются для просмотра.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QColorDialog,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -18,6 +21,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -26,14 +30,23 @@ from PyQt6.QtWidgets import (
 
 from utils import _
 
+# Пресеты цветов для быстрой пометки (подпись RU/EN + hex).
+_COLOR_PRESETS = [
+    ("Красный", "Red", "#e53935"),
+    ("Оранжевый", "Orange", "#fb8c00"),
+    ("Жёлтый", "Yellow", "#fdd835"),
+    ("Зелёный", "Green", "#43a047"),
+    ("Голубой", "Blue", "#1e88e5"),
+    ("Фиолетовый", "Purple", "#8e24aa"),
+]
+
 
 class SessionManagerDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(_("Сейвы и чекпоинты", "Saves & checkpoints"))
-        self.setMinimumSize(720, 460)
+        self.setMinimumSize(760, 480)
         self.setObjectName("SessionManagerDialog")
-
         self._build_ui()
         self.refresh()
 
@@ -76,27 +89,16 @@ class SessionManagerDialog(QDialog):
         # --- Saves column ---
         saves_box = QVBoxLayout()
         saves_box.setSpacing(6)
-        saves_title = QLabel(_("Сейвы", "Saves"))
+        saves_title = QLabel(_("Сейвы  (правый клик — действия)", "Saves  (right-click for actions)"))
         saves_title.setStyleSheet("font-weight: 600;")
         saves_box.addWidget(saves_title)
 
         self._sessions_list = QListWidget()
+        self._sessions_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._sessions_list.customContextMenuRequested.connect(self._sessions_menu)
         self._sessions_list.currentItemChanged.connect(lambda *_: self._on_session_selected())
+        self._sessions_list.itemDoubleClicked.connect(lambda *_: self._do_switch())
         saves_box.addWidget(self._sessions_list, 1)
-
-        self._btn_switch = QPushButton(_("Открыть", "Switch to"))
-        self._btn_copy = QPushButton(_("Копия / ветка", "Copy / branch"))
-        self._btn_rename = QPushButton(_("Переименовать", "Rename"))
-        self._btn_clear = QPushButton(_("Очистить", "Clear"))
-        self._btn_delete = QPushButton(_("Удалить", "Delete"))
-        self._btn_switch.clicked.connect(self._do_switch)
-        self._btn_copy.clicked.connect(self._do_copy)
-        self._btn_rename.clicked.connect(self._do_rename)
-        self._btn_clear.clicked.connect(self._do_clear)
-        self._btn_delete.clicked.connect(self._do_delete)
-        for b in (self._btn_switch, self._btn_copy, self._btn_rename, self._btn_clear, self._btn_delete):
-            saves_box.addWidget(b)
-
         columns.addLayout(saves_box, 1)
 
         sep = QFrame()
@@ -107,23 +109,15 @@ class SessionManagerDialog(QDialog):
         # --- Checkpoints column ---
         ck_box = QVBoxLayout()
         ck_box.setSpacing(6)
-        self._ck_title = QLabel(_("Чекпоинты", "Checkpoints"))
+        self._ck_title = QLabel(_("Чекпоинты  (правый клик — действия)", "Checkpoints  (right-click for actions)"))
         self._ck_title.setStyleSheet("font-weight: 600;")
         ck_box.addWidget(self._ck_title)
 
         self._checkpoints_list = QListWidget()
-        self._checkpoints_list.currentItemChanged.connect(lambda *_: self._update_buttons())
+        self._checkpoints_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._checkpoints_list.customContextMenuRequested.connect(self._checkpoints_menu)
+        self._checkpoints_list.itemDoubleClicked.connect(lambda *_: self._do_rollback())
         ck_box.addWidget(self._checkpoints_list, 1)
-
-        self._btn_ck_create = QPushButton(_("Создать чекпоинт", "Create checkpoint"))
-        self._btn_ck_rollback = QPushButton(_("Откатить к чекпоинту", "Roll back to checkpoint"))
-        self._btn_ck_delete = QPushButton(_("Удалить чекпоинт", "Delete checkpoint"))
-        self._btn_ck_create.clicked.connect(self._do_create_checkpoint)
-        self._btn_ck_rollback.clicked.connect(self._do_rollback)
-        self._btn_ck_delete.clicked.connect(self._do_delete_checkpoint)
-        for b in (self._btn_ck_create, self._btn_ck_rollback, self._btn_ck_delete):
-            ck_box.addWidget(b)
-
         columns.addLayout(ck_box, 1)
 
         # --- footer ---
@@ -138,7 +132,7 @@ class SessionManagerDialog(QDialog):
         root.addLayout(footer)
 
     # ------------------------------------------------------------------
-    # data
+    # helpers: selection, swatches
     # ------------------------------------------------------------------
     def _selected_session_id(self) -> Optional[str]:
         item = self._sessions_list.currentItem()
@@ -148,12 +142,33 @@ class SessionManagerDialog(QDialog):
         item = self._checkpoints_list.currentItem()
         return None if item is None else str(item.data(Qt.ItemDataRole.UserRole) or "")
 
+    @staticmethod
+    def _swatch(color_hex: str) -> QIcon:
+        pix = QPixmap(14, 14)
+        c = QColor(color_hex)
+        pix.fill(c if c.isValid() else Qt.GlobalColor.transparent)
+        return QIcon(pix)
+
+    def _decorate_item(self, item: QListWidgetItem, color_hex: str, comment: str) -> None:
+        if color_hex:
+            c = QColor(color_hex)
+            if c.isValid():
+                item.setIcon(self._swatch(color_hex))
+                tint = QColor(c)
+                tint.setAlpha(48)
+                item.setBackground(tint)
+        if comment:
+            item.setToolTip(comment)
+
+    # ------------------------------------------------------------------
+    # data
+    # ------------------------------------------------------------------
     def refresh(self) -> None:
         svc = self._service()
         if svc is None:
             self._hint.setText(_("SessionService недоступен.", "SessionService is unavailable."))
-            for b in self._all_buttons():
-                b.setEnabled(False)
+            self._sessions_list.clear()
+            self._checkpoints_list.clear()
             return
 
         try:
@@ -174,9 +189,12 @@ class SessionManagerDialog(QDialog):
             counts = _("И:{h} П:{m} В:{v}", "H:{h} M:{m} V:{v}").format(
                 h=s.get("history", 0), m=s.get("memories", 0), v=s.get("variables", 0)
             )
-            text = ("● " if is_active else "   ") + f"{label}    {counts}"
+            comment = str(s.get("comment", "") or "")
+            head = ("● " if is_active else "") + f"{label}    {counts}"
+            text = head + (("\n" + comment) if comment else "")
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, sid)
+            self._decorate_item(item, str(s.get("color", "") or ""), comment)
             self._sessions_list.addItem(item)
             if (prev and sid == prev) or (not prev and sid == current):
                 select_row = i
@@ -184,6 +202,7 @@ class SessionManagerDialog(QDialog):
         if self._sessions_list.count():
             self._sessions_list.setCurrentRow(select_row)
 
+        self._update_hint()
         self._on_session_selected()
 
     def _on_session_selected(self) -> None:
@@ -198,31 +217,24 @@ class SessionManagerDialog(QDialog):
                     label = ck.get("label") or ""
                     created = str(ck.get("created_at", ""))[:19].replace("T", " ")
                     tag = _("авто", "auto") if ck.get("auto") else _("ручной", "manual")
+                    comment = str(ck.get("comment", "") or "")
                     title = label if label else _("(без метки)", "(no label)")
-                    item = QListWidgetItem(f"{title}   [{tag}]   {created}")
+                    head = f"{title}   [{tag}]   {created}"
+                    text = head + (("\n" + comment) if comment else "")
+                    item = QListWidgetItem(text)
                     item.setData(Qt.ItemDataRole.UserRole, cid)
+                    self._decorate_item(item, str(ck.get("color", "") or ""), comment)
                     self._checkpoints_list.addItem(item)
             except Exception:
                 pass
-        self._update_buttons()
 
-    # ------------------------------------------------------------------
-    # buttons enable/disable
-    # ------------------------------------------------------------------
-    def _all_buttons(self) -> List[QPushButton]:
-        return [
-            self._btn_switch, self._btn_copy, self._btn_rename, self._btn_clear, self._btn_delete,
-            self._btn_ck_create, self._btn_ck_rollback, self._btn_ck_delete,
-        ]
-
-    def _update_buttons(self) -> None:
-        connected = self._game_connected()
-        if connected:
+    def _update_hint(self) -> None:
+        if self._game_connected():
             self._hint.setText(_(
-                "⚠ Игра подключена — управление сейвами и чекпоинтами недоступно, "
-                "чтобы БД и папка сейва Unity не разошлись. Управляйте из игры. Списки доступны для просмотра.",
-                "⚠ The game is connected — save/checkpoint management is disabled to keep the DB "
-                "and Unity's save folder in sync. Manage them from the game. Lists are view-only.",
+                "⚠ Игра подключена — изменения заблокированы (иначе БД и папка сейва Unity разойдутся). "
+                "Управляйте из игры. Списки доступны для просмотра.",
+                "⚠ The game is connected — changes are disabled (otherwise the DB and Unity's save folder drift). "
+                "Manage from the game. Lists are view-only.",
             ))
         else:
             try:
@@ -231,29 +243,217 @@ class SessionManagerDialog(QDialog):
                 current = "?"
             self._hint.setText(_("Активный сейв: ", "Active save: ") + str(current))
 
-        has_session = bool(self._selected_session_id())
-        has_checkpoint = bool(self._selected_checkpoint_id())
-        enabled = (not connected)
+    # ------------------------------------------------------------------
+    # context menus
+    # ------------------------------------------------------------------
+    def _sessions_menu(self, pos: QPoint) -> None:
+        item = self._sessions_list.itemAt(pos)
+        if item is not None:
+            self._sessions_list.setCurrentItem(item)
+        sid = self._selected_session_id()
+        if not sid:
+            return
+        enabled = not self._game_connected()
+        svc = self._service()
+        try:
+            is_active = bool(svc and sid == svc.current())
+        except Exception:
+            is_active = False
 
-        self._btn_switch.setEnabled(enabled and has_session)
-        self._btn_copy.setEnabled(enabled and has_session)
-        self._btn_rename.setEnabled(enabled and has_session)
-        self._btn_clear.setEnabled(enabled and has_session)
-        self._btn_delete.setEnabled(enabled and has_session)
-        self._btn_ck_create.setEnabled(enabled and has_session)
-        self._btn_ck_rollback.setEnabled(enabled and has_checkpoint)
-        self._btn_ck_delete.setEnabled(enabled and has_checkpoint)
+        menu = QMenu(self)
+        act_switch = menu.addAction(_("Открыть", "Switch to"))
+        act_switch.setEnabled(enabled and not is_active)
+        menu.addSeparator()
+        act_ckpt = menu.addAction(_("Создать чекпоинт…", "Create checkpoint…"))
+        act_ckpt.setEnabled(enabled)
+        menu.addSeparator()
+        act_comment = menu.addAction(_("Комментарий…", "Comment…"))
+        act_comment.setEnabled(enabled)
+        self._add_color_submenu(menu, enabled, lambda c: self._set_session_color(sid, c))
+        menu.addSeparator()
+        act_copy = menu.addAction(_("Копия / ветка…", "Copy / branch…"))
+        act_copy.setEnabled(enabled)
+        act_rename = menu.addAction(_("Переименовать…", "Rename…"))
+        act_rename.setEnabled(enabled and sid != "default")
+        act_clear = menu.addAction(_("Очистить", "Clear"))
+        act_clear.setEnabled(enabled)
+        act_delete = menu.addAction(_("Удалить", "Delete"))
+        act_delete.setEnabled(enabled and not is_active)
+
+        chosen = menu.exec(self._sessions_list.mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen == act_switch:
+            self._do_switch()
+        elif chosen == act_ckpt:
+            self._do_create_checkpoint()
+        elif chosen == act_comment:
+            self._do_session_comment(sid)
+        elif chosen == act_copy:
+            self._do_copy()
+        elif chosen == act_rename:
+            self._do_rename()
+        elif chosen == act_clear:
+            self._do_clear()
+        elif chosen == act_delete:
+            self._do_delete()
+
+    def _checkpoints_menu(self, pos: QPoint) -> None:
+        item = self._checkpoints_list.itemAt(pos)
+        enabled = not self._game_connected()
+        menu = QMenu(self)
+        if item is None:
+            # пустая область — предложить создать чекпоинт для выбранного сейва
+            act_new = menu.addAction(_("Создать чекпоинт…", "Create checkpoint…"))
+            act_new.setEnabled(enabled and bool(self._selected_session_id()))
+            if menu.exec(self._checkpoints_list.mapToGlobal(pos)) == act_new:
+                self._do_create_checkpoint()
+            return
+
+        self._checkpoints_list.setCurrentItem(item)
+        cid = self._selected_checkpoint_id()
+        if not cid:
+            return
+
+        act_rollback = menu.addAction(_("Откатить к чекпоинту", "Roll back to checkpoint"))
+        act_rollback.setEnabled(enabled)
+        menu.addSeparator()
+        act_label = menu.addAction(_("Метка…", "Label…"))
+        act_label.setEnabled(enabled)
+        act_comment = menu.addAction(_("Комментарий…", "Comment…"))
+        act_comment.setEnabled(enabled)
+        self._add_color_submenu(menu, enabled, lambda c: self._set_checkpoint_color(cid, c))
+        menu.addSeparator()
+        act_delete = menu.addAction(_("Удалить чекпоинт", "Delete checkpoint"))
+        act_delete.setEnabled(enabled)
+
+        chosen = menu.exec(self._checkpoints_list.mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen == act_rollback:
+            self._do_rollback()
+        elif chosen == act_label:
+            self._do_checkpoint_label(cid)
+        elif chosen == act_comment:
+            self._do_checkpoint_comment(cid)
+        elif chosen == act_delete:
+            self._do_delete_checkpoint()
+
+    def _add_color_submenu(self, menu: QMenu, enabled: bool, apply_fn) -> None:
+        sub = menu.addMenu(_("Цвет", "Color"))
+        sub.setEnabled(enabled)
+        for ru, en, hex_code in _COLOR_PRESETS:
+            act = sub.addAction(self._swatch(hex_code), _(ru, en))
+            act.triggered.connect(lambda _checked=False, c=hex_code: apply_fn(c))
+        sub.addSeparator()
+        pick = sub.addAction(_("Выбрать…", "Pick…"))
+        pick.triggered.connect(lambda _checked=False: apply_fn(self._pick_color()))
+        clear = sub.addAction(_("Убрать цвет", "Clear color"))
+        clear.triggered.connect(lambda _checked=False: apply_fn(""))
+
+    def _pick_color(self) -> Optional[str]:
+        col = QColorDialog.getColor(parent=self, title=_("Выбор цвета", "Pick a color"))
+        return col.name() if col.isValid() else None
 
     # ------------------------------------------------------------------
-    # actions
+    # meta actions
+    # ------------------------------------------------------------------
+    def _set_session_color(self, sid: str, color: Optional[str]) -> None:
+        svc = self._guard()
+        if svc is None or color is None:
+            return
+        try:
+            svc.set_session_meta(sid, color=color)
+        except Exception as e:
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
+        self.refresh()
+
+    def _set_checkpoint_color(self, cid: str, color: Optional[str]) -> None:
+        svc = self._guard()
+        if svc is None or color is None:
+            return
+        try:
+            svc.set_checkpoint_meta(cid, color=color)
+        except Exception as e:
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
+        self._on_session_selected()
+
+    def _do_session_comment(self, sid: str) -> None:
+        svc = self._guard()
+        if svc is None:
+            return
+        current = ""
+        try:
+            current = svc.get_session_meta(sid).get("comment", "")
+        except Exception:
+            pass
+        text, ok = QInputDialog.getMultiLineText(
+            self, _("Комментарий к сейву", "Save comment"),
+            _("Заметка для «{s}»:", "Note for '{s}':").format(s=sid), current,
+        )
+        if not ok:
+            return
+        try:
+            svc.set_session_meta(sid, comment=text.strip())
+        except Exception as e:
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
+        self.refresh()
+
+    def _do_checkpoint_comment(self, cid: str) -> None:
+        svc = self._guard()
+        if svc is None:
+            return
+        current = ""
+        try:
+            for ck in svc.list_checkpoints(self._selected_session_id()):
+                if ck.get("checkpoint_id") == cid:
+                    current = ck.get("comment", "")
+                    break
+        except Exception:
+            pass
+        text, ok = QInputDialog.getMultiLineText(
+            self, _("Комментарий к чекпоинту", "Checkpoint comment"),
+            _("Заметка:", "Note:"), current,
+        )
+        if not ok:
+            return
+        try:
+            svc.set_checkpoint_meta(cid, comment=text.strip())
+        except Exception as e:
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
+        self._on_session_selected()
+
+    def _do_checkpoint_label(self, cid: str) -> None:
+        svc = self._guard()
+        if svc is None:
+            return
+        current = ""
+        try:
+            for ck in svc.list_checkpoints(self._selected_session_id()):
+                if ck.get("checkpoint_id") == cid:
+                    current = ck.get("label", "")
+                    break
+        except Exception:
+            pass
+        text, ok = QInputDialog.getText(self, _("Метка чекпоинта", "Checkpoint label"),
+                                        _("Короткая метка:", "Short label:"), text=current)
+        if not ok:
+            return
+        try:
+            svc.set_checkpoint_meta(cid, label=text.strip())
+        except Exception as e:
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
+        self._on_session_selected()
+
+    # ------------------------------------------------------------------
+    # session/checkpoint actions
     # ------------------------------------------------------------------
     def _guard(self):
-        """Возвращает сервис, если операция разрешена (игра не подключена), иначе None."""
+        """Сервис, если операция разрешена (игра не подключена), иначе None."""
         if self._game_connected():
             QMessageBox.information(
-                self,
-                _("Игра подключена", "Game connected"),
-                _("Управление недоступно, пока игра запущена.", "Management is disabled while the game is running."),
+                self, _("Игра подключена", "Game connected"),
+                _("Изменения недоступны, пока игра запущена.", "Changes are disabled while the game is running."),
             )
             return None
         return self._service()
@@ -264,7 +464,8 @@ class SessionManagerDialog(QDialog):
         if svc is None or not sid:
             return
         try:
-            svc.switch(sid)
+            if sid != svc.current():
+                svc.switch(sid)
         except Exception as e:
             QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
         self.refresh()
@@ -274,10 +475,9 @@ class SessionManagerDialog(QDialog):
         sid = self._selected_session_id()
         if svc is None or not sid:
             return
-        suggestion = f"{sid}-copy"
         dst, ok = QInputDialog.getText(
             self, _("Копия сейва", "Copy save"),
-            _("Идентификатор нового сейва:", "New save id:"), text=suggestion,
+            _("Идентификатор нового сейва:", "New save id:"), text=f"{sid}-copy",
         )
         if not ok or not dst.strip():
             return
@@ -295,11 +495,7 @@ class SessionManagerDialog(QDialog):
     def _do_rename(self) -> None:
         svc = self._guard()
         sid = self._selected_session_id()
-        if svc is None or not sid:
-            return
-        if sid == "default":
-            QMessageBox.information(self, _("Нельзя", "Not allowed"),
-                                    _("Основной сейв переименовать нельзя.", "The main save cannot be renamed."))
+        if svc is None or not sid or sid == "default":
             return
         new, ok = QInputDialog.getText(self, _("Переименовать сейв", "Rename save"),
                                        _("Новое имя:", "New id:"), text=sid)
@@ -386,8 +582,7 @@ class SessionManagerDialog(QDialog):
             return
         try:
             if not svc.rollback(cid):
-                QMessageBox.warning(self, _("Ошибка", "Error"),
-                                    _("Не удалось откатить.", "Rollback failed."))
+                QMessageBox.warning(self, _("Ошибка", "Error"), _("Не удалось откатить.", "Rollback failed."))
         except Exception as e:
             QMessageBox.warning(self, _("Ошибка", "Error"), str(e))
         self.refresh()

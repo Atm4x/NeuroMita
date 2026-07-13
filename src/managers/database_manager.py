@@ -638,13 +638,37 @@ class DatabaseManager:
                    parent_session_id TEXT NOT NULL,
                    label TEXT,
                    created_at TEXT NOT NULL,
-                   auto INTEGER NOT NULL DEFAULT 0
+                   auto INTEGER NOT NULL DEFAULT 0,
+                   comment TEXT,
+                   color TEXT
                )
            '''
         )
         cursor.execute(
             '''CREATE INDEX IF NOT EXISTS idx_checkpoints_parent
                ON session_checkpoints(parent_session_id, created_at)'''
+        )
+        # comment/color могли появиться позже — добираем колонки для старых БД.
+        for _col, _type in (("comment", "TEXT"), ("color", "TEXT")):
+            try:
+                cursor.execute("PRAGMA table_info(session_checkpoints)")
+                _existing = {r[1] for r in cursor.fetchall() if r and len(r) > 1}
+                if _col not in _existing:
+                    cursor.execute(f"ALTER TABLE session_checkpoints ADD COLUMN {_col} {_type}")
+            except Exception:
+                pass
+
+        # Метаданные сейва (сессии): комментарий и цвет для UI. Сами данные сейва —
+        # это строки history/memories/variables с этим session_id; здесь только подписи.
+        cursor.execute(
+            '''
+               CREATE TABLE IF NOT EXISTS session_meta (
+                   session_id TEXT PRIMARY KEY,
+                   comment TEXT,
+                   color TEXT,
+                   updated_at TEXT
+               )
+           '''
         )
 
         # Снимок производного состояния перед ходом (переменные + метки памяти),

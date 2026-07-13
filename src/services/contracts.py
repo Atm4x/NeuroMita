@@ -63,6 +63,19 @@ class SessionService(ABC):
     @abstractmethod
     def delete_checkpoint(self, checkpoint_id: str) -> bool: ...
 
+    # -- метаданные (комментарий/цвет). Конкретные no-op по умолчанию. --
+    def get_session_meta(self, session_id: str) -> Dict[str, str]:
+        return {"comment": "", "color": ""}
+
+    def set_session_meta(self, session_id: str, *, comment: Optional[str] = None, color: Optional[str] = None) -> bool:
+        return False
+
+    def set_checkpoint_meta(
+        self, checkpoint_id: str, *, comment: Optional[str] = None,
+        color: Optional[str] = None, label: Optional[str] = None,
+    ) -> bool:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Настройки

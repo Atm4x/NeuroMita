@@ -226,11 +226,13 @@ class _AdvancedTablePage(QWidget):
         "graph_relations": {"predicate": 300},
     }
 
-    def __init__(self, parent: QWidget, *, db: QSqlDatabase, table_name: str, character_id: Optional[str] = None):
+    def __init__(self, parent: QWidget, *, db: QSqlDatabase, table_name: str, character_id: Optional[str] = None, session_id: Optional[str] = None):
         super().__init__(parent)
         self.db = db
         self.table_name = table_name
         self.character_id = character_id
+        self.session_id = session_id  # None/"__all__" → без фильтра по сейву
+        self._session_col_cached: Optional[bool] = None
 
         self._hide_deleted: bool = True
         self._base_filter = self._build_base_filter()
@@ -437,14 +439,39 @@ class _AdvancedTablePage(QWidget):
         except Exception:
             pass
 
+    def _has_session_col(self) -> bool:
+        if self._session_col_cached is not None:
+            return self._session_col_cached
+        has = False
+        try:
+            q = QSqlQuery(self.db)
+            if q.exec(f'PRAGMA table_info("{self.table_name}")'):
+                while q.next():
+                    if str(q.value(1)) == "session_id":
+                        has = True
+                        break
+        except Exception:
+            has = False
+        self._session_col_cached = has
+        return has
+
     def _build_base_filter(self) -> str:
         parts: List[str] = []
         if self.character_id is not None and str(self.character_id).strip() != "":
             cid = _sql_escape_literal(str(self.character_id))
             parts.append(f"character_id = '{cid}'")
+        sid = getattr(self, "session_id", None)
+        if sid is not None and str(sid) not in ("", "__all__") and self._has_session_col():
+            parts.append(f"session_id = '{_sql_escape_literal(str(sid))}'")
         if getattr(self, "_hide_deleted", True) and self.table_name in self.TABLES_WITH_IS_DELETED:
             parts.append("is_deleted = 0")
         return " AND ".join(f"({p})" for p in parts)
+
+    def set_session_filter(self, session_id: Optional[str]) -> None:
+        """Меняет фильтр по сейву (session_id) и обновляет вид."""
+        self.session_id = session_id
+        self._base_filter = self._build_base_filter()
+        self.refresh()
 
     def _on_hide_deleted_toggled(self, checked: bool) -> None:
         self._hide_deleted = bool(checked)
@@ -1472,6 +1499,8 @@ class DbViewerDialog(QDialog):
         self.setWindowTitle(_("Просмотрщик базы данных (World.db)", "Advanced Database Viewer (World.db)"))
         self.resize(1200, 740)
         self.character_id = character_id
+        self._active_session = self._resolve_active_session()
+        self._session_scoped_pages: list = []
 
         self._connection_name = f"db_viewer_connection_{id(self)}"
         self.db = self._init_sql_connection()
@@ -1480,6 +1509,14 @@ class DbViewerDialog(QDialog):
 
         # Global "extended output" checkbox (affects all tabs)
         top_row = QHBoxLayout()
+
+        # Save (session) filter — по умолчанию активный сейв, чтобы не смешивать данные разных сейвов.
+        top_row.addWidget(QLabel(_("Сейв:", "Save:")))
+        self.cmb_session = QComboBox(self)
+        self.cmb_session.setMinimumWidth(160)
+        self.cmb_session.setToolTip(_("Показывать данные выбранного сейва", "Show data for the selected save"))
+        top_row.addWidget(self.cmb_session)
+
         self.chk_extended = QCheckBox(_("Расширенный вывод (все колонки)", "Extended output (show all columns)"), self)
         self.chk_extended.setChecked(False)
         top_row.addWidget(self.chk_extended)
@@ -1492,9 +1529,10 @@ class DbViewerDialog(QDialog):
         self.tabs = QTabWidget(self)
         layout.addWidget(self.tabs)
 
-        self.history_page = _AdvancedTablePage(self, db=self.db, table_name="history", character_id=self.character_id)
-        self.memories_page = _AdvancedTablePage(self, db=self.db, table_name="memories", character_id=self.character_id)
-        self.variables_page = _AdvancedTablePage(self, db=self.db, table_name="variables", character_id=self.character_id)
+        self.history_page = _AdvancedTablePage(self, db=self.db, table_name="history", character_id=self.character_id, session_id=self._active_session)
+        self.memories_page = _AdvancedTablePage(self, db=self.db, table_name="memories", character_id=self.character_id, session_id=self._active_session)
+        self.variables_page = _AdvancedTablePage(self, db=self.db, table_name="variables", character_id=self.character_id, session_id=self._active_session)
+        self._session_scoped_pages += [self.history_page, self.memories_page, self.variables_page]
         self.image_desc_page = _ImageDescriptionsPage(self, db=self.db, character_id=self.character_id)
 
         self.tabs.addTab(self.history_page, _("История", "History"))
@@ -1503,15 +1541,17 @@ class DbViewerDialog(QDialog):
         self.tabs.addTab(self.image_desc_page, _("Изображения", "Images"))
 
         if self._table_exists("embeddings"):
-            self.embeddings_page = _AdvancedTablePage(self, db=self.db, table_name="embeddings", character_id=self.character_id)
+            self.embeddings_page = _AdvancedTablePage(self, db=self.db, table_name="embeddings", character_id=self.character_id, session_id=self._active_session)
             self.tabs.addTab(self.embeddings_page, _("Embedding", "Embeddings"))
+            self._session_scoped_pages.append(self.embeddings_page)
 
         self._graph_pages: list[_AdvancedTablePage] = []
         for tbl_name, tab_label_ru, tab_label_en in [("graph_entities", "Граф: Сущности", "Graph: Entities"), ("graph_relations", "Граф: Связи", "Graph: Relations")]:
             if self._table_exists(tbl_name):
-                page = _AdvancedTablePage(self, db=self.db, table_name=tbl_name, character_id=self.character_id)
+                page = _AdvancedTablePage(self, db=self.db, table_name=tbl_name, character_id=self.character_id, session_id=self._active_session)
                 self.tabs.addTab(page, _(tab_label_ru, tab_label_en))
                 self._graph_pages.append(page)
+                self._session_scoped_pages.append(page)
 
         # Interactive graph visualisation tab (if graph tables exist).
         self._graph_view_page = None
@@ -1527,6 +1567,10 @@ class DbViewerDialog(QDialog):
         self._apply_extended_to_all(self.chk_extended.isChecked())
         self.chk_auto_row_height.toggled.connect(self._apply_auto_row_height_to_all)
         self._apply_auto_row_height_to_all(self.chk_auto_row_height.isChecked())
+
+        # Populate the save filter now that pages exist, then wire changes.
+        self._populate_session_combo()
+        self.cmb_session.currentIndexChanged.connect(self._on_session_filter_changed)
         # Bottom buttons
         btn_row = QHBoxLayout()
         self.btn_refresh = QPushButton(_("Обновить", "Refresh"), self)
@@ -1550,6 +1594,59 @@ class DbViewerDialog(QDialog):
         if q.exec() and q.next():
             return True
         return False
+
+    @staticmethod
+    def _resolve_active_session() -> str:
+        """Активный сейв (session_id) в процессе. Fallback — 'default'."""
+        try:
+            from core.session_context import current_session_id
+            return str(current_session_id() or "default")
+        except Exception:
+            return "default"
+
+    def _collect_session_ids(self) -> list:
+        """Список сейвов из БД (session_id из history/memories/variables), без чекпоинтов."""
+        found: set[str] = set()
+        if self.db and self.db.isOpen():
+            for tbl in ("history", "memories", "variables"):
+                if not self._table_exists(tbl):
+                    continue
+                q = QSqlQuery(self.db)
+                if q.exec(f'SELECT DISTINCT session_id FROM "{tbl}"'):
+                    while q.next():
+                        sid = q.value(0)
+                        if sid is None:
+                            continue
+                        sid = str(sid)
+                        if sid and "#ckpt#" not in sid:
+                            found.add(sid)
+        found.add("default")
+        if self._active_session:
+            found.add(self._active_session)
+        # активный первым, дальше по алфавиту
+        rest = sorted(s for s in found if s != self._active_session)
+        return ([self._active_session] if self._active_session else []) + rest
+
+    def _populate_session_combo(self) -> None:
+        self.cmb_session.blockSignals(True)
+        self.cmb_session.clear()
+        self.cmb_session.addItem(_("Все сейвы", "All saves"), "__all__")
+        active_index = 0
+        for i, sid in enumerate(self._collect_session_ids()):
+            label = sid if sid != "default" else _("Основной (default)", "Main (default)")
+            self.cmb_session.addItem(label, sid)
+            if sid == self._active_session:
+                active_index = i + 1  # +1 из-за пункта "Все сейвы"
+        self.cmb_session.setCurrentIndex(active_index)
+        self.cmb_session.blockSignals(False)
+
+    def _on_session_filter_changed(self, _index: int) -> None:
+        sid = self.cmb_session.currentData()
+        for page in self._session_scoped_pages:
+            try:
+                page.set_session_filter(sid)
+            except Exception:
+                pass
 
     @property
     def _all_pages(self) -> list:

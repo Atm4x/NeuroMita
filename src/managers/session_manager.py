@@ -131,9 +131,13 @@ class SessionManager(SessionService):
         # активная сессия всегда присутствует в списке, даже если ещё пустая
         active = current_session_id()
         sessions.setdefault(active, {"session_id": active, "history": 0, "memories": 0, "variables": 0})
+        meta_map = self._load_session_meta_map()
         result = list(sessions.values())
         for e in result:
             e["active"] = (e["session_id"] == active)
+            m = meta_map.get(e["session_id"], {})
+            e["comment"] = m.get("comment", "") or ""
+            e["color"] = m.get("color", "") or ""
         result.sort(key=lambda e: (not e["active"], e["session_id"]))
         return result
 
@@ -225,6 +229,7 @@ class SessionManager(SessionService):
             cur = conn.cursor()
             try:
                 self._delete_session_rows(cur, sid)
+                cur.execute("DELETE FROM session_meta WHERE session_id=?", (sid,))
                 conn.commit()
             except Exception as e:
                 conn.rollback()
@@ -250,6 +255,7 @@ class SessionManager(SessionService):
                             f"UPDATE {self.db._q_ident(table)} SET session_id=? WHERE session_id=?",
                             (new, old),
                         )
+                cur.execute("UPDATE session_meta SET session_id=? WHERE session_id=?", (new, old))
                 conn.commit()
             except Exception as e:
                 conn.rollback()
@@ -348,17 +354,19 @@ class SessionManager(SessionService):
             with self.db.connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT checkpoint_id, parent_session_id, label, created_at, auto "
+                    "SELECT checkpoint_id, parent_session_id, label, created_at, auto, comment, color "
                     "FROM session_checkpoints WHERE parent_session_id=? ORDER BY created_at DESC",
                     (parent,),
                 )
-                for cid, pid, label, created_at, auto in cur.fetchall():
+                for cid, pid, label, created_at, auto, comment, color in cur.fetchall():
                     out.append({
                         "checkpoint_id": cid,
                         "parent_session_id": pid,
                         "label": label or "",
                         "created_at": created_at,
                         "auto": bool(auto),
+                        "comment": comment or "",
+                        "color": color or "",
                     })
         except Exception as e:
             logger.warning(f"[SessionManager] list_checkpoints failed: {e}")
@@ -439,6 +447,75 @@ class SessionManager(SessionService):
         """Удаляет все чекпоинты сейва (при удалении самого сейва)."""
         for ck in self.list_checkpoints(parent):
             self.delete_checkpoint(ck["checkpoint_id"])
+
+    # ------------------------------------------------------------------
+    # metadata (комментарий/цвет сейва и чекпоинта)
+    # ------------------------------------------------------------------
+    def _load_session_meta_map(self) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            with self.db.connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT session_id, comment, color FROM session_meta")
+                for sid, comment, color in cur.fetchall():
+                    out[normalize_session_id(sid)] = {"comment": comment or "", "color": color or ""}
+        except Exception as e:
+            logger.warning(f"[SessionManager] load session meta failed: {e}")
+        return out
+
+    def get_session_meta(self, session_id: str) -> Dict[str, str]:
+        sid = normalize_session_id(session_id)
+        return self._load_session_meta_map().get(sid, {"comment": "", "color": ""})
+
+    def set_session_meta(self, session_id: str, *, comment: Optional[str] = None, color: Optional[str] = None) -> bool:
+        """Задаёт комментарий и/или цвет сейва. None-поля не трогаются."""
+        sid = normalize_session_id(session_id)
+        from datetime import datetime, timezone
+        try:
+            with self.db.connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT comment, color FROM session_meta WHERE session_id=?", (sid,))
+                row = cur.fetchone()
+                cur_comment = (row[0] if row else "") or ""
+                cur_color = (row[1] if row else "") or ""
+                new_comment = cur_comment if comment is None else str(comment)
+                new_color = cur_color if color is None else str(color)
+                conn.execute(
+                    "INSERT INTO session_meta (session_id, comment, color, updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(session_id) DO UPDATE SET comment=excluded.comment, color=excluded.color, updated_at=excluded.updated_at",
+                    (sid, new_comment, new_color, datetime.now(timezone.utc).isoformat()),
+                )
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[SessionManager] set_session_meta '{sid}' failed: {e}", exc_info=True)
+            return False
+
+    def set_checkpoint_meta(self, checkpoint_id: str, *, comment: Optional[str] = None,
+                            color: Optional[str] = None, label: Optional[str] = None) -> bool:
+        """Задаёт комментарий/цвет/метку чекпоинта. None-поля не трогаются."""
+        ckpt = normalize_session_id(checkpoint_id)
+        if not is_checkpoint_id(ckpt):
+            return False
+        try:
+            with self.db.connection() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT label, comment, color FROM session_checkpoints WHERE checkpoint_id=?", (ckpt,))
+                row = cur.fetchone()
+                if not row:
+                    return False
+                new_label = (row[0] or "") if label is None else str(label)
+                new_comment = (row[1] or "") if comment is None else str(comment)
+                new_color = (row[2] or "") if color is None else str(color)
+                conn.execute(
+                    "UPDATE session_checkpoints SET label=?, comment=?, color=? WHERE checkpoint_id=?",
+                    (new_label, new_comment, new_color, ckpt),
+                )
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[SessionManager] set_checkpoint_meta '{ckpt}' failed: {e}", exc_info=True)
+            return False
 
     # ------------------------------------------------------------------
     # copy/delete internals
