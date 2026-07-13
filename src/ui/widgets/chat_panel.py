@@ -276,6 +276,17 @@ class ChatPanel(QWidget):
             ChatOpenHistoryRequested(str(self._state.character_id or ""))
         )
 
+    def _open_session_manager(self) -> None:
+        try:
+            from ui.dialogs.session_manager_dialog import SessionManagerDialog
+            dialog = SessionManagerDialog(self)
+            dialog.exec()
+            if self._session_selector is not None:
+                self._session_selector.refresh()
+        except Exception as exc:  # pragma: no cover - UI safety net
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, _("Ошибка", "Error"), str(exc))
+
     def _attach_images(self) -> None:
         paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
@@ -338,6 +349,19 @@ class ChatPanel(QWidget):
 
         self._session_selector = _SessionSelector()
         layout.addWidget(self._session_selector, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        manage_saves_button = QPushButton()
+        manage_saves_button.setObjectName("ChatStripGhostButton")
+        manage_saves_button.setIcon(qta.icon("fa6s.floppy-disk", color="#ffd2ec"))
+        manage_saves_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        tr_set(
+            manage_saves_button,
+            "Сейвы и чекпоинты",
+            "Saves & checkpoints",
+            "setToolTip",
+        )
+        manage_saves_button.clicked.connect(self._open_session_manager)
+        layout.addWidget(manage_saves_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         history_button = QPushButton()
         tr_set(history_button, "История", "History", "setText")
