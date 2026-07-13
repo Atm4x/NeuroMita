@@ -38,6 +38,9 @@ class SessionService(ABC):
     def delete(self, session_id: str) -> bool: ...
 
     @abstractmethod
+    def clear(self, session_id: Optional[str] = None) -> bool: ...
+
+    @abstractmethod
     def rename(self, old: str, new: str) -> bool: ...
 
 

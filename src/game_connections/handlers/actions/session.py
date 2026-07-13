@@ -42,6 +42,9 @@ class SessionAction:
                 result["ok"] = svc.copy(src, dst, overwrite=overwrite)
             elif op == "delete":
                 result["ok"] = svc.delete(str(request.get("session_id") or "").strip())
+            elif op == "clear":
+                sid = str(request.get("session_id") or "").strip()
+                result["ok"] = svc.clear(sid or None)
             elif op == "rename":
                 old = str(request.get("from") or request.get("old") or "").strip()
                 new = str(request.get("to") or request.get("new") or "").strip()

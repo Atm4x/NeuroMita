@@ -23,6 +23,26 @@ def _has_context_images(context: dict) -> bool:
     return bool((context.get("image_base64_list") or []) or (context.get("image_paths") or []))
 
 
+def _warn_on_session_mismatch(client_session_id: Any, event_type: str) -> None:
+    """Diagnostic only: the client tags each task with the save it thinks is active.
+    If that drifted from our active session, session_select got lost — log it, but
+    don't reject the turn (session_select on connect/change is the source of truth)."""
+    sid = str(client_session_id or "").strip()
+    if not sid:
+        return
+    try:
+        from core.session_context import current_session_id
+
+        active = current_session_id()
+        if sid != active:
+            logger.warning(
+                f"[create_task] Session mismatch: client save={sid!r} but server "
+                f"active={active!r} (event_type={event_type}). session_select may have been lost."
+            )
+    except Exception:
+        pass
+
+
 def _should_label_as_mita_camera(event_type: str, context: dict) -> bool:
     """
     Unity6 continuous FrameRecorder currently attaches frames without an explicit
@@ -115,6 +135,7 @@ class CreateTaskAction:
         event_bus = ctx.event_bus
 
         event_type = request.get("type", "answer")
+        _warn_on_session_mismatch(request.get("session_id"), event_type)
         character_id = request.get("character", "Mita")
         data = request.get("data", {}) or {}
         context = request.get("context", {}) or {}

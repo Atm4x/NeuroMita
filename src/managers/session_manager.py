@@ -166,6 +166,32 @@ class SessionManager(SessionService):
         logger.info(f"[SessionManager] Copied session {src} -> {dst}")
         return True
 
+    def clear(self, session_id: Optional[str] = None) -> bool:
+        """Стирает данные сессии (history/memory/embeddings/variables), но саму сессию
+        оставляет — используется при сбросе сейва в игре. Допускает активную сессию."""
+        sid = normalize_session_id(session_id if session_id is not None else current_session_id())
+        with self.db.connection() as conn:
+            cur = conn.cursor()
+            try:
+                self._delete_session_rows(cur, sid)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"[SessionManager] clear '{sid}' failed: {e}", exc_info=True)
+                return False
+        # если чистим активную — перечитать персонажей (их in-memory состояние устарело)
+        if sid == current_session_id() and self.character_reloader is not None:
+            try:
+                self.character_reloader()
+            except Exception:
+                pass
+        try:
+            self.event_bus.emit(Events.Session.CHANGED, {"session_id": sid})
+        except Exception:
+            pass
+        logger.info(f"[SessionManager] Cleared session '{sid}'")
+        return True
+
     def delete(self, session_id: str) -> bool:
         sid = normalize_session_id(session_id)
         if sid == current_session_id():
