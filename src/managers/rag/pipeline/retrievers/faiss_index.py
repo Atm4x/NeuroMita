@@ -119,6 +119,20 @@ class _VectorCache:
         self._indexes: dict[tuple, _NumpyIndex | _FaissIndex] = {}
         self._counts: dict[tuple, int] = {}
 
+    @staticmethod
+    def _emb_has_session(conn) -> bool:
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(embeddings)")
+            return any((r and len(r) > 1 and r[1] == "session_id") for r in cur.fetchall())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _session_id() -> str:
+        from core.session_context import current_session_id
+        return current_session_id()
+
     def get(
         self,
         conn,
@@ -127,13 +141,17 @@ class _VectorCache:
         source_table: str,
         dim: int,
     ) -> Optional[_NumpyIndex | _FaissIndex]:
-        key = (character_id, model_name, source_table)
+        has_session = self._emb_has_session(conn)
+        sid = self._session_id() if has_session else None
+        key = (character_id, sid, model_name, source_table)
+        session_clause = " AND session_id=?" if has_session else ""
+        session_param = (sid,) if has_session else ()
         try:
             cur = conn.cursor()
             cur.execute(
                 "SELECT COUNT(*) FROM embeddings "
-                "WHERE character_id=? AND model_name=? AND source_table=?",
-                (character_id, model_name, source_table),
+                f"WHERE character_id=? AND model_name=? AND source_table=?{session_clause}",
+                (character_id, model_name, source_table, *session_param),
             )
             db_count: int = cur.fetchone()[0]
         except Exception:
@@ -142,16 +160,17 @@ class _VectorCache:
         if key in self._indexes and self._counts.get(key) == db_count:
             return self._indexes[key]      # cache hit
 
-        index = self._build(conn, character_id, model_name, source_table)
+        index = self._build(conn, character_id, model_name, source_table, session_clause, session_param)
         if index is not None:
             self._indexes[key] = index
             self._counts[key] = db_count
         return index
 
     def invalidate(self, character_id: str, model_name: str, source_table: str) -> None:
-        key = (character_id, model_name, source_table)
-        self._indexes.pop(key, None)
-        self._counts.pop(key, None)
+        # Инвалидация по всем сессиям персонажа (session-компонент ключа может отличаться).
+        for key in [k for k in self._indexes if k[0] == character_id and k[2] == model_name and k[3] == source_table]:
+            self._indexes.pop(key, None)
+            self._counts.pop(key, None)
 
     def _build(
         self,
@@ -159,13 +178,15 @@ class _VectorCache:
         character_id: str,
         model_name: str,
         source_table: str,
+        session_clause: str = "",
+        session_param: tuple = (),
     ) -> Optional[_NumpyIndex | _FaissIndex]:
         try:
             cur = conn.cursor()
             cur.execute(
                 "SELECT source_id, embedding FROM embeddings "
-                "WHERE character_id=? AND model_name=? AND source_table=?",
-                (character_id, model_name, source_table),
+                f"WHERE character_id=? AND model_name=? AND source_table=?{session_clause}",
+                (character_id, model_name, source_table, *session_param),
             )
             rows = cur.fetchall()
         except Exception:

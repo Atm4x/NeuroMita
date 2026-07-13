@@ -33,6 +33,7 @@ from services.contracts import (
     InstallableOperationsService,
     LoopService,
     ProtocolBuilderService,
+    SessionService,
     SettingsService,
     TaskService,
     TelegramAuthService,
@@ -212,6 +213,10 @@ class MainController:
         )
         services().register(ModelStateService, self.model_controller, replace=True)
         logger.notify("ModelController успешно инициализирован.")
+
+        self.session_manager = self._build_component("session", self._init_session_manager)
+        services().register(SessionService, self.session_manager, replace=True)
+        logger.notify("SessionManager успешно инициализирован.")
 
         self.chat_controller = self._build_component(
             "chat", lambda: ChatController(self.settings)
@@ -518,6 +523,34 @@ class MainController:
         if mode in {"headless", "server", "server-only", "server_only", "no-gui", "no_gui"}:
             return "headless"
         return "full"
+
+    def _init_session_manager(self):
+        from managers.session_manager import SessionManager
+
+        def _reload_characters_for_session() -> None:
+            try:
+                cm = self.character_controller.character_manager
+            except Exception:
+                return
+            for character in cm.get_loaded_characters():
+                try:
+                    character.reload_character_data()
+                except Exception as exc:
+                    logger.error(
+                        f"[MainController] Failed to reload character for session switch: {exc}",
+                        exc_info=True,
+                    )
+
+        manager = SessionManager(character_reloader=_reload_characters_for_session)
+        # Восстанавливаем последнюю активную сессию из настроек. Персонажи уже
+        # материализованы в сессии 'default'; switch перечитает их, если сейв другой.
+        restored = manager.restore_last_active()
+        try:
+            if restored and restored != "default":
+                manager.switch(restored)
+        except Exception as exc:
+            logger.error(f"[MainController] Failed to restore last session '{restored}': {exc}", exc_info=True)
+        return manager
 
     def _init_server_controller(self):
         # Старый серверный API (ServerControllerOld / server_old.py) удалён —

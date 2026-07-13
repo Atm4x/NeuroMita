@@ -28,6 +28,7 @@ class DatabaseManager:
     _MIGRATION_MESSAGE_ID_UNIQUE = "history_message_id_unique_v1"
     _MIGRATION_VARIABLES_SESSION_ID = "variables_session_id_pk_v1"
     _MIGRATION_HISTORY_MSG_UNIQUE_SESSION = "history_message_id_unique_session_v1"
+    _MIGRATION_EMBEDDINGS_SESSION_ID = "embeddings_session_id_v1"
 
     # Single source of truth: extra columns to ensure in history table.
     # (column_name -> SQL type). Base columns (id, character_id, role, content,
@@ -611,14 +612,17 @@ class DatabaseManager:
                    source_table TEXT NOT NULL,
                    source_id INTEGER NOT NULL,
                    character_id TEXT NOT NULL,
+                   session_id TEXT NOT NULL DEFAULT 'default',
                    model_name TEXT NOT NULL,
                    dimensions INTEGER NOT NULL DEFAULT 0,
                    embedding BLOB NOT NULL,
                    created_at TEXT,
-                   UNIQUE(source_table, source_id, character_id, model_name)
+                   UNIQUE(source_table, source_id, character_id, session_id, model_name)
                )
            '''
         )
+        # 3-колоночный индекс безопасен и для старых БД (без session_id).
+        # session-aware индекс создаётся в _upgrade_schema после миграции.
         cursor.execute(
             '''CREATE INDEX IF NOT EXISTS idx_emb_lookup
                ON embeddings(source_table, character_id, model_name)'''
@@ -831,11 +835,12 @@ class DatabaseManager:
                         source_table TEXT NOT NULL,
                         source_id INTEGER NOT NULL,
                         character_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL DEFAULT 'default',
                         model_name TEXT NOT NULL,
                         dimensions INTEGER NOT NULL DEFAULT 0,
                         embedding BLOB NOT NULL,
                         created_at TEXT,
-                        UNIQUE(source_table, source_id, character_id, model_name)
+                        UNIQUE(source_table, source_id, character_id, session_id, model_name)
                     )"""
                 )
                 cursor.execute(
@@ -853,11 +858,12 @@ class DatabaseManager:
                         source_table TEXT NOT NULL,
                         source_id INTEGER NOT NULL,
                         character_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL DEFAULT 'default',
                         model_name TEXT NOT NULL,
                         sentence_idx INTEGER NOT NULL DEFAULT 0,
                         embedding BLOB NOT NULL,
                         created_at TEXT,
-                        UNIQUE(source_table, source_id, character_id, model_name, sentence_idx)
+                        UNIQUE(source_table, source_id, character_id, session_id, model_name, sentence_idx)
                     )"""
                 )
                 cursor.execute(
@@ -866,6 +872,11 @@ class DatabaseManager:
                 )
             except Exception as e:
                 logging.warning(f"DB upgrade: failed to ensure sentence_embeddings table (ignored): {e}")
+
+            # --- Add session_id to embeddings tables (memory embeddings key on
+            #     eternal_id, which is per-session — without this two saves collide).
+            #     Runs after the ensure-exists blocks above so both tables exist. ---
+            self._migrate_embeddings_session_id(cursor)
 
             # --- Migrate old BLOB embeddings into separate table ---
             self._migrate_embeddings_to_table(cursor)
@@ -920,6 +931,74 @@ class DatabaseManager:
             logging.info("DB upgrade: variables table rebuilt with session_id PK")
         except Exception as e:
             logging.warning(f"DB upgrade: failed to rebuild variables table for session_id (ignored): {e}")
+
+    def _migrate_embeddings_session_id(self, cursor: sqlite3.Cursor) -> None:
+        """Rebuild embeddings/sentence_embeddings so UNIQUE includes session_id.
+
+        Existing rows all belong to the 'default' session (pre-session DB). Memory
+        embeddings key on eternal_id (per-session), so without session_id in the
+        UNIQUE two saves with the same eternal_id would clobber each other."""
+        if self._migration_applied(cursor, self._MIGRATION_EMBEDDINGS_SESSION_ID):
+            return
+        specs = (
+            (
+                "embeddings",
+                """CREATE TABLE embeddings_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_table TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    character_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT 'default',
+                    model_name TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL DEFAULT 0,
+                    embedding BLOB NOT NULL,
+                    created_at TEXT,
+                    UNIQUE(source_table, source_id, character_id, session_id, model_name)
+                )""",
+                "source_table, source_id, character_id, model_name, dimensions, embedding, created_at",
+            ),
+            (
+                "sentence_embeddings",
+                """CREATE TABLE sentence_embeddings_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_table TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    character_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT 'default',
+                    model_name TEXT NOT NULL,
+                    sentence_idx INTEGER NOT NULL DEFAULT 0,
+                    embedding BLOB NOT NULL,
+                    created_at TEXT,
+                    UNIQUE(source_table, source_id, character_id, session_id, model_name, sentence_idx)
+                )""",
+                "source_table, source_id, character_id, model_name, sentence_idx, embedding, created_at",
+            ),
+        )
+        try:
+            for table, create_new, copy_cols in specs:
+                if not self.table_exists(cursor, table):
+                    continue
+                cols = self._get_table_columns_conn_cursor(cursor, table)
+                if "session_id" in cols:
+                    continue  # fresh table already has it
+                cursor.execute(f"DROP TABLE IF EXISTS {table}_new")
+                cursor.execute(create_new)
+                cursor.execute(
+                    f"INSERT INTO {table}_new ({copy_cols}) SELECT {copy_cols} FROM {table}"
+                )
+                cursor.execute(f"DROP TABLE {table}")
+                cursor.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+                logging.info(f"DB upgrade: rebuilt {table} with session_id")
+            # recreate lookup indexes
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_emb_lookup ON embeddings(source_table, character_id, session_id, model_name)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sent_emb_lookup ON sentence_embeddings(source_table, character_id, session_id, model_name)"
+            )
+            self._mark_migration(cursor, self._MIGRATION_EMBEDDINGS_SESSION_ID)
+        except Exception as e:
+            logging.warning(f"DB upgrade: failed to add session_id to embeddings (ignored): {e}")
 
     def _get_table_columns_conn_cursor(self, cursor: sqlite3.Cursor, table: str) -> Set[str]:
         try:

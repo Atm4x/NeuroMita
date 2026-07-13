@@ -16,6 +16,32 @@ from core.request_policy import RequestPolicy
 
 
 # ---------------------------------------------------------------------------
+# Сессии (сейвы)
+# ---------------------------------------------------------------------------
+
+class SessionService(ABC):
+    """Управление сессиями (сейвами): активная сессия и операции над ними."""
+
+    @abstractmethod
+    def current(self) -> str: ...
+
+    @abstractmethod
+    def switch(self, session_id: str, *, reload_characters: bool = True) -> str: ...
+
+    @abstractmethod
+    def list_sessions(self) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def copy(self, src: str, dst: str, *, overwrite: bool = False) -> bool: ...
+
+    @abstractmethod
+    def delete(self, session_id: str) -> bool: ...
+
+    @abstractmethod
+    def rename(self, old: str, new: str) -> bool: ...
+
+
+# ---------------------------------------------------------------------------
 # Настройки
 # ---------------------------------------------------------------------------
 

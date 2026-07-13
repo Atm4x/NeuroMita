@@ -138,6 +138,22 @@ class RAGManager:
         from core.session_context import current_session_id
         return [current_session_id()]
 
+    def _emb_has_session(self) -> bool:
+        try:
+            return "session_id" in self.db.get_table_columns("embeddings")
+        except Exception:
+            return False
+
+    def _emb_session_id(self) -> str:
+        from core.session_context import current_session_id
+        return current_session_id()
+
+    def _mem_emb_join_session(self, alias: str) -> str:
+        """Session-match для join эмбеддингов памяти (source_id=eternal_id — per-session)."""
+        if "session_id" in self._mem_cols and self._emb_has_session():
+            return f" AND {alias}.session_id=m.session_id"
+        return ""
+
     def _current_model_name(self) -> str:
         """Returns the DB key used to tag embedding rows (provider:model or bare hf_name)."""
         cfg = resolve_full_config()
@@ -616,12 +632,20 @@ class RAGManager:
                 continue
             blob = self._array_to_blob(vec)
             try:
-                conn.execute(
-                    """INSERT OR REPLACE INTO sentence_embeddings
-                       (source_table, source_id, character_id, model_name, sentence_idx, embedding, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
-                    (source_table, source_id, self.character_id, model, idx, blob),
-                )
+                if self._emb_has_session():
+                    conn.execute(
+                        """INSERT OR REPLACE INTO sentence_embeddings
+                           (source_table, source_id, character_id, session_id, model_name, sentence_idx, embedding, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                        (source_table, source_id, self.character_id, self._emb_session_id(), model, idx, blob),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO sentence_embeddings
+                           (source_table, source_id, character_id, model_name, sentence_idx, embedding, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                        (source_table, source_id, self.character_id, model, idx, blob),
+                    )
                 stored += 1
             except Exception:
                 pass
@@ -669,13 +693,13 @@ class RAGManager:
         # Memory rows with whole-doc embedding but no sentence embeddings for current model
         try:
             cursor.execute(
-                """SELECT m.eternal_id, m.content FROM memories m
+                f"""SELECT m.eternal_id, m.content FROM memories m
                    INNER JOIN embeddings e
                      ON e.source_table='memories' AND e.source_id=m.eternal_id
-                     AND e.character_id=m.character_id AND e.model_name=?
+                     AND e.character_id=m.character_id{self._mem_emb_join_session('e')} AND e.model_name=?
                    LEFT JOIN sentence_embeddings se
                      ON se.source_table='memories' AND se.source_id=m.eternal_id
-                     AND se.character_id=m.character_id AND se.model_name=?
+                     AND se.character_id=m.character_id{self._mem_emb_join_session('se')} AND se.model_name=?
                    WHERE m.character_id=? AND m.is_deleted=0 AND se.id IS NULL""",
                 (model, model, self.character_id),
             )
@@ -753,12 +777,20 @@ class RAGManager:
                 (blob, self.character_id, eternal_id)
             )
             # New embeddings table
-            conn.execute(
-                """INSERT OR REPLACE INTO embeddings
-                   (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                   VALUES ('memories', ?, ?, ?, ?, ?, datetime('now'))""",
-                (eternal_id, self.character_id, model, dims, blob),
-            )
+            if self._emb_has_session():
+                conn.execute(
+                    """INSERT OR REPLACE INTO embeddings
+                       (source_table, source_id, character_id, session_id, model_name, dimensions, embedding, created_at)
+                       VALUES ('memories', ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (eternal_id, self.character_id, self._emb_session_id(), model, dims, blob),
+                )
+            else:
+                conn.execute(
+                    """INSERT OR REPLACE INTO embeddings
+                       (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
+                       VALUES ('memories', ?, ?, ?, ?, ?, datetime('now'))""",
+                    (eternal_id, self.character_id, model, dims, blob),
+                )
             # Sentence-level indexing (optional)
             if SettingsManager.get("RAG_SENTENCE_LEVEL", False):
                 min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
@@ -798,12 +830,20 @@ class RAGManager:
                 (blob, msg_id)
             )
             # New embeddings table
-            conn.execute(
-                """INSERT OR REPLACE INTO embeddings
-                   (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                   VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
-                (msg_id, self.character_id, model, dims, blob),
-            )
+            if self._emb_has_session():
+                conn.execute(
+                    """INSERT OR REPLACE INTO embeddings
+                       (source_table, source_id, character_id, session_id, model_name, dimensions, embedding, created_at)
+                       VALUES ('history', ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    (msg_id, self.character_id, self._emb_session_id(), model, dims, blob),
+                )
+            else:
+                conn.execute(
+                    """INSERT OR REPLACE INTO embeddings
+                       (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
+                       VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
+                    (msg_id, self.character_id, model, dims, blob),
+                )
             # Sentence-level indexing (optional)
             if SettingsManager.get("RAG_SENTENCE_LEVEL", False):
                 min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
@@ -1131,10 +1171,10 @@ class RAGManager:
 
             # Memories: нет записи в embeddings для текущей модели
             cursor.execute(
-                """SELECT m.eternal_id, m.content FROM memories m
+                f"""SELECT m.eternal_id, m.content FROM memories m
                    LEFT JOIN embeddings e
                      ON e.source_table='memories' AND e.source_id=m.eternal_id
-                     AND e.character_id=m.character_id AND e.model_name=?
+                     AND e.character_id=m.character_id{self._mem_emb_join_session('e')} AND e.model_name=?
                    WHERE m.character_id=? AND m.is_deleted=0 AND e.id IS NULL""",
                 (model, self.character_id),
             )
