@@ -706,6 +706,29 @@ class HistoryManager(CharacterScopedService):
             return " AND is_deleted = 0 "
         return ""
 
+    def _has_session_col(self) -> bool:
+        return "session_id" in self._history_cols
+
+    _variables_session_col: ClassVar[Optional[bool]] = None
+
+    def _variables_has_session_col(self, cursor) -> bool:
+        """Есть ли session_id в variables (кешируется на класс — схема общая)."""
+        if HistoryManager._variables_session_col is None:
+            try:
+                cursor.execute("PRAGMA table_info(variables)")
+                cols = {r[1] for r in cursor.fetchall() if r and len(r) > 1}
+                HistoryManager._variables_session_col = "session_id" in cols
+            except Exception:
+                HistoryManager._variables_session_col = False
+        return bool(HistoryManager._variables_session_col)
+
+    def _session_clause(self) -> str:
+        """`AND session_id = ?` (param — self.session_id), либо '' на старых БД без колонки."""
+        return " AND session_id = ? " if self._has_session_col() else ""
+
+    def _session_params(self) -> tuple:
+        return (self.session_id,) if self._has_session_col() else ()
+
     def _content_for_dedupe(self, raw_content) -> str:
         try:
             if raw_content is None:
@@ -748,6 +771,9 @@ class HistoryManager(CharacterScopedService):
         vals: list[Any] = []
         cols.extend(["character_id", "role", "content", "is_active", "meta_data", "timestamp"])
         vals.extend([self.storage_key, msg.get("role"), db_content, int(is_active), db_meta, ts])
+        if self._has_session_col():
+            cols.append("session_id")
+            vals.append(self.session_id)
         if "is_deleted" in self._history_cols:
             cols.append("is_deleted")
             vals.append(0)
@@ -778,11 +804,12 @@ class HistoryManager(CharacterScopedService):
             FROM history
             WHERE character_id = ?
               AND message_id = ?
+              {self._session_clause()}
               {not_deleted_clause}
             ORDER BY id DESC
             LIMIT 1
             """,
-            (self.storage_key, normalized_message_id),
+            (self.storage_key, normalized_message_id, *self._session_params()),
         )
         row = cursor.fetchone()
         if not row or not row[0]:
@@ -836,13 +863,22 @@ class HistoryManager(CharacterScopedService):
             msg.get("content"),
             extra_meta,
         )
-        cursor.execute(
-            """
-            INSERT INTO history (character_id, role, content, is_active, meta_data, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (self.storage_key, msg.get("role"), db_content, int(is_active), db_meta, ts),
-        )
+        if self._has_session_col():
+            cursor.execute(
+                """
+                INSERT INTO history (character_id, session_id, role, content, is_active, meta_data, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (self.storage_key, self.session_id, msg.get("role"), db_content, int(is_active), db_meta, ts),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO history (character_id, role, content, is_active, meta_data, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (self.storage_key, msg.get("role"), db_content, int(is_active), db_meta, ts),
+            )
         row_id = cursor.lastrowid
         return int(row_id) if row_id else None
 
@@ -953,7 +989,14 @@ class HistoryManager(CharacterScopedService):
             cursor = conn.cursor()
 
             # 1) Переменные
-            cursor.execute("SELECT key, value FROM variables WHERE character_id = ?", (self.storage_key,))
+            self._ensure_history_schema()
+            if self._variables_has_session_col(cursor):
+                cursor.execute(
+                    "SELECT key, value FROM variables WHERE character_id = ? AND session_id = ?",
+                    (self.storage_key, self.session_id),
+                )
+            else:
+                cursor.execute("SELECT key, value FROM variables WHERE character_id = ?", (self.storage_key,))
             variables = {}
             for row in cursor.fetchall():
                 try:
@@ -969,10 +1012,10 @@ class HistoryManager(CharacterScopedService):
             sql = f"""
                 SELECT {", ".join(select_cols)}
                 FROM history
-                WHERE character_id = ? AND is_active = 1 {self._history_not_deleted_clause()}
+                WHERE character_id = ? {self._session_clause()} AND is_active = 1 {self._history_not_deleted_clause()}
                 ORDER BY id ASC
             """
-            cursor.execute(sql, (self.storage_key,))
+            cursor.execute(sql, (self.storage_key, *self._session_params()))
             rows = cursor.fetchall()
         finally:
             try:
@@ -1020,19 +1063,29 @@ class HistoryManager(CharacterScopedService):
             try:
                 cursor = conn.cursor()
 
+                has_var_session = self._variables_has_session_col(cursor)
                 for k, v in variables.items():
                     val_str = json.dumps(v, ensure_ascii=False)
-                    cursor.execute(
-                        """
-                        INSERT INTO variables (character_id, key, value) VALUES(?, ?, ?)
-                        ON CONFLICT(character_id, key) DO UPDATE SET value=excluded.value
-                        """,
-                        (self.storage_key, k, val_str),
-                    )
+                    if has_var_session:
+                        cursor.execute(
+                            """
+                            INSERT INTO variables (session_id, character_id, key, value) VALUES(?, ?, ?, ?)
+                            ON CONFLICT(session_id, character_id, key) DO UPDATE SET value=excluded.value
+                            """,
+                            (self.session_id, self.storage_key, k, val_str),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO variables (character_id, key, value) VALUES(?, ?, ?)
+                            ON CONFLICT(character_id, key) DO UPDATE SET value=excluded.value
+                            """,
+                            (self.storage_key, k, val_str),
+                        )
 
                 cursor.execute(
-                    "DELETE FROM history WHERE character_id = ? AND is_active = 1",
-                    (self.storage_key,),
+                    f"DELETE FROM history WHERE character_id = ? {self._session_clause()} AND is_active = 1",
+                    (self.storage_key, *self._session_params()),
                 )
 
                 for msg in messages:
@@ -1185,6 +1238,25 @@ class HistoryManager(CharacterScopedService):
         try:
             cursor = conn.cursor()
             val_str = json.dumps(value, ensure_ascii=False)
+            self._upsert_variable(cursor, key, val_str)
+            conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _upsert_variable(self, cursor, key: str, val_str: str) -> None:
+        """UPSERT одной переменной в текущей (session_id, character_id)."""
+        if self._variables_has_session_col(cursor):
+            cursor.execute(
+                """
+                INSERT INTO variables (session_id, character_id, key, value) VALUES(?, ?, ?, ?)
+                ON CONFLICT(session_id, character_id, key) DO UPDATE SET value=excluded.value
+                """,
+                (self.session_id, self.storage_key, key, val_str),
+            )
+        else:
             cursor.execute(
                 """
                 INSERT INTO variables (character_id, key, value) VALUES(?, ?, ?)
@@ -1192,12 +1264,6 @@ class HistoryManager(CharacterScopedService):
                 """,
                 (self.storage_key, key, val_str),
             )
-            conn.commit()
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
     def update_variables_batch(self, variables: dict):
         """Batch-write multiple variables in a single transaction."""
@@ -1208,13 +1274,7 @@ class HistoryManager(CharacterScopedService):
             cursor = conn.cursor()
             for key, value in variables.items():
                 val_str = json.dumps(value, ensure_ascii=False)
-                cursor.execute(
-                    """
-                    INSERT INTO variables (character_id, key, value) VALUES(?, ?, ?)
-                    ON CONFLICT(character_id, key) DO UPDATE SET value=excluded.value
-                    """,
-                    (self.storage_key, key, val_str),
-                )
+                self._upsert_variable(cursor, key, val_str)
             conn.commit()
         finally:
             try:
@@ -1235,13 +1295,13 @@ class HistoryManager(CharacterScopedService):
             # RAG searches is_active=0 for archived history; is_deleted=1 excludes them.
             if "is_deleted" in self._history_cols:
                 cursor.execute(
-                    "UPDATE history SET is_active = 0, is_deleted = 1 WHERE character_id = ?",
-                    (self.storage_key,),
+                    f"UPDATE history SET is_active = 0, is_deleted = 1 WHERE character_id = ? {self._session_clause()}",
+                    (self.storage_key, *self._session_params()),
                 )
             else:
                 cursor.execute(
-                    "UPDATE history SET is_active = 0 WHERE character_id = ?",
-                    (self.storage_key,),
+                    f"UPDATE history SET is_active = 0 WHERE character_id = ? {self._session_clause()}",
+                    (self.storage_key, *self._session_params()),
                 )
             conn.commit()
 
@@ -1264,14 +1324,14 @@ class HistoryManager(CharacterScopedService):
                 try:
                     cur.execute(
                         f"DELETE FROM {emb_table} WHERE source_table='history' AND character_id=?"
-                        " AND source_id IN (SELECT id FROM history WHERE character_id=? AND is_deleted=1)",
-                        (self.storage_key, self.storage_key),
+                        f" AND source_id IN (SELECT id FROM history WHERE character_id=? {self._session_clause()} AND is_deleted=1)",
+                        (self.storage_key, self.storage_key, *self._session_params()),
                     )
                 except Exception as e:
                     logger.warning(f"[HistoryManager] purge_deleted: {emb_table} cleanup failed: {e}")
             cur.execute(
-                "DELETE FROM history WHERE character_id=? AND is_deleted=1",
-                (self.storage_key,),
+                f"DELETE FROM history WHERE character_id=? {self._session_clause()} AND is_deleted=1",
+                (self.storage_key, *self._session_params()),
             )
             purged = cur.rowcount
             conn.commit()
@@ -1320,10 +1380,10 @@ class HistoryManager(CharacterScopedService):
                 not_deleted = " AND is_deleted = 0" if "is_deleted" in self._history_cols else ""
                 cur.execute(
                     f"""UPDATE history SET is_active = 0
-                        WHERE character_id = ? AND is_active = 1{not_deleted}
+                        WHERE character_id = ? {self._session_clause()} AND is_active = 1{not_deleted}
                           AND timestamp IS NOT NULL AND TRIM(timestamp) != ''
                           AND julianday('now') - julianday({_ts_expr}) > ?""",
-                    (self.storage_key, ttl_days),
+                    (self.storage_key, *self._session_params(), ttl_days),
                 )
                 total = cur.rowcount
                 if total > 0:
@@ -1343,7 +1403,10 @@ class HistoryManager(CharacterScopedService):
         conn = self.db.get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM history WHERE character_id = ? AND is_active = 1 {self._history_not_deleted_clause()}", (self.storage_key,))
+            cursor.execute(
+                f"SELECT COUNT(*) FROM history WHERE character_id = ? {self._session_clause()} AND is_active = 1 {self._history_not_deleted_clause()}",
+                (self.storage_key, *self._session_params()),
+            )
             count = cursor.fetchone()[0]
             return count
         finally:
@@ -1363,11 +1426,11 @@ class HistoryManager(CharacterScopedService):
             sql = f"""
                 SELECT {", ".join(select_cols)}
                 FROM history
-                WHERE character_id = ? AND is_active = 1 {self._history_not_deleted_clause()}
+                WHERE character_id = ? {self._session_clause()} AND is_active = 1 {self._history_not_deleted_clause()}
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
             """
-            cursor.execute(sql, (self.storage_key, int(limit), int(offset)))
+            cursor.execute(sql, (self.storage_key, *self._session_params(), int(limit), int(offset)))
             rows = cursor.fetchall()
         finally:
             try:
@@ -1415,12 +1478,12 @@ class HistoryManager(CharacterScopedService):
             cursor.execute(
                 f"""
                 SELECT id FROM history
-                WHERE character_id = ? AND is_active = 1
+                WHERE character_id = ? {self._session_clause()} AND is_active = 1
                 {self._history_not_deleted_clause()}
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-                (self.storage_key, num_messages),
+                (self.storage_key, *self._session_params(), num_messages),
             )
             ids_to_hide = [row[0] for row in cursor.fetchall()]
 
@@ -1458,8 +1521,8 @@ class HistoryManager(CharacterScopedService):
             cursor = conn.cursor()
             cursor.execute(
                 f"UPDATE history SET {self._soft_delete_set_clause()} "
-                "WHERE id = ? AND character_id = ?",
-                (row_id, self.storage_key),
+                f"WHERE id = ? AND character_id = ? {self._session_clause()}",
+                (row_id, self.storage_key, *self._session_params()),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1478,10 +1541,10 @@ class HistoryManager(CharacterScopedService):
                 f"""
                 UPDATE history
                 SET {self._soft_delete_set_clause()}
-                WHERE character_id = ? AND id {'>=' if include_target else '>'} ?
+                WHERE character_id = ? {self._session_clause()} AND id {'>=' if include_target else '>'} ?
                   AND is_active = 1{not_deleted}
                 """,
-                (self.storage_key, int(row_id)),
+                (self.storage_key, *self._session_params(), int(row_id)),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1501,11 +1564,11 @@ class HistoryManager(CharacterScopedService):
             cursor.execute(
                 f"""
                 SELECT id FROM history
-                WHERE message_id = ? AND character_id = ?
+                WHERE message_id = ? AND character_id = ? {self._session_clause()}
                   AND is_active = 1{not_deleted}
                 ORDER BY id DESC LIMIT 1
                 """,
-                (message_id, self.storage_key),
+                (message_id, self.storage_key, *self._session_params()),
             )
             row = cursor.fetchone()
             return int(row[0]) if row else None
@@ -1546,11 +1609,11 @@ class HistoryManager(CharacterScopedService):
             cursor.execute(
                 f"""
                 SELECT 1 FROM history
-                WHERE character_id = ? AND message_id = ?
+                WHERE character_id = ? {self._session_clause()} AND message_id = ?
                   AND is_active = 1{not_deleted}
                 LIMIT 1
                 """,
-                (self.storage_key, str(message_id)),
+                (self.storage_key, *self._session_params(), str(message_id)),
             )
             return cursor.fetchone() is not None
         finally:

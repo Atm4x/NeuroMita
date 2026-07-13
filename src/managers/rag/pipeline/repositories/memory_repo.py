@@ -30,10 +30,23 @@ class MemoryRepository:
     def _has_entities(self) -> bool:
         return "entities" in self.schema.mem_cols
 
+    @property
+    def _has_session(self) -> bool:
+        return "session_id" in self.schema.mem_cols
+
+    def _where_session(self, prefix: str = "m.") -> str:
+        return f" AND {prefix}session_id=?" if self._has_session else ""
+
+    def _session_params(self) -> list:
+        if not self._has_session:
+            return []
+        from core.session_context import current_session_id
+        return [current_session_id()]
+
     def _base_where(self, memory_mode: str) -> tuple[str, list]:
         """Build the WHERE clause and params for memory queries."""
-        where = "m.character_id=? AND m.is_deleted=0"
-        params: list = [self.character_id]
+        where = "m.character_id=?" + self._where_session() + " AND m.is_deleted=0"
+        params: list = [self.character_id, *self._session_params()]
         if self._has_forgotten:
             if memory_mode == "forgotten":
                 where += " AND m.is_forgotten=1"
@@ -89,8 +102,8 @@ class MemoryRepository:
         if self._has_entities:
             cols.append("m.entities")
 
-        where = "m.character_id=? AND m.is_deleted=0"
-        params: list = [self.character_id]
+        where = "m.character_id=?" + self._where_session() + " AND m.is_deleted=0"
+        params: list = [self.character_id, *self._session_params()]
         if self._has_forgotten:
             if memory_mode == "forgotten":
                 where += " AND m.is_forgotten=1"
@@ -247,8 +260,8 @@ class MemoryRepository:
         if (not has_forgotten) and memory_mode == "forgotten":
             return []
 
-        where = "character_id=? AND is_deleted=0 AND (embedding IS NULL) AND content IS NOT NULL AND TRIM(content) != ''"
-        params: list[Any] = [self.character_id]
+        where = "character_id=?" + self._where_session("") + " AND is_deleted=0 AND (embedding IS NULL) AND content IS NOT NULL AND TRIM(content) != ''"
+        params: list[Any] = [self.character_id, *self._session_params()]
         if has_forgotten:
             if memory_mode == "forgotten":
                 where += " AND is_forgotten=1"

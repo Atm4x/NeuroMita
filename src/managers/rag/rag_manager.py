@@ -129,6 +129,15 @@ class RAGManager:
     def _mem_cols(self):
         return self._schema.mem_cols
 
+    def _hist_session_clause(self) -> str:
+        return " AND session_id=?" if "session_id" in self._history_cols else ""
+
+    def _hist_session_params(self) -> list:
+        if "session_id" not in self._history_cols:
+            return []
+        from core.session_context import current_session_id
+        return [current_session_id()]
+
     def _current_model_name(self) -> str:
         """Returns the DB key used to tag embedding rows (provider:model or bare hf_name)."""
         cfg = resolve_full_config()
@@ -251,8 +260,8 @@ class RAGManager:
         conn = self.db.get_connection()
         try:
             cur = conn.cursor()
-            where = "character_id=? AND is_active=1"
-            params: list[Any] = [self.character_id]
+            where = "character_id=?" + self._hist_session_clause() + " AND is_active=1"
+            params: list[Any] = [self.character_id, *self._hist_session_params()]
             if "is_deleted" in self._history_cols:
                 where += " AND is_deleted=0"
 
@@ -376,8 +385,8 @@ class RAGManager:
         conn = self.db.get_connection()
         try:
             cur = conn.cursor()
-            where = "character_id=? AND is_active=1"
-            params: list[Any] = [self.character_id]
+            where = "character_id=?" + self._hist_session_clause() + " AND is_active=1"
+            params: list[Any] = [self.character_id, *self._hist_session_params()]
             if "is_deleted" in self._history_cols:
                 where += " AND is_deleted=0"
 

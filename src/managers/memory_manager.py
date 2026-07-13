@@ -37,15 +37,20 @@ class MemoryManager(CharacterScopedService):
         self._ensure_memories_schema()
 
     @property
+    def _total_chars_key(self) -> str:
+        # счётчик символов памяти — свой на каждую (сессию, персонажа)
+        return f"{self.session_id}:{self.character_id}"
+
+    @property
     def total_characters(self) -> int:
-        key = self.character_id
+        key = self._total_chars_key
         if key not in self._total_characters:
             self._calculate_total_characters()
         return int(self._total_characters.get(key, 0))
 
     @total_characters.setter
     def total_characters(self, value: int) -> None:
-        self._total_characters[self.character_id] = max(0, int(value or 0))
+        self._total_characters[self._total_chars_key] = max(0, int(value or 0))
 
     @property
     def rag(self):
@@ -114,6 +119,21 @@ class MemoryManager(CharacterScopedService):
                 conn.close()
             except Exception:
                 pass
+
+    _session_col: ClassVar[Optional[bool]] = None
+
+    def _has_session_col(self) -> bool:
+        """Есть ли session_id в memories (кешируется на класс — схема общая)."""
+        if MemoryManager._session_col is None:
+            MemoryManager._session_col = "session_id" in self._mem_cols()
+        return bool(MemoryManager._session_col)
+
+    def _session_and(self) -> str:
+        """`AND session_id=?` (param — self.session_id) либо '' на старых БД."""
+        return " AND session_id=?" if self._has_session_col() else ""
+
+    def _session_params(self) -> tuple:
+        return (self.session_id,) if self._has_session_col() else ()
 
     def _ensure_memories_schema(self) -> None:
         """
@@ -195,13 +215,13 @@ class MemoryManager(CharacterScopedService):
         conn = self.db.get_connection()
         try:
             cur = conn.cursor()
-            where = "character_id=? AND is_deleted=0"
-            params = [self.storage_key]
+            where = "character_id=?" + self._session_and() + " AND is_deleted=0"
+            params = [self.storage_key, *self._session_params()]
             if "is_forgotten" in cols:
                 where += " AND is_forgotten=0"
             cur.execute(f"SELECT SUM(LENGTH(content)) FROM memories WHERE {where}", tuple(params))
             result = cur.fetchone()[0]
-            self._total_characters[self.character_id] = int(result) if result else 0
+            self._total_characters[self._total_chars_key] = int(result) if result else 0
         finally:
             try:
                 conn.close()
@@ -238,8 +258,8 @@ class MemoryManager(CharacterScopedService):
 
             # сколько активных сейчас
             cur.execute(
-                "SELECT COUNT(*) FROM memories WHERE character_id=? AND is_deleted=0 AND is_forgotten=0",
-                (self.storage_key,),
+                f"SELECT COUNT(*) FROM memories WHERE character_id=?{self._session_and()} AND is_deleted=0 AND is_forgotten=0",
+                (self.storage_key, *self._session_params()),
             )
             active_count = int(cur.fetchone()[0] or 0)
 
@@ -251,12 +271,12 @@ class MemoryManager(CharacterScopedService):
 
             # Собираем всех кандидатов (Critical нельзя)
             cur.execute(
-                """
+                f"""
                 SELECT id, eternal_id, priority, date_created, content
                 FROM memories
-                WHERE character_id=? AND is_deleted=0 AND is_forgotten=0
+                WHERE character_id=?{self._session_and()} AND is_deleted=0 AND is_forgotten=0
                 """,
-                (self.storage_key,),
+                (self.storage_key, *self._session_params()),
             )
             rows = cur.fetchall() or []
 
@@ -340,8 +360,8 @@ class MemoryManager(CharacterScopedService):
             with self.db.connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT id, is_deleted, is_forgotten FROM memories WHERE character_id=? AND content=? LIMIT 1",
-                    (self.storage_key, str(content)),
+                    f"SELECT id, is_deleted, is_forgotten FROM memories WHERE character_id=?{self._session_and()} AND content=? LIMIT 1",
+                    (self.storage_key, *self._session_params(), str(content)),
                 )
                 row = cur.fetchone()
                 if row:
@@ -370,8 +390,8 @@ class MemoryManager(CharacterScopedService):
             cursor = conn.cursor()
 
             cursor.execute(
-                "SELECT MAX(eternal_id) FROM memories WHERE character_id = ?",
-                (self.storage_key,)
+                f"SELECT MAX(eternal_id) FROM memories WHERE character_id = ?{self._session_and()}",
+                (self.storage_key, *self._session_params())
             )
             res = cursor.fetchone()[0]
             new_id = (res + 1) if res is not None else 1
@@ -380,6 +400,10 @@ class MemoryManager(CharacterScopedService):
 
             insert_cols = ["character_id", "eternal_id", "content", "priority", "type", "date_created", "is_deleted"]
             insert_vals = [self.storage_key, new_id, content, priority, memory_type, date, 0]
+
+            if self._has_session_col():
+                insert_cols.append("session_id")
+                insert_vals.append(self.session_id)
 
             if "is_forgotten" in cols:
                 insert_cols.append("is_forgotten")
@@ -444,8 +468,8 @@ class MemoryManager(CharacterScopedService):
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT entities FROM memories WHERE character_id = ? AND eternal_id = ? AND is_deleted = 0",
-                (self.storage_key, eternal_id),
+                f"SELECT entities FROM memories WHERE character_id = ?{self._session_and()} AND eternal_id = ? AND is_deleted = 0",
+                (self.storage_key, *self._session_params(), eternal_id),
             )
             row = cur.fetchone()
             if not row:
@@ -460,8 +484,8 @@ class MemoryManager(CharacterScopedService):
             merged_json = json.dumps(sorted(merged), ensure_ascii=False)
 
             cur.execute(
-                "UPDATE memories SET entities = ? WHERE character_id = ? AND eternal_id = ?",
-                (merged_json, self.storage_key, eternal_id),
+                f"UPDATE memories SET entities = ? WHERE character_id = ?{self._session_and()} AND eternal_id = ?",
+                (merged_json, self.storage_key, *self._session_params(), eternal_id),
             )
             conn.commit()
             return True
@@ -480,8 +504,8 @@ class MemoryManager(CharacterScopedService):
         Если захочешь — можно расширить на забытые, но это уже другой UX.
         """
         cols = self._mem_cols()
-        where = "character_id=? AND eternal_id=? AND is_deleted=0"
-        params = [self.storage_key, number]
+        where = "character_id=?" + self._session_and() + " AND eternal_id=? AND is_deleted=0"
+        params = [self.storage_key, *self._session_params(), number]
         if "is_forgotten" in cols:
             where += " AND is_forgotten=0"
 
@@ -497,19 +521,19 @@ class MemoryManager(CharacterScopedService):
 
             if priority:
                 cursor.execute(
-                    """
+                    f"""
                     UPDATE memories SET content=?, priority=?, date_created=?
-                    WHERE character_id=? AND eternal_id=?
+                    WHERE character_id=?{self._session_and()} AND eternal_id=?
                     """,
-                    (content, priority, datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S"), self.storage_key, number)
+                    (content, priority, datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S"), self.storage_key, *self._session_params(), number)
                 )
             else:
                 cursor.execute(
-                    """
+                    f"""
                     UPDATE memories SET content=?, date_created=?
-                    WHERE character_id=? AND eternal_id=?
+                    WHERE character_id=?{self._session_and()} AND eternal_id=?
                     """,
-                    (content, datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S"), self.storage_key, number)
+                    (content, datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S"), self.storage_key, *self._session_params(), number)
                 )
 
             conn.commit()
@@ -545,8 +569,8 @@ class MemoryManager(CharacterScopedService):
     def get_memory_content(self, number: int):
         """Return content of an active memory by eternal_id, or None if not found."""
         cols = self._mem_cols()
-        where = "character_id=? AND eternal_id=? AND is_deleted=0"
-        params = [self.storage_key, number]
+        where = "character_id=?" + self._session_and() + " AND eternal_id=? AND is_deleted=0"
+        params = [self.storage_key, *self._session_params(), number]
         if "is_forgotten" in cols:
             where += " AND is_forgotten=0"
         conn = self.db.get_connection()
@@ -577,8 +601,8 @@ class MemoryManager(CharacterScopedService):
                 select_cols.append("is_forgotten")
 
             cursor.execute(
-                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
-                (self.storage_key, number)
+                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=?{self._session_and()} AND eternal_id=? AND is_deleted=0",
+                (self.storage_key, *self._session_params(), number)
             )
             row = cursor.fetchone()
             if not row:
@@ -591,8 +615,8 @@ class MemoryManager(CharacterScopedService):
                 content, is_forgotten = row[0], 0
 
             cursor.execute(
-                "UPDATE memories SET is_deleted=1 WHERE character_id=? AND eternal_id=?",
-                (self.storage_key, number)
+                f"UPDATE memories SET is_deleted=1 WHERE character_id=?{self._session_and()} AND eternal_id=?",
+                (self.storage_key, *self._session_params(), number)
             )
             conn.commit()
 
@@ -633,8 +657,8 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch source
                 cur.execute(
-                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
-                    (self.storage_key, source_id),
+                    f"SELECT content, entities FROM memories WHERE character_id=?{self._session_and()} AND eternal_id=? AND is_deleted=0",
+                    (self.storage_key, *self._session_params(), source_id),
                 )
                 src = cur.fetchone()
                 if not src:
@@ -643,8 +667,8 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch target
                 cur.execute(
-                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
-                    (self.storage_key, target_id),
+                    f"SELECT content, entities FROM memories WHERE character_id=?{self._session_and()} AND eternal_id=? AND is_deleted=0",
+                    (self.storage_key, *self._session_params(), target_id),
                 )
                 tgt = cur.fetchone()
                 if not tgt:
@@ -667,19 +691,19 @@ class MemoryManager(CharacterScopedService):
 
                 if "entities" in cols:
                     cur.execute(
-                        "UPDATE memories SET content=?, entities=?, date_created=? WHERE character_id=? AND eternal_id=?",
-                        (final_content, merged_ents_json, now, self.storage_key, target_id),
+                        f"UPDATE memories SET content=?, entities=?, date_created=? WHERE character_id=?{self._session_and()} AND eternal_id=?",
+                        (final_content, merged_ents_json, now, self.storage_key, *self._session_params(), target_id),
                     )
                 else:
                     cur.execute(
-                        "UPDATE memories SET content=?, date_created=? WHERE character_id=? AND eternal_id=?",
-                        (final_content, now, self.storage_key, target_id),
+                        f"UPDATE memories SET content=?, date_created=? WHERE character_id=?{self._session_and()} AND eternal_id=?",
+                        (final_content, now, self.storage_key, *self._session_params(), target_id),
                     )
 
                 # Soft-delete source
                 cur.execute(
-                    "UPDATE memories SET is_deleted=1 WHERE character_id=? AND eternal_id=?",
-                    (self.storage_key, source_id),
+                    f"UPDATE memories SET is_deleted=1 WHERE character_id=?{self._session_and()} AND eternal_id=?",
+                    (self.storage_key, *self._session_params(), source_id),
                 )
                 conn.commit()
 
@@ -785,9 +809,9 @@ class MemoryManager(CharacterScopedService):
                         extra = ", access_count" if has_access else ""
                         rows = conn.execute(
                             f"SELECT eternal_id, {_age_expr} as age{extra} "
-                            f"FROM memories WHERE character_id=? AND is_deleted=0 AND is_forgotten=0 "
+                            f"FROM memories WHERE character_id=?{self._session_and()} AND is_deleted=0 AND is_forgotten=0 "
                             f"AND LOWER(priority)=? AND {_age_expr} > ?",
-                            (self.storage_key, prio, pre_days),
+                            (self.storage_key, *self._session_params(), prio, pre_days),
                         ).fetchall()
 
                         to_forget = []
@@ -804,8 +828,8 @@ class MemoryManager(CharacterScopedService):
                             chunk = to_forget[i:i + BATCH]
                             ph = ",".join("?" * len(chunk))
                             conn.execute(
-                                f"UPDATE memories SET is_forgotten=1 WHERE eternal_id IN ({ph})",
-                                chunk,
+                                f"UPDATE memories SET is_forgotten=1 WHERE character_id=?{self._session_and()} AND eternal_id IN ({ph})",
+                                (self.storage_key, *self._session_params(), *chunk),
                             )
                         total += len(to_forget)
 
@@ -822,11 +846,11 @@ class MemoryManager(CharacterScopedService):
                         cur.execute(
                             f"""
                             UPDATE memories SET is_forgotten=1
-                            WHERE character_id=? AND is_deleted=0 AND is_forgotten=0
+                            WHERE character_id=?{self._session_and()} AND is_deleted=0 AND is_forgotten=0
                               AND LOWER(priority)=?
                               AND {_age_expr} > ?
                             """,
-                            (self.storage_key, prio, base_days),
+                            (self.storage_key, *self._session_params(), prio, base_days),
                         )
                         total += cur.rowcount
 
@@ -845,7 +869,10 @@ class MemoryManager(CharacterScopedService):
         conn = self.db.get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("UPDATE memories SET is_deleted=1 WHERE character_id=?", (self.storage_key,))
+            cursor.execute(
+                f"UPDATE memories SET is_deleted=1 WHERE character_id=?{self._session_and()}",
+                (self.storage_key, *self._session_params()),
+            )
             conn.commit()
         finally:
             try:
@@ -871,14 +898,14 @@ class MemoryManager(CharacterScopedService):
                 try:
                     cur.execute(
                         f"DELETE FROM {emb_table} WHERE source_table='memories' AND character_id=?"
-                        " AND source_id IN (SELECT id FROM memories WHERE character_id=? AND is_deleted=1)",
-                        (self.storage_key, self.storage_key),
+                        f" AND source_id IN (SELECT id FROM memories WHERE character_id=?{self._session_and()} AND is_deleted=1)",
+                        (self.storage_key, self.storage_key, *self._session_params()),
                     )
                 except Exception as e:
                     logging.warning(f"[MemoryManager] purge_deleted: {emb_table} cleanup failed: {e}")
             cur.execute(
-                "DELETE FROM memories WHERE character_id=? AND is_deleted=1",
-                (self.storage_key,),
+                f"DELETE FROM memories WHERE character_id=?{self._session_and()} AND is_deleted=1",
+                (self.storage_key, *self._session_params()),
             )
             purged = cur.rowcount
             conn.commit()
@@ -926,8 +953,8 @@ class MemoryManager(CharacterScopedService):
 
         cols = self._mem_cols()
 
-        where = "character_id=? AND is_deleted=0"
-        params = [self.storage_key]
+        where = "character_id=?" + self._session_and() + " AND is_deleted=0"
+        params = [self.storage_key, *self._session_params()]
         if "is_forgotten" in cols:
             where += " AND is_forgotten=0"
 

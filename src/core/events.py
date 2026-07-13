@@ -747,6 +747,11 @@ class Events:
         # summary_count обновлён). Для обновления живых счётчиков в UI.
         COMPRESSED = "history_compressed"
 
+    class Session:
+        """Сейвы / сессии: активная сессия (сейв) и операции над ними."""
+        # Активная сессия сменилась (payload: {"session_id": str}).
+        CHANGED = "session_changed"
+
     class RAG:
         GET_EMBEDDING = "rag_get_embedding"
         GET_EMBEDDINGS = "rag_get_embeddings"

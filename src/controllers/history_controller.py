@@ -266,7 +266,10 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
-        self._start_background_compression(character)
+        # Замораживаем активную сессию на момент завершения хода: сжатие уйдёт в фон
+        # с задержкой, а пользователь мог за это время переключить сейв.
+        from core.session_context import current_session_id
+        self._start_background_compression(character, current_session_id())
 
     def _process_history_compression(
         self,
@@ -444,22 +447,25 @@ class HistoryController(HistoryService):
         self._set_history_summary_state(character, new_summary, new_count)
         return new_summary, new_count
 
-    def _start_background_compression(self, character) -> None:
+    def _start_background_compression(self, character, session_id: Optional[str] = None) -> None:
         if getattr(self, "_closed", False):
             return
         char_id = getattr(character, "char_id", "Unknown") or "Unknown"
+        if session_id is None:
+            from core.session_context import current_session_id
+            session_id = current_session_id()
         delay_sec = self._compression_background_delay_seconds()
         remaining_cooldown = self._get_compression_cooldown_remaining(char_id)
-        self._schedule_background_compression(character, delay_sec=max(delay_sec, remaining_cooldown))
+        self._schedule_background_compression(character, session_id, delay_sec=max(delay_sec, remaining_cooldown))
 
-    def _schedule_background_compression(self, character, *, delay_sec: float) -> None:
+    def _schedule_background_compression(self, character, session_id: str, *, delay_sec: float) -> None:
         if getattr(self, "_closed", False):
             return
         char_id = getattr(character, "char_id", "Unknown") or "Unknown"
         timer = threading.Timer(
             max(0.0, float(delay_sec)),
             self._run_scheduled_background_compression,
-            args=(character,),
+            args=(character, session_id),
         )
         timer.daemon = True
         timer.name = f"history-compress-delay-{char_id}"
@@ -478,7 +484,7 @@ class HistoryController(HistoryService):
         )
         timer.start()
 
-    def _run_scheduled_background_compression(self, character) -> None:
+    def _run_scheduled_background_compression(self, character, session_id: str) -> None:
         char_id = getattr(character, "char_id", "Unknown") or "Unknown"
         should_reschedule = False
         with self._compression_guard:
@@ -491,21 +497,26 @@ class HistoryController(HistoryService):
                 self._background_compression_inflight.add(char_id)
         if should_reschedule:
             reschedule_delay = max(1.0, self._compression_background_delay_seconds())
-            self._schedule_background_compression(character, delay_sec=reschedule_delay)
+            self._schedule_background_compression(character, session_id, delay_sec=reschedule_delay)
             return
 
         # Единый фоновый LLM-пул (concurrency=1): сжатие и graph extraction
         # больше не конкурируют друг с другом и не плодят ad-hoc потоки.
         try:
             executors().try_submit(
-                Pools.BACKGROUND_LLM, self._run_post_response_compression, character
+                Pools.BACKGROUND_LLM, self._run_post_response_compression, character, session_id
             )
         except Exception as e:
             logger.warning(f"[HistoryController][{char_id}] Не удалось поставить сжатие в очередь: {e}")
             with self._compression_guard:
                 self._background_compression_inflight.discard(char_id)
 
-    def _run_post_response_compression(self, character) -> None:
+    def _run_post_response_compression(self, character, session_id: Optional[str] = None) -> None:
+        from core.session_context import session_scope, current_session_id
+        with session_scope(session_id or current_session_id()):
+            self._run_post_response_compression_locked(character)
+
+    def _run_post_response_compression_locked(self, character) -> None:
         try:
             history_data = character.history_manager.load_history()
             llm_messages_history: List[Dict[str, Any]] = history_data.get("messages", []) or []
@@ -737,8 +748,10 @@ class HistoryController(HistoryService):
 
         logger.warning("[HistoryController] History compression finished without success.")
         if self._get_compression_cooldown_remaining(char_id) > 0:
+            from core.session_context import current_session_id
             self._schedule_background_compression(
                 character,
+                current_session_id(),
                 delay_sec=max(
                     self._compression_background_delay_seconds(),
                     self._get_compression_cooldown_remaining(char_id),

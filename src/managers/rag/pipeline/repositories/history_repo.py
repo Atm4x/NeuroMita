@@ -29,6 +29,19 @@ class HistoryRepository:
     def _where_not_deleted(self) -> str:
         return " AND h.is_deleted=0" if "is_deleted" in self.schema.history_cols else ""
 
+    def _has_session(self) -> bool:
+        return "session_id" in self.schema.history_cols
+
+    def _where_session(self, prefix: str = "h.") -> str:
+        """`AND {prefix}session_id=?` (param — активная сессия) либо '' на старых БД."""
+        return f" AND {prefix}session_id=?" if self._has_session() else ""
+
+    def _session_params(self) -> tuple:
+        if not self._has_session():
+            return ()
+        from core.session_context import current_session_id
+        return (current_session_id(),)
+
     def _rows_to_dicts(self, cursor, cols: list[str]) -> list[dict]:
         keys = [c.split(" AS ")[-1].split(".")[-1] for c in cols]
         return [dict(zip(keys, row)) for row in (cursor.fetchall() or [])]
@@ -55,7 +68,7 @@ class HistoryRepository:
         cols.append("e.embedding")
         cols += self._opt_cols(("message_id", "speaker", "target", "participants", "entities"))
 
-        where = f"h.character_id=? AND h.is_active=0{self._where_not_deleted()}"
+        where = f"h.character_id=?{self._where_session()} AND h.is_active=0{self._where_not_deleted()}"
         try:
             cursor.execute(
                 f"""
@@ -69,7 +82,7 @@ class HistoryRepository:
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (model_name, match_q, self.character_id, int(top_k)),
+                (model_name, match_q, self.character_id, *self._session_params(), int(top_k)),
             )
             return self._rows_to_dicts(cursor, cols)
         except Exception:
@@ -88,7 +101,7 @@ class HistoryRepository:
                 cols.append(f"h.{opt}")
                 keys.append(opt)
 
-        where = f"h.character_id=? AND h.is_active=0{self._where_not_deleted()}"
+        where = f"h.character_id=?{self._where_session()} AND h.is_active=0{self._where_not_deleted()}"
         try:
             cursor.execute(
                 f"""SELECT {', '.join(cols)} FROM history h
@@ -96,7 +109,7 @@ class HistoryRepository:
                       ON e.source_table='history' AND e.source_id=h.id
                       AND e.character_id=h.character_id AND e.model_name=?
                     WHERE {where}""",
-                (model_name, self.character_id),
+                (model_name, self.character_id, *self._session_params()),
             )
             return [dict(zip(keys, row)) for row in (cursor.fetchall() or [])]
         except Exception:
@@ -123,11 +136,11 @@ class HistoryRepository:
         all_cols = base_cols + opt_cols
         all_keys = base_keys + opt_keys
 
-        where = f"h.character_id=? AND h.is_active=0 AND h.id IN ({placeholders}){self._where_not_deleted()}"
+        where = f"h.character_id=?{self._where_session()} AND h.is_active=0 AND h.id IN ({placeholders}){self._where_not_deleted()}"
         try:
             cursor.execute(
                 f"SELECT {', '.join(all_cols)} FROM history h WHERE {where}",
-                tuple([self.character_id] + ids),
+                tuple([self.character_id] + list(self._session_params()) + ids),
             )
             return [dict(zip(all_keys, row)) for row in (cursor.fetchall() or [])]
         except Exception:
@@ -146,7 +159,7 @@ class HistoryRepository:
                 cols_h.append(f"h.{opt}")
                 keys_h.append(opt)
 
-        where = f"h.character_id=? AND h.is_active=0{self._where_not_deleted()}"
+        where = f"h.character_id=?{self._where_session()} AND h.is_active=0{self._where_not_deleted()}"
         try:
             cursor.execute(
                 f"""SELECT {', '.join(cols_h)}, se.sentence_idx, se.embedding
@@ -155,7 +168,7 @@ class HistoryRepository:
                       ON se.source_table='history' AND se.source_id=h.id
                       AND se.character_id=h.character_id AND se.model_name=?
                     WHERE {where}""",
-                (model_name, self.character_id),
+                (model_name, self.character_id, *self._session_params()),
             )
             keys_full = keys_h + ["sentence_idx", "embedding"]
             return [dict(zip(keys_full, row)) for row in (cursor.fetchall() or [])]
@@ -180,7 +193,7 @@ class HistoryRepository:
         placeholders = ",".join("?" * len(actors))
         actor_where = f"(h.speaker IN ({placeholders}) OR h.target IN ({placeholders}))"
         where = (
-            f"h.character_id=? AND h.is_active=0 AND {actor_where}"
+            f"h.character_id=?{self._where_session()} AND h.is_active=0 AND {actor_where}"
             f"{self._where_not_deleted()}"
         )
         try:
@@ -190,7 +203,7 @@ class HistoryRepository:
                       ON e.source_table='history' AND e.source_id=h.id
                       AND e.character_id=h.character_id AND e.model_name=?
                     WHERE {where}""",
-                tuple([model_name, self.character_id] + actors + actors),
+                tuple([model_name, self.character_id] + list(self._session_params()) + actors + actors),
             )
             return [dict(zip(keys, row)) for row in (cursor.fetchall() or [])]
         except Exception:
@@ -212,7 +225,7 @@ class HistoryRepository:
             return []
 
         where = (
-            "character_id=? AND is_active=0 AND (embedding IS NULL) "
+            f"character_id=?{self._where_session('')} AND is_active=0 AND (embedding IS NULL) "
             "AND content IS NOT NULL AND TRIM(content) != ''"
         )
         if "is_deleted" in self.schema.history_cols:
@@ -227,7 +240,7 @@ class HistoryRepository:
         try:
             cursor.execute(
                 f"SELECT {', '.join(cols)} FROM history WHERE {where} ORDER BY id DESC LIMIT ?",
-                tuple([self.character_id] + kw_params + [int(limit)]),
+                tuple([self.character_id] + list(self._session_params()) + kw_params + [int(limit)]),
             )
             return [dict(zip(cols, row)) for row in (cursor.fetchall() or [])]
         except Exception:
@@ -243,13 +256,13 @@ class HistoryRepository:
         cols = [c for c in possible if c in self.schema.history_cols]
         if not cols:
             return None
-        where = "character_id=? AND is_active=1"
+        where = f"character_id=?{self._where_session('')} AND is_active=1"
         if "is_deleted" in self.schema.history_cols:
             where += " AND is_deleted=0"
         try:
             cursor.execute(
                 f"SELECT {', '.join(cols)} FROM history WHERE {where} ORDER BY id DESC LIMIT 1",
-                (self.character_id,),
+                (self.character_id, *self._session_params()),
             )
             row = cursor.fetchone()
             return dict(zip(cols, row)) if row else None
@@ -270,7 +283,7 @@ class HistoryRepository:
         if rf not in ("user_only", "user_and_assistant", "assistant_only"):
             rf = "user_only"
 
-        where = "character_id=? AND is_active=1"
+        where = f"character_id=?{self._where_session('')} AND is_active=1"
         if "is_deleted" in self.schema.history_cols:
             where += " AND is_deleted=0"
 
@@ -283,7 +296,7 @@ class HistoryRepository:
         try:
             cursor.execute(
                 f"SELECT role, content FROM history WHERE {where} ORDER BY id DESC LIMIT ?",
-                (self.character_id, int(tail)),
+                (self.character_id, *self._session_params(), int(tail)),
             )
             return [str(r[1] or "") for r in (cursor.fetchall() or []) if r[1]]
         except Exception:

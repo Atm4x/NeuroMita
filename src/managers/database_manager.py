@@ -26,6 +26,8 @@ class DatabaseManager:
     _BUSY_TIMEOUT_MS: int = 5000
     _MIGRATION_TIMESTAMP_NORMALIZATION = "history_timestamp_iso_v1"
     _MIGRATION_MESSAGE_ID_UNIQUE = "history_message_id_unique_v1"
+    _MIGRATION_VARIABLES_SESSION_ID = "variables_session_id_pk_v1"
+    _MIGRATION_HISTORY_MSG_UNIQUE_SESSION = "history_message_id_unique_session_v1"
 
     # Single source of truth: extra columns to ensure in history table.
     # (column_name -> SQL type). Base columns (id, character_id, role, content,
@@ -537,6 +539,7 @@ class DatabaseManager:
                CREATE TABLE IF NOT EXISTS memories (
                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                    character_id TEXT NOT NULL,
+                   session_id TEXT NOT NULL DEFAULT 'default',
                    eternal_id INTEGER NOT NULL,
                    content TEXT NOT NULL,
                    priority TEXT DEFAULT 'Normal',
@@ -556,6 +559,7 @@ class DatabaseManager:
                CREATE TABLE IF NOT EXISTS history (
                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                    character_id TEXT NOT NULL,
+                   session_id TEXT NOT NULL DEFAULT 'default',
                    role TEXT NOT NULL,
                    target TEXT,
                    participants TEXT,
@@ -591,10 +595,11 @@ class DatabaseManager:
         cursor.execute(
             '''
                CREATE TABLE IF NOT EXISTS variables (
+                   session_id TEXT NOT NULL DEFAULT 'default',
                    character_id TEXT NOT NULL,
                    key TEXT NOT NULL,
                    value TEXT,
-                   PRIMARY KEY (character_id, key)
+                   PRIMARY KEY (session_id, character_id, key)
                )
            '''
         )
@@ -634,6 +639,7 @@ class DatabaseManager:
         desired = {
             "memories": [
                 ("character_id", "TEXT"),
+                ("session_id", "TEXT NOT NULL DEFAULT 'default'"),
                 ("eternal_id", "INTEGER"),
                 ("content", "TEXT"),
                 ("priority", "TEXT DEFAULT 'Normal'"),
@@ -649,6 +655,7 @@ class DatabaseManager:
             ],
             "history": [
                 ("character_id", "TEXT"),
+                ("session_id", "TEXT NOT NULL DEFAULT 'default'"),
                 ("role", "TEXT"),
                 ("target", "TEXT"),
                 ("participants", "TEXT"),
@@ -777,10 +784,35 @@ class DatabaseManager:
                 except Exception as e:
                     logging.warning(f"DB upgrade: failed to create message-id UNIQUE index (ignored): {e}")
 
+            # --- Session-aware unique index for message_id (нужно для копирования сейвов:
+            #     один message_id может жить в разных сессиях после ветвления) ---
+            if {"session_id", "character_id", "message_id"}.issubset(hist_cols):
+                try:
+                    if not self._migration_applied(cursor, self._MIGRATION_HISTORY_MSG_UNIQUE_SESSION):
+                        cursor.execute("DROP INDEX IF EXISTS idx_history_unique_msg")
+                        deleted_predicate = "AND COALESCE(is_deleted, 0) = 0" if "is_deleted" in hist_cols else ""
+                        cursor.execute(
+                            f"""
+                            CREATE UNIQUE INDEX IF NOT EXISTS idx_history_unique_msg
+                            ON history(session_id, character_id, message_id)
+                            WHERE message_id IS NOT NULL AND TRIM(message_id) != ''
+                              {deleted_predicate}
+                            """
+                        )
+                        self._mark_migration(cursor, self._MIGRATION_HISTORY_MSG_UNIQUE_SESSION)
+                        logging.info("DB upgrade: rebuilt message-id UNIQUE index with session_id")
+                except Exception as e:
+                    logging.warning(f"DB upgrade: failed to rebuild session-aware message-id index (ignored): {e}")
+
+            # --- Rebuild variables table with (session_id, character_id, key) PK ---
+            self._migrate_variables_session_id(cursor)
+
             # --- Performance indexes for common queries ---
             for idx_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_history_char_active ON history(character_id, is_active)",
                 "CREATE INDEX IF NOT EXISTS idx_memories_char_deleted_forgotten ON memories(character_id, is_deleted, is_forgotten)",
+                "CREATE INDEX IF NOT EXISTS idx_history_sess_char_active ON history(session_id, character_id, is_active)",
+                "CREATE INDEX IF NOT EXISTS idx_memories_sess_char ON memories(session_id, character_id, is_deleted, is_forgotten)",
             ]:
                 try:
                     cursor.execute(idx_sql)
@@ -844,6 +876,57 @@ class DatabaseManager:
                 conn.close()
             except Exception:
                 pass
+
+    def _migrate_variables_session_id(self, cursor: sqlite3.Cursor) -> None:
+        """Rebuild the variables table so its PK is (session_id, character_id, key).
+
+        SQLite can't ALTER a primary key, so we recreate the table and copy every
+        existing row into the 'default' session. Idempotent via schema_migrations and
+        a column check (fresh DBs already have the new schema)."""
+        try:
+            if not self.table_exists(cursor, "variables"):
+                return
+            cols = self._get_table_columns_conn_cursor(cursor, "variables")
+            if "session_id" in cols:
+                # Fresh DB or already migrated.
+                if not self._migration_applied(cursor, self._MIGRATION_VARIABLES_SESSION_ID):
+                    self._mark_migration(cursor, self._MIGRATION_VARIABLES_SESSION_ID)
+                return
+            if self._migration_applied(cursor, self._MIGRATION_VARIABLES_SESSION_ID):
+                return
+
+            logging.info("DB upgrade: rebuilding variables table with session_id PK")
+            cursor.execute("DROP TABLE IF EXISTS variables_new")
+            cursor.execute(
+                """
+                CREATE TABLE variables_new (
+                    session_id TEXT NOT NULL DEFAULT 'default',
+                    character_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT,
+                    PRIMARY KEY (session_id, character_id, key)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO variables_new (session_id, character_id, key, value)
+                SELECT 'default', character_id, key, value FROM variables
+                """
+            )
+            cursor.execute("DROP TABLE variables")
+            cursor.execute("ALTER TABLE variables_new RENAME TO variables")
+            self._mark_migration(cursor, self._MIGRATION_VARIABLES_SESSION_ID)
+            logging.info("DB upgrade: variables table rebuilt with session_id PK")
+        except Exception as e:
+            logging.warning(f"DB upgrade: failed to rebuild variables table for session_id (ignored): {e}")
+
+    def _get_table_columns_conn_cursor(self, cursor: sqlite3.Cursor, table: str) -> Set[str]:
+        try:
+            cursor.execute(f"PRAGMA table_info({self._q_ident(table)})")
+            return set(r[1] for r in cursor.fetchall() if r and len(r) > 1)
+        except Exception:
+            return set()
 
     def _migrate_embeddings_to_table(self, cursor: sqlite3.Cursor) -> None:
         """Migrate BLOB embeddings from history/memories into the separate embeddings table.
@@ -941,6 +1024,10 @@ class DatabaseManager:
             cur = conn.cursor()
             hist_cols = self._get_table_columns_conn(conn, "history")
 
+            # session_id входит в GROUP BY, чтобы дедуп не схлопывал одинаковые
+            # message_id/content из РАЗНЫХ сессий (после ветвления сейва это норма).
+            group_session = "session_id, " if "session_id" in hist_cols else ""
+
             params: list = []
             char_filter = ""
             if cid:
@@ -960,7 +1047,7 @@ class DatabaseManager:
                       WHERE message_id IS NOT NULL AND TRIM(message_id) != ''
                         {active_filter}
                         {char_filter}
-                      GROUP BY character_id, message_id
+                      GROUP BY {group_session}character_id, message_id
                   )
                 """
                 cur.execute(sql, params + params)
@@ -972,7 +1059,7 @@ class DatabaseManager:
                   AND id NOT IN (
                       SELECT MIN(id) FROM history
                       WHERE {base_filter} {char_filter}
-                      GROUP BY character_id, content, timestamp
+                      GROUP BY {group_session}character_id, content, timestamp
                   )
                 """
                 cur.execute(sql, params + params)

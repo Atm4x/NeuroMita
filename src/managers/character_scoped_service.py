@@ -44,6 +44,11 @@ class BoundCharacterService:
     def storage_key(self) -> str:
         return self._scope().storage_key
 
+    @property
+    def session_id(self) -> str:
+        from core.session_context import current_session_id
+        return current_session_id()
+
     def __getattr__(self, name: str) -> Any:
         service = object.__getattribute__(self, "_service")
         scope = self._scope()
@@ -184,6 +189,11 @@ class CharacterScopedService:
     @property
     def storage_key(self) -> str:
         return self.current_scope().storage_key
+
+    @property
+    def session_id(self) -> str:
+        from core.session_context import current_session_id
+        return current_session_id()
 
     @property
     def prompt_set_path(self) -> str:
