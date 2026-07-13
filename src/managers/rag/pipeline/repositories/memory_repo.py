@@ -43,6 +43,11 @@ class MemoryRepository:
         from core.session_context import current_session_id
         return [current_session_id()]
 
+    def _emb_join_session(self, alias: str) -> str:
+        """`AND {alias}.session_id=m.session_id` — эмбеддинги памяти ключуются на
+        eternal_id (per-session), поэтому join обязан совпадать по сессии."""
+        return f" AND {alias}.session_id=m.session_id" if self._has_session else ""
+
     def _base_where(self, memory_mode: str) -> tuple[str, list]:
         """Build the WHERE clause and params for memory queries."""
         where = "m.character_id=?" + self._where_session() + " AND m.is_deleted=0"
@@ -120,7 +125,7 @@ class MemoryRepository:
                 JOIN memories m ON m.id = memories_fts.rowid
                 LEFT JOIN embeddings e
                   ON e.source_table='memories' AND e.source_id=m.eternal_id
-                  AND e.character_id=m.character_id AND e.model_name=?
+                  AND e.character_id=m.character_id{self._emb_join_session('e')} AND e.model_name=?
                 WHERE memories_fts MATCH ? AND {where}
                 ORDER BY rank
                 LIMIT ?
@@ -161,7 +166,7 @@ class MemoryRepository:
                 f"""SELECT {', '.join(all_cols)} FROM memories m
                     INNER JOIN embeddings e
                       ON e.source_table='memories' AND e.source_id=m.eternal_id
-                      AND e.character_id=m.character_id AND e.model_name=?
+                      AND e.character_id=m.character_id{self._emb_join_session('e')} AND e.model_name=?
                     WHERE {where}""",
                 tuple([model_name] + params),
             )
@@ -225,7 +230,7 @@ class MemoryRepository:
                     FROM memories m
                     INNER JOIN sentence_embeddings se
                       ON se.source_table='memories' AND se.source_id=m.eternal_id
-                      AND se.character_id=m.character_id AND se.model_name=?
+                      AND se.character_id=m.character_id{self._emb_join_session('se')} AND se.model_name=?
                     WHERE {where}""",
                 tuple([model_name] + params),
             )
