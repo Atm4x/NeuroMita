@@ -628,6 +628,25 @@ class DatabaseManager:
                ON embeddings(source_table, character_id, model_name)'''
         )
 
+        # Метаданные чекпоинтов (точек восстановления внутри сессии). Сами данные
+        # чекпоинта лежат как обычная дочерняя сессия (session_id со спецразделителем);
+        # здесь — только описание: к какому сейву относится, метка, время, авто/ручной.
+        cursor.execute(
+            '''
+               CREATE TABLE IF NOT EXISTS session_checkpoints (
+                   checkpoint_id TEXT PRIMARY KEY,
+                   parent_session_id TEXT NOT NULL,
+                   label TEXT,
+                   created_at TEXT NOT NULL,
+                   auto INTEGER NOT NULL DEFAULT 0
+               )
+           '''
+        )
+        cursor.execute(
+            '''CREATE INDEX IF NOT EXISTS idx_checkpoints_parent
+               ON session_checkpoints(parent_session_id, created_at)'''
+        )
+
         conn.commit()
         conn.close()
 

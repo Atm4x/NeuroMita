@@ -1,6 +1,7 @@
 """SessionAction — операции над сейвами по запросу игры.
 
-Запрос: {"action": "session", "op": <select|list|copy|delete|rename>, ...}
+Запрос: {"action": "session", "op": <select|list|copy|delete|clear|rename|
+        checkpoint|list_checkpoints|rollback|delete_checkpoint>, ...}
 Ответ:  {"type": "session_result", "op": ..., "ok": bool, ...}
 """
 from __future__ import annotations
@@ -49,6 +50,25 @@ class SessionAction:
                 old = str(request.get("from") or request.get("old") or "").strip()
                 new = str(request.get("to") or request.get("new") or "").strip()
                 result["ok"] = svc.rename(old, new)
+            elif op == "checkpoint":
+                sid = str(request.get("session_id") or "").strip()
+                label = str(request.get("label") or "").strip()
+                auto = bool(request.get("auto", False))
+                explicit = str(request.get("checkpoint_id") or "").strip()
+                ckpt = svc.create_checkpoint(sid or None, label=label, auto=auto, checkpoint_id=explicit or None)
+                result["ok"] = ckpt is not None
+                result["checkpoint_id"] = ckpt or ""
+            elif op == "list_checkpoints":
+                sid = str(request.get("session_id") or "").strip()
+                result["checkpoints"] = svc.list_checkpoints(sid or None)
+            elif op == "rollback":
+                cid = str(request.get("checkpoint_id") or "").strip()
+                result["ok"] = svc.rollback(cid)
+                result["checkpoint_id"] = cid
+            elif op == "delete_checkpoint":
+                cid = str(request.get("checkpoint_id") or "").strip()
+                result["ok"] = svc.delete_checkpoint(cid)
+                result["checkpoint_id"] = cid
             else:
                 result = {"type": "session_result", "op": op, "ok": False, "error": f"Unknown session op: {op}"}
             await ctx.server.send_json(ctx.writer, result)

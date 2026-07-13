@@ -43,6 +43,26 @@ class SessionService(ABC):
     @abstractmethod
     def rename(self, old: str, new: str) -> bool: ...
 
+    # -- checkpoints (точки восстановления внутри сейва) --
+    @abstractmethod
+    def create_checkpoint(
+        self,
+        session_id: Optional[str] = None,
+        *,
+        label: str = "",
+        auto: bool = False,
+        checkpoint_id: Optional[str] = None,
+    ) -> Optional[str]: ...
+
+    @abstractmethod
+    def list_checkpoints(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def rollback(self, checkpoint_id: str) -> bool: ...
+
+    @abstractmethod
+    def delete_checkpoint(self, checkpoint_id: str) -> bool: ...
+
 
 # ---------------------------------------------------------------------------
 # Настройки
