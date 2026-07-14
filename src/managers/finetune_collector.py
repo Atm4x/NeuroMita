@@ -116,6 +116,10 @@ class FineTuneCollector:
             logger.error(f"[FineTuneCollector] Failed to save sample: {e}", exc_info=True)
             return None
 
+    def enforce_limit(self) -> None:
+        """Публичная точка входа для внешних вызовов (presentation hub)."""
+        self._enforce_limit()
+
     def _enforce_limit(self) -> None:
         """Trim the oldest samples so at most `_record_limit()` remain.
 
@@ -199,7 +203,24 @@ class FineTuneCollector:
     # ── Stats ─────────────────────────────────────────────────────────────────
 
     def get_stats(self) -> Dict[str, Any]:
-        """Возвращает статистику по всем записям."""
+        """Возвращает статистику по всем записям.
+
+        Парсинг всех jsonl дорогой (полный промпт + история в каждой записи),
+        поэтому кэшируем по сигнатуре файлов (mtime/size) — повторные вызовы и
+        двойное чтение из UI становятся мгновенными, кэш сам инвалидируется при
+        любой записи/очистке."""
+        try:
+            files = sorted(self.data_dir.glob("samples_*.jsonl"))
+            signature = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+        except Exception:
+            files = []
+            signature = None
+
+        if signature is not None and getattr(self, "_stats_cache_sig", None) == signature:
+            cached = getattr(self, "_stats_cache", None)
+            if cached is not None:
+                return cached
+
         total = 0
         by_character: Dict[str, int] = {}
         by_model: Dict[str, int] = {}
@@ -208,7 +229,7 @@ class FineTuneCollector:
         negative = 0
 
         try:
-            for file_path in sorted(self.data_dir.glob("samples_*.jsonl")):
+            for file_path in files:
                 for line in file_path.read_text(encoding="utf-8").splitlines():
                     line = line.strip()
                     if not line:
@@ -232,7 +253,7 @@ class FineTuneCollector:
         except Exception as e:
             logger.error(f"[FineTuneCollector] get_stats error: {e}", exc_info=True)
 
-        return {
+        result = {
             "total": total,
             "rated": rated,
             "positive": positive,
@@ -240,6 +261,10 @@ class FineTuneCollector:
             "by_character": by_character,
             "by_model": by_model,
         }
+        if signature is not None:
+            self._stats_cache = result
+            self._stats_cache_sig = signature
+        return result
 
     # ── Load / filter samples ─────────────────────────────────────────────────
 

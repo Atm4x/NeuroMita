@@ -11,6 +11,10 @@ from typing import Any, Optional
 
 def run_ai_engine_process(cmd_queue, res_queue, log_queue) -> None:
     try:
+        # torch/MKL (libiomp5md) + onnxruntime (libomp140) в одном процессе дают
+        # OMP Error #15 → abort. Ставим до любых тяжёлых импортов. См. __main__.py.
+        os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
         _ensure_lib_on_path()
 
         try:
@@ -164,8 +168,6 @@ async def _handle_action(st: EngineState, action: str, payload: dict, *, log_que
         if warm_torch:
             import importlib
             importlib.invalidate_caches()
-            from handlers.embedding_handler import _ensure_torch_and_transformers
-            _ensure_torch_and_transformers()
             import torch  # noqa: F401
 
         if warm_tf:

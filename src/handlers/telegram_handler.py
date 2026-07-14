@@ -1,4 +1,4 @@
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 import os
 import sys
 import time
@@ -6,14 +6,23 @@ import random
 import asyncio
 
 from telethon.tl.types import MessageMediaDocument, DocumentAttributeAudio
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import (
+    SessionPasswordNeededError,
+    PhoneCodeInvalidError,
+    PhoneCodeExpiredError,
+    PhoneCodeEmptyError,
+    PasswordHashInvalidError,
+)
 
 from utils.audio_converter import AudioConverter
 from handlers.audio_handler import AudioHandler
 from main_logger import logger
-from utils import SH
+from utils import getTranslationVariant
 import platform
 from core.events import get_event_bus, Events
+from core.services import use
+from services.contracts import TelegramAuthService
+from services.contracts import GameLinkService, LoopService, SettingsService
 
 
 class TelegramBotHandler:
@@ -29,10 +38,8 @@ class TelegramBotHandler:
         self._last_speaker_command_norm = ""
         self.last_send_time = -1.0
 
-        settings_result = self.event_bus.emit_and_wait(Events.Settings.GET_SETTINGS, timeout=1.0)
-        settings = settings_result[0] if settings_result else {}
         try:
-            self.silero_time_limit = int(settings.get("SILERO_TIME", "10"))
+            self.silero_time_limit = int(use(SettingsService).get("SILERO_TIME", "10"))
         except Exception:
             self.silero_time_limit = 10
         if not hasattr(self, "silero_time_limit") or self.silero_time_limit is None:
@@ -63,9 +70,7 @@ class TelegramBotHandler:
                 app_version=app_version,
             )
         except Exception as e:
-            logger.info(f"Проблема в ините тг: {e}")
-            logger.info(SH(self.api_id))
-            logger.info(SH(self.api_hash))
+            logger.error(f"Проблема в ините Telegram-клиента: {e}")
 
     def reset_message_count(self):
         if time.time() - self.start_time > 60:
@@ -229,15 +234,7 @@ class TelegramBotHandler:
 
             sound_absolute_path = os.path.abspath(file_path)
 
-            # Check game connection status via event bus
-            connection_result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                self.event_bus.emit_and_wait,
-                Events.Server.GET_GAME_CONNECTION,
-                {},
-                1.0
-            )
-            connected_to_game = connection_result[0] if connection_result else False
+            connected_to_game = use(GameLinkService).is_connected()
 
             if connected_to_game:
                 logger.info("Подключен к игре, нужна конвертация")
@@ -253,7 +250,10 @@ class TelegramBotHandler:
                     logger.info(f"Ошибка при удалении файла {sound_absolute_path}: {remove_error}")
 
                 self.event_bus.emit(Events.Server.SET_PATCH_TO_SOUND_FILE, absolute_wav_path)
-                self.event_bus.emit_and_wait(Events.Server.SET_ID_SOUND, {'id': message_id})
+                # emit, а не sync EventBus RPC: подписчиков у SET_ID_SOUND нет, ответ
+                # всё равно отбрасывался, а синхронный сбор внутри telegram
+                # asyncio-loop блокирует loop и падает guardrail'ом.
+                self.event_bus.emit(Events.Server.SET_ID_SOUND, {'id': message_id})
 
                 path_to_file = absolute_wav_path
             else:
@@ -273,31 +273,11 @@ class TelegramBotHandler:
 
             await self.client.connect()
 
-            loop_results = await asyncio.get_event_loop().run_in_executor(
-                None,
-                self.event_bus.emit_and_wait,
-                Events.Core.GET_EVENT_LOOP,
-                {},
-                1.0
-            )
-            loop = loop_results[0] if loop_results else asyncio.get_event_loop()
+            loop = use(LoopService).loop()
 
             if not await self.client.is_user_authorized():
                 try:
-                    await self.client.send_code_request(self.phone)
-
-                    code_future = loop.create_future()
-                    self.event_bus.emit(Events.Telegram.PROMPT_FOR_TG_CODE, {'future': code_future})
-                    verification_code = await code_future
-
-                    try:
-                        await self.client.sign_in(phone=self.phone, code=verification_code)
-                    except SessionPasswordNeededError:
-                        password_future = loop.create_future()
-                        self.event_bus.emit(Events.Telegram.PROMPT_FOR_TG_PASSWORD, {'future': password_future})
-                        password = await password_future
-                        await self.client.sign_in(password=password)
-
+                    await self._authorize_with_retries(loop)
                 except asyncio.CancelledError:
                     logger.info("Авторизация отменена пользователем.")
                     raise
@@ -327,6 +307,68 @@ class TelegramBotHandler:
         except Exception as e:
             self.event_bus.emit(Events.Telegram.SET_SILERO_CONNECTED, {'connected': False})
             logger.error(f"Ошибка авторизации/старта: {e}")
+            # Пробрасываем, иначе вызывающий (TelegramController) считает подключение
+            # успешным и эмитит connected=True поверх нашего connected=False — ложный успех.
+            raise
+
+    async def _authorize_with_retries(self, loop, max_attempts: int = 3):
+        """Логин с повторами при неверном коде/пароле.
+
+        Бросает исключение, если авторизоваться не удалось — вызывающий обязан
+        трактовать это как неуспех (без ложного «успешно подключен»).
+        """
+        await self.client.send_code_request(self.phone)
+
+        last_error = ""
+        for attempt in range(1, max_attempts + 1):
+            verification_code = await use(TelegramAuthService).request(
+                "code", error=last_error, attempt=attempt
+            )
+
+            try:
+                await self.client.sign_in(phone=self.phone, code=verification_code)
+                return  # успех
+            except (PhoneCodeInvalidError, PhoneCodeEmptyError):
+                last_error = getTranslationVariant(
+                    "Неверный код подтверждения. Попробуйте ещё раз.",
+                    "Invalid confirmation code. Please try again.",
+                )
+                logger.warning(f"Telegram: неверный код (попытка {attempt}/{max_attempts}).")
+                continue
+            except PhoneCodeExpiredError:
+                last_error = getTranslationVariant(
+                    "Код истёк, запрошен новый. Введите свежий код.",
+                    "The code expired, a new one was requested. Enter the fresh code.",
+                )
+                logger.warning("Telegram: код истёк, запрашиваю новый.")
+                await self.client.send_code_request(self.phone)
+                continue
+            except SessionPasswordNeededError:
+                await self._sign_in_with_password_retries(loop, max_attempts=max_attempts)
+                return  # успех (пароль принят внутри)
+
+        raise RuntimeError("Не удалось подтвердить код Telegram после нескольких попыток.")
+
+    async def _sign_in_with_password_retries(self, loop, max_attempts: int = 3):
+        """Ввод пароля 2FA с повторами при неверном пароле."""
+        last_error = ""
+        for attempt in range(1, max_attempts + 1):
+            password = await use(TelegramAuthService).request(
+                "password", error=last_error, attempt=attempt
+            )
+
+            try:
+                await self.client.sign_in(password=password)
+                return  # успех
+            except PasswordHashInvalidError:
+                last_error = getTranslationVariant(
+                    "Неверный пароль двухфакторной аутентификации. Попробуйте ещё раз.",
+                    "Invalid two-factor authentication password. Please try again.",
+                )
+                logger.warning(f"Telegram: неверный пароль 2FA (попытка {attempt}/{max_attempts}).")
+                continue
+
+        raise RuntimeError("Не удалось ввести пароль 2FA Telegram после нескольких попыток.")
 
     async def getLastMessage(self):
         if not self.client:
@@ -364,7 +406,7 @@ class TelegramBotHandler:
         while attempts < max_attempts:
             attempts += 1
             try:
-                base_id = await self._get_last_chat_message_id()
+                await self._get_last_chat_message_id()
 
                 await self._safe_send_message(command, min_gap=1.2, count=True)
                 await asyncio.sleep(initial_delay)
