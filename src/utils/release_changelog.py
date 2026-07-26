@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Sequence
 
 RELEASE_TAG_PATTERN = re.compile(r"^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$")
+_GIT_TIMEOUT_SECONDS = 30.0
+
 IGNORED_SUBJECT_RE = re.compile(
     r"(_version|\bbump\b|version bump|\[skip ci\]|tester code|release workflow|github actions?)",
     re.IGNORECASE,
@@ -57,23 +59,13 @@ class GitRepo:
             encoding="utf-8",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=_GIT_TIMEOUT_SECONDS,
         )
         return proc.stdout.strip()
 
     def list_release_tags(self) -> list[str]:
         tags = self.git("tag", "--list", "v*", "--sort=-version:refname")
         return [tag for tag in tags.splitlines() if _is_release_tag(tag)]
-
-    def is_ancestor(self, tag: str, rev: str = "HEAD") -> bool:
-        proc = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", tag, rev],
-            cwd=self.repo,
-            text=True,
-            encoding="utf-8",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        return proc.returncode == 0
 
     def commit_subjects_not_reachable_from(self, excluded_tags: Sequence[str]) -> list[str]:
         if not excluded_tags:
@@ -107,17 +99,15 @@ def find_excluded_release_tags(repo: GitRepo, current_tag: str) -> list[str]:
     return excluded
 
 
-def find_previous_reachable_release_tag(repo: GitRepo, excluded_tags: Sequence[str]) -> str:
-    for tag in excluded_tags:
-        if repo.is_ancestor(tag, "HEAD"):
-            return tag
-    return ""
+def find_previous_release_tag(excluded_tags: Sequence[str]) -> str:
+    """Return the immediately preceding release by version, regardless of branch."""
+    return excluded_tags[0] if excluded_tags else ""
 
 
 def build_changelog_data(current_tag: str, repo: str | Path = ".") -> ChangelogData:
     git_repo = GitRepo(repo)
     excluded_tags = find_excluded_release_tags(git_repo, current_tag)
-    previous_tag = find_previous_reachable_release_tag(git_repo, excluded_tags)
+    previous_tag = find_previous_release_tag(excluded_tags)
     commits = git_repo.commit_subjects_not_reachable_from(excluded_tags)
     return ChangelogData(
         current_tag=current_tag,
