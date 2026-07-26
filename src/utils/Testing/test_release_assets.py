@@ -239,3 +239,12 @@ def test_raw_release_has_launcher_assets_accepts_python_release():
         ],
     }
     assert raw_release_has_launcher_assets(raw)
+
+
+def test_retired_unity_asset_is_not_launcher_installable():
+    release = _r("v1.2.3", "retired", [_a("UnityBuild-v1.2.3-retired.7z")])
+
+    picked = pick_from_release(release)
+
+    assert picked.unity is None
+    assert not has_launcher_release_assets(release)

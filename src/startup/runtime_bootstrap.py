@@ -390,6 +390,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
                     restart_on_success=apply_update,
                     update_mode=settings.get("UPDATE_MODE", "diff"),
                     preserve_prompts=bool(settings.get("UPDATE_PRESERVE_PROMPTS", True)),
+                    settings=settings,
                 )
             except SystemExit:
                 raise
@@ -418,6 +419,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
                     channel=settings.get("UPDATE_CHANNEL", "stable"),
                     tester_code=settings.get("TESTER_CODE") or None,
                     auto_update=apply_update,
+                    settings=settings,
                 )
             except Exception as exc:
                 logger.warning(f"Unity update check failed: {exc}")

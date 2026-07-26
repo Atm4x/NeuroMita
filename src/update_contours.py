@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,11 @@ UPDATE_CONTOUR_KEY = "UPDATE_CONTOUR"
 INSTALLED_SOURCES_KEY = "UPDATE_INSTALLED_SOURCES"
 TESTER_CODE_KEY = "TESTER_CODE"
 TESTER_CODES_KEY = "TESTER_CODES"
+
+# These repositories are part of the delivery architecture, not user settings.
+# A release build must never be redirected to an arbitrary GitHub repository.
+RELEASE_REPOSITORY = "VinerX/NeuroMita"
+TEST_REPOSITORY = "Atm4x/NeuroMita"
 
 
 @dataclass(frozen=True)
@@ -50,34 +56,27 @@ def normalize_update_contour(value: str | None) -> str:
     text = str(value or "").strip().lower()
     if text in VALID_UPDATE_CONTOURS:
         return text
-    return TEST_CONTOUR
+    return RELEASE_CONTOUR
 
 
 def default_update_contour() -> str:
-    return normalize_update_contour(os.environ.get(UPDATE_CONTOUR_KEY, TEST_CONTOUR))
-
-
-def _release_repo() -> str:
-    return str(os.environ.get("UPDATE_REPO_RELEASE") or "VinerX/NeuroMita").strip()
-
-
-def _test_repo() -> str:
-    legacy_repo = str(os.environ.get("UPDATE_REPO") or "").strip()
-    return str(os.environ.get("UPDATE_REPO_TEST") or legacy_repo or "Atm4x/NeuroMita").strip()
+    # Test builds opt in explicitly through their launcher environment.
+    raw = str(os.environ.get("NEUROMITA_TEST_CONTOUR") or "").strip().casefold()
+    return TEST_CONTOUR if raw in {"1", "true", "yes", "on"} else RELEASE_CONTOUR
 
 
 def _source_map() -> dict[str, UpdateSource]:
     return {
         RELEASE_CONTOUR: UpdateSource(
             contour=RELEASE_CONTOUR,
-            repo=_release_repo(),
+            repo=RELEASE_REPOSITORY,
             display_name_ru="Релизный",
             display_name_en="Release",
             requires_tester_code=False,
         ),
         TEST_CONTOUR: UpdateSource(
             contour=TEST_CONTOUR,
-            repo=_test_repo(),
+            repo=TEST_REPOSITORY,
             display_name_ru="Тестовый",
             display_name_en="Test",
             requires_tester_code=True,
@@ -94,6 +93,15 @@ def get_selected_update_contour(settings: Any = None, contour: str | None = None
 def resolve_update_source(settings: Any = None, contour: str | None = None) -> UpdateSource:
     selected = get_selected_update_contour(settings=settings, contour=contour)
     return _source_map()[selected]
+
+
+def update_channel_for_source(source: UpdateSource) -> str:
+    """Return the only allowed GitHub release channel for a contour.
+
+    Production must never consume prereleases. Test releases are prereleases so
+    they are visible only to clients deliberately placed in the test contour.
+    """
+    return "beta" if source.is_test else "stable"
 
 
 def get_test_contour_badge(settings: Any = None, contour: str | None = None, *, lang: str = "ru") -> str:

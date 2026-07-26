@@ -256,5 +256,6 @@ jobs:
           body_path: CHANGELOG_BODY.md
           files: PythonBuild-v${{ steps.ver.outputs.version }}.zip
           make_latest: true
+          prerelease: ${{ github.repository_owner == 'Atm4x' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

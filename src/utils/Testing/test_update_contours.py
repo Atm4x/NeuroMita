@@ -15,11 +15,12 @@ from update_contours import (  # noqa: E402
     get_tester_codes,
     is_source_mismatch,
     resolve_update_source,
+    update_channel_for_source,
 )
 
 
-def test_default_selected_contour_is_test():
-    assert get_selected_update_contour({}) == TEST_CONTOUR
+def test_default_selected_contour_is_release():
+    assert get_selected_update_contour({}) == RELEASE_CONTOUR
 
 
 def test_resolve_update_source_switches_repo_by_contour():
@@ -68,3 +69,18 @@ def test_same_tag_from_other_repo_is_source_mismatch():
     }
 
     assert is_source_mismatch(release_source, installed) is True
+
+
+def test_contour_controls_the_only_allowed_release_channel():
+    assert update_channel_for_source(resolve_update_source({"UPDATE_CONTOUR": RELEASE_CONTOUR})) == "stable"
+    assert update_channel_for_source(resolve_update_source({"UPDATE_CONTOUR": TEST_CONTOUR})) == "beta"
+
+
+def test_invalid_contour_falls_back_to_release():
+    assert get_selected_update_contour({"UPDATE_CONTOUR": "unknown"}) == RELEASE_CONTOUR
+
+
+def test_test_contour_requires_explicit_launcher_opt_in(monkeypatch):
+    monkeypatch.setenv("NEUROMITA_TEST_CONTOUR", "1")
+
+    assert get_selected_update_contour({}) == TEST_CONTOUR

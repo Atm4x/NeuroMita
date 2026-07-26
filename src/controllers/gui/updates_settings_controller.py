@@ -413,6 +413,7 @@ def setup_updates_settings_controls(
                     restart_on_success=False,
                     update_mode=(self.settings.get("UPDATE_MODE", "diff") or "diff"),
                     preserve_prompts=bool(self.settings.get("UPDATE_PRESERVE_PROMPTS", True)),
+                    settings=self.settings,
                 )
                 if not python_result.ok:
                     raise RuntimeError(python_result.error or "Python update failed")
@@ -575,9 +576,9 @@ def setup_updates_settings_controls(
         "QComboBox::drop-down { border: none; width: 26px; }"
         "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(183, 75, 125,0.24); color: #f3edf6; selection-background-color: rgba(183, 75, 125,0.30); }"
     )
-    contour_combo.addItem(_("Тестовый", "Test"), TEST_CONTOUR)
     contour_combo.addItem(_("Релизный", "Release"), RELEASE_CONTOUR)
-    current_contour = str(self.settings.get(UPDATE_CONTOUR_KEY, TEST_CONTOUR) or TEST_CONTOUR).strip().lower()
+    contour_combo.addItem(_("Тестовый", "Test"), TEST_CONTOUR)
+    current_contour = str(self.settings.get(UPDATE_CONTOUR_KEY, RELEASE_CONTOUR) or RELEASE_CONTOUR).strip().lower()
     contour_idx = contour_combo.findData(current_contour)
     if contour_idx >= 0:
         contour_combo.setCurrentIndex(contour_idx)
@@ -589,6 +590,9 @@ def setup_updates_settings_controls(
         "Release - public releases without a password.",
         "setToolTip",
     )
+    # The test contour is provisioned by the test build (or its launch environment),
+    # not selected by ordinary users in settings.
+    contour_combo.setVisible(False)
     contour_layout.addWidget(contour_combo)
 
     contour_badge = QLabel("")
@@ -602,8 +606,8 @@ def setup_updates_settings_controls(
     parent.addWidget(contour_row)
 
     def _save_contour():
-        value = contour_combo.currentData() or TEST_CONTOUR
-        current_value = str(self.settings.get(UPDATE_CONTOUR_KEY, TEST_CONTOUR) or TEST_CONTOUR).strip().lower()
+        value = contour_combo.currentData() or RELEASE_CONTOUR
+        current_value = str(self.settings.get(UPDATE_CONTOUR_KEY, RELEASE_CONTOUR) or RELEASE_CONTOUR).strip().lower()
         if value == current_value:
             return
         logger.info(f"[updates_ui] UPDATE_CONTOUR -> {value}")
@@ -612,48 +616,6 @@ def setup_updates_settings_controls(
         _reset_update_context()
 
     contour_combo.activated.connect(lambda _index: QTimer.singleShot(0, _save_contour))
-
-    # Channel
-    channel_row = QWidget()
-    channel_row.setObjectName("UpdatesChannelRow")
-    channel_row.setStyleSheet("QWidget#UpdatesChannelRow { background: transparent; }")
-    channel_layout = QHBoxLayout(channel_row)
-    channel_layout.setContentsMargins(0, 4, 0, 0)
-    channel_layout.setSpacing(8)
-
-    channel_lbl = tr_set(QLabel(), "Канал обновлений:", "Update channel:")
-    channel_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
-    channel_layout.addWidget(channel_lbl)
-
-    channel_combo = QComboBox()
-    channel_combo.setStyleSheet(
-        "QComboBox { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QComboBox:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
-        "QComboBox::drop-down { border: none; width: 26px; }"
-        "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(183, 75, 125,0.24); color: #f3edf6; selection-background-color: rgba(183, 75, 125,0.30); }"
-    )
-    channel_combo.addItems(["stable", "beta"])
-    current_channel = self.settings.get("UPDATE_CHANNEL", "stable")
-    idx = channel_combo.findText(current_channel)
-    if idx >= 0:
-        channel_combo.setCurrentIndex(idx)
-    tr_set(channel_combo, "stable - официальные релизы.\n"
-            "beta - включая пре-релизы.",
-            "stable - official releases.\n"
-            "beta - including pre-releases.", "setToolTip")
-
-    def _save_channel(text: str):
-        if text == self.settings.get("UPDATE_CHANNEL", "stable"):
-            return
-        logger.info(f"[updates_ui] UPDATE_CHANNEL -> {text}")
-        _persist_setting("UPDATE_CHANNEL", text)
-        _reset_update_context()
-
-    channel_combo.activated.connect(lambda _index: QTimer.singleShot(0, lambda: _save_channel(channel_combo.currentText())))
-    channel_layout.addWidget(channel_combo)
-    channel_layout.addStretch()
-    parent.addWidget(channel_row)
 
     # Update mode (diff / full)
     mode_row = QWidget()
@@ -668,7 +630,7 @@ def setup_updates_settings_controls(
     mode_layout.addWidget(mode_lbl)
 
     mode_combo = TRQComboBox()
-    mode_combo.setStyleSheet(channel_combo.styleSheet())
+    mode_combo.setStyleSheet(contour_combo.styleSheet())
     # data: "diff"/"full"; подписи переводятся вживую.
     mode_combo.add_tr_item("Дифф (только изменённые файлы)", "Diff (changed files only)", value="diff")
     mode_combo.add_tr_item("Полная перезапись", "Full replace", value="full")

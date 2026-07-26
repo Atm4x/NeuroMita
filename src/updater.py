@@ -26,6 +26,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from update_contours import (
+    INSTALLED_SOURCES_KEY,
+    TESTER_CODES_KEY,
+    TESTER_CODE_KEY,
+    build_installed_source_record,
+    get_installed_source,
+    get_selected_update_contour,
+    get_tester_codes,
+    is_source_mismatch,
+    resolve_update_source,
+    update_channel_for_source,
+)
 from services.update_transaction import (
     DirectoryInstallTransaction,
     UpdateTransactionError,
@@ -58,6 +70,53 @@ from utils.release_assets import (
 _USER_AGENT = "NeuroMita-Updater/2.0"
 _LOG_PREFIX = "[updater]"
 
+
+def _settings_path(base_dir: Optional[str] = None) -> Path:
+    root = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
+    return root / "Settings" / "settings.json"
+
+
+def _load_settings_payload(base_dir: Optional[str] = None, settings=None) -> dict:
+    if isinstance(settings, dict):
+        return dict(settings)
+    if settings is not None:
+        raw = getattr(settings, "settings", None)
+        if isinstance(raw, dict):
+            return dict(raw)
+        getter = getattr(settings, "get", None)
+        if callable(getter):
+            try:
+                return {
+                    "UPDATE_CONTOUR": getter("UPDATE_CONTOUR", None),
+                    TESTER_CODE_KEY: getter(TESTER_CODE_KEY, None),
+                    TESTER_CODES_KEY: getter(TESTER_CODES_KEY, None),
+                    INSTALLED_SOURCES_KEY: getter(INSTALLED_SOURCES_KEY, None),
+                }
+            except Exception:
+                pass
+    payload = read_json(_settings_path(base_dir))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _persist_installed_source(base_dir: Optional[str], component: str, record: dict) -> None:
+    path = _settings_path(base_dir)
+    payload = _load_settings_payload(base_dir)
+    sources = payload.get(INSTALLED_SOURCES_KEY)
+    source_map = dict(sources) if isinstance(sources, dict) else {}
+    source_map[str(component or "").strip().lower()] = dict(record)
+    payload[INSTALLED_SOURCES_KEY] = source_map
+    atomic_write_json(path, payload)
+
+
+def _password_candidates(settings=None, tester_code: Optional[str] = None) -> list[Optional[str]]:
+    codes = get_tester_codes(settings, explicit=tester_code)
+    return codes or [None]
+
+
+def _selected_source_context(base_dir: Optional[str] = None, settings=None, contour: str | None = None):
+    payload = _load_settings_payload(base_dir, settings=settings)
+    selected_contour = get_selected_update_contour(payload, contour=contour)
+    return payload, selected_contour, resolve_update_source(payload, contour=selected_contour)
 
 class UpdateCancelled(RuntimeError):
     pass
@@ -817,7 +876,7 @@ def get_python_update_info(
     )
     repo = source.repo
     local_version = _get_current_version()
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = update_channel_for_source(source)
     installed_source = get_installed_source(settings_payload, "python")
     source_mismatch = is_source_mismatch(source, installed_source)
 
@@ -833,7 +892,9 @@ def get_python_update_info(
         }
 
     remote_tag = str(release.tag or "")
-    available = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    version_newer = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    available = bool(version_newer or source_mismatch)
+    reason = "source_mismatch" if source_mismatch and not version_newer else ("newer_version" if version_newer else "")
     picked = pick_from_release(release)
     python_asset = picked.python_patch or picked.python_full
     return {
@@ -874,7 +935,7 @@ def get_unity_update_info(
         contour=contour,
     )
     repo = source.repo
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = update_channel_for_source(source)
 
     if base_dir is None:
         base_dir = str(Path(sys.argv[0]).parent)
@@ -942,6 +1003,8 @@ def check_for_updates(
     update_mode: str = "diff",
     preserve_prompts: bool = False,
     stop_event=None,
+    settings=None,
+    contour: str | None = None,
 ) -> UpdateResult:
     """Check and optionally install the Python component update.
 
@@ -962,8 +1025,9 @@ def check_for_updates(
     source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = update_channel_for_source(source)
     password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
+    tester_code = password_candidates[0]
     update_mode = (update_mode or os.environ.get("UPDATE_MODE", "diff")).lower()
     if update_mode not in ("diff", "full"):
         update_mode = "diff"
@@ -1719,13 +1783,22 @@ def check_for_unity_updates(
     on_stage: Optional[Callable[[str, int, int, bool], None]] = None,
     auto_update: Optional[bool] = None,
     stop_event=None,
+    settings=None,
+    contour: str | None = None,
 ) -> UpdateResult:
     log = make_logger(logger, _LOG_PREFIX)
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
+    installed_source = get_installed_source(settings_payload, "unity")
+    source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE_UNITY", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
-    tester_code = tester_code or os.environ.get("TESTER_CODE") or None
+    channel = update_channel_for_source(source)
+    tester_code = _password_candidates(settings_payload, tester_code=tester_code)[0]
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
     unity_path = Path(unity_dir) if unity_dir else base_path / "NeuroMita-Unity"
     version_file = unity_path / "_version.txt"
@@ -1741,14 +1814,19 @@ def check_for_unity_updates(
     remote_tag = str(release.tag or "")
     if not remote_tag:
         return UpdateResult(component="unity", ok=False, status="check_failed", error="Release tag is empty")
-    if not _is_newer(remote_tag, local_version) and install_complete:
+    if not _is_newer(remote_tag, local_version) and install_complete and not source_mismatch:
         log(f"Unity up to date: {local_version}")
         return UpdateResult(component="unity", ok=True, status="current", version=local_version)
+    if source_mismatch and not _is_newer(remote_tag, local_version):
+        log(
+            f"Selected contour differs from installed Unity source ({installed_source.get('repo', '?')} -> {repo}). Sync available.",
+            "notify",
+        )
     if not auto_update:
         log(f"Unity update {remote_tag} is available; waiting for user selection.")
         return UpdateResult(component="unity", ok=True, status="available", version=remote_tag)
 
-    return _install_unity_asset(
+    result = _install_unity_asset(
         base_path=base_path,
         unity_path=unity_path,
         version=remote_tag,
@@ -1761,3 +1839,17 @@ def check_for_unity_updates(
         on_stage=on_stage,
         stop_event=stop_event,
     )
+    if result.ok and result.changed:
+        _persist_installed_source(
+            base_dir,
+            "unity",
+            build_installed_source_record(
+                "unity",
+                source,
+                tag=remote_tag,
+                asset_name=unity_asset.name,
+                published_at=str(release.published_at or ""),
+                release_name=str(release.name or ""),
+            ),
+        )
+    return result
