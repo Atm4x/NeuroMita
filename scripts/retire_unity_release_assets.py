@@ -22,6 +22,8 @@ import tempfile
 from typing import Any
 
 DEFAULT_REPO = "Atm4x/NeuroMita"
+# Пароль защищает архив от случайного скачивания и запуска, а не от целенаправленного вскрытия.
+DEFAULT_ARCHIVE_PASSWORD = "VinerX"
 
 
 def sha256(path: Path) -> str:
@@ -61,7 +63,8 @@ def read_release(repo: str, tag: str) -> dict[str, Any]:
     return release
 
 
-def unity_asset_name(release: dict[str, Any], requested: str | None) -> str:
+def unity_asset_name(release: dict[str, Any], requested: str | None) -> str | None:
+    """Имя устанавливаемого Unity-ассета либо None, если релиз уже заархивирован."""
     names = [str(asset.get("name") or "") for asset in release.get("assets") or []]
     if requested:
         if requested not in names:
@@ -74,10 +77,14 @@ def unity_asset_name(release: dict[str, Any], requested: str | None) -> str:
         and name.casefold().endswith((".zip", ".7z"))
         and "-retired" not in name.casefold()
     ]
-    if len(candidates) != 1:
+    if not candidates:
+        if any("-retired" in name.casefold() for name in names):
+            return None
+        raise RuntimeError("Release has no installable Unity asset")
+    if len(candidates) > 1:
         raise RuntimeError(
             "Expected exactly one installable Unity asset; use --asset-name to choose one. "
-            f"Found: {candidates or 'none'}"
+            f"Found: {candidates}"
         )
     return candidates[0]
 
@@ -122,8 +129,15 @@ def make_archive(
     run([seven_zip, "t", f"-p{archive_password}", str(destination)])
 
 
-def verify_archive(seven_zip: str, archive: Path, password: str, asset_name: str, expected_sha256: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="neuromita-retired-verify-") as raw_dir:
+def verify_archive(
+    seven_zip: str,
+    archive: Path,
+    password: str,
+    asset_name: str,
+    expected_sha256: str,
+    work_dir: str | None = None,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="neuromita-retired-verify-", dir=work_dir) as raw_dir:
         output = Path(raw_dir)
         run([seven_zip, "x", "-y", f"-p{password}", f"-o{output}", str(archive)])
         wrapped_asset = output / asset_name
@@ -160,13 +174,16 @@ def archive_release(
 ) -> None:
     release = read_release(args.repo, tag)
     asset_name = unity_asset_name(release, args.asset_name)
+    if asset_name is None:
+        print(f"{tag}: already retired, skipping")
+        return
     new_name = retired_name(asset_name)
     print(f"{tag}: {asset_name} -> {new_name}")
     if not args.apply:
         print("  dry-run: no files or GitHub release assets will be changed")
         return
 
-    with tempfile.TemporaryDirectory(prefix="neuromita-retire-") as raw_dir:
+    with tempfile.TemporaryDirectory(prefix="neuromita-retire-", dir=args.work_dir) as raw_dir:
         work = Path(raw_dir)
         download_dir = work / "download"
         download_dir.mkdir()
@@ -197,7 +214,7 @@ def archive_release(
             metadata=metadata,
             old_password=old_password,
         )
-        verify_archive(seven_zip, retired, archive_password, asset_name, original_hash)
+        verify_archive(seven_zip, retired, archive_password, asset_name, original_hash, work_dir=args.work_dir)
 
         run([
             "gh", "release", "upload", tag, str(retired), "--repo", args.repo, "--clobber",
@@ -209,7 +226,7 @@ def archive_release(
             "--pattern", new_name, "--dir", str(remote_dir),
         ])
         remote_archive = remote_dir / new_name
-        verify_archive(seven_zip, remote_archive, archive_password, asset_name, original_hash)
+        verify_archive(seven_zip, remote_archive, archive_password, asset_name, original_hash, work_dir=args.work_dir)
 
         # Deletion is deliberately last: until this point GitHub still has the
         # original asset and the newly uploaded archive has been independently verified.
@@ -231,33 +248,56 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", default=DEFAULT_REPO, help=f"GitHub repository (default: {DEFAULT_REPO})")
     parser.add_argument("--tag", action="append", required=True, help="Release tag to archive; repeat for multiple releases")
     parser.add_argument("--asset-name", help="Exact Unity asset name; required only when a release has several Unity assets")
+    parser.add_argument("--archive-password", help="New archive password; overrides --archive-password-env")
     parser.add_argument("--archive-password-env", default="NEUROMITA_RETIRED_ARCHIVE_PASSWORD", help="Environment variable containing the new archive password")
+    parser.add_argument("--old-password", help="Old asset password to keep inside the encrypted wrapper; overrides --old-password-env")
     parser.add_argument("--old-password-env", help="Optional environment variable containing the old asset password to keep inside the encrypted wrapper")
     parser.add_argument("--seven-zip", help="Path to 7z executable; autodetected when omitted")
+    parser.add_argument("--work-dir", help="Directory for temporary files; defaults to the system temp drive (needs ~4x the asset size)")
     parser.add_argument("--apply", action="store_true", help="Actually upload the wrapper and delete the original asset")
     return parser.parse_args()
 
 
+def resolve_archive_password(args: argparse.Namespace) -> str:
+    return args.archive_password or os.environ.get(args.archive_password_env, "") or DEFAULT_ARCHIVE_PASSWORD
+
+
+def resolve_old_password(args: argparse.Namespace) -> str | None:
+    if args.old_password:
+        return args.old_password
+    if args.old_password_env:
+        return os.environ.get(args.old_password_env, "") or None
+    return None
+
+
 def main() -> int:
     args = parse_args()
-    archive_password = os.environ.get(args.archive_password_env, "")
-    if args.apply and not archive_password:
-        print(f"Set {args.archive_password_env} to a new strong archive password.", file=sys.stderr)
-        return 2
-    old_password = os.environ.get(args.old_password_env, "") if args.old_password_env else None
+    archive_password = resolve_archive_password(args)
+    old_password = resolve_old_password(args)
+    failures: list[str] = []
     try:
         require_binary("GitHub CLI", ["gh"])
         seven_zip = args.seven_zip or (require_binary("7-Zip", ["7z.exe", "7z", "7zz"]) if args.apply else "")
-        for tag in args.tag:
+    except RuntimeError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
+    for tag in args.tag:
+        try:
             archive_release(
                 args=args,
                 seven_zip=seven_zip,
                 archive_password=archive_password,
-                old_password=old_password or None,
+                old_password=old_password,
                 tag=tag,
             )
-    except (RuntimeError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
-        print(f"ERROR: {error}", file=sys.stderr)
+        except (RuntimeError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+            # Один сломанный релиз не должен обрывать остальные: исходный ассет удаляется последним шагом.
+            print(f"ERROR [{tag}]: {error}", file=sys.stderr)
+            failures.append(tag)
+
+    if failures:
+        print(f"Failed tags: {', '.join(failures)}", file=sys.stderr)
         return 1
     return 0
 
