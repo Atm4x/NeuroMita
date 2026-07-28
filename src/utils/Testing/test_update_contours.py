@@ -14,6 +14,7 @@ from update_contours import (  # noqa: E402
     get_selected_update_contour,
     get_tester_codes,
     is_source_mismatch,
+    migrate_update_contour_settings,
     resolve_update_source,
     update_channel_for_source,
 )
@@ -50,14 +51,33 @@ def test_get_tester_codes_merges_single_and_history():
     assert codes == ["history", "single"]
 
 
-def test_get_installed_source_infers_legacy_test_install():
-    installed = get_installed_source({}, "python")
+def test_get_installed_source_is_unknown_without_metadata():
+    assert get_installed_source({}, "python") is None
 
-    assert installed["component"] == "python"
-    assert installed["contour"] == TEST_CONTOUR
-    assert installed["legacy_inferred"] is True
-    assert installed["repo"]
 
+def test_legacy_test_setting_migrates_to_release_without_test_build_opt_in(monkeypatch):
+    monkeypatch.delenv("NEUROMITA_TEST_CONTOUR", raising=False)
+
+    payload, changed = migrate_update_contour_settings({"UPDATE_CONTOUR": TEST_CONTOUR})
+
+    assert changed is True
+    assert payload["UPDATE_CONTOUR"] == RELEASE_CONTOUR
+    assert payload["UPDATE_CONTOUR_SCHEMA_VERSION"] == 1
+
+
+def test_legacy_test_setting_is_kept_for_explicit_test_build(monkeypatch):
+    monkeypatch.setenv("NEUROMITA_TEST_CONTOUR", "1")
+
+    payload, changed = migrate_update_contour_settings({"UPDATE_CONTOUR": TEST_CONTOUR})
+
+    assert changed is True
+    assert payload["UPDATE_CONTOUR"] == TEST_CONTOUR
+
+
+def test_unknown_source_is_not_a_mismatch():
+    release_source = resolve_update_source({"UPDATE_CONTOUR": RELEASE_CONTOUR})
+
+    assert is_source_mismatch(release_source, None) is False
 
 def test_same_tag_from_other_repo_is_source_mismatch():
     release_source = resolve_update_source({"UPDATE_CONTOUR": RELEASE_CONTOUR})

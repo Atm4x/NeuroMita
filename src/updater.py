@@ -35,6 +35,7 @@ from update_contours import (
     get_selected_update_contour,
     get_tester_codes,
     is_source_mismatch,
+    migrate_update_contour_settings,
     resolve_update_source,
     update_channel_for_source,
 )
@@ -80,6 +81,14 @@ def _load_settings_payload(base_dir: Optional[str] = None, settings=None) -> dic
     if isinstance(settings, dict):
         return dict(settings)
     if settings is not None:
+        snapshot = getattr(settings, "snapshot", None)
+        if callable(snapshot):
+            try:
+                raw_snapshot = snapshot()
+                if isinstance(raw_snapshot, dict):
+                    return dict(raw_snapshot)
+            except Exception:
+                pass
         raw = getattr(settings, "settings", None)
         if isinstance(raw, dict):
             return dict(raw)
@@ -115,8 +124,56 @@ def _password_candidates(settings=None, tester_code: Optional[str] = None) -> li
 
 def _selected_source_context(base_dir: Optional[str] = None, settings=None, contour: str | None = None):
     payload = _load_settings_payload(base_dir, settings=settings)
+    payload, migrated = migrate_update_contour_settings(payload)
+    if migrated:
+        if isinstance(settings, dict):
+            settings.clear()
+            settings.update(payload)
+        elif settings is None:
+            atomic_write_json(_settings_path(base_dir), payload)
+        else:
+            update_many = getattr(settings, "update_many", None)
+            if callable(update_many):
+                update_many(payload, source="update_contour_migration")
+            else:
+                setter = getattr(settings, "set", None)
+                if callable(setter):
+                    for key, value in payload.items():
+                        setter(key, value)
     selected_contour = get_selected_update_contour(payload, contour=contour)
     return payload, selected_contour, resolve_update_source(payload, contour=selected_contour)
+
+def _extract_archive_with_password_candidates(
+    archive: Path,
+    target: Path,
+    passwords,
+    *,
+    logger=None,
+    on_extract_progress: Optional[Callable[[int, int], None]] = None,
+    stop_event=None,
+):
+    """Extract with historical tester codes, retrying only bad-password errors."""
+    candidates = list(passwords) if isinstance(passwords, (list, tuple)) else [passwords]
+    if not candidates:
+        candidates = [None]
+    last_error: PasswordError | None = None
+    for password in candidates:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            extract_archive(
+                archive,
+                target,
+                password,
+                logger=logger,
+                on_extract_progress=on_extract_progress,
+                stop_event=stop_event,
+            )
+            return password
+        except PasswordError as error:
+            last_error = error
+    raise last_error or PasswordError("No tester code accepted the archive")
 
 class UpdateCancelled(RuntimeError):
     pass
@@ -251,47 +308,61 @@ def _overlay_dir(
     log(msg + ".")
 
 
-def _full_replace(staging: Path, base_path: Path, log, preserve_prompts: bool = False) -> None:
-    """Полная перезапись: стереть base_path (кроме user_data) и перенести релиз.
+def _preserved_python_roots(*, preserve_prompts: bool, preserve_user_data: bool) -> set[str]:
+    roots: set[str] = set()
+    if preserve_prompts:
+        roots.add("prompts")
+    if preserve_user_data:
+        roots.update({"settings", "histories", "logs", "prompts", "user_data"})
+    return roots
 
-    preserve_prompts=True — локальная папка Prompts откладывается до wipe и
-    возвращается поверх релизной (локальные версии файлов выигрывают, новые
-    промпты из релиза остаются).
-    """
-    prompts_backup: Optional[Path] = None
-    local_prompts = base_path / "Prompts"
-    if preserve_prompts and local_prompts.is_dir():
-        prompts_backup = Path(tempfile.gettempdir()) / "neuromita_prompts_backup"
-        if prompts_backup.exists():
-            shutil.rmtree(prompts_backup, ignore_errors=True)
-        shutil.move(str(local_prompts), str(prompts_backup))
-        log("Backed up local Prompts before full replace")
 
-    wipe_dir(base_path)
-    base_path.mkdir(parents=True, exist_ok=True)
-    for item in staging.iterdir():
-        if item.name == install_manifest_name():
-            continue
-        target = base_path / item.name
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
+def _full_replace(
+    staging: Path,
+    base_path: Path,
+    log,
+    preserve_prompts: bool = False,
+    preserve_user_data: bool = False,
+) -> None:
+    """Replace program files while retaining only explicit user-owned roots."""
+    preserved_roots = _preserved_python_roots(
+        preserve_prompts=preserve_prompts,
+        preserve_user_data=preserve_user_data,
+    )
+    backup_root: Optional[Path] = None
+    if preserved_roots:
+        backup_root = Path(tempfile.mkdtemp(prefix="neuromita_user_data_"))
+        for child in list(base_path.iterdir()) if base_path.is_dir() else []:
+            if child.name.casefold() in preserved_roots:
+                shutil.move(str(child), str(backup_root / child.name))
+        if not any(backup_root.iterdir()):
+            backup_root.rmdir()
+            backup_root = None
+
+    try:
+        wipe_dir(base_path)
+        base_path.mkdir(parents=True, exist_ok=True)
+        for item in staging.iterdir():
+            if item.name == install_manifest_name():
+                continue
+            target = base_path / item.name
+            if item.is_dir():
+                shutil.copytree(item, target)
             else:
-                try:
-                    target.unlink()
-                except OSError:
-                    pass
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
+                shutil.copy2(item, target)
 
-    if prompts_backup and prompts_backup.exists():
-        # Локальные промпты накладываем поверх релизных — локальные версии
-        # выигрывают, релизные-новые остаются.
-        _overlay_dir(prompts_backup, base_path / "Prompts", log)
-        shutil.rmtree(prompts_backup, ignore_errors=True)
-        log("Restored local Prompts (local versions kept)")
+        if backup_root:
+            for item in backup_root.iterdir():
+                target = base_path / item.name
+                if item.is_dir():
+                    _overlay_dir(item, target, log)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, target)
+            log("Restored explicit user data after full replace")
+    finally:
+        if backup_root and backup_root.exists():
+            shutil.rmtree(backup_root, ignore_errors=True)
     log(f"Full replace into {base_path} finished.")
 
 
@@ -300,12 +371,16 @@ def _verify_python_application(
     base_path: Path,
     *,
     preserve_prompts: bool,
+    preserve_user_data: bool = False,
 ) -> None:
     manifest = verify_install_manifest(staging)
     files = manifest.get("files") or {}
     for relative, record in files.items():
         relative_path = Path(str(relative))
-        if preserve_prompts and relative_path.parts and relative_path.parts[0].casefold() == "prompts":
+        if relative_path.parts and relative_path.parts[0].casefold() in _preserved_python_roots(
+            preserve_prompts=preserve_prompts,
+            preserve_user_data=preserve_user_data,
+        ):
             continue
         target = base_path / relative_path
         if not target.is_file():
@@ -324,6 +399,7 @@ def _install_full_archive(
     log,
     mode: str = "diff",
     preserve_prompts: bool = False,
+    preserve_user_data: bool = False,
     *,
     staging: Path | None = None,
     archive_sha256: str = "",
@@ -366,7 +442,7 @@ def _install_full_archive(
         staging.mkdir(parents=True, exist_ok=True)
     try:
         if not reusable:
-            extract_archive(
+            _extract_archive_with_password_candidates(
                 archive,
                 staging,
                 password,
@@ -398,7 +474,13 @@ def _install_full_archive(
             on_apply_started()
         base_path.mkdir(parents=True, exist_ok=True)
         if mode == "full":
-            _full_replace(staging, base_path, log, preserve_prompts)
+            _full_replace(
+                staging,
+                base_path,
+                log,
+                preserve_prompts,
+                preserve_user_data,
+            )
         else:
             _overlay_dir(
                 staging,
@@ -411,6 +493,7 @@ def _install_full_archive(
             staging,
             base_path,
             preserve_prompts=preserve_prompts,
+            preserve_user_data=preserve_user_data,
         )
         log(f"Installed update contents into {base_path}")
     except Exception:
@@ -759,6 +842,7 @@ def _begin_python_operation(
     asset: ReleaseAsset,
     mode: str,
     preserve_prompts: bool,
+    preserve_user_data: bool,
     is_patch: bool,
 ) -> dict:
     journal = _python_journal_path(base_path)
@@ -783,6 +867,7 @@ def _begin_python_operation(
         "staging": str(_python_staging_path(base_path)),
         "mode": str(mode),
         "preserve_prompts": bool(preserve_prompts),
+        "preserve_user_data": bool(preserve_user_data),
         "is_patch": bool(is_patch),
         "created_at": created_at,
         "updated_at": int(time.time()),
@@ -1027,12 +1112,16 @@ def check_for_updates(
         auto_update = os.environ.get("AUTO_UPDATE", "0") == "1"
     channel = update_channel_for_source(source)
     password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
-    tester_code = password_candidates[0]
     update_mode = (update_mode or os.environ.get("UPDATE_MODE", "diff")).lower()
     if update_mode not in ("diff", "full"):
         update_mode = "diff"
     preserve_prompts = preserve_prompts or os.environ.get("UPDATE_PRESERVE_PROMPTS", "0") == "1"
-
+    preserve_user_data = False
+    if source_mismatch:
+        # Different repositories are separate delivery contours. A patch/overlay
+        # could leave test-only files in the production installation.
+        update_mode = "full"
+        preserve_user_data = True
     log(f"Checking for updates ({repo}, contour={selected_contour}, channel={channel}, mode={update_mode}) ...")
 
     release = _select_python_release(repo, channel)
@@ -1068,7 +1157,7 @@ def check_for_updates(
     is_patch = False
     python_asset = None
 
-    if picked.python_patch is not None:
+    if not source_mismatch and picked.python_patch is not None:
         python_asset = picked.python_patch
         is_patch = True
     elif picked.python_full is not None:
@@ -1105,6 +1194,7 @@ def check_for_updates(
         asset=python_asset,
         mode="diff" if is_patch else update_mode,
         preserve_prompts=preserve_prompts,
+        preserve_user_data=preserve_user_data,
         is_patch=is_patch,
     )
 
@@ -1148,8 +1238,9 @@ def check_for_updates(
             try:
                 _set_python_operation_phase(base_path, "extracting")
                 _install_full_archive(
-                    temp_archive, base_path, tester_code, log,
+                    temp_archive, base_path, password_candidates, log,
                     mode="diff", preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     staging=staging,
                     archive_sha256=archive_hash,
                     logger=logger,
@@ -1167,6 +1258,8 @@ def check_for_updates(
                 full_asset = _fetch_full_fallback_asset(repo, channel)
                 if full_asset is None:
                     raise RuntimeError("No full release found for fallback")
+                python_asset = full_asset
+                is_patch = False
                 full_archive = dl_dir / full_asset.name
                 active_archive = full_archive
                 _begin_python_operation(
@@ -1175,6 +1268,7 @@ def check_for_updates(
                     asset=full_asset,
                     mode=update_mode,
                     preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     is_patch=False,
                 )
                 _set_python_operation_phase(base_path, "downloading")
@@ -1195,8 +1289,9 @@ def check_for_updates(
                 )
                 _set_python_operation_phase(base_path, "extracting")
                 _install_full_archive(
-                    full_archive, base_path, tester_code, log,
+                    full_archive, base_path, password_candidates, log,
                     mode=update_mode, preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     staging=staging,
                     archive_sha256=archive_hash,
                     logger=logger,
@@ -1208,8 +1303,9 @@ def check_for_updates(
         else:
             _set_python_operation_phase(base_path, "extracting")
             _install_full_archive(
-                temp_archive, base_path, tester_code, log,
+                temp_archive, base_path, password_candidates, log,
                 mode=update_mode, preserve_prompts=preserve_prompts,
+                preserve_user_data=preserve_user_data,
                 staging=staging,
                 archive_sha256=archive_hash,
                 logger=logger,
@@ -1346,8 +1442,8 @@ def resume_pending_python_update(
             recovered=True,
         )
 
-    effective_tester_code = tester_code or os.environ.get("TESTER_CODE") or None
-    if phase == "waiting_for_credentials" and not effective_tester_code:
+    password_candidates = _password_candidates(_load_settings_payload(str(base_path)), tester_code=tester_code)
+    if phase == "waiting_for_credentials" and password_candidates == [None]:
         return UpdateResult(
             component="python",
             ok=False,
@@ -1416,10 +1512,11 @@ def resume_pending_python_update(
         _install_full_archive(
             archive,
             base_path,
-            effective_tester_code,
+            password_candidates,
             log,
             mode=str(state.get("mode") or "diff"),
             preserve_prompts=bool(state.get("preserve_prompts", False)),
+            preserve_user_data=bool(state.get("preserve_user_data", False)),
             staging=staging,
             archive_sha256=archive_hash,
             logger=logger,
@@ -1546,6 +1643,7 @@ def _install_unity_asset(
     version: str,
     asset: ReleaseAsset,
     tester_code: Optional[str],
+    password_candidates=None,
     logger,
     on_progress: Optional[Callable[[int, int], None]],
     on_extract_progress: Optional[Callable[[int, int], None]],
@@ -1627,10 +1725,10 @@ def _install_unity_asset(
             transaction.set_phase("extracting")
             stage = transaction.reset_stage()
             _emit_stage(on_stage, "Extracting", 2, 6, True)
-            extract_archive(
+            _extract_archive_with_password_candidates(
                 archive,
                 stage,
-                tester_code,
+                password_candidates if password_candidates is not None else [tester_code],
                 logger=logger,
                 on_extract_progress=on_extract_progress,
                 stop_event=stop_event,
@@ -1733,8 +1831,8 @@ def resume_pending_unity_update(
     phase = str(state.get("phase") or "")
     if not state or phase in {"", "completed", "rolled_back", "cancelled", "failed"}:
         return UpdateResult(component="unity", ok=True, status="no_pending_operation")
-    effective_tester_code = tester_code or os.environ.get("TESTER_CODE") or None
-    if phase == "waiting_for_credentials" and not effective_tester_code:
+    password_candidates = _password_candidates(_load_settings_payload(str(base_path)), tester_code=tester_code)
+    if phase == "waiting_for_credentials" and password_candidates == [None]:
         return UpdateResult(
             component="unity",
             ok=False,
@@ -1760,7 +1858,8 @@ def resume_pending_unity_update(
         unity_path=target,
         version=str(state.get("version") or ""),
         asset=asset,
-        tester_code=effective_tester_code,
+        tester_code=None,
+        password_candidates=password_candidates,
         logger=logger,
         on_progress=on_progress,
         on_extract_progress=on_extract_progress,
@@ -1798,7 +1897,7 @@ def check_for_unity_updates(
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE_UNITY", "0") == "1"
     channel = update_channel_for_source(source)
-    tester_code = _password_candidates(settings_payload, tester_code=tester_code)[0]
+    password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
     unity_path = Path(unity_dir) if unity_dir else base_path / "NeuroMita-Unity"
     version_file = unity_path / "_version.txt"

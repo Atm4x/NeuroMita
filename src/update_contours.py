@@ -12,6 +12,8 @@ TEST_CONTOUR = "test"
 VALID_UPDATE_CONTOURS = (RELEASE_CONTOUR, TEST_CONTOUR)
 
 UPDATE_CONTOUR_KEY = "UPDATE_CONTOUR"
+UPDATE_CONTOUR_SCHEMA_KEY = "UPDATE_CONTOUR_SCHEMA_VERSION"
+UPDATE_CONTOUR_SCHEMA_VERSION = 1
 INSTALLED_SOURCES_KEY = "UPDATE_INSTALLED_SOURCES"
 TESTER_CODE_KEY = "TESTER_CODE"
 TESTER_CODES_KEY = "TESTER_CODES"
@@ -64,6 +66,30 @@ def default_update_contour() -> str:
     raw = str(os.environ.get("NEUROMITA_TEST_CONTOUR") or "").strip().casefold()
     return TEST_CONTOUR if raw in {"1", "true", "yes", "on"} else RELEASE_CONTOUR
 
+
+def migrate_update_contour_settings(settings: Any = None) -> tuple[dict[str, Any], bool]:
+    """Migrate pre-dual-contour settings without silently keeping users in test.
+
+    A persisted ``UPDATE_CONTOUR=test`` created before the explicit test-build
+    opt-in existed is not evidence that the user is a tester. Test builds keep
+    that value only when their launcher explicitly opts in through
+    ``NEUROMITA_TEST_CONTOUR``.
+    """
+    payload = dict(settings) if isinstance(settings, dict) else {}
+    try:
+        schema_version = int(payload.get(UPDATE_CONTOUR_SCHEMA_KEY) or 0)
+    except (TypeError, ValueError):
+        schema_version = 0
+    if schema_version >= UPDATE_CONTOUR_SCHEMA_VERSION:
+        return payload, False
+
+    if (
+        normalize_update_contour(payload.get(UPDATE_CONTOUR_KEY)) == TEST_CONTOUR
+        and default_update_contour() != TEST_CONTOUR
+    ):
+        payload[UPDATE_CONTOUR_KEY] = RELEASE_CONTOUR
+    payload[UPDATE_CONTOUR_SCHEMA_KEY] = UPDATE_CONTOUR_SCHEMA_VERSION
+    return payload, True
 
 def _source_map() -> dict[str, UpdateSource]:
     return {
@@ -191,24 +217,16 @@ def build_installed_source_record(
     }
 
 
-def get_installed_source(settings: Any, component: str) -> dict[str, Any]:
+def get_installed_source(settings: Any, component: str) -> dict[str, Any] | None:
     key = str(component or "").strip().lower()
     source_map = get_installed_sources(settings)
     found = source_map.get(key)
     if isinstance(found, dict) and str(found.get("repo") or "").strip():
         return dict(found)
 
-    legacy = resolve_update_source(contour=TEST_CONTOUR)
-    return {
-        "component": key,
-        "contour": legacy.contour,
-        "repo": legacy.repo,
-        "tag": "",
-        "asset_name": "",
-        "published_at": "",
-        "release_name": "",
-        "legacy_inferred": True,
-    }
+    # Old installations did not record their source. Treating them as a test
+    # install causes an unnecessary (and potentially downgrading) migration.
+    return None
 
 
 def is_source_mismatch(selected: UpdateSource, installed: dict[str, Any] | None) -> bool:

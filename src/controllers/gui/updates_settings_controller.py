@@ -172,8 +172,19 @@ def setup_updates_settings_controls(
     def _refresh_contour_state() -> None:
         source = _selected_source()
         badge_text = get_test_contour_badge(self.settings)
-        contour_badge.setText(badge_text)
-        contour_badge.setVisible(bool(badge_text))
+        if badge_text:
+            contour_badge.setText(badge_text)
+            contour_badge.setStyleSheet(
+                "QLabel { color: #ffffff; background-color: rgba(183,75,125,0.34); border: 1px solid rgba(183,75,125,0.40); "
+                "border-radius: 9px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
+            )
+        else:
+            contour_badge.setText(_("Стабильный", "Stable"))
+            contour_badge.setStyleSheet(
+                "QLabel { color: #c9dfd0; background-color: rgba(71,144,103,0.22); border: 1px solid rgba(71,144,103,0.34); "
+                "border-radius: 9px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
+            )
+        contour_badge.setVisible(True)
         tester_row.setVisible(bool(source.requires_tester_code))
         tester_hint.setVisible(bool(source.requires_tester_code))
         if source.requires_tester_code:
