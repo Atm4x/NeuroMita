@@ -68,13 +68,7 @@ def default_update_contour() -> str:
 
 
 def migrate_update_contour_settings(settings: Any = None) -> tuple[dict[str, Any], bool]:
-    """Migrate pre-dual-contour settings without silently keeping users in test.
-
-    A persisted ``UPDATE_CONTOUR=test`` created before the explicit test-build
-    opt-in existed is not evidence that the user is a tester. Test builds keep
-    that value only when their launcher explicitly opts in through
-    ``NEUROMITA_TEST_CONTOUR``.
-    """
+    """Persist a valid default without changing an existing contour choice."""
     payload = dict(settings) if isinstance(settings, dict) else {}
     try:
         schema_version = int(payload.get(UPDATE_CONTOUR_SCHEMA_KEY) or 0)
@@ -83,11 +77,11 @@ def migrate_update_contour_settings(settings: Any = None) -> tuple[dict[str, Any
     if schema_version >= UPDATE_CONTOUR_SCHEMA_VERSION:
         return payload, False
 
-    if (
-        normalize_update_contour(payload.get(UPDATE_CONTOUR_KEY)) == TEST_CONTOUR
-        and default_update_contour() != TEST_CONTOUR
-    ):
-        payload[UPDATE_CONTOUR_KEY] = RELEASE_CONTOUR
+    saved_contour = str(payload.get(UPDATE_CONTOUR_KEY) or "").strip().lower()
+    if saved_contour not in VALID_UPDATE_CONTOURS:
+        # The environment is a provisioning default for fresh installations;
+        # it must never override an existing tester or release user choice.
+        payload[UPDATE_CONTOUR_KEY] = default_update_contour()
     payload[UPDATE_CONTOUR_SCHEMA_KEY] = UPDATE_CONTOUR_SCHEMA_VERSION
     return payload, True
 
@@ -113,7 +107,10 @@ def _source_map() -> dict[str, UpdateSource]:
 def get_selected_update_contour(settings: Any = None, contour: str | None = None) -> str:
     if contour is not None:
         return normalize_update_contour(contour)
-    return normalize_update_contour(_settings_get(settings, UPDATE_CONTOUR_KEY, default_update_contour()))
+    saved_contour = str(_settings_get(settings, UPDATE_CONTOUR_KEY, "") or "").strip().lower()
+    if saved_contour in VALID_UPDATE_CONTOURS:
+        return saved_contour
+    return default_update_contour()
 
 
 def resolve_update_source(settings: Any = None, contour: str | None = None) -> UpdateSource:

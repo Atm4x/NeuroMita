@@ -55,24 +55,49 @@ def test_get_installed_source_is_unknown_without_metadata():
     assert get_installed_source({}, "python") is None
 
 
-def test_legacy_test_setting_migrates_to_release_without_test_build_opt_in(monkeypatch):
+def test_existing_test_contour_survives_migration_without_environment(monkeypatch):
     monkeypatch.delenv("NEUROMITA_TEST_CONTOUR", raising=False)
 
     payload, changed = migrate_update_contour_settings({"UPDATE_CONTOUR": TEST_CONTOUR})
 
     assert changed is True
-    assert payload["UPDATE_CONTOUR"] == RELEASE_CONTOUR
+    assert payload["UPDATE_CONTOUR"] == TEST_CONTOUR
     assert payload["UPDATE_CONTOUR_SCHEMA_VERSION"] == 1
 
 
-def test_legacy_test_setting_is_kept_for_explicit_test_build(monkeypatch):
+def test_existing_release_contour_survives_test_environment(monkeypatch):
     monkeypatch.setenv("NEUROMITA_TEST_CONTOUR", "1")
 
-    payload, changed = migrate_update_contour_settings({"UPDATE_CONTOUR": TEST_CONTOUR})
+    payload, changed = migrate_update_contour_settings({"UPDATE_CONTOUR": RELEASE_CONTOUR})
+
+    assert changed is True
+    assert payload["UPDATE_CONTOUR"] == RELEASE_CONTOUR
+
+
+def test_fresh_settings_use_release_without_test_environment(monkeypatch):
+    monkeypatch.delenv("NEUROMITA_TEST_CONTOUR", raising=False)
+
+    payload, changed = migrate_update_contour_settings({})
+
+    assert changed is True
+    assert payload["UPDATE_CONTOUR"] == RELEASE_CONTOUR
+
+
+def test_fresh_settings_use_test_with_explicit_test_environment(monkeypatch):
+    monkeypatch.setenv("NEUROMITA_TEST_CONTOUR", "1")
+
+    payload, changed = migrate_update_contour_settings({})
 
     assert changed is True
     assert payload["UPDATE_CONTOUR"] == TEST_CONTOUR
 
+
+def test_invalid_saved_contour_uses_provisioning_default(monkeypatch):
+    monkeypatch.setenv("NEUROMITA_TEST_CONTOUR", "1")
+
+    payload, _changed = migrate_update_contour_settings({"UPDATE_CONTOUR": "invalid"})
+
+    assert payload["UPDATE_CONTOUR"] == TEST_CONTOUR
 
 def test_unknown_source_is_not_a_mismatch():
     release_source = resolve_update_source({"UPDATE_CONTOUR": RELEASE_CONTOUR})
