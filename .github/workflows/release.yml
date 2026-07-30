@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   build:
+    # Production releases are created only by promote-to-vinerx.yml.
+    # A copy of this repository in VinerX must not build on push.
+    if: github.repository == 'Atm4x/NeuroMita'
     runs-on: windows-latest
 
     steps:

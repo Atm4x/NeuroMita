@@ -1,0 +1,210 @@
+name: Promote selected test release to VinerX
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Atm4x prerelease tag to publish as a stable VinerX release
+        required: true
+        type: string
+
+env:
+  TEST_REPOSITORY: Atm4x/NeuroMita
+  PRODUCTION_REPOSITORY: VinerX/NeuroMita
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    # This workflow intentionally lives in the test repository. VinerX never
+    # builds or promotes a release from a push.
+    if: github.repository == 'Atm4x/NeuroMita'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      # Fine-grained PAT with Contents: Read and write access to VinerX/NeuroMita.
+      VINERX_RELEASE_TOKEN: ${{ secrets.VINERX_RELEASE_TOKEN }}
+      # The test archive password; never put a fallback value in this workflow.
+      TESTER_CODE: ${{ secrets.TESTER_CODE }}
+
+    steps:
+      - name: Validate promotion credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VINERX_RELEASE_TOKEN" || {
+            echo "Set VINERX_RELEASE_TOKEN before promoting a release."
+            exit 1
+          }
+          test -n "$TESTER_CODE" || {
+            echo "Set TESTER_CODE before promoting an encrypted Unity archive."
+            exit 1
+          }
+
+      - name: Install archive tooling
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes p7zip-full
+
+      - name: Read and validate selected test release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$TEST_REPOSITORY/releases/tags/$RELEASE_TAG" > release.json
+
+          jq -e '.prerelease == true and .draft == false' release.json > /dev/null || {
+            echo "The selected release must be a published test prerelease."
+            exit 1
+          }
+          jq -e '([.assets[].name | select(test("-retired\\.7z$"; "i"))] | length) == 0' release.json > /dev/null || {
+            echo "The selected release contains a retired Unity archive."
+            exit 1
+          }
+
+          python_asset=$(jq -r '
+            [.assets[].name
+             | select(test("^PythonBuild-"; "i"))
+             | select(test("patch"; "i") | not)
+             | select(test("\\.(zip|7z)$"; "i"))]
+            | if length == 1 then .[0] else empty end
+          ' release.json)
+          unity_asset=$(jq -r '
+            [.assets[].name
+             | select(test("UnityBuild"; "i"))
+             | select(test("-retired"; "i") | not)
+             | select(test("\\.(zip|7z)$"; "i"))]
+            | if length == 1 then .[0] else empty end
+          ' release.json)
+
+          test -n "$python_asset" || {
+            echo "Expected exactly one full PythonBuild .zip/.7z asset."
+            exit 1
+          }
+          test -n "$unity_asset" || {
+            echo "Expected exactly one installable UnityBuild .zip/.7z asset."
+            exit 1
+          }
+
+          echo "python_asset=$python_asset" >> "$GITHUB_OUTPUT"
+          echo "unity_asset=$unity_asset" >> "$GITHUB_OUTPUT"
+          jq -r '.name // .tag_name' release.json > release-title.txt
+          jq -r '.body // ""' release.json > release-body.txt
+
+      - name: Download and verify tested assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHON_ASSET: ${{ steps.release.outputs.python_asset }}
+          UNITY_ASSET: ${{ steps.release.outputs.unity_asset }}
+        run: |
+          set -euo pipefail
+          mkdir incoming
+          gh release download "$RELEASE_TAG" --repo "$TEST_REPOSITORY" --dir incoming --pattern "$PYTHON_ASSET"
+          gh release download "$RELEASE_TAG" --repo "$TEST_REPOSITORY" --dir incoming --pattern "$UNITY_ASSET"
+
+          python_asset="incoming/$PYTHON_ASSET"
+          unity_asset="incoming/$UNITY_ASSET"
+          7z t "$python_asset"
+          7z t "-p$TESTER_CODE" "$unity_asset"
+          sha256sum "$python_asset" > python.sha256
+          sha256sum "$unity_asset" > test-unity-wrapper.sha256
+
+      - name: Create and verify public Unity archive
+        id: unity
+        shell: bash
+        env:
+          UNITY_ASSET: ${{ steps.release.outputs.unity_asset }}
+        run: |
+          set -euo pipefail
+          mkdir unity-test unity-public
+          7z x -y "-p$TESTER_CODE" "incoming/$UNITY_ASSET" "-ounity-test"
+          (
+            cd unity-test
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > unity-test-files.sha256
+
+          public_asset="${UNITY_ASSET%.*}-public.zip"
+          7z a -tzip -mx=9 "unity-public/$public_asset" "./unity-test/*"
+          7z t "unity-public/$public_asset"
+          7z x -y "unity-public/$public_asset" "-ounity-public/extracted"
+          (
+            cd unity-public/extracted
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > unity-public-files.sha256
+          diff --unified unity-test-files.sha256 unity-public-files.sha256
+          echo "asset=$public_asset" >> "$GITHUB_OUTPUT"
+          sha256sum "unity-public/$public_asset" > public-unity.sha256
+
+      - name: Create production draft without rebuilding
+        id: production
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.VINERX_RELEASE_TOKEN }}
+          PYTHON_ASSET: ${{ steps.release.outputs.python_asset }}
+          PUBLIC_UNITY_ASSET: ${{ steps.unity.outputs.asset }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$PRODUCTION_REPOSITORY" > /dev/null 2>&1; then
+            echo "A VinerX release with tag $RELEASE_TAG already exists. Promotion is intentionally not idempotent."
+            exit 1
+          fi
+
+          {
+            cat release-body.txt
+            printf '\n\n---\nPromoted unchanged from test release %s in %s.\n' "$RELEASE_TAG" "$TEST_REPOSITORY"
+            printf 'Python SHA-256: '
+            cut -d ' ' -f 1 python.sha256
+            printf 'Test Unity wrapper SHA-256: '
+            cut -d ' ' -f 1 test-unity-wrapper.sha256
+            printf 'Public Unity SHA-256: '
+            cut -d ' ' -f 1 public-unity.sha256
+          } > production-notes.md
+
+          gh release create "$RELEASE_TAG" \
+            "incoming/$PYTHON_ASSET" \
+            "unity-public/$PUBLIC_UNITY_ASSET" \
+            --repo "$PRODUCTION_REPOSITORY" \
+            --title "$(cat release-title.txt)" \
+            --notes-file production-notes.md \
+            --draft
+          release_id=$(gh api "repos/$PRODUCTION_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)
+          echo "id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Verify uploaded production draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.VINERX_RELEASE_TOKEN }}
+          PYTHON_ASSET: ${{ steps.release.outputs.python_asset }}
+          PUBLIC_UNITY_ASSET: ${{ steps.unity.outputs.asset }}
+        run: |
+          set -euo pipefail
+          mkdir production-download
+          gh release download "$RELEASE_TAG" --repo "$PRODUCTION_REPOSITORY" --dir production-download --pattern "$PYTHON_ASSET"
+          gh release download "$RELEASE_TAG" --repo "$PRODUCTION_REPOSITORY" --dir production-download --pattern "$PUBLIC_UNITY_ASSET"
+          sha256sum --check python.sha256 --ignore-missing --status
+          cmp "incoming/$PYTHON_ASSET" "production-download/$PYTHON_ASSET"
+          7z t "production-download/$PUBLIC_UNITY_ASSET"
+          rm -rf unity-public/extracted
+          7z x -y "production-download/$PUBLIC_UNITY_ASSET" "-ounity-public/extracted"
+          (
+            cd unity-public/extracted
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > uploaded-unity-files.sha256
+          diff --unified unity-test-files.sha256 uploaded-unity-files.sha256
+
+      - name: Publish verified production release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.VINERX_RELEASE_TOKEN }}
+          RELEASE_ID: ${{ steps.production.outputs.id }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/$PRODUCTION_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false \
+            -F prerelease=false \
+            -F make_latest=true > /dev/null
