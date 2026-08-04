@@ -9,12 +9,10 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
 
 from main_logger import logger
+from update_contours import get_test_contour_badge, resolve_update_source
 from utils.release_assets import raw_release_has_launcher_assets
 from ui.widgets.launcher_dashboard_helpers import DashboardAction, NewsItem
 from utils import _
-
-
-NEWS_REPO = "Atm4x/NeuroMita"
 
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -103,7 +101,7 @@ def get_news_releases(store: NewsReleasesStore) -> list[dict[str, Any]]:
         import requests
 
         response = requests.get(
-            f"https://api.github.com/repos/{NEWS_REPO}/releases",
+            f"https://api.github.com/repos/{repo}/releases",
             timeout=10,
             headers={"Accept": "application/vnd.github+json"},
         )
@@ -174,8 +172,8 @@ def _build_release_preview(body: str, *, limit: int = 280) -> tuple[str, bool]:
     return summary, has_details
 
 
-def _prepare_release_cards(releases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    repo_url = f"https://github.com/{NEWS_REPO}/releases"
+def _prepare_release_cards(releases: list[dict[str, Any]], *, repo: str) -> list[dict[str, Any]]:
+    repo_url = f"https://github.com/{repo}/releases"
     prepared: list[dict[str, Any]] = []
     for release in releases:
         tag_name = str(release.get("tag_name") or "")
@@ -348,7 +346,7 @@ def build_release_news_items(store: NewsReleasesStore, *, limit: int | None = 8)
         summary = str(release.get("summary") or "").strip() or build_release_summary("")
         published = str(release.get("published") or "")[:10]
         tag = str(release.get("tag") or "RELEASE")
-        url = str(release.get("url") or f"https://github.com/{NEWS_REPO}/releases")
+        url = str(release.get("url") or f"https://github.com/{current_news_repo(gui)}/releases")
         items.append(
             NewsItem(
                 name,

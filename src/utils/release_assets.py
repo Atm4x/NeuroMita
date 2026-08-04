@@ -123,7 +123,7 @@ def pick_from_release(release: Release) -> PickedAssets:
 
     for a in release.assets:
         low = a.name.lower()
-        if not _ext_ok(a.name):
+        if not _ext_ok(a.name) or "-retired" in low:
             continue
 
         if "unitybuild" in low and picked.unity is None:

@@ -13,6 +13,9 @@ permissions:
 
 jobs:
   build:
+    # Production releases are created only by promote-to-vinerx.yml.
+    # A copy of this repository in VinerX must not build on push.
+    if: github.repository == 'Atm4x/NeuroMita'
     runs-on: windows-latest
 
     steps:
@@ -255,6 +258,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: CHANGELOG_BODY.md
           files: PythonBuild-v${{ steps.ver.outputs.version }}.zip
-          make_latest: true
+          make_latest: ${{ github.repository_owner != 'Atm4x' }}
+          prerelease: ${{ github.repository_owner == 'Atm4x' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

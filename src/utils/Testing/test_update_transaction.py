@@ -23,6 +23,8 @@ from updater import (
     UpdateCancelled,
     _archive_meta_path,
     _download,
+    _extract_archive_with_password_candidates,
+    _install_full_archive,
     _install_unity_asset,
     _python_journal_path,
     _python_stage_marker,
@@ -30,7 +32,7 @@ from updater import (
     note_locked_restart_attempt,
     resume_pending_python_update,
 )
-from utils.archive_utils import extract_archive
+from utils.archive_utils import PasswordError, extract_archive
 from utils.release_assets import ReleaseAsset
 
 
@@ -445,3 +447,49 @@ def test_password_protected_7z_with_zip_name_is_detected_by_signature(tmp_path: 
     extract_archive(archive, destination, password="tester-code")
 
     assert (destination / "payload.txt").read_text(encoding="utf-8") == "secret payload"
+
+
+def test_historical_tester_codes_retry_only_after_password_error(tmp_path: Path, monkeypatch):
+    attempts: list[str] = []
+
+    def fake_extract(_archive, target, password, **_kwargs):
+        attempts.append(password)
+        if password == "old-code":
+            raise PasswordError("wrong password")
+        (target / "payload.txt").write_text("ok", encoding="utf-8")
+
+    monkeypatch.setattr("updater.extract_archive", fake_extract)
+
+    accepted = _extract_archive_with_password_candidates(
+        tmp_path / "archive.7z",
+        tmp_path / "stage",
+        ["old-code", "current-code"],
+    )
+
+    assert accepted == "current-code"
+    assert attempts == ["old-code", "current-code"]
+
+
+def test_full_replace_removes_test_only_files_and_keeps_explicit_user_data(tmp_path: Path):
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    (base / "TestOnlyModule.py").write_text("test", encoding="utf-8")
+    (base / "Settings").mkdir()
+    (base / "Settings" / "settings.json").write_text('{"ui": "kept"}', encoding="utf-8")
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("release.py", "release")
+
+    _install_full_archive(
+        archive,
+        base,
+        None,
+        lambda _message: None,
+        mode="full",
+        preserve_user_data=True,
+        staging=tmp_path / "stage",
+    )
+
+    assert (base / "release.py").read_text(encoding="utf-8") == "release"
+    assert not (base / "TestOnlyModule.py").exists()
+    assert (base / "Settings" / "settings.json").read_text(encoding="utf-8") == '{"ui": "kept"}'

@@ -26,6 +26,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from update_contours import (
+    INSTALLED_SOURCES_KEY,
+    TESTER_CODES_KEY,
+    TESTER_CODE_KEY,
+    build_installed_source_record,
+    get_installed_source,
+    get_selected_update_contour,
+    get_tester_codes,
+    is_source_mismatch,
+    migrate_update_contour_settings,
+    resolve_update_source,
+    update_channel_for_source,
+)
 from services.update_transaction import (
     DirectoryInstallTransaction,
     UpdateTransactionError,
@@ -58,6 +71,109 @@ from utils.release_assets import (
 _USER_AGENT = "NeuroMita-Updater/2.0"
 _LOG_PREFIX = "[updater]"
 
+
+def _settings_path(base_dir: Optional[str] = None) -> Path:
+    root = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
+    return root / "Settings" / "settings.json"
+
+
+def _load_settings_payload(base_dir: Optional[str] = None, settings=None) -> dict:
+    if isinstance(settings, dict):
+        return dict(settings)
+    if settings is not None:
+        snapshot = getattr(settings, "snapshot", None)
+        if callable(snapshot):
+            try:
+                raw_snapshot = snapshot()
+                if isinstance(raw_snapshot, dict):
+                    return dict(raw_snapshot)
+            except Exception:
+                pass
+        raw = getattr(settings, "settings", None)
+        if isinstance(raw, dict):
+            return dict(raw)
+        getter = getattr(settings, "get", None)
+        if callable(getter):
+            try:
+                return {
+                    "UPDATE_CONTOUR": getter("UPDATE_CONTOUR", None),
+                    TESTER_CODE_KEY: getter(TESTER_CODE_KEY, None),
+                    TESTER_CODES_KEY: getter(TESTER_CODES_KEY, None),
+                    INSTALLED_SOURCES_KEY: getter(INSTALLED_SOURCES_KEY, None),
+                }
+            except Exception:
+                pass
+    payload = read_json(_settings_path(base_dir))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _persist_installed_source(base_dir: Optional[str], component: str, record: dict) -> None:
+    path = _settings_path(base_dir)
+    payload = _load_settings_payload(base_dir)
+    sources = payload.get(INSTALLED_SOURCES_KEY)
+    source_map = dict(sources) if isinstance(sources, dict) else {}
+    source_map[str(component or "").strip().lower()] = dict(record)
+    payload[INSTALLED_SOURCES_KEY] = source_map
+    atomic_write_json(path, payload)
+
+
+def _password_candidates(settings=None, tester_code: Optional[str] = None) -> list[Optional[str]]:
+    codes = get_tester_codes(settings, explicit=tester_code)
+    return codes or [None]
+
+
+def _selected_source_context(base_dir: Optional[str] = None, settings=None, contour: str | None = None):
+    payload = _load_settings_payload(base_dir, settings=settings)
+    payload, migrated = migrate_update_contour_settings(payload)
+    if migrated:
+        if isinstance(settings, dict):
+            settings.clear()
+            settings.update(payload)
+        elif settings is None:
+            atomic_write_json(_settings_path(base_dir), payload)
+        else:
+            update_many = getattr(settings, "update_many", None)
+            if callable(update_many):
+                update_many(payload, source="update_contour_migration")
+            else:
+                setter = getattr(settings, "set", None)
+                if callable(setter):
+                    for key, value in payload.items():
+                        setter(key, value)
+    selected_contour = get_selected_update_contour(payload, contour=contour)
+    return payload, selected_contour, resolve_update_source(payload, contour=selected_contour)
+
+def _extract_archive_with_password_candidates(
+    archive: Path,
+    target: Path,
+    passwords,
+    *,
+    logger=None,
+    on_extract_progress: Optional[Callable[[int, int], None]] = None,
+    stop_event=None,
+):
+    """Extract with historical tester codes, retrying only bad-password errors."""
+    candidates = list(passwords) if isinstance(passwords, (list, tuple)) else [passwords]
+    if not candidates:
+        candidates = [None]
+    last_error: PasswordError | None = None
+    for password in candidates:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            extract_archive(
+                archive,
+                target,
+                password,
+                logger=logger,
+                on_extract_progress=on_extract_progress,
+                stop_event=stop_event,
+            )
+            return password
+        except PasswordError as error:
+            last_error = error
+    raise last_error or PasswordError("No tester code accepted the archive")
 
 class UpdateCancelled(RuntimeError):
     pass
@@ -192,47 +308,61 @@ def _overlay_dir(
     log(msg + ".")
 
 
-def _full_replace(staging: Path, base_path: Path, log, preserve_prompts: bool = False) -> None:
-    """Полная перезапись: стереть base_path (кроме user_data) и перенести релиз.
+def _preserved_python_roots(*, preserve_prompts: bool, preserve_user_data: bool) -> set[str]:
+    roots: set[str] = set()
+    if preserve_prompts:
+        roots.add("prompts")
+    if preserve_user_data:
+        roots.update({"settings", "histories", "logs", "prompts", "user_data"})
+    return roots
 
-    preserve_prompts=True — локальная папка Prompts откладывается до wipe и
-    возвращается поверх релизной (локальные версии файлов выигрывают, новые
-    промпты из релиза остаются).
-    """
-    prompts_backup: Optional[Path] = None
-    local_prompts = base_path / "Prompts"
-    if preserve_prompts and local_prompts.is_dir():
-        prompts_backup = Path(tempfile.gettempdir()) / "neuromita_prompts_backup"
-        if prompts_backup.exists():
-            shutil.rmtree(prompts_backup, ignore_errors=True)
-        shutil.move(str(local_prompts), str(prompts_backup))
-        log("Backed up local Prompts before full replace")
 
-    wipe_dir(base_path)
-    base_path.mkdir(parents=True, exist_ok=True)
-    for item in staging.iterdir():
-        if item.name == install_manifest_name():
-            continue
-        target = base_path / item.name
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
+def _full_replace(
+    staging: Path,
+    base_path: Path,
+    log,
+    preserve_prompts: bool = False,
+    preserve_user_data: bool = False,
+) -> None:
+    """Replace program files while retaining only explicit user-owned roots."""
+    preserved_roots = _preserved_python_roots(
+        preserve_prompts=preserve_prompts,
+        preserve_user_data=preserve_user_data,
+    )
+    backup_root: Optional[Path] = None
+    if preserved_roots:
+        backup_root = Path(tempfile.mkdtemp(prefix="neuromita_user_data_"))
+        for child in list(base_path.iterdir()) if base_path.is_dir() else []:
+            if child.name.casefold() in preserved_roots:
+                shutil.move(str(child), str(backup_root / child.name))
+        if not any(backup_root.iterdir()):
+            backup_root.rmdir()
+            backup_root = None
+
+    try:
+        wipe_dir(base_path)
+        base_path.mkdir(parents=True, exist_ok=True)
+        for item in staging.iterdir():
+            if item.name == install_manifest_name():
+                continue
+            target = base_path / item.name
+            if item.is_dir():
+                shutil.copytree(item, target)
             else:
-                try:
-                    target.unlink()
-                except OSError:
-                    pass
-        if item.is_dir():
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
+                shutil.copy2(item, target)
 
-    if prompts_backup and prompts_backup.exists():
-        # Локальные промпты накладываем поверх релизных — локальные версии
-        # выигрывают, релизные-новые остаются.
-        _overlay_dir(prompts_backup, base_path / "Prompts", log)
-        shutil.rmtree(prompts_backup, ignore_errors=True)
-        log("Restored local Prompts (local versions kept)")
+        if backup_root:
+            for item in backup_root.iterdir():
+                target = base_path / item.name
+                if item.is_dir():
+                    _overlay_dir(item, target, log)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, target)
+            log("Restored explicit user data after full replace")
+    finally:
+        if backup_root and backup_root.exists():
+            shutil.rmtree(backup_root, ignore_errors=True)
     log(f"Full replace into {base_path} finished.")
 
 
@@ -241,12 +371,16 @@ def _verify_python_application(
     base_path: Path,
     *,
     preserve_prompts: bool,
+    preserve_user_data: bool = False,
 ) -> None:
     manifest = verify_install_manifest(staging)
     files = manifest.get("files") or {}
     for relative, record in files.items():
         relative_path = Path(str(relative))
-        if preserve_prompts and relative_path.parts and relative_path.parts[0].casefold() == "prompts":
+        if relative_path.parts and relative_path.parts[0].casefold() in _preserved_python_roots(
+            preserve_prompts=preserve_prompts,
+            preserve_user_data=preserve_user_data,
+        ):
             continue
         target = base_path / relative_path
         if not target.is_file():
@@ -265,6 +399,7 @@ def _install_full_archive(
     log,
     mode: str = "diff",
     preserve_prompts: bool = False,
+    preserve_user_data: bool = False,
     *,
     staging: Path | None = None,
     archive_sha256: str = "",
@@ -307,7 +442,7 @@ def _install_full_archive(
         staging.mkdir(parents=True, exist_ok=True)
     try:
         if not reusable:
-            extract_archive(
+            _extract_archive_with_password_candidates(
                 archive,
                 staging,
                 password,
@@ -339,7 +474,13 @@ def _install_full_archive(
             on_apply_started()
         base_path.mkdir(parents=True, exist_ok=True)
         if mode == "full":
-            _full_replace(staging, base_path, log, preserve_prompts)
+            _full_replace(
+                staging,
+                base_path,
+                log,
+                preserve_prompts,
+                preserve_user_data,
+            )
         else:
             _overlay_dir(
                 staging,
@@ -352,6 +493,7 @@ def _install_full_archive(
             staging,
             base_path,
             preserve_prompts=preserve_prompts,
+            preserve_user_data=preserve_user_data,
         )
         log(f"Installed update contents into {base_path}")
     except Exception:
@@ -362,8 +504,8 @@ def _install_full_archive(
 
 # ── Repo / version helpers ────────────────────────────────────────────────────
 
-def _get_repo() -> str:
-    return os.environ.get("UPDATE_REPO", "Atm4x/NeuroMita")
+def _get_repo(settings=None, contour: str | None = None) -> str:
+    return resolve_update_source(settings=settings, contour=contour).repo
 
 
 def _get_current_version() -> str:
@@ -700,6 +842,7 @@ def _begin_python_operation(
     asset: ReleaseAsset,
     mode: str,
     preserve_prompts: bool,
+    preserve_user_data: bool,
     is_patch: bool,
 ) -> dict:
     journal = _python_journal_path(base_path)
@@ -724,6 +867,7 @@ def _begin_python_operation(
         "staging": str(_python_staging_path(base_path)),
         "mode": str(mode),
         "preserve_prompts": bool(preserve_prompts),
+        "preserve_user_data": bool(preserve_user_data),
         "is_patch": bool(is_patch),
         "created_at": created_at,
         "updated_at": int(time.time()),
@@ -806,23 +950,36 @@ def note_locked_restart_attempt(
 def get_python_update_info(
     base_dir: Optional[str] = None,
     channel: str = "stable",
+    settings=None,
+    contour: str | None = None,
 ) -> dict:
     """Return current/latest Python update information without installing."""
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
     local_version = _get_current_version()
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = update_channel_for_source(source)
+    installed_source = get_installed_source(settings_payload, "python")
+    source_mismatch = is_source_mismatch(source, installed_source)
 
     release = _select_python_release(repo, channel)
     if release is None:
         return {
             "ok": False,
             "component": "python",
+            "repo": repo,
+            "selected_contour": selected_contour,
             "current_version": local_version,
             "error": "Could not reach GitHub to check for updates",
         }
 
     remote_tag = str(release.tag or "")
-    available = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    version_newer = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    available = bool(version_newer or source_mismatch)
+    reason = "source_mismatch" if source_mismatch and not version_newer else ("newer_version" if version_newer else "")
     picked = pick_from_release(release)
     python_asset = picked.python_patch or picked.python_full
     return {
@@ -830,9 +987,14 @@ def get_python_update_info(
         "component": "python",
         "repo": repo,
         "channel": channel,
+        "selected_contour": selected_contour,
+        "requires_tester_code": bool(source.requires_tester_code),
         "current_version": local_version,
         "latest_version": remote_tag,
         "available": available,
+        "source_mismatch": source_mismatch,
+        "update_reason": reason,
+        "installed_source": installed_source,
         "prerelease": bool(release.prerelease),
         "name": str(release.name or ""),
         "body": str(release.body or ""),
@@ -848,10 +1010,17 @@ def get_unity_update_info(
     base_dir: Optional[str] = None,
     unity_dir: Optional[str] = None,
     channel: str = "stable",
+    settings=None,
+    contour: str | None = None,
 ) -> dict:
     """Return current/latest Unity update information without installing."""
-    repo = _get_repo()
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
+    channel = update_channel_for_source(source)
 
     if base_dir is None:
         base_dir = str(Path(sys.argv[0]).parent)
@@ -864,27 +1033,38 @@ def get_unity_update_info(
         if version_file.exists()
         else "0.0.0.0"
     )
+    installed_source = get_installed_source(settings_payload, "unity")
+    source_mismatch = is_source_mismatch(source, installed_source)
 
     release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
     if release is None:
         return {
             "ok": False,
             "component": "unity",
+            "repo": repo,
+            "selected_contour": selected_contour,
             "current_version": local_version,
             "error": "Could not find a Unity release asset to check for updates",
         }
 
     remote_tag = str(release.tag or "")
-    available = bool(remote_tag) and (_is_newer(remote_tag, local_version) or not install_complete)
+    version_newer = bool(remote_tag) and _is_newer(remote_tag, local_version)
+    available = bool(version_newer or source_mismatch or not install_complete)
+    reason = "source_mismatch" if source_mismatch and not version_newer else ("missing_install" if not install_complete and not version_newer else ("newer_version" if version_newer else ""))
     return {
         "ok": True,
         "component": "unity",
         "repo": repo,
         "channel": channel,
+        "selected_contour": selected_contour,
+        "requires_tester_code": bool(source.requires_tester_code),
         "current_version": local_version,
         "latest_version": remote_tag,
         "available": available,
         "install_complete": install_complete,
+        "source_mismatch": source_mismatch,
+        "update_reason": reason,
+        "installed_source": installed_source,
         "prerelease": bool(release.prerelease),
         "name": str(release.name or ""),
         "body": str(release.body or ""),
@@ -908,6 +1088,8 @@ def check_for_updates(
     update_mode: str = "diff",
     preserve_prompts: bool = False,
     stop_event=None,
+    settings=None,
+    contour: str | None = None,
 ) -> UpdateResult:
     """Check and optionally install the Python component update.
 
@@ -917,18 +1099,30 @@ def check_for_updates(
     """
     log = make_logger(logger, _LOG_PREFIX)
 
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
     local_version = _get_current_version()
+    installed_source = get_installed_source(settings_payload, "python")
+    source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
-    tester_code = tester_code or os.environ.get("TESTER_CODE") or None
+    channel = update_channel_for_source(source)
+    password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
     update_mode = (update_mode or os.environ.get("UPDATE_MODE", "diff")).lower()
     if update_mode not in ("diff", "full"):
         update_mode = "diff"
     preserve_prompts = preserve_prompts or os.environ.get("UPDATE_PRESERVE_PROMPTS", "0") == "1"
-
-    log(f"Checking for updates ({repo}, channel={channel}, mode={update_mode}) ...")
+    preserve_user_data = False
+    if source_mismatch:
+        # Different repositories are separate delivery contours. A patch/overlay
+        # could leave test-only files in the production installation.
+        update_mode = "full"
+        preserve_user_data = True
+    log(f"Checking for updates ({repo}, contour={selected_contour}, channel={channel}, mode={update_mode}) ...")
 
     release = _select_python_release(repo, channel)
     if release is None:
@@ -940,11 +1134,19 @@ def check_for_updates(
     if not remote_tag:
         return UpdateResult(component="python", ok=False, status="check_failed", error="Release tag is empty")
 
-    if not _is_newer(remote_tag, local_version):
+    is_newer = _is_newer(remote_tag, local_version)
+    if not is_newer and not source_mismatch:
         log(f"Up to date: {local_version}")
         return UpdateResult(component="python", ok=True, status="current", version=local_version)
 
-    log(f"New version available: {remote_tag} (current: {local_version})", "notify")
+    if source_mismatch and not is_newer:
+        log(
+            f"Selected contour differs from installed Python source "
+            f"({installed_source.get('repo', '?')} -> {repo}). Sync available.",
+            "notify",
+        )
+    else:
+        log(f"New version available: {remote_tag} (current: {local_version})", "notify")
 
     if not auto_update:
         log(f"Python update {remote_tag} is available; waiting for user selection.")
@@ -955,7 +1157,7 @@ def check_for_updates(
     is_patch = False
     python_asset = None
 
-    if picked.python_patch is not None:
+    if not source_mismatch and picked.python_patch is not None:
         python_asset = picked.python_patch
         is_patch = True
     elif picked.python_full is not None:
@@ -992,6 +1194,7 @@ def check_for_updates(
         asset=python_asset,
         mode="diff" if is_patch else update_mode,
         preserve_prompts=preserve_prompts,
+        preserve_user_data=preserve_user_data,
         is_patch=is_patch,
     )
 
@@ -1035,8 +1238,9 @@ def check_for_updates(
             try:
                 _set_python_operation_phase(base_path, "extracting")
                 _install_full_archive(
-                    temp_archive, base_path, tester_code, log,
+                    temp_archive, base_path, password_candidates, log,
                     mode="diff", preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     staging=staging,
                     archive_sha256=archive_hash,
                     logger=logger,
@@ -1054,6 +1258,8 @@ def check_for_updates(
                 full_asset = _fetch_full_fallback_asset(repo, channel)
                 if full_asset is None:
                     raise RuntimeError("No full release found for fallback")
+                python_asset = full_asset
+                is_patch = False
                 full_archive = dl_dir / full_asset.name
                 active_archive = full_archive
                 _begin_python_operation(
@@ -1062,6 +1268,7 @@ def check_for_updates(
                     asset=full_asset,
                     mode=update_mode,
                     preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     is_patch=False,
                 )
                 _set_python_operation_phase(base_path, "downloading")
@@ -1082,8 +1289,9 @@ def check_for_updates(
                 )
                 _set_python_operation_phase(base_path, "extracting")
                 _install_full_archive(
-                    full_archive, base_path, tester_code, log,
+                    full_archive, base_path, password_candidates, log,
                     mode=update_mode, preserve_prompts=preserve_prompts,
+                    preserve_user_data=preserve_user_data,
                     staging=staging,
                     archive_sha256=archive_hash,
                     logger=logger,
@@ -1095,8 +1303,9 @@ def check_for_updates(
         else:
             _set_python_operation_phase(base_path, "extracting")
             _install_full_archive(
-                temp_archive, base_path, tester_code, log,
+                temp_archive, base_path, password_candidates, log,
                 mode=update_mode, preserve_prompts=preserve_prompts,
+                preserve_user_data=preserve_user_data,
                 staging=staging,
                 archive_sha256=archive_hash,
                 logger=logger,
@@ -1113,6 +1322,19 @@ def check_for_updates(
         )
         _cleanup_python_reserve(base_path, active_archive)
         _emit_stage(on_stage, "Completed", 4, 4, False)
+
+        _persist_installed_source(
+            base_dir,
+            "python",
+            build_installed_source_record(
+                "python",
+                source,
+                tag=remote_tag,
+                asset_name=python_asset.name,
+                published_at=str(release.published_at or ""),
+                release_name=str(release.name or ""),
+            ),
+        )
 
         if restart_on_success:
             log(f"Update {remote_tag} installed successfully. Restarting ...", "success")
@@ -1220,8 +1442,8 @@ def resume_pending_python_update(
             recovered=True,
         )
 
-    effective_tester_code = tester_code or os.environ.get("TESTER_CODE") or None
-    if phase == "waiting_for_credentials" and not effective_tester_code:
+    password_candidates = _password_candidates(_load_settings_payload(str(base_path)), tester_code=tester_code)
+    if phase == "waiting_for_credentials" and password_candidates == [None]:
         return UpdateResult(
             component="python",
             ok=False,
@@ -1290,10 +1512,11 @@ def resume_pending_python_update(
         _install_full_archive(
             archive,
             base_path,
-            effective_tester_code,
+            password_candidates,
             log,
             mode=str(state.get("mode") or "diff"),
             preserve_prompts=bool(state.get("preserve_prompts", False)),
+            preserve_user_data=bool(state.get("preserve_user_data", False)),
             staging=staging,
             archive_sha256=archive_hash,
             logger=logger,
@@ -1420,6 +1643,7 @@ def _install_unity_asset(
     version: str,
     asset: ReleaseAsset,
     tester_code: Optional[str],
+    password_candidates=None,
     logger,
     on_progress: Optional[Callable[[int, int], None]],
     on_extract_progress: Optional[Callable[[int, int], None]],
@@ -1501,10 +1725,10 @@ def _install_unity_asset(
             transaction.set_phase("extracting")
             stage = transaction.reset_stage()
             _emit_stage(on_stage, "Extracting", 2, 6, True)
-            extract_archive(
+            _extract_archive_with_password_candidates(
                 archive,
                 stage,
-                tester_code,
+                password_candidates if password_candidates is not None else [tester_code],
                 logger=logger,
                 on_extract_progress=on_extract_progress,
                 stop_event=stop_event,
@@ -1607,8 +1831,8 @@ def resume_pending_unity_update(
     phase = str(state.get("phase") or "")
     if not state or phase in {"", "completed", "rolled_back", "cancelled", "failed"}:
         return UpdateResult(component="unity", ok=True, status="no_pending_operation")
-    effective_tester_code = tester_code or os.environ.get("TESTER_CODE") or None
-    if phase == "waiting_for_credentials" and not effective_tester_code:
+    password_candidates = _password_candidates(_load_settings_payload(str(base_path)), tester_code=tester_code)
+    if phase == "waiting_for_credentials" and password_candidates == [None]:
         return UpdateResult(
             component="unity",
             ok=False,
@@ -1634,7 +1858,8 @@ def resume_pending_unity_update(
         unity_path=target,
         version=str(state.get("version") or ""),
         asset=asset,
-        tester_code=effective_tester_code,
+        tester_code=None,
+        password_candidates=password_candidates,
         logger=logger,
         on_progress=on_progress,
         on_extract_progress=on_extract_progress,
@@ -1657,13 +1882,22 @@ def check_for_unity_updates(
     on_stage: Optional[Callable[[str, int, int, bool], None]] = None,
     auto_update: Optional[bool] = None,
     stop_event=None,
+    settings=None,
+    contour: str | None = None,
 ) -> UpdateResult:
     log = make_logger(logger, _LOG_PREFIX)
-    repo = _get_repo()
+    settings_payload, selected_contour, source = _selected_source_context(
+        base_dir=base_dir,
+        settings=settings,
+        contour=contour,
+    )
+    repo = source.repo
+    installed_source = get_installed_source(settings_payload, "unity")
+    source_mismatch = is_source_mismatch(source, installed_source)
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE_UNITY", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
-    tester_code = tester_code or os.environ.get("TESTER_CODE") or None
+    channel = update_channel_for_source(source)
+    password_candidates = _password_candidates(settings_payload, tester_code=tester_code)
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
     unity_path = Path(unity_dir) if unity_dir else base_path / "NeuroMita-Unity"
     version_file = unity_path / "_version.txt"
@@ -1679,14 +1913,19 @@ def check_for_unity_updates(
     remote_tag = str(release.tag or "")
     if not remote_tag:
         return UpdateResult(component="unity", ok=False, status="check_failed", error="Release tag is empty")
-    if not _is_newer(remote_tag, local_version) and install_complete:
+    if not _is_newer(remote_tag, local_version) and install_complete and not source_mismatch:
         log(f"Unity up to date: {local_version}")
         return UpdateResult(component="unity", ok=True, status="current", version=local_version)
+    if source_mismatch and not _is_newer(remote_tag, local_version):
+        log(
+            f"Selected contour differs from installed Unity source ({installed_source.get('repo', '?')} -> {repo}). Sync available.",
+            "notify",
+        )
     if not auto_update:
         log(f"Unity update {remote_tag} is available; waiting for user selection.")
         return UpdateResult(component="unity", ok=True, status="available", version=remote_tag)
 
-    return _install_unity_asset(
+    result = _install_unity_asset(
         base_path=base_path,
         unity_path=unity_path,
         version=remote_tag,
@@ -1699,3 +1938,17 @@ def check_for_unity_updates(
         on_stage=on_stage,
         stop_event=stop_event,
     )
+    if result.ok and result.changed:
+        _persist_installed_source(
+            base_dir,
+            "unity",
+            build_installed_source_record(
+                "unity",
+                source,
+                tag=remote_tag,
+                asset_name=unity_asset.name,
+                published_at=str(release.published_at or ""),
+                release_name=str(release.name or ""),
+            ),
+        )
+    return result
