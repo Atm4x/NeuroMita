@@ -15,7 +15,9 @@ from handlers.llm_providers.base import (
     LLMResponse,
     StreamCallback,
     StreamChannel,
+    ToolCall,
     check_request_cancelled,
+    normalize_tool_arguments,
     normalize_usage_payload,
 )
 from handlers.llm_providers.errors import build_provider_error, build_stream_error, coerce_provider_error
@@ -44,6 +46,70 @@ class OpenAIHTTPProviderBase(BaseProvider):
         if "tools_native" in caps:
             return bool(caps.get("tools_native"))
         return bool(self.supports_tools_native)
+
+    @staticmethod
+    def _normalize_tools_payload(payload: Any) -> Any:
+        if not isinstance(payload, list):
+            return payload
+
+        normalized: List[Any] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                normalized.append(item)
+                continue
+            if item.get("type") == "function" and isinstance(item.get("function"), dict):
+                normalized.append(dict(item))
+                continue
+            if "name" not in item:
+                normalized.append(dict(item))
+                continue
+            normalized.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": str(item.get("name") or ""),
+                        "description": str(item.get("description") or ""),
+                        "parameters": dict(item.get("parameters") or {}),
+                    },
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _parse_tool_calls(message: Dict[str, Any]) -> List[ToolCall]:
+        calls: List[ToolCall] = []
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = str(function.get("name") or "").strip()
+            if not name:
+                continue
+            calls.append(
+                ToolCall(
+                    id=str(call.get("id") or ""),
+                    name=name,
+                    arguments=normalize_tool_arguments(function.get("arguments")),
+                )
+            )
+        return calls
+
+    @staticmethod
+    def _parse_stream_tool_calls(states: Dict[int, Dict[str, Any]]) -> List[ToolCall]:
+        calls: List[ToolCall] = []
+        for index in sorted(states):
+            state = states[index]
+            name = str(state.get("name") or "").strip()
+            if not name:
+                continue
+            calls.append(
+                ToolCall(
+                    id=str(state.get("id") or ""),
+                    name=name,
+                    arguments=normalize_tool_arguments(state.get("arguments") or "{}"),
+                )
+            )
+        return calls
 
     def _headers(self, req: LLMRequest) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -211,6 +277,10 @@ class OpenAIHTTPProviderBase(BaseProvider):
         payload.update(self._map_unified_params(req.extra or {}, model_to_use))
         self._apply_reasoning(payload, req)
 
+        if req.tools_on and req.tools_payload:
+            payload["tools"] = self._normalize_tools_payload(req.tools_payload)
+            payload["tool_choice"] = "auto"
+
         if req.protocol_id == "openrouter_default":
             routing = normalize_openrouter_routing((req.extra or {}).get("openrouter_routing"))
             if routing:
@@ -375,13 +445,14 @@ class OpenAIHTTPProviderBase(BaseProvider):
             raise provider_error
 
         message = (data.get("choices", [{}])[0].get("message") or {}) if isinstance(data, dict) else {}
+        tool_calls = self._parse_tool_calls(message)
         finish_reason = ((data.get("choices") or [{}])[0].get("finish_reason") if isinstance(data, dict) else None)
 
         content, reasoning = self._resolve_content_and_reasoning(
             str(message.get("content") or ""),
             str(message.get("reasoning_content") or ""),
         )
-        if not content:
+        if not content and not tool_calls:
             response_preview = self._stringify_error(data, limit=600)
             finish_suffix = f" finish_reason={finish_reason}." if finish_reason else ""
             error_message = f"Provider returned 200 OK but empty message content.{finish_suffix}"
@@ -399,6 +470,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
                 finish_reason=finish_reason,
                 error_message=error_message,
                 raw=data if isinstance(data, dict) else {},
+                tool_calls=tool_calls,
             )
 
         return LLMResponse(
@@ -409,6 +481,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
             finish_reason=finish_reason,
             raw=data if isinstance(data, dict) else {},
             reasoning=reasoning.strip() or None,
+            tool_calls=tool_calls,
         )
 
     def _handle_stream(
@@ -467,7 +540,10 @@ class OpenAIHTTPProviderBase(BaseProvider):
                     if not isinstance(tool_delta, dict):
                         continue
                     index = int(tool_delta.get("index") or 0)
-                    state = tool_calls.setdefault(index, {"id": "", "name": "", "started": False})
+                    state = tool_calls.setdefault(
+                        index,
+                        {"id": "", "name": "", "arguments": "", "started": False},
+                    )
                     state["id"] = str(tool_delta.get("id") or state["id"])
                     function = tool_delta.get("function") if isinstance(tool_delta.get("function"), dict) else {}
                     state["name"] = str(function.get("name") or state["name"])
@@ -476,6 +552,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
                         state["started"] = True
                     arguments = str(function.get("arguments") or "")
                     if arguments:
+                        state["arguments"] += arguments
                         accumulator.tool_call_delta(
                             tool_call_id=state["id"],
                             tool_name=state["name"],
@@ -499,7 +576,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
             if state["started"]:
                 accumulator.tool_call_completed(tool_call_id=state["id"], tool_name=state["name"])
         response = accumulator.complete(finish_reason=finish_reason, model=response_model)
-        if not response.text:
+        response.tool_calls = self._parse_stream_tool_calls(tool_calls)
+        if not response.text and not response.tool_calls:
             if finish_reason and finish_reason != "stop":
                 response.error_message = f"Provider stream ended without content (finish_reason={finish_reason})."
         return response

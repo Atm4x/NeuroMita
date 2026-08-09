@@ -93,11 +93,12 @@ class ProviderManager:
             f"Using provider: {provider.name} | protocol={req.protocol_id} | dialect={req.dialect_id}"
         )
 
-        preprocess_messages_for_provider(req, provider)
+        if not bool((req.extra or {}).get("_tool_loop_prepared", False)):
+            preprocess_messages_for_provider(req, provider)
 
-        if req.transforms:
-            req.messages, transform_trace = apply_transforms(req.messages, req.transforms)
-            trace["transform_trace"] = transform_trace
+            if req.transforms:
+                req.messages, transform_trace = apply_transforms(req.messages, req.transforms)
+                trace["transform_trace"] = transform_trace
 
         logger.debug(f"Protocol trace: {trace}")
         return provider.generate(req)

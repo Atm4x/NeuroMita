@@ -10,6 +10,7 @@ from main_logger import logger
 
 class TaskStatus(Enum):
     PENDING = "PENDING"
+    RUNNING = "RUNNING"
     VOICING = "VOICING"
     SUCCESS = "SUCCESS"
     FAILED_ON_GENERATION = "FAILED_ON_GENERATION"

@@ -35,6 +35,7 @@ from managers.context_counter import ContextCounter
 from managers.conversation_event_writer import ConversationEventWriter
 from managers.history_ui_projector import HistoryUiProjector
 from managers.model_pricing_manager import ModelPricingManager, known_model_context_length
+from managers.tools.models import ToolExecutionContext
 from core.request_policy import RequestPolicy, resolve_policy
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
@@ -44,7 +45,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "delegate_to_codex"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -52,6 +53,7 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "delegate_to_codex": True,
 }
 
 def _render_tools_for_prompt(schema: list) -> str:
@@ -2292,7 +2294,17 @@ class ModelController(GenerationService, ModelStateService):
         logger.info(f"[ModelController] Executing tool '{tool_name}' with args: {tool_args}")
         self.model.tool_manager.set_char_context(char_id)
         try:
-            tool_result = self.model.tool_manager.run(tool_name, tool_args)
+            tool_context = ToolExecutionContext(
+                character_id=str(char_id or ""),
+                request_id=str(req_id or ""),
+                event_type=str(event_type or ""),
+                origin_message_id=str(origin_message_id or ""),
+            )
+            tool_result = self.model.tool_manager.run(
+                tool_name,
+                tool_args,
+                context=tool_context,
+            )
         except Exception as e:
             tool_result = f"[Tool error: {e}]"
             logger.error(f"[ModelController] Tool '{tool_name}' failed: {e}", exc_info=True)

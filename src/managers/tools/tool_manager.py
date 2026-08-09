@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from main_logger import logger
@@ -69,6 +70,7 @@ class _LazyTool(Tool):
 class ToolManager:
     def __init__(self):
         self._tools: Dict[str, Tool] = {}
+        self._lock = RLock()
 
         self.dialects = ToolDialectRegistry(package="managers.tools.dialects", auto_discover=True)
         self.dialects.add_alias("deepseek", "openai")
@@ -82,17 +84,23 @@ class ToolManager:
         ):
             self.register(_LazyTool(name, module_name, class_name))
 
-    def register(self, tool: Tool):
-        self._tools[tool.name] = tool
+    def register(self, tool: Tool, *, replace: bool = False):
+        with self._lock:
+            existing = self._tools.get(tool.name)
+            if existing is not None and existing is not tool and not replace:
+                raise ValueError(f"Tool name collision: {tool.name}")
+            self._tools[tool.name] = tool
 
     def json_schema(self) -> List[dict]:
+        with self._lock:
+            tools = tuple(self._tools.values())
         return [
             {
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.parameters,
             }
-            for tool in self._tools.values()
+            for tool in tools
         ]
 
     def available_dialects(self) -> List[dict]:
@@ -100,11 +108,13 @@ class ToolManager:
 
     def _filtered_schema(self, enabled_names: Optional[List[str]]) -> List[dict]:
         """Return schema only for requested tools; disabled heavy tools stay unloaded."""
+        with self._lock:
+            tools = tuple(self._tools.items())
         if enabled_names is None:
-            selected = self._tools.values()
+            selected = (tool for _, tool in tools)
         else:
             enabled = set(enabled_names)
-            selected = (tool for name, tool in self._tools.items() if name in enabled)
+            selected = (tool for name, tool in tools if name in enabled)
         return [
             {
                 "name": tool.name,
@@ -154,16 +164,23 @@ class ToolManager:
 
     def set_char_context(self, char_id: str) -> None:
         """Inject character context without forcing lazy tools to import."""
-        for tool in self._tools.values():
+        with self._lock:
+            tools = tuple(self._tools.values())
+        for tool in tools:
             setter = getattr(tool, "set_char_id", None)
             if callable(setter):
                 setter(char_id)
 
-    def run(self, name: str, arguments: dict):
-        tool = self._tools.get(name)
+
+    def run(self, name: str, arguments: dict, *, context: Any = None):
+        with self._lock:
+            tool = self._tools.get(name)
         if not tool:
             return f"[Tool-Error] Неизвестный инструмент: {name}"
         try:
+            contextual_runner = getattr(tool, "run_with_context", None)
+            if context is not None and callable(contextual_runner):
+                return contextual_runner(context=context, **(arguments or {}))
             return tool.run(**(arguments or {}))
         except Exception as exc:
             return f"[Tool-Error] {name} вызвал исключение: {exc}"

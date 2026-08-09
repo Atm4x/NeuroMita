@@ -743,6 +743,30 @@ class GuiInteractionService(ABC):
     def confirm(self, kind: str, payload: Dict[str, Any]) -> bool: ...
 
 
+class MCPService(ABC):
+    """Application boundary for configured Model Context Protocol servers."""
+
+    @abstractmethod
+    def load_configs(self) -> List[Any]: ...
+
+    @abstractmethod
+    def connect_enabled(self) -> Dict[str, str]: ...
+
+    @abstractmethod
+    def list_tools(self, server_id: str) -> Any: ...
+
+    @abstractmethod
+    def call_tool(
+        self,
+        server_id: str,
+        remote_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> Any: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+
 class TaskService(ABC):
     """Задачи диалога/idle игрового сервера. Обработчики TCP-действий живут в
     asyncio-loop сервера, где синхронный EventBus-запрос запрещён (блокирует весь loop) —

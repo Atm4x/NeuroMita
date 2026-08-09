@@ -1,4 +1,5 @@
 # src/handlers/llm_providers/base.py
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Callable, Optional, Any, Mapping
@@ -156,6 +157,28 @@ class LLMUsage:
         }
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """Provider-neutral description of a tool invocation requested by an LLM."""
+
+    id: str
+    name: str
+    arguments: Dict[str, Any] = field(default_factory=dict)
+
+
+def normalize_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
+    """Convert provider-specific tool arguments into a JSON-object mapping."""
+    if isinstance(raw_arguments, Mapping):
+        return dict(raw_arguments)
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments or "{}")
+        except Exception:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
 @dataclass
 class LLMResponse:
     text: Optional[str]
@@ -166,6 +189,7 @@ class LLMResponse:
     error_message: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None
     raw: Dict[str, Any] = field(default_factory=dict)
+    tool_calls: List[ToolCall] = field(default_factory=list)
 
     # Размышления, которые провайдер отдал отдельным каналом. В text их быть
     # не должно: text — только то, что видит игрок.
@@ -284,6 +308,7 @@ class BaseProvider(ABC):
 __all__ = [
     "LLMRequest",
     "LLMUsage",
+    "ToolCall",
     "LLMResponse",
     "BaseProvider",
     "RequestCancellation",
@@ -297,5 +322,6 @@ __all__ = [
     "register_cancellable_resource",
     "resolve_total_timeout",
     "normalize_usage_payload",
+    "normalize_tool_arguments",
     "LLMProviderError",
 ]

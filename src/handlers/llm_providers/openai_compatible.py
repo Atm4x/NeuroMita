@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from main_logger import logger
 from .base import (
@@ -12,7 +12,9 @@ from .base import (
     LLMResponse,
     StreamCallback,
     StreamChannel,
+    ToolCall,
     check_request_cancelled,
+    normalize_tool_arguments,
     normalize_usage_payload,
     record_response_body_started,
     register_cancellable_resource,
@@ -62,6 +64,80 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
     def generate(self, req: LLMRequest) -> LLMResponse:
         return self._generate(req)
 
+    @staticmethod
+    def _field(value: Any, name: str, default: Any = None) -> Any:
+        if isinstance(value, Mapping):
+            return value.get(name, default)
+        return getattr(value, name, default)
+
+    @staticmethod
+    def _extract_sdk_reasoning(message: Any) -> str:
+        if isinstance(message, Mapping):
+            return str(message.get("reasoning_content") or message.get("reasoning") or "")
+        return str(
+            getattr(message, "reasoning_content", None)
+            or getattr(message, "reasoning", None)
+            or (getattr(message, "model_extra", None) or {}).get("reasoning_content", "")
+        )
+
+    @classmethod
+    def _parse_tool_calls(cls, message: Any) -> List[ToolCall]:
+        calls: List[ToolCall] = []
+        for call in cls._field(message, "tool_calls", None) or []:
+            function = cls._field(call, "function", None)
+            name = str(cls._field(function, "name", "") or "").strip()
+            if not name:
+                continue
+            calls.append(
+                ToolCall(
+                    id=str(cls._field(call, "id", "") or ""),
+                    name=name,
+                    arguments=normalize_tool_arguments(cls._field(function, "arguments", {})),
+                )
+            )
+        return calls
+
+    @staticmethod
+    def _normalize_tools_payload(payload: Any) -> Any:
+        if not isinstance(payload, list):
+            return payload
+
+        normalized: List[Any] = []
+        for item in payload:
+            if not isinstance(item, Mapping):
+                normalized.append(item)
+                continue
+            if item.get("type") == "function" and isinstance(item.get("function"), Mapping):
+                normalized.append(dict(item))
+                continue
+            if "name" not in item:
+                normalized.append(dict(item))
+                continue
+            function = {
+                "name": str(item.get("name") or ""),
+                "description": str(item.get("description") or ""),
+                "parameters": dict(item.get("parameters") or {}),
+            }
+            normalized.append({"type": "function", "function": function})
+        return normalized
+
+    @classmethod
+    def _parse_stream_tool_calls(cls, states: Mapping[int, Mapping[str, Any]]) -> List[ToolCall]:
+        calls: List[ToolCall] = []
+        for index in sorted(states):
+            state = states[index]
+            name = str(state.get("name") or "").strip()
+            if not name:
+                continue
+            calls.append(
+                ToolCall(
+                    id=str(state.get("id") or ""),
+                    name=name,
+                    arguments=normalize_tool_arguments(state.get("arguments") or "{}"),
+                )
+            )
+        return calls
+
     def _generate(self, req: LLMRequest) -> LLMResponse:
         if req.depth > 3:
             logger.error(f"Слишком много рекурсивных tool-вызовов ({self.name}).")
@@ -91,6 +167,9 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
             params: Dict[str, Any] = {"model": model_to_use, "messages": cleaned_messages}
             if req.stream and self.should_request_stream_usage(req):
                 params["stream_options"] = {"include_usage": True}
+            if req.tools_on and req.tools_payload:
+                params["tools"] = self._normalize_tools_payload(req.tools_payload)
+                params["tool_choice"] = "auto"
             params.update(self._map_unified_params(req.extra or {}, model_to_use))
             if req.protocol_id == "openrouter_default":
                 extra_body = dict(params.get("extra_body") or {})
@@ -132,6 +211,7 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
 
             if completion and getattr(completion, "choices", None):
                 message = completion.choices[0].message
+                tool_calls = self._parse_tool_calls(message)
                 reasoning = self._extract_sdk_reasoning(message)
                 if not reasoning:
                     try:
@@ -141,7 +221,7 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                     except Exception:
                         reasoning = ""
                 content, reasoning = self._resolve_content_and_reasoning(
-                    str(message.content or ""), reasoning
+                    str(self._field(message, "content", "") or ""), reasoning
                 )
                 usage = self._extract_usage(getattr(completion, "usage", None))
                 finish_reason = None
@@ -155,11 +235,12 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                     model=getattr(completion, "model", None) or model_to_use,
                     provider_name=self.name,
                     finish_reason=finish_reason,
-                    error_message=None if content else (
+                    error_message=None if (content or tool_calls) else (
                         "Provider returned completion without message content."
                         + (f" finish_reason={finish_reason}." if finish_reason else "")
                     ),
                     reasoning=reasoning.strip() or None,
+                    tool_calls=tool_calls,
                 )
 
             logger.warning(f"[{self.name}] No completion choices.")
@@ -242,7 +323,10 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                         accumulator.add_reasoning(reasoning)
                         for tool_delta in getattr(delta, "tool_calls", None) or []:
                             index = int(getattr(tool_delta, "index", 0) or 0)
-                            state = tool_calls.setdefault(index, {"id": "", "name": "", "started": False})
+                            state = tool_calls.setdefault(
+                                index,
+                                {"id": "", "name": "", "arguments": "", "started": False},
+                            )
                             state["id"] = str(getattr(tool_delta, "id", None) or state["id"])
                             function = getattr(tool_delta, "function", None)
                             state["name"] = str(getattr(function, "name", None) or state["name"])
@@ -251,6 +335,7 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                                 state["started"] = True
                             arguments = str(getattr(function, "arguments", None) or "")
                             if arguments:
+                                state["arguments"] += arguments
                                 accumulator.tool_call_delta(
                                     tool_call_id=state["id"],
                                     tool_name=state["name"],
@@ -285,7 +370,8 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
             if state["started"]:
                 accumulator.tool_call_completed(tool_call_id=state["id"], tool_name=state["name"])
         response = accumulator.complete(finish_reason=finish_reason, model=response_model)
-        if not response.text:
+        response.tool_calls = self._parse_stream_tool_calls(tool_calls)
+        if not response.text and not response.tool_calls:
             if finish_reason and finish_reason != "stop":
                 response.error_message = f"Provider stream ended without content (finish_reason={finish_reason})."
         return response

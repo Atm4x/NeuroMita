@@ -27,6 +27,8 @@ from handlers.llm_providers.streaming import (
     StreamSupervisor,
 )
 from managers.provider_manager import ProviderManager
+from managers.tools.executor import ToolCallExecutor
+from managers.tools.models import ToolExecutionContext
 
 
 class LLMRequestRunner:
@@ -54,6 +56,7 @@ class LLMRequestRunner:
         self.last_error = None
         self._abort_chain = False
         self.provider_manager = ProviderManager()
+        self.tool_call_executor = ToolCallExecutor()
 
     @property
     def last_error(self) -> Optional[LLMProviderError]:
@@ -233,8 +236,9 @@ class LLMRequestRunner:
 
             try:
                 response = self._call_with_timeout(
-                    pm.generate,
-                    args=(req,),
+                    self.tool_call_executor.execute_until_final,
+                    args=(pm.generate, req),
+                    kwargs={"context": ToolExecutionContext.from_request(req)},
                     timeout=request_timeout,
                     cancellation=cancellation,
                     stream_policy=(StreamDeadlinePolicy.for_request(req) if req.stream else None),

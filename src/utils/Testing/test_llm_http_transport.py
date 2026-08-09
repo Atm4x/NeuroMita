@@ -978,3 +978,113 @@ def test_runner_uses_retry_after_with_a_reasonable_cap():
     assert response is not None and response.text == "ok"
     assert waits == [10.0]
     runner.close()
+
+
+class _SdkToolResponseProvider(OpenAICompatibleProvider):
+    name = "sdk-tool-response"
+
+    def __init__(self, captured, completion):
+        super().__init__()
+        self._captured = captured
+        self._completion = completion
+
+    def is_applicable(self, req):
+        return True
+
+    def _get_client(self, req):
+        captured = self._captured
+        completion = self._completion
+
+        class Completions:
+            @staticmethod
+            def create(**kwargs):
+                captured.update(kwargs)
+                return completion
+
+        class Chat:
+            completions = Completions()
+
+        class Client:
+            chat = Chat()
+
+            @staticmethod
+            def close():
+                return None
+
+        return Client()
+
+
+def test_openai_sdk_native_tool_call_is_normalized():
+    class Function:
+        name = "lookup"
+        arguments = '{"query": "status"}'
+
+    class Call:
+        id = "call-1"
+        function = Function()
+
+    class Message:
+        content = None
+        tool_calls = [Call()]
+
+    class Choice:
+        message = Message()
+        finish_reason = "tool_calls"
+
+    class Completion:
+        choices = [Choice()]
+        model = "model"
+        usage = None
+
+    captured = {}
+    provider = _SdkToolResponseProvider(captured, Completion())
+    req = _request()
+    req.tools_on = True
+    req.tools_payload = [
+        {
+            "name": "lookup",
+            "description": "Look something up.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }
+    ]
+
+    response = provider.generate(req)
+
+    assert captured["tool_choice"] == "auto"
+    assert captured["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "Look something up.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            },
+        }
+    ]
+    assert response.text is None
+    assert response.error_message is None
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].id == "call-1"
+    assert response.tool_calls[0].name == "lookup"
+    assert response.tool_calls[0].arguments == {"query": "status"}
+    provider.close()
+
+
+def test_openai_http_payload_includes_native_tools():
+    common = CommonProvider()
+    req = _request()
+    req.tools_on = True
+    req.tools_payload = [
+        {
+            "name": "lookup",
+            "description": "Look something up.",
+            "parameters": {"type": "object"},
+        }
+    ]
+
+    payload = common._build_payload(req, req.model, req.messages)
+
+    assert payload["tool_choice"] == "auto"
+    assert payload["tools"][0]["type"] == "function"
+    assert payload["tools"][0]["function"]["name"] == "lookup"
+    common.close()

@@ -11,6 +11,8 @@ from characters.character import Character
 from managers.api_preset_resolver import ApiPresetResolver
 from managers.llm_request_runner import LLMRequestRunner
 from managers.model_config_loader import ModelConfigLoader
+from managers.mcp import MCPManager, MCPToolSource
+from managers.mcp.profiles.codex import CodexTaskService, CodexTaskTool
 from managers.tools.tool_manager import ToolManager
 
 from handlers.llm_providers.base import LLMRequest, LLMResponse
@@ -23,7 +25,7 @@ from handlers.llm_providers.param_mapper import build_unified_generation_params
 from core.events import get_event_bus
 from core.executors import Pools, executors
 from core.services import use
-from services.contracts import GameLinkService
+from services.contracts import GameLinkService, MCPService
 
 
 def _debug_dumps_enabled(settings: Any) -> bool:
@@ -151,6 +153,15 @@ class ChatModel:
         self.cfg = self.cfg_loader.load()
 
         self.tool_manager = ToolManager()
+        self.mcp_manager = MCPManager()
+        self.mcp_tool_source = MCPToolSource(self.mcp_manager, self.tool_manager)
+        self.codex_task_service = None
+        self.codex_task_tool = None
+        self._register_codex_task_tool()
+        from core.services import services
+        services().register(MCPService, self.mcp_manager, replace=True)
+        self._mcp_refresh_future = None
+        self._schedule_mcp_tool_refresh()
 
         self.request_runner = LLMRequestRunner(
             settings=self.settings,
@@ -191,6 +202,44 @@ class ChatModel:
 
     def close(self) -> None:
         self.request_runner.close()
+        if self.codex_task_service is not None:
+            self.codex_task_service.close()
+        self.mcp_manager.close()
+
+    def _register_codex_task_tool(self) -> None:
+        try:
+            codex_enabled = any(
+                config.server_id == "codex" and config.enabled
+                for config in self.mcp_manager.load_configs()
+            )
+            if not codex_enabled:
+                return
+            self.codex_task_service = CodexTaskService(self.mcp_manager)
+            self.codex_task_tool = CodexTaskTool(self.codex_task_service)
+            self.tool_manager.register(self.codex_task_tool)
+        except Exception as exc:
+            logger.warning("Codex task tool was not registered: %s", exc)
+
+    def _schedule_mcp_tool_refresh(self) -> None:
+        try:
+            configs = self.mcp_manager.load_configs()
+            should_refresh = any(
+                config.enabled and config.auto_connect and config.expose_tools
+                for config in configs
+            )
+            if not should_refresh:
+                return
+            self._mcp_refresh_future = executors().try_submit(
+                Pools.IO,
+                self._refresh_mcp_tools,
+            )
+        except Exception as exc:
+            logger.warning("MCP tool discovery was not scheduled: %s", exc)
+
+    def _refresh_mcp_tools(self) -> None:
+        errors = self.mcp_tool_source.refresh()
+        if errors:
+            logger.warning("Some MCP servers could not expose tools: %s", sorted(errors))
 
     def generate(
         self,
@@ -293,7 +342,21 @@ class ChatModel:
             )
 
             req.extra["tool_manager"] = self.tool_manager
+            current_character = getattr(self, "current_character", None)
+            req.extra["character_id"] = str(getattr(current_character, "char_id", "") or "")
             req.extra["http_timeout_seconds"] = float(request_timeout)
+
+            if bool(self.settings.get("MCP_NATIVE_TOOLS_ON", False)):
+                enabled_names = self.settings.get("MCP_NATIVE_TOOL_NAMES", None)
+                if not isinstance(enabled_names, list) or not enabled_names:
+                    enabled_names = None
+                req.tools_payload = self.tool_manager.get_tools_payload(
+                    "openai",
+                    enabled_names=enabled_names,
+                )
+                req.tools_on = bool(req.tools_payload)
+                req.tools_mode = "native"
+                req.tools_dialect = "openai"
             if preset_settings.protocol_id == "openrouter_default":
                 routing = normalize_openrouter_routing(preset_settings.openrouter_routing)
                 if routing:
