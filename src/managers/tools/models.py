@@ -10,6 +10,7 @@ class ToolExecutionContext:
 
     character_id: str = ""
     request_id: str = ""
+    origin_request_id: str = ""
     event_type: str = ""
     origin_message_id: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -23,6 +24,7 @@ class ToolExecutionContext:
         return cls(
             character_id=str(extra.get("character_id") or ""),
             request_id=str(extra.get("request_id") or ""),
+            origin_request_id=str(extra.get("origin_request_id") or ""),
             event_type=str(extra.get("event_type") or ""),
             origin_message_id=str(extra.get("origin_message_id") or ""),
             metadata=dict(metadata),

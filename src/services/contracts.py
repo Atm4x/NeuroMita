@@ -446,6 +446,7 @@ class PromptBuildRequest:
     policy: RequestPolicy
     user_input: str = ""
     system_input: str = ""
+    external_result: str = ""
     rag_context: str = ""
     hidden_user_context: str = ""
     image_data: List[Any] = field(default_factory=list)
@@ -485,6 +486,7 @@ class ChatGenerationRequest:
     character_id: Optional[str] = None
     user_input: str = ""
     system_input: str = ""
+    external_result: str = ""
     image_data: List[Any] = field(default_factory=list)
     image_source: str = ""
     stream_callback: Optional[Any] = None
@@ -493,6 +495,7 @@ class ChatGenerationRequest:
     sender: str = "Player"
     participants: List[str] = field(default_factory=list)
     req_id: Optional[str] = None
+    origin_request_id: Optional[str] = None
     origin_message_id: Optional[str] = None
     task_uid: Optional[str] = None
     policy: Optional[RequestPolicy] = None
@@ -753,7 +756,11 @@ class MCPService(ABC):
     def connect_enabled(self) -> Dict[str, str]: ...
 
     @abstractmethod
-    def list_tools(self, server_id: str) -> Any: ...
+    def list_cached_tools(self, server_id: str) -> Any: ...
+
+    def list_tools(self, server_id: str) -> Any:
+        """Backward-compatible cache-only discovery alias."""
+        return self.list_cached_tools(server_id)
 
     @abstractmethod
     def call_tool(

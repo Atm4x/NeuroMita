@@ -6,7 +6,8 @@ import threading
 from typing import Any, Mapping
 
 from main_logger import logger
-from services.contracts import MCPService
+from core.services import services
+from services.contracts import LoopService, MCPService
 
 from .config_store import MCPConfigStore
 from .connection import MCPConnection
@@ -14,19 +15,41 @@ from .models import MCPCallResult, MCPServerConfig, MCPToolDescriptor
 
 
 class MCPManager(MCPService):
-    """Synchronous host facade backed by one dedicated asyncio loop."""
+    """Synchronous host facade scheduled on the application LoopService."""
 
-    def __init__(self, config_store: MCPConfigStore | None = None) -> None:
+    def __init__(
+        self,
+        config_store: MCPConfigStore | None = None,
+        *,
+        loop_service: LoopService | None = None,
+    ) -> None:
         self.config_store = config_store or MCPConfigStore()
+        self.loop_service = loop_service
         self._connections: dict[str, MCPConnection] = {}
         self._lock = threading.RLock()
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
-        self._ready = threading.Event()
         self._closed = False
 
     def load_configs(self) -> list[MCPServerConfig]:
         return self.config_store.load()
+
+    async def connect_async(self, server_id: str) -> MCPConnection:
+        config = self._config(server_id)
+        connection = await self._connection_async(config)
+        await connection.connect()
+        return connection
+
+    async def refresh_tools_async(self, server_id: str) -> tuple[MCPToolDescriptor, ...]:
+        connection = await self.connect_async(server_id)
+        return await connection.refresh_tools()
+
+    async def call_tool_async(
+        self,
+        server_id: str,
+        remote_name: str,
+        arguments: Mapping[str, Any] | None = None,
+    ) -> MCPCallResult:
+        connection = await self.connect_async(server_id)
+        return await connection.call_tool(remote_name, arguments or {})
 
     def connect(self, server_id: str) -> MCPConnection:
         config = self._config(server_id)
@@ -53,13 +76,15 @@ class MCPManager(MCPService):
             timeout=connection.config.connect_timeout_seconds,
         )
 
-    def list_tools(self, server_id: str) -> tuple[MCPToolDescriptor, ...]:
+    def list_cached_tools(self, server_id: str) -> tuple[MCPToolDescriptor, ...]:
+        """Return cached descriptors without starting or refreshing a server."""
         config = self._config(server_id)
         connection = self._connection(config)
-        return self._run(
-            connection.refresh_tools(),
-            timeout=config.connect_timeout_seconds,
-        )
+        return connection.tools
+
+    def list_tools(self, server_id: str) -> tuple[MCPToolDescriptor, ...]:
+        """Backward-compatible alias for the cache-only discovery API."""
+        return self.list_cached_tools(server_id)
 
     def call_tool(
         self,
@@ -80,20 +105,14 @@ class MCPManager(MCPService):
                 return
             self._closed = True
             connections = tuple(self._connections.values())
-        if self._loop is not None:
-            future = asyncio.run_coroutine_threadsafe(
-                self._close_connections(connections),
-                self._loop,
-            )
-            try:
-                future.result(timeout=5.0)
-            except Exception:
-                logger.debug("Failed to close all MCP connections", exc_info=True)
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-        self._loop = None
-        self._thread = None
+        loop_service = self.loop_service or services().get_optional(LoopService)
+        if loop_service is None or not loop_service.is_running():
+            return
+        try:
+            future = loop_service.run(self._close_connections(connections))
+            future.result(timeout=5.0)
+        except Exception:
+            logger.debug("Failed to close all MCP connections", exc_info=True)
 
     def _config(self, server_id: str) -> MCPServerConfig:
         normalized = str(server_id or "").strip()
@@ -105,56 +124,60 @@ class MCPManager(MCPService):
         raise KeyError(f"Unknown MCP server: {normalized}")
 
     def _connection(self, config: MCPServerConfig) -> MCPConnection:
+        previous = None
         with self._lock:
             connection = self._connections.get(config.server_id)
-            if connection is None or connection.config != config:
-                connection = MCPConnection(config)
-                self._connections[config.server_id] = connection
-            return connection
+            if connection is not None and connection.config == config:
+                return connection
+            previous = connection
+            connection = MCPConnection(config)
+            self._connections[config.server_id] = connection
+        if previous is not None:
+            try:
+                self._run(previous.close(), timeout=previous.config.connect_timeout_seconds)
+            except Exception:
+                logger.debug("Failed to close replaced MCP connection", exc_info=True)
+        return connection
+
+    async def _connection_async(self, config: MCPServerConfig) -> MCPConnection:
+        previous = None
+        with self._lock:
+            connection = self._connections.get(config.server_id)
+            if connection is not None and connection.config == config:
+                return connection
+            previous = connection
+            connection = MCPConnection(config)
+            self._connections[config.server_id] = connection
+        if previous is not None:
+            try:
+                await previous.close()
+            except Exception:
+                logger.debug("Failed to close replaced MCP connection", exc_info=True)
+        return connection
 
     def _run(self, coroutine, *, timeout: float):
-        self._ensure_loop()
-        assert self._loop is not None
-        if threading.current_thread() is self._thread:
-            raise RuntimeError("MCPManager cannot synchronously wait from its event loop thread.")
-        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        with self._lock:
+            if self._closed:
+                coroutine.close()
+                raise RuntimeError("MCPManager is closed.")
+        loop_service = self.loop_service or services().get_optional(LoopService)
+        if loop_service is None or not loop_service.is_running():
+            coroutine.close()
+            raise RuntimeError("MCP requires a running LoopService.")
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop_service.loop():
+            coroutine.close()
+            raise RuntimeError("MCPManager cannot synchronously wait from the application event loop thread.")
+        future = loop_service.run(coroutine)
         try:
             return future.result(timeout=float(timeout))
         except concurrent.futures.TimeoutError:
             future.cancel()
             raise TimeoutError(f"MCP operation exceeded {float(timeout):.1f}s.")
 
-    def _ensure_loop(self) -> None:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("MCPManager is closed.")
-            if self._loop is not None:
-                return
-            self._ready.clear()
-            self._thread = threading.Thread(
-                target=self._loop_worker,
-                name="neuromita-mcp-loop",
-                daemon=True,
-            )
-            self._thread.start()
-        if not self._ready.wait(timeout=5.0):
-            raise RuntimeError("MCP event loop failed to start.")
-
-    def _loop_worker(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        with self._lock:
-            self._loop = loop
-            self._ready.set()
-        try:
-            loop.run_forever()
-        finally:
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            loop.close()
 
     @staticmethod
     async def _close_connections(connections: tuple[MCPConnection, ...]) -> None:

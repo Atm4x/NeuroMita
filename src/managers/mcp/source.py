@@ -42,21 +42,58 @@ class MCPToolSource:
         self.tool_manager = tool_manager
         self._tools: dict[str, _MCPTool] = {}
 
-    def refresh(self) -> dict[str, str]:
+    def refresh(self, *, connect_if_needed: bool = False) -> dict[str, str]:
         errors: dict[str, str] = {}
-        for config in self.manager.load_configs():
-            if not config.enabled or not config.expose_tools or not config.auto_connect:
+        configs = tuple(self.manager.load_configs())
+        eligible_ids = {
+            config.server_id
+            for config in configs
+            if config.enabled and config.expose_tools
+        }
+        discovered: dict[str, MCPToolDescriptor] = {}
+        successful_ids: set[str] = set()
+
+        for config in configs:
+            if config.server_id not in eligible_ids:
                 continue
             try:
-                for descriptor in self.manager.list_tools(config.server_id):
-                    if descriptor.public_name in self._tools:
-                        continue
-                    tool = _MCPTool(self.manager, descriptor)
-                    self.tool_manager.register(tool)
-                    self._tools[descriptor.public_name] = tool
+                refresh = getattr(self.manager, "refresh_tools", None)
+                list_cached = getattr(self.manager, "list_cached_tools", None)
+                should_connect = bool(connect_if_needed and config.auto_connect)
+                if should_connect and callable(refresh):
+                    descriptors = refresh(config.server_id)
+                elif callable(list_cached):
+                    descriptors = list_cached(config.server_id)
+                else:
+                    descriptors = self.manager.list_tools(config.server_id)
+                successful_ids.add(config.server_id)
+                for descriptor in descriptors:
+                    discovered[descriptor.public_name] = descriptor
             except Exception as exc:
                 errors[config.server_id] = str(exc)
                 logger.error("Failed to expose MCP tools from '%s': %s", config.server_id, exc)
+
+        for public_name, descriptor in discovered.items():
+            existing = self._tools.get(public_name)
+            if existing is not None and existing.descriptor == descriptor:
+                continue
+            tool = _MCPTool(self.manager, descriptor)
+            try:
+                self.tool_manager.register(tool, replace=existing is not None)
+            except Exception as exc:
+                errors.setdefault(descriptor.server_id, str(exc))
+                logger.error("Failed to register MCP tool '%s': %s", public_name, exc)
+                continue
+            self._tools[public_name] = tool
+
+        for public_name, tool in tuple(self._tools.items()):
+            server_id = tool.descriptor.server_id
+            should_remove = (
+                server_id not in eligible_ids
+                or (server_id in successful_ids and public_name not in discovered)
+            )
+            if should_remove and self.tool_manager.unregister(public_name, expected=tool):
+                self._tools.pop(public_name, None)
         return errors
 
     def tools(self) -> tuple[Tool, ...]:

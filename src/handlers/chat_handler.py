@@ -25,7 +25,7 @@ from handlers.llm_providers.param_mapper import build_unified_generation_params
 from core.events import get_event_bus
 from core.executors import Pools, executors
 from core.services import use
-from services.contracts import GameLinkService, MCPService
+from services.contracts import GameLinkService, LoopService, MCPService
 
 
 def _debug_dumps_enabled(settings: Any) -> bool:
@@ -133,13 +133,14 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
 
 
 class ChatModel:
-    def __init__(self, settings):
+    def __init__(self, settings, *, on_mcp_completion=None):
         self._error_state = threading.local()
         self._last_error_global = None
         self._last_error_lock = threading.Lock()
         self.last_key = 0
         self.settings = settings
         self.event_bus = get_event_bus()
+        self._on_mcp_completion = on_mcp_completion
 
         self.preset_resolver = ApiPresetResolver(settings=self.settings, event_bus=self.event_bus)
 
@@ -153,12 +154,12 @@ class ChatModel:
         self.cfg = self.cfg_loader.load()
 
         self.tool_manager = ToolManager()
-        self.mcp_manager = MCPManager()
+        from core.services import services
+        self.mcp_manager = MCPManager(loop_service=services().get_optional(LoopService))
         self.mcp_tool_source = MCPToolSource(self.mcp_manager, self.tool_manager)
         self.codex_task_service = None
         self.codex_task_tool = None
         self._register_codex_task_tool()
-        from core.services import services
         services().register(MCPService, self.mcp_manager, replace=True)
         self._mcp_refresh_future = None
         self._schedule_mcp_tool_refresh()
@@ -208,13 +209,20 @@ class ChatModel:
 
     def _register_codex_task_tool(self) -> None:
         try:
-            codex_enabled = any(
-                config.server_id == "codex" and config.enabled
-                for config in self.mcp_manager.load_configs()
+            codex_config = next(
+                (
+                    config for config in self.mcp_manager.load_configs()
+                    if config.server_id == "codex" and config.enabled
+                ),
+                None,
             )
-            if not codex_enabled:
+            if codex_config is None:
                 return
-            self.codex_task_service = CodexTaskService(self.mcp_manager)
+            self.codex_task_service = CodexTaskService(
+                self.mcp_manager,
+                project_paths=codex_config.projects,
+                on_complete=self._on_mcp_completion,
+            )
             self.codex_task_tool = CodexTaskTool(self.codex_task_service)
             self.tool_manager.register(self.codex_task_tool)
         except Exception as exc:
@@ -237,7 +245,7 @@ class ChatModel:
             logger.warning("MCP tool discovery was not scheduled: %s", exc)
 
     def _refresh_mcp_tools(self) -> None:
-        errors = self.mcp_tool_source.refresh()
+        errors = self.mcp_tool_source.refresh(connect_if_needed=True)
         if errors:
             logger.warning("Some MCP servers could not expose tools: %s", sorted(errors))
 
@@ -249,6 +257,8 @@ class ChatModel:
         preset_id: Optional[int] = None,
         *,
         request_id: str = "",
+        origin_request_id: str = "",
+        event_type: str = "chat",
         capabilities_override: Optional[Dict[str, Any]] = None,
         request_options_override: Optional[Dict[str, Any]] = None,
         structured_model: Optional[type] = None,
@@ -261,6 +271,8 @@ class ChatModel:
             stream_event_callback=stream_event_callback,
             preset_id=preset_id,
             request_id=request_id,
+            origin_request_id=origin_request_id,
+            event_type=event_type,
             capabilities_override=capabilities_override,
             request_options_override=request_options_override,
             structured_model=structured_model,
@@ -277,11 +289,14 @@ class ChatModel:
         preset_id: Optional[int] = None,
         *,
         request_id: str = "",
+        origin_request_id: str = "",
+        event_type: str = "chat",
         capabilities_override: Optional[Dict[str, Any]] = None,
         request_options_override: Optional[Dict[str, Any]] = None,
         structured_model: Optional[type] = None,
     ):
         request_options = dict(request_options_override or {})
+        event_type = str(event_type or "chat")
         max_attempts = int(request_options.get("max_attempts", self.cfg.max_request_attempts) or 1)
         retry_delay = float(request_options.get("retry_delay", self.cfg.request_delay) or 0.0)
         request_timeout = float(request_options.get("request_timeout", 240) or 240)
@@ -342,21 +357,25 @@ class ChatModel:
             )
 
             req.extra["tool_manager"] = self.tool_manager
+            req.extra["origin_request_id"] = str(origin_request_id or "")
+            req.extra["event_type"] = event_type
             current_character = getattr(self, "current_character", None)
             req.extra["character_id"] = str(getattr(current_character, "char_id", "") or "")
             req.extra["http_timeout_seconds"] = float(request_timeout)
 
-            if bool(self.settings.get("MCP_NATIVE_TOOLS_ON", False)):
+            tools_requested = (
+                bool(self.settings.get("MCP_NATIVE_TOOLS_ON", False))
+                and event_type != "mcp_completion"
+            )
+            if tools_requested:
                 enabled_names = self.settings.get("MCP_NATIVE_TOOL_NAMES", None)
                 if not isinstance(enabled_names, list) or not enabled_names:
                     enabled_names = None
-                req.tools_payload = self.tool_manager.get_tools_payload(
-                    "openai",
-                    enabled_names=enabled_names,
-                )
-                req.tools_on = bool(req.tools_payload)
+                req.extra["tools_requested"] = True
+                req.extra["enabled_tool_names"] = enabled_names
+                req.allowed_tool_names = frozenset(self.tool_manager.get_tool_names(enabled_names))
+                req.tools_on = True
                 req.tools_mode = "native"
-                req.tools_dialect = "openai"
             if preset_settings.protocol_id == "openrouter_default":
                 routing = normalize_openrouter_routing(preset_settings.openrouter_routing)
                 if routing:

@@ -40,9 +40,16 @@ class MCPConnection:
             self.state = MCPServerState.CONNECTING
             stack = AsyncExitStack()
             try:
-                ClientSession, read_stream, write_stream = await self._open_transport(stack)
-                self._session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
-                await self._session.initialize()
+                transport = await self._open_transport(stack)
+                if transport[0] == "client":
+                    _tag, client_type, transport_context = transport
+                    self._session = await stack.enter_async_context(
+                        client_type(transport_context, mode="auto")
+                    )
+                else:
+                    _tag, ClientSession, read_stream, write_stream = transport
+                    self._session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+                    await self._session.initialize()
                 self._stack = stack
                 self._tools = await self._list_tools_unlocked()
                 self.last_error = None
@@ -86,9 +93,33 @@ class MCPConnection:
             return _decode_call_result(result)
 
     async def _list_tools_unlocked(self) -> tuple[MCPToolDescriptor, ...]:
-        result = await self._session.list_tools()
+        pages: list[Any] = []
+        cursor = None
+        seen_cursors: set[str] = set()
+        for _page_number in range(1000):
+            if cursor is None:
+                result = await self._session.list_tools()
+            else:
+                try:
+                    result = await self._session.list_tools(cursor=cursor)
+                except TypeError:
+                    from mcp.types import PaginatedRequestParams
+                    result = await self._session.list_tools(
+                        params=PaginatedRequestParams(cursor=cursor)
+                    )
+            pages.extend(getattr(result, "tools", None) or [])
+            next_cursor = _object_field(result, "next_cursor", "nextCursor")
+            if next_cursor is None or str(next_cursor).strip() == "":
+                break
+            cursor = str(next_cursor)
+            if cursor in seen_cursors:
+                raise RuntimeError("MCP tools/list returned a repeated pagination cursor.")
+            seen_cursors.add(cursor)
+        else:
+            raise RuntimeError("MCP tools/list exceeded the pagination page limit.")
+
         descriptors: list[MCPToolDescriptor] = []
-        for item in getattr(result, "tools", None) or []:
+        for item in pages:
             remote_name = str(getattr(item, "name", "") or "").strip()
             if not remote_name or not self.config.allows_tool(remote_name):
                 continue
@@ -99,7 +130,7 @@ class MCPConnection:
                     server_id=self.config.server_id,
                     remote_name=remote_name,
                     public_name=build_public_tool_name(self.config.server_id, remote_name),
-                    description=str(getattr(item, "description", "") or ""),
+                    description=str(getattr(item, "description", "") or "")[:4000],
                     input_schema=dict(input_schema) if isinstance(input_schema, Mapping) else {},
                     output_schema=dict(output_schema) if isinstance(output_schema, Mapping) else None,
                 )
@@ -110,9 +141,13 @@ class MCPConnection:
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
+            try:
+                from mcp import Client as HighLevelClient
+            except ImportError:
+                HighLevelClient = None
         except ImportError as exc:
             raise RuntimeError(
-                "MCP support is not installed. Install the optional 'mcp<2' dependency."
+                "MCP support is not installed. Install the optional MCP dependency."
             ) from exc
 
         transport = MCPTransportKind(self.config.transport)
@@ -125,24 +160,35 @@ class MCPConnection:
                 env=environment,
                 cwd=self.config.cwd,
             )
-            read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
-            return ClientSession, read_stream, write_stream
+            transport_context = stdio_client(params)
+            if HighLevelClient is not None:
+                return "client", HighLevelClient, transport_context
+            read_stream, write_stream = await stack.enter_async_context(transport_context)
+            return "session", ClientSession, read_stream, write_stream
 
         from mcp.client.streamable_http import streamable_http_client
-        import httpx
-
         headers = _resolve_env(self.config.headers)
-        http_client = httpx.AsyncClient(
+        try:
+            import httpx2 as http_client_lib
+        except ImportError:
+            import httpx as http_client_lib
+        http_client = http_client_lib.AsyncClient(
             headers=headers,
             timeout=float(self.config.call_timeout_seconds),
+            follow_redirects=True,
         )
         await stack.enter_async_context(http_client)
         transport_context = streamable_http_client(
             str(self.config.url),
             http_client=http_client,
         )
-        read_stream, write_stream, _ = await stack.enter_async_context(transport_context)
-        return ClientSession, read_stream, write_stream
+        if HighLevelClient is not None:
+            return "client", HighLevelClient, transport_context
+        streams = tuple(await stack.enter_async_context(transport_context))
+        if len(streams) < 2:
+            raise RuntimeError("MCP streamable HTTP transport returned incomplete streams.")
+        read_stream, write_stream = streams[:2]
+        return "session", ClientSession, read_stream, write_stream
 
 
 def _object_field(value: Any, *names: str) -> Any:

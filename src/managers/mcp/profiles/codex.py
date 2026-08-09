@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Mapping
 
 from managers.task_manager import Task, TaskManager, get_task_manager
@@ -53,15 +54,35 @@ class CodexTaskService:
         task_manager: TaskManager | None = None,
         runner: MCPBackgroundTaskRunner | None = None,
         on_complete: Callable[[Task], None] | None = None,
+        approval_policy: str = "on-request",
+        project_paths: Mapping[str, str] | None = None,
     ) -> None:
         self.manager = manager
         self.task_manager = task_manager or get_task_manager()
         self.runner = runner or MCPBackgroundTaskRunner(self.task_manager)
         self.profile = CodexProfile(manager)
         self.on_complete = on_complete
+        self.approval_policy = str(approval_policy or "on-request")
+        configured_projects = {
+            str(name).strip(): os.path.abspath(str(path).strip())
+            for name, path in dict(project_paths or {}).items()
+            if str(name).strip() and str(path).strip()
+        }
+        configured_projects.setdefault("current", os.path.abspath(os.getcwd()))
+        self.project_paths = configured_projects
+
+    def available_projects(self) -> tuple[str, ...]:
+        return tuple(self.project_paths)
+
+    def resolve_project(self, project: str | None) -> tuple[str, str]:
+        project_id = str(project or "current").strip() or "current"
+        cwd = self.project_paths.get(project_id)
+        if not cwd:
+            raise ValueError(f"Unknown Codex project: {project_id}")
+        return project_id, cwd
 
     def close(self) -> None:
-        self.runner.close()
+        self.runner.close(wait=True)
 
     def submit(
         self,
@@ -72,6 +93,7 @@ class CodexTaskService:
         model: str | None = None,
         sandbox: str = "read-only",
         approval_policy: str = "on-request",
+        project: str = "current",
     ) -> Task:
         context = context or ToolExecutionContext()
         arguments = CodexProfile.build_start_arguments(
@@ -84,15 +106,17 @@ class CodexTaskService:
             "profile": "codex",
             "character_id": context.character_id,
             "request_id": context.request_id,
+            "origin_request_id": context.origin_request_id or context.request_id,
             "origin_message_id": context.origin_message_id,
             "prompt": str(prompt),
             "cwd": cwd or "",
+            "project": str(project or "current"),
             "sandbox": sandbox,
             "approval_policy": approval_policy,
         }
 
-        def operation() -> dict[str, Any]:
-            turn = self.profile.start(prompt, arguments)
+        async def operation() -> dict[str, Any]:
+            turn = await self.profile.start_async(prompt, arguments)
             return _turn_payload(turn)
 
         return self.runner.submit(
@@ -122,12 +146,13 @@ class CodexTaskService:
             "parent_task_id": task_uid,
             "character_id": context.character_id,
             "request_id": context.request_id,
+            "origin_request_id": context.origin_request_id or context.request_id,
             "origin_message_id": context.origin_message_id,
             "prompt": str(prompt),
         }
 
-        def operation() -> dict[str, Any]:
-            turn = self.profile.continue_task(thread_id, prompt)
+        async def operation() -> dict[str, Any]:
+            turn = await self.profile.continue_task_async(thread_id, prompt)
             return _turn_payload(turn)
 
         return self.runner.submit(
@@ -157,15 +182,15 @@ class CodexTaskTool(Tool):
             "type": "object",
             "properties": {
                 "prompt": {"type": "string"},
-                "cwd": {"type": "string"},
-                "model": {"type": "string"},
-                "sandbox": {
+                "mode": {
                     "type": "string",
-                    "enum": ["read-only", "workspace-write", "danger-full-access"],
+                    "enum": ["analyze", "edit"],
+                    "description": "Use analyze for read-only work or edit for workspace changes.",
                 },
-                "approval_policy": {
+                "project": {
                     "type": "string",
-                    "enum": ["untrusted", "on-request", "never"],
+                    "enum": list(self.service.available_projects()),
+                    "description": "Trusted configured project where Codex should work.",
                 },
             },
             "required": ["prompt"],
@@ -178,13 +203,21 @@ class CodexTaskTool(Tool):
         prompt = str(kwargs.get("prompt") or "").strip()
         if not prompt:
             return {"accepted": False, "error": "Codex prompt must not be empty."}
+        mode = str(kwargs.get("mode") or "analyze").strip().lower()
+        sandbox = {"analyze": "read-only", "edit": "workspace-write"}.get(mode)
+        if sandbox is None:
+            return {"accepted": False, "error": "Codex mode must be analyze or edit."}
+        try:
+            project, cwd = self.service.resolve_project(kwargs.get("project"))
+        except ValueError as exc:
+            return {"accepted": False, "error": str(exc)}
         task = self.service.submit(
             prompt,
             context=context,
-            cwd=_optional_string(kwargs.get("cwd")),
-            model=_optional_string(kwargs.get("model")),
-            sandbox=str(kwargs.get("sandbox") or "read-only"),
-            approval_policy=str(kwargs.get("approval_policy") or "on-request"),
+            cwd=cwd,
+            project=project,
+            sandbox=sandbox,
+            approval_policy=self.service.approval_policy,
         )
         return {
             "accepted": True,

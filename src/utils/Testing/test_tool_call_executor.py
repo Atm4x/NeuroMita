@@ -27,6 +27,9 @@ class _FakeToolManager:
             "dialect": dialect_id,
         }
 
+    def mk_tool_calls_msg(self, dialect_id, calls):
+        return {"role": "assistant", "tool_calls": list(calls), "dialect": dialect_id}
+
     def mk_tool_resp_msg(self, dialect_id, name, result, tool_call_id=None):
         return {
             "role": "tool",
@@ -82,6 +85,125 @@ def test_tool_call_executor_runs_calls_and_merges_usage():
     assert req.messages[-1]["role"] == "tool"
     assert len(seen_messages) == 2
     assert req.depth == 1
+
+
+def test_tool_call_executor_batches_multiple_calls_and_keeps_result_order():
+    manager = _FakeToolManager()
+    req = LLMRequest(
+        model="model",
+        messages=[],
+        provider_name="common",
+        tools_on=True,
+        tools_dialect="openai",
+        tool_manager=manager,
+    )
+    generated = [
+        LLMResponse(
+            text=None,
+            provider_name="common",
+            tool_calls=[
+                ToolCall(id="call-1", name="first", arguments={"value": 1}),
+                ToolCall(id="call-2", name="second", arguments={"value": 2}),
+            ],
+        ),
+        LLMResponse(text="done", provider_name="common"),
+    ]
+
+    response = ToolCallExecutor(max_depth=2).execute_until_final(
+        lambda _req: generated.pop(0),
+        req,
+    )
+
+    assert response.text == "done"
+    assert [item[0] for item in manager.executed] == ["first", "second"]
+    assert req.messages[-3]["role"] == "assistant"
+    assert len(req.messages[-3]["tool_calls"]) == 2
+    assert [item["role"] for item in req.messages[-2:]] == ["tool", "tool"]
+
+
+def test_tool_call_executor_reuses_generated_id_for_assistant_and_tool_messages():
+    manager = _FakeToolManager()
+    req = LLMRequest(
+        model="model",
+        messages=[],
+        provider_name="common",
+        tools_on=True,
+        tools_dialect="openai",
+        tool_manager=manager,
+    )
+    generated = [
+        LLMResponse(
+            text=None,
+            provider_name="common",
+            tool_calls=[ToolCall(id="", name="lookup", arguments={})],
+        ),
+        LLMResponse(text="done", provider_name="common"),
+    ]
+
+    ToolCallExecutor(max_depth=2).execute_until_final(lambda _req: generated.pop(0), req)
+
+    assistant_call_id = req.messages[-2]["tool_calls"][0]["tool_call_id"]
+    tool_call_id = req.messages[-1]["tool_call_id"]
+    assert assistant_call_id
+    assert assistant_call_id == tool_call_id
+
+
+def test_tool_call_executor_rejects_tool_calls_when_tools_are_disabled():
+    manager = _FakeToolManager()
+    req = LLMRequest(
+        model="model",
+        messages=[],
+        provider_name="common",
+        tools_on=False,
+        tool_manager=manager,
+    )
+    generated = [
+        LLMResponse(
+            text=None,
+            provider_name="common",
+            tool_calls=[ToolCall(id="call-1", name="delete_everything", arguments={})],
+        ),
+        LLMResponse(text="recovered", provider_name="common"),
+    ]
+
+    response = ToolCallExecutor(max_depth=2).execute_until_final(
+        lambda _req: generated.pop(0),
+        req,
+    )
+
+    assert response.text == "recovered"
+    assert manager.executed == []
+    assert "disabled" in req.messages[-1]["result"]
+
+
+def test_tool_call_executor_rejects_hallucinated_tool_outside_request_allowlist():
+    manager = _FakeToolManager()
+    req = LLMRequest(
+        model="model",
+        messages=[],
+        provider_name="common",
+        tools_on=True,
+        tools_dialect="openai",
+        tool_manager=manager,
+        allowed_tool_names=frozenset({"allowed"}),
+    )
+    generated = [
+        LLMResponse(
+            text=None,
+            provider_name="common",
+            tool_calls=[ToolCall(id="call-1", name="not_advertised", arguments={})],
+        ),
+        LLMResponse(text="recovered", provider_name="common"),
+    ]
+
+    response = ToolCallExecutor(max_depth=2).execute_until_final(
+        lambda _req: generated.pop(0),
+        req,
+    )
+
+    assert response.text == "recovered"
+    assert manager.executed == []
+    assert "not_advertised" in req.messages[-1]["result"]
 
 
 def test_tool_call_executor_stops_at_depth_limit():

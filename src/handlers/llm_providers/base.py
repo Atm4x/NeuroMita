@@ -91,6 +91,7 @@ class LLMRequest:
     settings: Optional[Any] = None
     depth: int = 0
     tool_manager: Optional[Any] = None
+    allowed_tool_names: Optional[frozenset[str]] = None
 
     structured_model: Optional[Any] = None
 

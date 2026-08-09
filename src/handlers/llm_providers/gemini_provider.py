@@ -24,7 +24,8 @@ from .streaming import StreamAccumulator, iter_json_values, iter_sse_data, track
 class GeminiProvider(BaseProvider):
     name = "gemini"
     priority = 20
-    supports_tools_native = True
+    # Native tool-call parsing is not implemented by this provider yet.
+    supports_tools_native = False
     supports_streaming = True
     supports_streaming_with_tools = False
     tools_dialect_id: str = "gemini"

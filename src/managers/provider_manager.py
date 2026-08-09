@@ -53,17 +53,58 @@ class ProviderManager:
                 return provider
         return None
 
-    def _enforce_capabilities(self, req: LLMRequest) -> None:
+    def _prepare_native_tools(self, req: LLMRequest, provider: BaseProvider) -> None:
+        extra = req.extra or {}
+        if extra.get("event_type") == "mcp_completion":
+            req.tools_on = False
+            req.tools_payload = None
+            req.tools_dialect = None
+            return
+        if not bool(extra.get("tools_requested")):
+            return
+        if not req.tools_on or req.tools_mode != "native":
+            req.tools_payload = None
+            req.tools_dialect = None
+            return
+
+        tool_manager = req.tool_manager
+        dialect_id = str(getattr(provider, "tools_dialect_id", "") or "").strip()
+        if tool_manager is None or not dialect_id:
+            logger.warning("Provider '%s' has no native tool dialect; disabling tools.", provider.name)
+            req.tools_on = False
+            req.tools_payload = None
+            req.tools_dialect = None
+            return
+
+        try:
+            req.tools_payload = tool_manager.get_tools_payload(
+                dialect_id,
+                enabled_names=extra.get("enabled_tool_names"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to build tools for provider '%s': %s", provider.name, exc)
+            req.tools_on = False
+            req.tools_payload = None
+            req.tools_dialect = None
+            return
+        req.tools_dialect = dialect_id
+        req.tools_on = bool(req.tools_payload)
+
+    def _enforce_capabilities(self, req: LLMRequest, provider: BaseProvider) -> None:
         caps = req.capabilities or {}
 
         if "streaming" in caps and not bool(caps.get("streaming")):
             req.stream = False
 
         if req.tools_on and req.tools_mode == "native":
-            if "tools_native" in caps and not bool(caps.get("tools_native")):
+            if not bool(getattr(provider, "supports_tools_native", False)):
+                req.tools_on = False
+            elif "tools_native" in caps and not bool(caps.get("tools_native")):
                 req.tools_on = False
 
-            if req.stream and ("streaming_with_tools" in caps) and not bool(caps.get("streaming_with_tools")):
+            if req.stream and not bool(getattr(provider, "supports_streaming_with_tools", False)):
+                req.stream = False
+            elif req.stream and ("streaming_with_tools" in caps) and not bool(caps.get("streaming_with_tools")):
                 req.stream = False
 
     def generate(self, req: LLMRequest) -> LLMResponse:
@@ -77,7 +118,8 @@ class ProviderManager:
             logger.error(f"No provider registered with name '{req.provider_name}'. {details}")
             raise RuntimeError(f"Provider '{req.provider_name}' is unavailable")
 
-        self._enforce_capabilities(req)
+        self._enforce_capabilities(req, provider)
+        self._prepare_native_tools(req, provider)
 
         trace = {
             "protocol_id": req.protocol_id,

@@ -36,6 +36,7 @@ class MCPServerConfig:
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     profile: str | None = None
+    projects: dict[str, str] = field(default_factory=dict)
     auto_connect: bool = True
     connect_timeout_seconds: float = 15.0
     call_timeout_seconds: float = 120.0
@@ -63,6 +64,7 @@ class MCPServerConfig:
             url=_optional_string(data.get("url")),
             headers=_string_mapping(data.get("headers")),
             profile=_optional_string(data.get("profile")),
+            projects=_string_mapping(data.get("projects")),
             auto_connect=bool(data.get("auto_connect", True)),
             connect_timeout_seconds=_positive_float(data.get("connect_timeout_seconds"), 15.0),
             call_timeout_seconds=_positive_float(data.get("call_timeout_seconds"), 120.0),
@@ -83,6 +85,11 @@ class MCPServerConfig:
             raise MCPConfigurationError(f"MCP stdio server '{self.server_id}' has no command.")
         if transport is MCPTransportKind.STREAMABLE_HTTP and not self.url:
             raise MCPConfigurationError(f"MCP HTTP server '{self.server_id}' has no URL.")
+        for project_id, project_cwd in self.projects.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", str(project_id)):
+                raise MCPConfigurationError("MCP project ids must contain only letters, digits, '_' or '-'.")
+            if not str(project_cwd or "").strip():
+                raise MCPConfigurationError(f"MCP project '{project_id}' has an empty cwd.")
         if not self.allowed_tools:
             raise MCPConfigurationError(f"MCP server '{self.server_id}' must define allowed_tools or '*'.")
         if self.connect_timeout_seconds <= 0 or self.call_timeout_seconds <= 0:
@@ -103,7 +110,11 @@ class MCPServerConfig:
             "command": self.command,
             "args": list(self.args),
             "cwd": self.cwd,
-            "env": dict(self.env),
+            "env": (
+                {key: "<redacted>" for key in self.env}
+                if redact
+                else dict(self.env)
+            ),
             "url": self.url,
             "headers": (
                 {key: "<redacted>" for key in self.headers}
@@ -111,6 +122,7 @@ class MCPServerConfig:
                 else dict(self.headers)
             ),
             "profile": self.profile,
+            "projects": dict(self.projects),
             "auto_connect": self.auto_connect,
             "connect_timeout_seconds": self.connect_timeout_seconds,
             "call_timeout_seconds": self.call_timeout_seconds,

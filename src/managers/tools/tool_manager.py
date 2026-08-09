@@ -130,6 +130,14 @@ class ToolManager:
             return []
         return dialect.build_tools_payload(self._filtered_schema(enabled_names))
 
+    def get_tool_names(self, enabled_names: Optional[List[str]] = None) -> tuple[str, ...]:
+        with self._lock:
+            names = tuple(self._tools)
+        if enabled_names is None:
+            return names
+        enabled = set(enabled_names)
+        return tuple(name for name in names if name in enabled)
+
     def mk_tool_call_msg(
         self,
         dialect_id: str,
@@ -161,6 +169,20 @@ class ToolManager:
             result=result,
             tool_call_id=tool_call_id,
         )
+
+    def mk_tool_calls_msg(self, dialect_id: str, calls: list[dict]) -> dict:
+        dialect = self.dialects.get(dialect_id)
+        if not dialect:
+            raise ValueError(f"Unknown tools dialect: {dialect_id}")
+        return dialect.mk_tool_calls_msg(calls)
+
+    def unregister(self, name: str, *, expected: Tool | None = None) -> bool:
+        with self._lock:
+            current = self._tools.get(name)
+            if current is None or (expected is not None and current is not expected):
+                return False
+            del self._tools[name]
+            return True
 
     def set_char_context(self, char_id: str) -> None:
         """Inject character context without forcing lazy tools to import."""
