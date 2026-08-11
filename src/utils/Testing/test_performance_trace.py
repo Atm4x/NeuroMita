@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import os
+import uuid
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -117,6 +119,22 @@ class PerformanceTraceTests(unittest.TestCase):
         self.assertIn("p95_ms", summary["latency"]["first_visible_text_ms"])
         self.assertIn("llm.total", summary["spans"])
         self.assertIsNotNone(store.snapshot(fresh.trace_id))
+
+    def test_finished_traces_persist_without_conversation_content(self):
+        path = os.path.join(os.getcwd(), f"performance_traces_test_{uuid.uuid4().hex}.json")
+        try:
+            store = PerformanceTraceStore(maxlen=2, storage_path=path)
+            trace = store.start("desktop", attributes={"character_id": "Crazy", "user_input": "secret"})
+            trace.mark("response.generated")
+            store.finish(trace.trace_id)
+
+            reloaded = PerformanceTraceStore(maxlen=2, storage_path=path)
+            snapshot = reloaded.recent(1)[0]
+            self.assertEqual(snapshot["trace_id"], trace.trace_id)
+            self.assertEqual(snapshot["attributes"], {"character_id": "Crazy"})
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 if __name__ == "__main__":

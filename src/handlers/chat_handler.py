@@ -61,6 +61,7 @@ def _save_last_request_context(req, character_name: str = "") -> None:
         messages = redact_image_payloads(getattr(req, "messages", []))
         record = {
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "trace_id": str(getattr(req, "trace_id", "") or ""),
             "model": getattr(req, "model", None),
             "provider_name": getattr(req, "provider_name", None),
             "protocol_id": getattr(req, "protocol_id", None),
@@ -292,6 +293,8 @@ class ChatModel:
                 settings=self.settings,
                 structured_model=structured_model,
             )
+            # This is local debug metadata only; it is not sent to a provider.
+            req.trace_id = trace_id
 
             req.extra["tool_manager"] = self.tool_manager
             req.extra["http_timeout_seconds"] = float(request_timeout)

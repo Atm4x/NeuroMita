@@ -8,12 +8,15 @@ request that is being measured.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from math import ceil
+from pathlib import Path
 from statistics import median
 from threading import RLock
 from typing import Any, Iterator
@@ -188,6 +191,15 @@ class PerformanceTrace:
             with self._lock:
                 self.last_activity_ns = time.perf_counter_ns()
                 self.attributes.update(_safe_attributes({str(key): value}))
+        except Exception:
+            return
+
+    def update_attributes(self, values: dict[str, Any]) -> None:
+        """Merge safe metadata when an earlier trace enters a new pipeline stage."""
+        try:
+            with self._lock:
+                self.last_activity_ns = time.perf_counter_ns()
+                self.attributes.update(_safe_attributes(values))
         except Exception:
             return
 
@@ -368,6 +380,7 @@ class PerformanceTraceStore:
         maxlen: int = 100,
         *,
         active_trace_ttl_sec: float = ACTIVE_TRACE_TTL_SEC,
+        storage_path: str | Path | None = None,
     ) -> None:
         self._maxlen = max(1, int(maxlen))
         try:
@@ -377,6 +390,35 @@ class PerformanceTraceStore:
         self._finished: deque[dict[str, Any]] = deque(maxlen=self._maxlen)
         self._active: dict[str, PerformanceTrace] = {}
         self._lock = RLock()
+        self._storage_path = Path(storage_path) if storage_path else None
+        self._load_finished()
+
+    def _load_finished(self) -> None:
+        if self._storage_path is None:
+            return
+        try:
+            if not self._storage_path.is_file():
+                return
+            raw = json.loads(self._storage_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return
+            self._finished.extend(item for item in raw[-self._maxlen:] if isinstance(item, dict))
+        except Exception:
+            return
+
+    def _save_finished_locked(self) -> None:
+        if self._storage_path is None:
+            return
+        try:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._storage_path.with_suffix(self._storage_path.suffix + ".tmp")
+            temporary.write_text(
+                json.dumps(list(self._finished), ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temporary.replace(self._storage_path)
+        except Exception:
+            return
 
     def _expire_stale_locked(self) -> None:
         """Close abandoned traces without needing a background cleanup thread."""
@@ -395,6 +437,8 @@ class PerformanceTraceStore:
                 continue
             trace.finish("abandoned", error_stage="unknown", error_type="TraceTTLExpired")
             self._finished.append(trace.snapshot())
+        if stale_ids:
+            self._save_finished_locked()
 
     def start(
         self,
@@ -473,6 +517,7 @@ class PerformanceTraceStore:
                 trace.finish(status, error_stage=error_stage, error_type=error_type)
                 snapshot = trace.snapshot()
                 self._finished.append(snapshot)
+                self._save_finished_locked()
             try:
                 logger.debug(format_perf_summary(snapshot))
             except Exception:
@@ -555,11 +600,17 @@ class PerformanceTraceStore:
             with self._lock:
                 self._active.clear()
                 self._finished.clear()
+                self._save_finished_locked()
         except Exception:
             return
 
 
-_STORE = PerformanceTraceStore()
+def _default_storage_path() -> Path | None:
+    base_dir = str(os.environ.get("NEUROMITA_BASE_DIR") or "").strip()
+    return Path(base_dir) / "SavedMessages" / "performance_traces.json" if base_dir else None
+
+
+_STORE = PerformanceTraceStore(storage_path=_default_storage_path())
 
 
 def performance_traces() -> PerformanceTraceStore:

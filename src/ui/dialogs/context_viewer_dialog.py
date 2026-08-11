@@ -28,6 +28,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.performance_trace import performance_traces
+from ui.dialogs.performance_timing_widget import PerformanceTimingPanel
 from utils import getTranslationVariant as _
 
 _ROLE_ICONS = {
@@ -191,6 +193,7 @@ class ContextViewerDialog(QDialog):
         self._data = data
         self._messages: List[Dict] = data.get("messages") or []
         self._initial_tab = str(initial_tab or "request").lower()
+        self._trace_id = str(data.get("trace_id") or "").strip()
         self._highlight_enabled = True
 
         # Отладочная мета по говорящему, параллельная messages (не уходит провайдеру).
@@ -251,7 +254,8 @@ class ContextViewerDialog(QDialog):
         first = self._tree.topLevelItem(0)
         if first:
             self._tree.setCurrentItem(first)
-        self._tabs.setCurrentIndex(1 if self._initial_tab == "response" else 0)
+        initial_index = {"request": 0, "response": 1, "timing": 2}.get(self._initial_tab, 0)
+        self._tabs.setCurrentIndex(initial_index)
 
     # ─────────────────────────────────── UI build ────────────────────────────────
 
@@ -265,6 +269,12 @@ class ContextViewerDialog(QDialog):
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_request_tab(), _("Запрос", "Request"))
         self._tabs.addTab(self._build_response_tab(), _("Ответ", "Response"))
+        self._timing_panel = PerformanceTimingPanel(
+            self._timing_snapshot,
+            lambda: performance_traces().recent(100),
+            self,
+        )
+        self._tabs.addTab(self._timing_panel, _("Время", "Timing"))
         root.addWidget(self._tabs, stretch=1)
 
         # Кнопки внизу
@@ -301,6 +311,27 @@ class ContextViewerDialog(QDialog):
         btn_row.addWidget(close_btn)
 
         root.addLayout(btn_row)
+
+        self._timing_timer = QTimer(self)
+        self._timing_timer.setInterval(500)
+        self._timing_timer.timeout.connect(self._refresh_timing_if_active)
+        self._timing_timer.start()
+
+    def _timing_snapshot(self) -> dict[str, Any] | None:
+        embedded = self._data.get("performance_trace")
+        if isinstance(embedded, dict):
+            return dict(embedded)
+        return performance_traces().snapshot(self._trace_id) if self._trace_id else None
+
+    def _refresh_timing_if_active(self) -> None:
+        snapshot = self._timing_snapshot()
+        if snapshot is None:
+            self._timing_timer.stop()
+            return
+        if str(snapshot.get("status") or "") != "active":
+            self._timing_timer.stop()
+        if self._tabs.currentWidget() is self._timing_panel:
+            self._timing_panel.refresh()
 
     def _build_request_tab(self) -> QWidget:
         tab = QWidget()

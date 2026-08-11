@@ -86,6 +86,7 @@ class FineTuneCollector:
             record: Dict[str, Any] = {
                 "id": sample_id,
                 "timestamp": now.isoformat(),
+                "trace_id": str(getattr(req, "trace_id", "") or ""),
                 "character_id": character_id,
                 "character_name": character_name,
                 "model": getattr(req, "model", None),

@@ -708,23 +708,32 @@ class ChatController:
 
     def _ensure_perf_trace(self, data: dict) -> str:
         trace_id = str(data.get("trace_id") or "").strip() or None
-        if trace_id and get_trace(trace_id) is not None:
-            return trace_id
+        attributes = self._perf_trace_attributes(data)
+        if trace_id:
+            trace = get_trace(trace_id)
+            if trace is not None:
+                trace.update_attributes(attributes)
+                perf_mark_once(trace_id, "chat.received")
+                return trace_id
         trace = performance_traces().start(
             source=self._resolve_perf_source(data),
             trace_id=trace_id,
-            attributes={
-                "event_type": str(data.get("event_type") or "chat"),
-                "character_id": str(self._normalize_character_id(data) or ""),
-                "req_id": str(data.get("req_id") or ""),
-                "task_uid": str(data.get("task_uid") or ""),
-                "streaming": bool(self.settings.get("ENABLE_STREAMING", False)),
-                "voice_method": str(self.settings.get("VOICEOVER_METHOD", "") or ""),
-                "input_chars": len(str(data.get("user_input") or "")),
-                "image_count": len(data.get("image_data") or []) if isinstance(data.get("image_data"), list) else 0,
-            },
+            attributes=attributes,
         )
+        perf_mark_once(trace.trace_id, "chat.received")
         return trace.trace_id
+
+    def _perf_trace_attributes(self, data: dict) -> dict:
+        return {
+            "event_type": str(data.get("event_type") or "chat"),
+            "character_id": str(self._normalize_character_id(data) or ""),
+            "req_id": str(data.get("req_id") or ""),
+            "task_uid": str(data.get("task_uid") or ""),
+            "streaming": bool(self.settings.get("ENABLE_STREAMING", False)),
+            "voice_method": str(self.settings.get("VOICEOVER_METHOD", "") or ""),
+            "input_chars": len(str(data.get("user_input") or "")),
+            "image_count": len(data.get("image_data") or []) if isinstance(data.get("image_data"), list) else 0,
+        }
 
     @staticmethod
     def _resolve_perf_source(data: dict) -> str:

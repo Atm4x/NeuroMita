@@ -259,6 +259,28 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
         self.assertEqual(snapshot["status"], "ok")
         self.assertIn("response.generated", [mark["name"] for mark in snapshot["marks"]])
 
+    def test_existing_asr_trace_is_enriched_when_it_enters_chat(self):
+        bus = _Bus()
+        controller = self._chat_controller(_Settings({"ENABLE_STREAMING": True, "VOICEOVER_METHOD": "Local"}), bus)
+        trace = performance_traces().start("asr", attributes={"engine": "whisper"})
+
+        trace_id = controller._ensure_perf_trace({
+            "trace_id": trace.trace_id,
+            "event_type": "chat",
+            "character_id": "Crazy",
+            "req_id": "req-1",
+            "user_input": "voice input",
+            "image_data": [],
+        })
+
+        snapshot = performance_traces().snapshot(trace_id)
+        self.assertEqual(trace_id, trace.trace_id)
+        self.assertEqual(snapshot["source"], "asr")
+        self.assertEqual(snapshot["attributes"]["engine"], "whisper")
+        self.assertEqual(snapshot["attributes"]["character_id"], "Crazy")
+        self.assertEqual(snapshot["attributes"]["req_id"], "req-1")
+        self.assertIn("chat.received", [mark["name"] for mark in snapshot["marks"]])
+
     def test_chat_exception_finishes_error_and_pool_rejection_finishes_rejected(self):
         bus = _Bus()
         services().register(
