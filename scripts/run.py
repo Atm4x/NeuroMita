@@ -18,8 +18,9 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -149,9 +150,129 @@ def _base_env() -> dict[str, str]:
     return env
 
 
+def _subst_executable() -> str:
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    candidate = system_root / "System32" / "subst.exe"
+    return str(candidate) if candidate.is_file() else "subst.exe"
+
+
+def _run_subst(*arguments: str) -> int | None:
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        return subprocess.run([_subst_executable(), *arguments], **kwargs).returncode
+    except OSError:
+        return None
+
+
+@contextmanager
+def _execution_root() -> Iterator[Path]:
+    """Expose ROOT through a temporary ASCII-only drive when Windows needs it."""
+    root = ROOT.resolve()
+    if os.name != "nt" or str(root).isascii():
+        yield root
+        return
+
+    for letter in "ZYXWVUTSRQPONMLKJIHGFED":
+        drive = f"{letter}:"
+        if drive.casefold() == root.drive.casefold() or Path(f"{drive}\\").exists():
+            continue
+        if _run_subst(drive, str(root)) != 0:
+            continue
+        try:
+            yield Path(f"{drive}\\")
+        finally:
+            _run_subst(drive, "/D")
+        return
+
+    log(
+        "Could not create a temporary ASCII drive alias for the launcher path; "
+        "continuing with the original path."
+    )
+    yield root
+
+
+def _rebase_path_for_execution(
+    value: Any,
+    *,
+    root: Path,
+    execution_root: Path,
+) -> Any:
+    try:
+        raw_value = os.fspath(value)
+    except TypeError:
+        return value
+    if isinstance(raw_value, bytes) or not raw_value:
+        return raw_value
+
+    candidate = Path(raw_value)
+    if not candidate.is_absolute():
+        return raw_value
+    try:
+        relative = candidate.resolve().relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return raw_value
+    return str(execution_root / relative)
+
+
+def _rebase_environment_for_execution(
+    env: dict[str, str],
+    *,
+    root: Path,
+    execution_root: Path,
+) -> dict[str, str]:
+    rebased = dict(env)
+    single_path_keys = (
+        "NEUROMITA_BASE_DIR",
+        "NEUROMITA_RUNTIME_ROOT",
+        "NEUROMITA_CORE_DIR",
+        "NEUROMITA_LIB_DIR",
+        "NEUROMITA_ENVIRONMENT_DIR",
+    )
+    for key in single_path_keys:
+        if key in rebased:
+            rebased[key] = _rebase_path_for_execution(
+                rebased[key], root=root, execution_root=execution_root
+            )
+
+    python_path = rebased.get("PYTHONPATH")
+    if python_path:
+        rebased["PYTHONPATH"] = os.pathsep.join(
+            _rebase_path_for_execution(item, root=root, execution_root=execution_root)
+            for item in python_path.split(os.pathsep)
+        )
+    return rebased
+
+
+def _rebase_command_for_execution(
+    cmd: list[Any],
+    *,
+    root: Path,
+    execution_root: Path,
+) -> list[Any]:
+    return [
+        _rebase_path_for_execution(item, root=root, execution_root=execution_root)
+        for item in cmd
+    ]
+
+
 def run(cmd: list[Any], *, env: dict[str, str] | None = None) -> int:
     log("\n>>> " + " ".join(str(c) for c in cmd))
-    return subprocess.run(cmd, cwd=str(ROOT), env=env or _base_env()).returncode
+    root = ROOT.resolve()
+    with _execution_root() as execution_root:
+        return subprocess.run(
+            _rebase_command_for_execution(
+                cmd, root=root, execution_root=execution_root
+            ),
+            cwd=str(execution_root),
+            env=_rebase_environment_for_execution(
+                env or _base_env(), root=root, execution_root=execution_root
+            ),
+        ).returncode
 
 
 def _normalize_child_exit_code(code: int, *, windows: bool | None = None) -> int:
@@ -177,14 +298,20 @@ def run_quiet(
     timeout: float = 8.0,
 ) -> bool:
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env or _base_env(),
-            timeout=max(0.1, float(timeout)),
-        )
+        root = ROOT.resolve()
+        with _execution_root() as execution_root:
+            result = subprocess.run(
+                _rebase_command_for_execution(
+                    cmd, root=root, execution_root=execution_root
+                ),
+                cwd=str(execution_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=_rebase_environment_for_execution(
+                    env or _base_env(), root=root, execution_root=execution_root
+                ),
+                timeout=max(0.1, float(timeout)),
+            )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0

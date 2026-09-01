@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -54,6 +55,55 @@ def test_launcher_normalizes_unsigned_windows_negative_exit_code() -> None:
     assert launcher._normalize_child_exit_code(0xFFFFFFFF, windows=True) == 1
     assert launcher._normalize_child_exit_code(42, windows=True) == 42
     assert launcher._normalize_child_exit_code(0, windows=True) == 0
+
+
+def test_launcher_rebases_unicode_root_paths_to_ascii_execution_alias(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    launcher = _load_launcher()
+    root = tmp_path / "\u043a\u0438\u0440\u0438\u043b\u043b\u0438\u0446\u0430"
+    interpreter = root / "libs" / "python" / "python.exe"
+    target = root / "Lib" / "core"
+    captured: dict[str, object] = {}
+
+    @contextmanager
+    def ascii_alias():
+        yield Path(r"R:\\")
+
+    class Result:
+        returncode = 0
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        captured["env"] = kwargs["env"]
+        return Result()
+
+    monkeypatch.setattr(launcher, "ROOT", root)
+    monkeypatch.setattr(launcher, "_execution_root", ascii_alias)
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+
+    assert launcher.run(
+        [str(interpreter), "-m", "pip", "install", "--target", str(target)],
+        env={
+            "PYTHONPATH": str(target),
+            "NEUROMITA_RUNTIME_ROOT": str(root / "Lib"),
+        },
+    ) == 0
+    assert captured["command"] == [
+        "R:\\libs\\python\\python.exe",
+        "-m",
+        "pip",
+        "install",
+        "--target",
+        "R:\\Lib\\core",
+    ]
+    assert captured["cwd"] == "R:\\"
+    assert captured["env"] == {
+        "PYTHONPATH": "R:\\Lib\\core",
+        "NEUROMITA_RUNTIME_ROOT": "R:\\Lib",
+    }
 
 
 def test_uv_requirements_install_targets_explicit_core(tmp_path, monkeypatch) -> None:
