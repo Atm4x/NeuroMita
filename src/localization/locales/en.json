@@ -924,7 +924,7 @@
   "Найдены потенциальные дубли:": "Potential duplicates found:",
   "Найти дубли (превью)": "Find duplicates (preview)",
   "Найти осиротевшие файлы": "Find orphaned files",
-  "Напиши что-нибудь Crazy Mita…": "Write something to Mita…",
+  "Напиши что-нибудь Мите…": "Write something to Mita…",
   "Напоминания": "Reminders",
   "Насколько похожими должны быть тексты (Jaccard по токенам), чтобы считать их дублями. Выше — строже (только почти идентичные), ниже — агрессивнее склеивает. По умолчанию 0.8.": "How similar two texts must be (token Jaccard) to be treated as duplicates. Higher = stricter (near-identical only), lower = merges more aggressively. Default 0.8.",
   "Настроить pipeline": "Configure pipeline",

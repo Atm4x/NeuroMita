@@ -985,7 +985,7 @@
   "Найдены потенциальные дубли:": "Potansiyel kopyalar:",
   "Найти дубли (превью)": "Kopyalari bul (onizleme)",
   "Найти осиротевшие файлы": "Yetim dosyalari bul",
-  "Напиши что-нибудь Crazy Mita…": "Crazy Mita'ya bir şey yaz…",
+  "Напиши что-нибудь Мите…": "Mita'ya bir şey yaz…",
   "Напоминания": "Animsaticilar",
   "Насколько может отклоняться длина диалога NPC без участия игрока": "NPC diyalog sapması.",
   "Насколько похожими должны быть тексты (Jaccard по токенам), чтобы считать их дублями. Выше — строже (только почти идентичные), ниже — агрессивнее склеивает. По умолчанию 0.8.": "Metinlerin yineleme sayılması için ne kadar benzer olması gerektiği (token Jaccard). Daha yüksek değer daha katıdır (yalnızca neredeyse aynı olanlar), daha düşük değer daha agresif birleştirir. Varsayılan 0,8'dir.",

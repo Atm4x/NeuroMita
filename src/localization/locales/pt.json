@@ -990,7 +990,7 @@
   "Найдены потенциальные дубли:": "Possíveis duplicatas encontradas:",
   "Найти дубли (превью)": "Encontrar duplicatas (prévia)",
   "Найти осиротевшие файлы": "Encontrar arquivos órfãos",
-  "Напиши что-нибудь Crazy Mita…": "Write something para Mita…",
+  "Напиши что-нибудь Мите…": "Write something para Mita…",
   "Напоминания": "Lembretes",
   "Насколько может отклоняться длина диалога NPC без участия игрока": "O quanto a duração do diálogo NPC pode variar sem participação do jogador",
   "Насколько похожими должны быть тексты (Jaccard по токенам), чтобы считать их дублями. Выше — строже (только почти идентичные), ниже — агрессивнее склеивает. По умолчанию 0.8.": "How semelhante two textos must be (token Jaccard) para be treated as duplicados. Higher = stricter (near-identical apenas), lower = merges more aggressively. Padrao 0.8.",
