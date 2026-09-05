@@ -987,8 +987,14 @@ class PromptController(PromptBuilderService):
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })
+
+        messages.extend(history_limited)
+
+        # These blocks are model-produced data, never system instructions. Put
+        # them after the stable summary/history prefix so their frequent updates
+        # do not invalidate provider prompt caching for the dialogue itself.
         if working_state_context:
-            messages.append({"role": "system", "content": working_state_context})
+            messages.append({"role": "assistant", "content": working_state_context})
 
         action_context = ""
         if bool(capabilities.get("action_memory", False)):
@@ -997,9 +1003,7 @@ class PromptController(PromptBuilderService):
             except Exception:
                 action_context = ""
         if action_context:
-            messages.append({"role": "system", "content": action_context})
-
-        messages.extend(history_limited)
+            messages.append({"role": "assistant", "content": action_context})
 
         dialogue_context_message = None
         dialogue = request.dialogue

@@ -14,6 +14,7 @@ from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
 from core.message_content import MessageContentCodec
 from managers.action_memory import (
+    cap_requested_actions,
     render_requested_actions,
     requested_actions_from_messages,
 )
@@ -70,6 +71,7 @@ class HistoryController(HistoryService):
         # Счётчик сообщений на персонажа для фоновой ревизии памяти (08 P1).
         self._messages_since_last_maintenance: Dict[str, int] = {}
         self._maintenance_inflight: set[str] = set()
+        self._action_memory_cap_warnings: set[str] = set()
         self._closed = False
 
         services().register(HistoryService, self, replace=True)
@@ -146,6 +148,7 @@ class HistoryController(HistoryService):
             self._compression_cooldowns.pop(char_id, None)
             self._messages_since_last_periodic_compression.pop(char_id, None)
             self._messages_since_last_maintenance.pop(char_id, None)
+            self._action_memory_cap_warnings.discard(char_id)
         if timer is not None:
             timer.cancel()
         logger.info(f"[HistoryController][{char_id}] История сброшена: отложенное сжатие снято.")
@@ -228,6 +231,20 @@ class HistoryController(HistoryService):
             value = 4
         return max(1, min(20, value))
 
+    def _action_memory_emergency_max_records(self) -> int:
+        try:
+            value = int(self._get_setting("ACTION_MEMORY_EMERGENCY_MAX_RECORDS", 80) or 80)
+        except (TypeError, ValueError):
+            value = 80
+        return max(1, min(1000, value))
+
+    def _action_memory_emergency_max_chars(self) -> int:
+        try:
+            value = int(self._get_setting("ACTION_MEMORY_EMERGENCY_MAX_CHARS", 8000) or 8000)
+        except (TypeError, ValueError):
+            value = 8000
+        return max(200, min(100_000, value))
+
     def _load_retained_action_requests(self, character) -> list[str]:
         try:
             raw = character.get_variable(self._ACTION_MEMORY_RETAINED_VAR, "[]")
@@ -253,6 +270,26 @@ class HistoryController(HistoryService):
             return ""
         records = self._load_retained_action_requests(character)
         records.extend(requested_actions_from_messages(unsummarized_history))
+        records, capped = cap_requested_actions(
+            records,
+            max_records=self._action_memory_emergency_max_records(),
+            max_chars=self._action_memory_emergency_max_chars(),
+        )
+        char_id = str(getattr(character, "char_id", "") or "")
+        warned = getattr(self, "_action_memory_cap_warnings", None)
+        if warned is None:
+            warned = set()
+            self._action_memory_cap_warnings = warned
+        if capped:
+            if char_id not in warned:
+                logger.warning(
+                    "[HistoryController][%s] Action memory emergency cap reached; "
+                    "waiting for a successful summary to compact it normally.",
+                    char_id or "Unknown",
+                )
+                warned.add(char_id)
+        else:
+            warned.discard(char_id)
         return render_requested_actions(records)
 
     def _next_retained_action_requests(

@@ -181,6 +181,7 @@ class PromptSystemStateTests(unittest.TestCase):
         state_index = enabled_contents.index(next(c for c in enabled_contents if c.startswith("[WORKING STATE]")))
         self.assertLess(protocol_index, state_index)
         self.assertLess(state_index, len(enabled_contents) - 1)
+        self.assertEqual(enabled.messages[state_index]["role"], "assistant")
 
         disabled = controller.build(PromptBuildRequest(
             character=_Character(),

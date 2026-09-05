@@ -9,7 +9,11 @@ if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from controllers.history_controller import HistoryController
-from managers.action_memory import requested_actions_from_structured, render_requested_actions
+from managers.action_memory import (
+    cap_requested_actions,
+    requested_actions_from_structured,
+    render_requested_actions,
+)
 from managers.working_state_manager import WorkingStateManager
 from schemas.structured_response import StructuredResponse, WorkingState
 
@@ -59,7 +63,26 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
         ])
         rendered = render_requested_actions(records)
         self.assertIn("[REQUESTED ACTIONS BY YOU]", rendered)
+        self.assertIn("chronological order", rendered)
         self.assertNotIn("performed", rendered.lower())
+
+    def test_action_emergency_cap_preserves_newest_suffix(self):
+        records, capped = cap_requested_actions(
+            ["animation: Dance_01", "animation: Dance_02", "animation: Dance_03"],
+            max_records=2,
+            max_chars=200,
+        )
+        self.assertTrue(capped)
+        self.assertEqual(records, ["animation: Dance_02", "animation: Dance_03"])
+
+        records, capped = cap_requested_actions(
+            ["x" * 300],
+            max_records=10,
+            max_chars=200,
+        )
+        self.assertTrue(capped)
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0].endswith("… [truncated]"))
 
     def test_action_tail_changes_only_when_summary_commits(self):
         controller = HistoryController.__new__(HistoryController)

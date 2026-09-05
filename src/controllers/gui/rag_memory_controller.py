@@ -728,6 +728,24 @@ def _build_memory_limits_config(self) -> list:
              'Только при успешной сводке старое схлопывается, и остаётся этот хвост последних действий.',
              'Between compressions the list is append-only, so the window does not shift every turn. '
              'Only a successful summary compacts old entries and keeps this final action tail.')},
+        {'label': _('Аварийный лимит действий (записей)', 'Emergency action limit (records)'),
+         'key': 'ACTION_MEMORY_EMERGENCY_MAX_RECORDS', 'type': 'entry', 'default': 80,
+         'validation': self.validate_positive_integer,
+         'depends_on': 'ENABLE_ACTION_MEMORY',
+         'tooltip': _(
+             'Предохранитель на случай отключённого или постоянно падающего сжатия. При достижении сохраняется '
+             'самый новый хвост, а в лог пишется предупреждение. В обычном режиме не должен срабатывать.',
+             'Safety guard for disabled or repeatedly failing compression. On overflow it keeps the newest suffix '
+             'and writes a warning to the log. It should not trigger in normal operation.')},
+        {'label': _('Аварийный лимит действий (символы)', 'Emergency action limit (chars)'),
+         'key': 'ACTION_MEMORY_EMERGENCY_MAX_CHARS', 'type': 'entry', 'default': 8000,
+         'validation': self.validate_positive_integer,
+         'depends_on': 'ENABLE_ACTION_MEMORY',
+         'tooltip': _(
+             'Второй предохранитель для длинных команд и intent payload. Обычное сжатие по-прежнему сохраняет '
+             'только хвост после summary; этот лимит нужен лишь чтобы prompt не рос бесконечно.',
+             'Second safety guard for long commands and intent payloads. Normal summary retention still owns the '
+             'ordinary tail; this limit only prevents unbounded prompt growth.')},
 
         {'label': _('Гигиена памяти', 'Memory hygiene'), 'type': 'subsection'},
         {'label': _('Дедуп при добавлении', 'Deduplicate on insert'),

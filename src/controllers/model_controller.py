@@ -2120,21 +2120,6 @@ class ModelController(GenerationService, ModelStateService):
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
             )
-            if effective_capabilities.get("working_state", False):
-                try:
-                    if structured.working_state is None:
-                        char.working_state.clear()
-                    else:
-                        char.working_state.update(
-                            structured.working_state,
-                            max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        "[ModelController][%s] Failed to update working state: %s",
-                        char_id,
-                        format_exception(exc),
-                    )
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
@@ -2192,6 +2177,25 @@ class ModelController(GenerationService, ModelStateService):
                 voice_profile=voice_profile,
                 dialogue=dialogue,
             )
+
+        # A tool-call response is only an intermediate turn. Commit its working
+        # state only when this is the final answer, so failed tools cannot leave
+        # a stale plan for the next player message.
+        if capabilities.get("working_state", False):
+            try:
+                if structured.working_state is None:
+                    char.working_state.clear()
+                else:
+                    char.working_state.update(
+                        structured.working_state,
+                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[ModelController][%s] Failed to update working state: %s",
+                    char_id,
+                    format_exception(exc),
+                )
 
         # Extract reasoning from structured response (if model used the reasoning field)
         if structured.reasoning:
@@ -2370,6 +2374,9 @@ class ModelController(GenerationService, ModelStateService):
         # Build first response result dict
         result_dict = structured_response_to_result_dict(structured)
         result_dict.pop("reasoning", None)
+        # Tool calls are intermediate responses too; working state must stay
+        # private and be committed only by the final response in the chain.
+        result_dict.pop("working_state", None)
         result_dict["_raw_json"] = visible_raw
         first_text = result_dict.get("response", "")
 

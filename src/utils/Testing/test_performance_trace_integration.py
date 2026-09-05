@@ -28,7 +28,7 @@ from managers.api_preset_resolver import PresetSettings
 from managers.llm_request_runner import LLMRequestRunner
 from managers.tools.base import Tool
 from managers.tools.tool_manager import ToolManager
-from schemas.structured_response import ResponseSegment, StructuredResponse, ToolCall
+from schemas.structured_response import ResponseSegment, StructuredResponse, ToolCall, WorkingState
 from services.contracts import (
     CharacterRegistry,
     ChatGenerationRequest,
@@ -407,6 +407,7 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
         structured = StructuredResponse(
             segments=[ResponseSegment(text="Checking")],
             tool_call=ToolCall(name="calculator", args={"value": 41}),
+            working_state=WorkingState(focus="Calculate the requested value"),
         )
         result = ModelController._handle_tool_call(
             harness,
@@ -438,6 +439,12 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
             trace_id=trace.trace_id,
         )
         self.assertEqual(result.text, "done")
+        first_response = next(
+            payload
+            for name, payload in harness.event_bus.events
+            if name == Events.GUI.UPDATE_CHAT_UI
+        )
+        self.assertNotIn("working_state", first_response["structured_data"])
         snapshot = performance_traces().finish(trace.trace_id)
         llm_spans = [span for span in snapshot["spans"] if span["name"] == "llm.total"]
         self.assertEqual(len(llm_spans), 1)

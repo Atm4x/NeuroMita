@@ -144,6 +144,7 @@ _SECTION_STYLE = {
     "world":       ("fa6s.house", "#4ADE80"),
     "environment": ("fa6s.leaf", "#2DD4BF"),
     "game":        ("fa6s.gamepad", "#4ADE80"),
+    "action":      ("fa6s.bolt", "#F59E0B"),
     "default":     ("fa6s.tag", "#9CA3AF"),
 }
 # Заголовок-строка целиком: <tag> / </tag> либо [Header].
@@ -168,6 +169,9 @@ _SECTION_TO_GROUP = {
     "tools": "prompt",               # каталог [Available Tools] — статика промпта
     "Unity contract": "prompt",      # статический контракт Unity в статике промпта
     "history": "history",
+    "working state protocol": "prompt",
+    "working state": "context",
+    "requested actions": "context",
     "user input": "input",
     "system input": "context",
     "NeuroMita World State": "context",
@@ -1355,6 +1359,8 @@ class ContextViewerDialog(QDialog):
             cat = "entity"
         elif "behavior" in key or "behaviour" in key:
             cat = "behavior"
+        elif "action" in key:
+            cat = "action"
         elif "participant" in key:
             cat = "participant"
         # Unity/MiSide-блоки распознаём до generic "state"/"game": и

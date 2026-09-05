@@ -70,4 +70,48 @@ def render_requested_actions(records: list[str]) -> str:
     clean = [str(record).strip() for record in records or [] if str(record).strip()]
     if not clean:
         return ""
-    return "[REQUESTED ACTIONS BY YOU]\n" + "\n".join(f"- {record}" for record in clean) + "\n[/REQUESTED ACTIONS BY YOU]"
+    return (
+        "[REQUESTED ACTIONS BY YOU]\n"
+        "Your previous structured action requests, in chronological order (oldest to newest). "
+        "They do not confirm that Unity executed them; later requests can supersede earlier ones.\n"
+        + "\n".join(f"- {record}" for record in clean)
+        + "\n[/REQUESTED ACTIONS BY YOU]"
+    )
+
+
+def cap_requested_actions(
+    records: list[str],
+    *,
+    max_records: int,
+    max_chars: int,
+) -> tuple[list[str], bool]:
+    """Emergency-only cap that preserves the newest chronological suffix.
+
+    Normal retention is intentionally controlled by history summarization. This
+    guard only prevents unlimited prompt growth when compression is disabled or
+    unable to commit for a long time.
+    """
+    clean = [str(record).strip() for record in records or [] if str(record).strip()]
+    max_records = max(1, int(max_records or 1))
+    max_chars = max(200, int(max_chars or 200))
+    capped = len(clean) > max_records
+    if capped:
+        clean = clean[-max_records:]
+
+    selected: list[str] = []
+    used_chars = 0
+    for record in reversed(clean):
+        record_chars = len(record) + 3  # bullet and newline in rendered form
+        if used_chars + record_chars <= max_chars:
+            selected.append(record)
+            used_chars += record_chars
+            continue
+
+        capped = True
+        if not selected:
+            suffix = "… [truncated]"
+            selected.append(record[: max(1, max_chars - len(suffix))].rstrip() + suffix)
+        break
+
+    selected.reverse()
+    return selected, capped
