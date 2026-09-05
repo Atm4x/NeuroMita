@@ -14,9 +14,11 @@ from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
 from core.message_content import MessageContentCodec
 from managers.action_memory import (
+    append_requested_actions,
     cap_requested_actions,
     render_requested_actions,
     requested_actions_from_messages,
+    requested_actions_from_structured,
 )
 from core.response_status import response_status_kind
 from core.services import services, use
@@ -189,10 +191,7 @@ class HistoryController(HistoryService):
         # того, что фоновое сжатие ещё не догнало историю.
         summary_cut = self._summary_cut_index(character, llm_messages_history)
         unsummarized_history = llm_messages_history[summary_cut:]
-        action_context = self._build_action_memory_context(
-            character,
-            unsummarized_history,
-        )
+        action_context = self._build_action_memory_context(character)
         window_overflow, history_limited = self._split_history_by_dialog_limit(
             unsummarized_history,
             effective_limit,
@@ -258,18 +257,16 @@ class HistoryController(HistoryService):
     def _build_action_memory_context(
         self,
         character,
-        unsummarized_history: List[Dict[str, Any]],
     ) -> str:
-        """Keep an append-only action suffix until a summary commits.
+        """Render only the retained bridge across the summary boundary.
 
-        ``structured_data`` remains the source of truth. The only persisted
-        derivative is the small tail that survived the previous summary, so
-        rolling prompt windows never discard an action on every request.
+        Actions of unsummarized assistant turns stay attached to their original
+        reply in ``_sanitize_history_for_llm``. The only separate derivative is
+        this small tail from turns that were successfully summarized.
         """
         if not self._action_memory_enabled():
             return ""
         records = self._load_retained_action_requests(character)
-        records.extend(requested_actions_from_messages(unsummarized_history))
         records, capped = cap_requested_actions(
             records,
             max_records=self._action_memory_emergency_max_records(),
@@ -283,7 +280,7 @@ class HistoryController(HistoryService):
         if capped:
             if char_id not in warned:
                 logger.warning(
-                    "[HistoryController][%s] Action memory emergency cap reached; "
+                    "[HistoryController][%s] Retained action bridge emergency cap reached; "
                     "waiting for a successful summary to compact it normally.",
                     char_id or "Unknown",
                 )
@@ -1808,6 +1805,15 @@ class HistoryController(HistoryService):
                 continue
 
             content = m.get("content")
+
+            # While a turn remains in the recent history, actions belong to
+            # that exact assistant reply. Do not persist this derived text:
+            # structured_data remains the source of truth in the database.
+            if role == "assistant" and self._action_memory_enabled():
+                content = append_requested_actions(
+                    content,
+                    requested_actions_from_structured(m.get("structured_data")),
+                )
 
             speaker = str(m.get("speaker") or m.get("sender") or ("Player" if role == "user" else owner_id) or "Player")
             target = str(m.get("target") or "Player")

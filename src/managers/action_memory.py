@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.message_content import MessageContentCodec
+
 
 _SEGMENT_ACTION_FIELDS = (
     ("emotions", "emotion"),
@@ -71,12 +73,32 @@ def render_requested_actions(records: list[str]) -> str:
     if not clean:
         return ""
     return (
-        "[REQUESTED ACTIONS BY YOU]\n"
-        "Your previous structured action requests, in chronological order (oldest to newest). "
-        "They do not confirm that Unity executed them; later requests can supersede earlier ones.\n"
+        "[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n"
+        "Structured action requests from earlier assistant turns now absorbed by the history summary, "
+        "in chronological order (oldest to newest). They do not confirm that Unity executed them; "
+        "later requests can supersede earlier ones.\n"
         + "\n".join(f"- {record}" for record in clean)
-        + "\n[/REQUESTED ACTIONS BY YOU]"
+        + "\n[/RECENT ACTIONS BEFORE SUMMARY BOUNDARY]"
     )
+
+
+def append_requested_actions(content: Any, records: list[str]) -> Any:
+    """Project one assistant turn's structured actions into its LLM-facing text.
+
+    This is deliberately a prompt-only projection: the persisted message keeps
+    its original content and ``structured_data`` remains the source of truth.
+    """
+    clean = [str(record).strip() for record in records or [] if str(record).strip()]
+    if not clean:
+        return content
+    block = (
+        "[REQUESTED ACTIONS THIS TURN]\n"
+        "Requested structured actions for this reply; Unity execution is not confirmed.\n"
+        + "\n".join(f"- {record}" for record in clean)
+        + "\n[/REQUESTED ACTIONS THIS TURN]"
+    )
+    separator = "\n\n" if MessageContentCodec.has_visible_content(content) else ""
+    return MessageContentCodec.append_text(content, separator + block)
 
 
 def cap_requested_actions(

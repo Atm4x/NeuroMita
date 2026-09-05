@@ -943,6 +943,7 @@ class PromptController(PromptBuilderService):
 
         history_limited: List[Dict[str, Any]] = []
         history_summary: str = ""
+        action_context: str = ""
         last_message_at: datetime.datetime | None = None
         if policy.use_history_in_prompt:
             prepared = use(HistoryService).prepare_for_prompt(
@@ -954,6 +955,8 @@ class PromptController(PromptBuilderService):
             )
             history_limited = list(prepared.messages)
             history_summary = prepared.summary.strip()
+            if bool(capabilities.get("action_memory", False)):
+                action_context = str(getattr(prepared, "action_context", "") or "")
             last_message_at = prepared.last_message_at
 
         for s in dsl_system_infos:
@@ -988,6 +991,12 @@ class PromptController(PromptBuilderService):
                 ),
             })
 
+        # Unlike live-turn actions, this small bridge contains only action
+        # requests whose source turns were already summarized. It changes only
+        # on a successful summary commit, so it remains a cache-stable prefix.
+        if action_context:
+            messages.append({"role": "assistant", "content": action_context})
+
         messages.extend(history_limited)
 
         # These blocks are model-produced data, never system instructions. Put
@@ -995,15 +1004,6 @@ class PromptController(PromptBuilderService):
         # do not invalidate provider prompt caching for the dialogue itself.
         if working_state_context:
             messages.append({"role": "assistant", "content": working_state_context})
-
-        action_context = ""
-        if bool(capabilities.get("action_memory", False)):
-            try:
-                action_context = str(getattr(prepared, "action_context", "") or "")
-            except Exception:
-                action_context = ""
-        if action_context:
-            messages.append({"role": "assistant", "content": action_context})
 
         dialogue_context_message = None
         dialogue = request.dialogue

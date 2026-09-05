@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_SRC = Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
@@ -15,6 +16,7 @@ from managers.game_state_manager import GameState
 from core.request_policy import RequestPolicy
 from services.contracts import (
     PlayerMessageSource,
+    PreparedHistory,
     PromptBuildRequest,
     parse_dialogue_turn_context,
 )
@@ -191,6 +193,43 @@ class PromptSystemStateTests(unittest.TestCase):
             capabilities={"structured_output": True, "working_state": False},
         ))
         self.assertFalse(any("[WORKING STATE" in m.get("content", "") for m in disabled.messages))
+
+    def test_retained_actions_precede_the_live_history(self):
+        class _Character:
+            char_id = "Test"
+
+            def get_variable(self, _name, default=None):
+                return default
+
+        class _History:
+            @staticmethod
+            def prepare_for_prompt(**_kwargs):
+                return PreparedHistory(
+                    messages=[{"role": "assistant", "content": "Recent Mita reply"}],
+                    summary="Older dialogue",
+                    action_context="[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07",
+                )
+
+        controller = PromptController()
+        controller._build_system_messages = lambda *_args, **_kwargs: ([], [], [])
+        controller._build_system_state_message = lambda: {"role": "system", "content": "[system state]"}
+        with patch("controllers.prompt_controller.use", return_value=_History()):
+            result = controller.build(PromptBuildRequest(
+                character=_Character(),
+                event_type="chat",
+                policy=RequestPolicy(use_history_in_prompt=True),
+                user_input="What did you do?",
+                capabilities={"action_memory": True},
+            ))
+
+        contents = [message.get("content", "") for message in result.messages]
+        self.assertLess(contents.index("[HISTORY SUMMARY]\nOlder dialogue"), contents.index(
+            "[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07"
+        ))
+        self.assertLess(
+            contents.index("[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07"),
+            contents.index("Recent Mita reply"),
+        )
 
     def test_character_environment_is_common_dynamic_context_before_input(self):
         controller = PromptController()

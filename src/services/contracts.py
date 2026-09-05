@@ -434,8 +434,8 @@ class RuntimeCapabilitiesService(ABC):
 class PreparedHistory:
     messages: List[Dict[str, Any]]
     summary: str = ""
-    # Deterministic projection of requested structured actions. It is separate
-    # from displayed message content and grows append-only between summaries.
+    # Small deterministic bridge of requested actions whose source turns were
+    # already summarized. Recent actions stay with their assistant message.
     action_context: str = ""
     # Время последнего сообщения истории. Сами messages уезжают провайдеру
     # строго как role/content, поэтому таймстемп едет отдельным полем —

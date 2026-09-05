@@ -715,19 +715,19 @@ def _build_memory_limits_config(self) -> list:
         {'label': _('Включить память действий', 'Enable action memory'),
          'key': 'ENABLE_ACTION_MEMORY', 'type': 'checkbutton', 'default_checkbutton': False,
          'tooltip': _(
-             'Передаёт модели компактный список действий из structured_data предыдущих ответов. '
-             'Действия помечаются как запрошенные: Python не считает их выполненными Unity без подтверждения.',
-             'Passes the model a compact list of actions from previous replies\' structured_data. '
-             'Actions are marked requested: Python never calls them executed by Unity without acknowledgement.')},
+             'Добавляет запрошенные structured actions к конкретным недавним репликам Миты. Отдельно хранится '
+             'только небольшой хвост, когда исходные реплики уже ушли в сводку. Python не считает действия выполненными Unity без подтверждения.',
+             'Adds requested structured actions to their specific recent Mita replies. Only a small tail is kept '
+             'separately after source replies enter the summary. Python never calls actions executed by Unity without acknowledgement.')},
         {'label': _('Сохранять действий после сводки', 'Keep actions after summary'),
          'key': 'ACTION_MEMORY_RETAIN_LAST', 'type': 'entry', 'default': 4,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_ACTION_MEMORY',
          'tooltip': _(
-             'Между сжатиями список только дополняется, чтобы не сдвигать окно на каждом ходе. '
-             'Только при успешной сводке старое схлопывается, и остаётся этот хвост последних действий.',
-             'Between compressions the list is append-only, so the window does not shift every turn. '
-             'Only a successful summary compacts old entries and keeps this final action tail.')},
+             'Сколько последних action requests сохранить отдельным мостом, когда их исходные реплики уже вошли в summary. '
+             'У недавних реплик действия остаются приклеенными к самой реплике.',
+             'How many latest action requests to retain as a separate bridge after their source replies enter the summary. '
+             'For recent replies, actions remain attached to the reply itself.')},
         {'label': _('Аварийный лимит действий (записей)', 'Emergency action limit (records)'),
          'key': 'ACTION_MEMORY_EMERGENCY_MAX_RECORDS', 'type': 'entry', 'default': 80,
          'validation': self.validate_positive_integer,

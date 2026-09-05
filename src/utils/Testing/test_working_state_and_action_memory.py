@@ -10,6 +10,7 @@ if str(PROJECT_SRC) not in sys.path:
 
 from controllers.history_controller import HistoryController
 from managers.action_memory import (
+    append_requested_actions,
     cap_requested_actions,
     requested_actions_from_structured,
     render_requested_actions,
@@ -21,6 +22,7 @@ from schemas.structured_response import StructuredResponse, WorkingState
 class _Character:
     def __init__(self) -> None:
         self.variables: dict[str, object] = {}
+        self.char_id = "Test"
 
     def get_variable(self, key, default=None):
         return self.variables.get(key, default)
@@ -62,7 +64,7 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
             'intent: inventory.collect {"id":"key"}',
         ])
         rendered = render_requested_actions(records)
-        self.assertIn("[REQUESTED ACTIONS BY YOU]", rendered)
+        self.assertIn("[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]", rendered)
         self.assertIn("chronological order", rendered)
         self.assertNotIn("performed", rendered.lower())
 
@@ -99,13 +101,41 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
         retained = controller._next_retained_action_requests(character, compressed)
         self.assertEqual(retained, ["animation: Dance_01", "animation: Dance_02"])
         character.variables[controller._ACTION_MEMORY_RETAINED_VAR] = retained
-        context = controller._build_action_memory_context(
-            character,
-            [{"role": "assistant", "structured_data": {"segments": [{"animations": ["Dance_03"]}]}}],
-        )
+        context = controller._build_action_memory_context(character)
         self.assertIn("Dance_01", context)
         self.assertIn("Dance_02", context)
-        self.assertIn("Dance_03", context)
+        self.assertNotIn("Dance_03", context)
+
+    def test_recent_actions_stay_on_their_assistant_reply(self):
+        controller = HistoryController.__new__(HistoryController)
+        controller._get_setting = lambda key, default=None: {
+            "ENABLE_ACTION_MEMORY": True,
+            "HISTORY_TIME_GAP_MARKERS": False,
+        }.get(key, default)
+        original = {
+            "role": "assistant",
+            "content": "Давай попробуем этот.",
+            "structured_data": {"segments": [{"animations": ["Dance_07"]}]},
+        }
+        projected = controller._sanitize_history_for_llm(_Character(), [original])
+
+        self.assertEqual(original["content"], "Давай попробуем этот.")
+        self.assertEqual(projected[0]["role"], "assistant")
+        self.assertIn("Давай попробуем этот.", projected[0]["content"])
+        self.assertIn("[REQUESTED ACTIONS THIS TURN]", projected[0]["content"])
+        self.assertIn("animation: Dance_07", projected[0]["content"])
+
+        controller._get_setting = lambda _key, default=None: default
+        disabled = controller._sanitize_history_for_llm(_Character(), [original])
+        self.assertNotIn("[REQUESTED ACTIONS THIS TURN]", disabled[0]["content"])
+
+    def test_action_projection_appends_after_multimodal_message(self):
+        projected = append_requested_actions(
+            [{"type": "text", "text": "Смотри"}, {"type": "image_url", "image_url": {"url": "x"}}],
+            ["animation: Dance_07"],
+        )
+        self.assertEqual(projected[-1]["type"], "text")
+        self.assertIn("[REQUESTED ACTIONS THIS TURN]", projected[-1]["text"])
 
     def test_working_state_can_be_removed_from_provider_schema(self):
         full = StructuredResponse.openai_response_format()["json_schema"]["schema"]
