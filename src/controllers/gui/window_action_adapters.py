@@ -16,10 +16,10 @@ class ShellActionsAdapter(_BoundActions):
     def is_closing(self) -> bool:
         return bool(self._target and self._target.is_closing)
 
-    def load_history(self) -> None:
+    def load_history(self, *, request_id: str = "", character_id: str = "") -> None:
         if self._target is None:
             raise RuntimeError("Shell actions are not bound")
-        self._target.load_history()
+        self._target.load_history(request_id=request_id, character_id=character_id)
 
     def request_debug_info(self, callback: Callable[[Any], None]) -> None:
         if self._target is not None:
@@ -35,14 +35,18 @@ class ShellActionsAdapter(_BoundActions):
         self._target.clear_chat()
         return True
 
+    def cancel_active_generations(self) -> None:
+        if self._target is not None:
+            self._target.cancel_active_generations()
+
     def send_message(self, **kwargs):
         if self._target is None:
             return False
         return self._target.send_message(**kwargs)
 
-    def load_more_history(self) -> None:
+    def load_more_history(self, *, character_id: str = "") -> None:
         if self._target is not None:
-            self._target.load_more_history()
+            self._target.load_more_history(character_id=character_id)
 
     def close_application(self) -> None:
         if self._target is not None:
@@ -175,6 +179,10 @@ class MainPageActionsAdapter(_BoundActions):
     def build_settings_section(self, category: str, layout) -> None:
         if self._target is not None:
             self._target.build_settings_section(category, layout)
+
+    def preload_settings_sections(self, preloads) -> None:
+        if self._target is not None:
+            self._target.preload_settings_sections(preloads)
 
     def sync_settings_mode_widgets(self, mode_value) -> None:
         if self._target is not None:

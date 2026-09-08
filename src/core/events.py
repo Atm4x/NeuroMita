@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import threading
 import time
@@ -322,7 +323,7 @@ class EventBus:
             callback(event)
         except Exception as exc:
             logger.error(
-                f"Event subscriber failed for '{event.name}': {exc}",
+                f"Event subscriber failed for '{event.name}': {format_exception(exc)}",
                 exc_info=True,
             )
 
@@ -568,6 +569,7 @@ class Events:
         CLOSE_WINDOW = "close_window"
         CLOSE_ALL_WINDOWS = "close_all_windows"
         SET_SETTINGS_ICON_INDICATOR = "set_settings_icon_indicator"
+        PRELOAD_SETTINGS_SECTIONS = "preload_settings_sections"
 
         VOICEOVER_UI_READY = "voiceover_ui_ready"
         VOICEOVER_REFRESH = "voiceover_refresh"
@@ -605,6 +607,8 @@ class Events:
     class Chat:
         """События, управляющие логикой чата и отправкой сообщений"""
         SEND_MESSAGE = "send_message"
+        CANCEL_ACTIVE_GENERATIONS = "chat_cancel_active_generations"
+        GENERATION_ACTIVITY_CHANGED = "chat_generation_activity_changed"
         CLEAR_CHAT = "clear_chat"
         ATTACH_IMAGES = "attach_images"
         STAGE_IMAGE = "stage_image"
@@ -617,6 +621,11 @@ class Events:
         INSERT_SYSTEM_MESSAGE = "chat_insert_system_message"
         SAVE_SNAPSHOT = "chat_save_snapshot"
         LOAD_SNAPSHOT = "chat_load_snapshot"
+
+    class Dialogue:
+        """Ephemeral dialogue runtime facts consumed by the Python UI."""
+
+        RUNTIME_STATE_CHANGED = "dialogue_runtime_state_changed"
 
     class Audio:
         """События для управления озвучкой и аудиофайлами"""
@@ -757,6 +766,8 @@ class Events:
         MODEL_INSTALL_FINISHED = "voice_model_install_finished"
         MODEL_UNINSTALL_STARTED = "voice_model_uninstall_started"
         MODEL_UNINSTALL_FINISHED = "voice_model_uninstall_finished"
+        MODEL_COMPILE_STARTED = "voice_model_compile_started"
+        MODEL_COMPILE_FINISHED = "voice_model_compile_finished"
         REFRESH_MODEL_PANELS = "refresh_voice_model_panels"
         REFRESH_SETTINGS_DISPLAY = "refresh_voice_settings_display"
 
@@ -795,6 +806,7 @@ class Events:
         """Работа с историей диалога (подготовка промпта — HistoryService)"""
         SAVE_AFTER_RESPONSE = "save_history_after_response"
         MESSAGE_COMPLETED = "history_message_completed"
+        MESSAGES_COMMITTED = "history_messages_committed"
         # Эмитится ПОСЛЕ фактического применения сжатия (история подрезана,
         # summary_count обновлён). Для обновления живых счётчиков в UI.
         COMPRESSED = "history_compressed"

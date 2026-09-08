@@ -5,7 +5,7 @@ from functools import cached_property
 import weakref
 from typing import Any, Callable
 
-from core.events import Event, get_event_bus
+from core.events import Event, Events, get_event_bus
 from core.services import services, use
 from services.contracts import (
     ApiPresetService,
@@ -95,6 +95,13 @@ class _ProviderOptionsController:
 class _SettingsSectionsController:
     def __init__(self, presentation: "UiPresentationHub") -> None:
         self._presentation = presentation
+
+    @staticmethod
+    def preload_sections(preloads) -> None:
+        get_event_bus().emit(
+            Events.GUI.PRELOAD_SETTINGS_SECTIONS,
+            {"sections": tuple(preloads or ())},
+        )
 
     def build_section(self, gui: Any, category: str, parent: Any) -> None:
         key = str(category or "").strip().lower()
@@ -225,6 +232,16 @@ class _SettingsSectionsController:
             return
         if key == "updates":
             self.build_updates(gui, parent)
+            return
+        if key == "data_collection":
+            from ui.settings.data_settings import setup_data_settings_controls
+
+            owner = self._section_owner(gui, parent)
+            view_model = self._own_view_model(
+                self._presentation.view_models.finetune_data(gui),
+                owner,
+            )
+            setup_data_settings_controls(gui, parent, view_model=view_model)
             return
         raise KeyError(f"Unknown settings section: {category}")
 
@@ -449,6 +466,7 @@ class _ViewModelFactory:
         return NewsPageViewModel(
             host=host,
             news=self._presentation.news,
+            settings=self._presentation.settings,
             parent=parent,
         )
 
@@ -459,6 +477,8 @@ class _ViewModelFactory:
 
         return AIHubSettingsViewModel(
             catalog=self._presentation.installables,
+            application=self._presentation.app,
+            open_documentation=self._presentation.voice.open_documentation,
             parent=parent,
         )
 
@@ -515,9 +535,10 @@ class _NewsController:
 
     @property
     def repository(self) -> str:
-        from controllers.gui.news_controller import NEWS_REPO
+        return str(self._store.repository)
 
-        return str(NEWS_REPO)
+    def set_repository(self, repository: str) -> bool:
+        return bool(self._store.set_repository(repository))
 
     def invalidate(self) -> None:
         self._store.invalidate()
@@ -796,6 +817,14 @@ class _VoiceController:
         service = self.local_voice()
         return dict(service.triton_status(refresh=refresh) or {}) if service is not None else {}
 
+    def compile_status(self) -> dict[str, Any]:
+        service = self.voice_models()
+        return dict(service.compile_status() or {}) if service is not None else {}
+
+    def enable_long_paths(self) -> bool:
+        service = self.voice_models()
+        return bool(service and service.enable_long_paths())
+
     def open_documentation(self, path: str) -> None:
         get_event_bus().emit("open_voice_model_doc", str(path))
 
@@ -826,6 +855,17 @@ class _InstallableController:
 
     def save_settings(self, component_id: str, values: dict[str, Any]):
         return self._catalog.save_component_settings(str(component_id), dict(values))
+
+    def compile_status(self) -> dict[str, Any]:
+        service = services().get_optional(VoiceModelService)
+        return dict(service.compile_status() or {}) if service is not None else {}
+
+    def compile_model(self, component_id: str, *, clear_only: bool = False) -> bool:
+        service = services().get_optional(VoiceModelService)
+        if service is None:
+            return False
+        model_id = str(component_id or "").split(":", 1)[-1]
+        return bool(service.start_compile(model_id, clear_only=clear_only, with_ui=True))
 
     def admit(self, action: str, payload: dict[str, Any]):
         operations = services().get(InstallableOperationsService)
@@ -864,6 +904,8 @@ class _ApplicationController:
     # на окне (_pending_python_restart_version) и читалось тремя слоями.
     _pending_restart_version: str = ""
     _last_update_check_ts: float = 0.0
+    _python_update_available: bool | None = None
+    _python_update_version: str = ""
 
     @property
     def main_controller(self):
@@ -883,6 +925,23 @@ class _ApplicationController:
     def mark_update_check(self, timestamp: float) -> None:
         self._last_update_check_ts = float(timestamp)
 
+    def publish_python_update(self, *, available: bool, version: str = "") -> None:
+        self._python_update_available = bool(available)
+        self._python_update_version = str(version or "").strip()
+        self._publish_cached_python_update()
+
+    def _publish_cached_python_update(self) -> None:
+        if self._python_update_available is None:
+            return
+        from services.contracts import CharacterEnvironmentContextService
+
+        provider = services().get_optional(CharacterEnvironmentContextService)
+        if provider is not None:
+            provider.publish_python_update(
+                available=self._python_update_available,
+                version=self._python_update_version,
+            )
+
     @property
     def backend_ready(self) -> bool:
         return self._main_controller is not None and not bool(
@@ -896,6 +955,7 @@ class _ApplicationController:
     def attach_backend(self, controller: Any) -> None:
         self._main_controller = controller
         self._startup_error = ""
+        self._publish_cached_python_update()
 
     def detach_backend(self) -> None:
         self._main_controller = None

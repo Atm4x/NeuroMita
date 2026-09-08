@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QComboBox,
-                             QCheckBox, QPushButton, QTextEdit, QSizePolicy, QFrame, QToolButton)
+                             QCheckBox, QPushButton, QTextEdit, QSizePolicy, QFrame, QToolButton, QSpinBox)
 from PyQt6.QtCore import QSignalBlocker, Qt
 
 from main_logger import logger
@@ -31,6 +31,21 @@ class SettingsBodyWidget(QWidget):
         self.setObjectName("SettingsBodyWidget")
 
 
+def _notify_setting_dependents(widget: QWidget) -> None:
+    """Refresh rows controlled by a setting widget after a silent model update.
+
+    Settings binding deliberately blocks Qt signals while applying a persisted
+    value to avoid feeding it back into the store.  Dependency rows used to
+    listen only to ``stateChanged``, so they could retain their old disabled
+    appearance after the controller was updated by the binding.
+    """
+    for sync in tuple(getattr(widget, "_settings_dependency_sync_callbacks", ())):
+        try:
+            sync()
+        except RuntimeError:
+            continue
+
+
 def _bind_setting_value(gui, key: str, widget: QWidget, apply_value) -> None:
     if not key:
         return
@@ -44,6 +59,7 @@ def _bind_setting_value(gui, key: str, widget: QWidget, apply_value) -> None:
             apply_value(value)
         finally:
             del blocker
+        _notify_setting_dependents(widget)
 
     binding.bind(key, widget, _apply)
 
@@ -72,6 +88,7 @@ def _bind_setting_two_way(
             apply_value(value)
         finally:
             del blocker
+        _notify_setting_dependents(widget)
 
     binding.bind_two_way(
         key,
@@ -144,6 +161,11 @@ def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=No
                 hide_when_disabled=cfg.get('hide_when_disabled', False),
                 toggle_key=cfg.get('toggle_key'),
                 toggle_default=cfg.get('toggle_default'),
+                minimum=cfg.get('minimum'),
+                maximum=cfg.get('maximum'),
+                step=cfg.get('step', 1),
+                suffix=cfg.get('suffix', ''),
+                special_value_text=cfg.get('special_value_text'),
             )
         if w:
             (current_sub or root).add_widget(w)
@@ -206,6 +228,11 @@ def create_settings_direct(gui, parent_layout, cfg_list, title=None):
                 hide_when_disabled=cfg.get('hide_when_disabled', False),
                 toggle_key=cfg.get('toggle_key'),
                 toggle_default=cfg.get('toggle_default'),
+                minimum=cfg.get('minimum'),
+                maximum=cfg.get('maximum'),
+                step=cfg.get('step', 1),
+                suffix=cfg.get('suffix', ''),
+                special_value_text=cfg.get('special_value_text'),
             )
         
         if w:
@@ -246,6 +273,10 @@ def create_button_group(gui, parent, buttons_config):
     for btn_config in buttons_config:
         button = QPushButton(btn_config['label'])
         register_if_tr(button, btn_config['label'])
+        tooltip = btn_config.get('tooltip')
+        if tooltip:
+            button.setToolTip(_fmt_tooltip(str(tooltip)))
+            register_if_tr(button, tooltip, "setToolTip", _fmt_tooltip)
         if 'command' in btn_config:
             button.clicked.connect(btn_config['command'])
         if 'widget_name' in btn_config:
@@ -294,6 +325,11 @@ def create_setting_widget(
         hide_when_disabled: bool = False,
         toggle_key: str | None = None,
         toggle_default: bool | None = None,
+        minimum: int | None = None,
+        maximum: int | None = None,
+        step: int = 1,
+        suffix: str = "",
+        special_value_text: str | None = None,
         **kwargs
 ):
     if setting_key and get_setting(gui, setting_key) is None:
@@ -327,13 +363,18 @@ def create_setting_widget(
 
         vlay.addWidget(widget)
 
+        def _apply_textarea_value(value) -> None:
+            text = str(value if value is not None else default)
+            if widget.toPlainText() != text:
+                widget.setPlainText(text)
+
         if not _bind_setting_two_way(
             gui,
             setting_key,
             widget,
             widget.textChanged,
             widget.toPlainText,
-            lambda value: widget.setPlainText(str(value if value is not None else default)),
+            _apply_textarea_value,
             default=default,
         ):
             widget.textChanged.connect(
@@ -343,7 +384,7 @@ def create_setting_widget(
                 gui,
                 setting_key,
                 widget,
-                lambda value: widget.setPlainText(str(value if value is not None else default)),
+                _apply_textarea_value,
             )
 
         if tooltip:
@@ -459,6 +500,61 @@ def create_setting_widget(
         layout.addLayout(title_col, 1)
         layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+    elif widget_type in ('spinbox', 'number_stepper'):
+        if widget_type == 'number_stepper':
+            from ui.widgets.number_stepper import NumberStepper
+
+            widget = NumberStepper()
+        else:
+            widget = QSpinBox()
+        try:
+            spin_default = int(default)
+        except (TypeError, ValueError):
+            spin_default = 0
+        try:
+            spin_value = int(get_setting(gui, setting_key, spin_default))
+        except (TypeError, ValueError):
+            spin_value = spin_default
+        spin_minimum = 0 if minimum is None else int(minimum)
+        spin_maximum = 100 if maximum is None else int(maximum)
+        widget.setRange(spin_minimum, spin_maximum)
+        widget.setSingleStep(max(1, int(step)))
+        widget.setValue(max(spin_minimum, min(spin_maximum, spin_value)))
+        if suffix:
+            widget.setSuffix(str(suffix))
+        if special_value_text is not None:
+            widget.setSpecialValueText(str(special_value_text))
+        widget.setMinimumWidth(72)
+
+        def _save_spin(value: int) -> None:
+            value = int(value)
+            gui._save_setting(setting_key, value)
+            if command:
+                command(value)
+
+        if not _bind_setting_two_way(
+            gui,
+            setting_key,
+            widget,
+            widget.valueChanged,
+            widget.value,
+            lambda value: widget.setValue(int(value)),
+            default=spin_default,
+            transform=int,
+            after_write=command,
+        ):
+            widget.valueChanged.connect(_save_spin)
+            _bind_setting_value(
+                gui,
+                setting_key,
+                widget,
+                lambda value: widget.setValue(int(value)),
+            )
+
+        layout.addWidget(lbl)
+        if toggle_chk:
+            layout.addWidget(toggle_chk, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignRight)
     elif widget_type == 'entry':
         widget = QLineEdit(str(get_setting(gui, setting_key, default)))
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -598,16 +694,21 @@ def create_setting_widget(
         else:
             def _dep_sync(_=None):
                 active = True
-                if isinstance(controller, QCheckBox):
+                if hasattr(controller, "isChecked"):
                     active = controller.isChecked()
                 elif isinstance(controller, QComboBox):
+                    controller_value = (
+                        controller.current_value()
+                        if callable(getattr(controller, "current_value", None))
+                        else controller.currentText()
+                    )
                     if depends_on_value is not None:
                         if isinstance(depends_on_value, (list, tuple, set)):
-                            active = controller.currentText() in depends_on_value
+                            active = controller_value in depends_on_value
                         else:
-                            active = (controller.currentText() == depends_on_value)
+                            active = (controller_value == depends_on_value)
                     else:
-                        active = bool(controller.currentText())
+                        active = bool(controller_value)
                 elif hasattr(controller, "currentText"):
                     active = bool(controller.currentText())
 
@@ -620,7 +721,13 @@ def create_setting_widget(
 
             _dep_sync()
 
-            if isinstance(controller, QCheckBox):
+            callbacks = getattr(controller, "_settings_dependency_sync_callbacks", None)
+            if callbacks is None:
+                callbacks = []
+                setattr(controller, "_settings_dependency_sync_callbacks", callbacks)
+            callbacks.append(_dep_sync)
+
+            if hasattr(controller, "stateChanged"):
                 controller.stateChanged.connect(_dep_sync)
             elif hasattr(controller, "currentTextChanged"):
                 controller.currentTextChanged.connect(_dep_sync)

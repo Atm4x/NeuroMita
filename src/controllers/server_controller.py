@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 # File: src/controllers/server_controller.py
 import ipaddress
 import os
@@ -7,6 +8,7 @@ from collections import deque
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from core.services import use
+from domain.dialogue_identity import DialogueActorKind
 from services.contracts import CharacterRegistry, SettingsService
 
 from managers.task_manager import TaskStatus
@@ -67,6 +69,7 @@ class ServerEchoSuppressor:
         *,
         client_id: str,
         sender: str,
+        sender_kind: DialogueActorKind,
         text: str,
         incoming_message_id: Optional[str] = None,
         origin_message_id: Optional[str] = None,
@@ -85,7 +88,7 @@ class ServerEchoSuppressor:
                     return False
                 seen.append(incoming_message_id)
 
-            if sender == "Player":
+            if sender_kind is DialogueActorKind.PLAYER:
                 return True
 
             if origin_message_id:
@@ -126,17 +129,35 @@ class ServerController:
         self._destroyed = False
 
         self.settings_to_send = [
-            'ACTION_MENU', 'MITAS_MENU', 'IGNORE_GAME_REQUESTS', 'GAME_BLOCK_LEVEL',
-            'CHARACTER', 'WORLD_HIERARCHY_TREE',
-            'BEAT_SYNC_ENABLED', 'BEAT_SYNC_STREAMING', 'BEAT_SYNC_CHUNK_SECONDS',
-            'BEAT_SYNC_MIN_CONFIDENCE', 'BEAT_SYNC_AUTO_INSTALL',
-            'BEAT_SYNC_USE_FILE_TRANSFER',
+            "ACTION_MENU",
+            "MITAS_MENU",
+            "IGNORE_GAME_REQUESTS",
+            "GAME_BLOCK_LEVEL",
+            "MIC_INSTANT_SENT",
+            "MITA_DIALOGUE_AUTO",
+            "DIALOGUE_MAX_CHAIN_TURNS",
+            "DIALOGUE_MAX_CONTINUES",
+            "GM_ON",
+            "GM_REPEAT",
+            "CHARACTER",
+            "WORLD_HIERARCHY_TREE",
+            "BEAT_SYNC_ENABLED",
+            "BEAT_SYNC_STREAMING",
+            "BEAT_SYNC_CHUNK_SECONDS",
+            "BEAT_SYNC_MIN_CONFIDENCE",
+            "BEAT_SYNC_AUTO_INSTALL",
+            "BEAT_SYNC_USE_FILE_TRANSFER",
             # Mita head-camera (FrameRecorder)
-            'MITA_CAMERA_ENABLED', 'MITA_CAMERA_CONTINUOUS', 'MITA_CAMERA_ON_DEMAND',
-            'MITA_CAMERA_INTERVAL', 'MITA_CAMERA_MAX_FRAMES', 'MITA_CAMERA_FRAMES_TO_SEND',
-            'MITA_CAMERA_JPEG_QUALITY', 'MITA_CAMERA_USE_FILE_TRANSFER',
+            "MITA_CAMERA_ENABLED",
+            "MITA_CAMERA_CONTINUOUS",
+            "MITA_CAMERA_ON_DEMAND",
+            "MITA_CAMERA_INTERVAL",
+            "MITA_CAMERA_MAX_FRAMES",
+            "MITA_CAMERA_FRAMES_TO_SEND",
+            "MITA_CAMERA_JPEG_QUALITY",
+            "MITA_CAMERA_USE_FILE_TRANSFER",
             # Image transport: "shared_files" | "socket" | "auto"
-            'IMAGE_TRANSPORT_MODE',
+            "IMAGE_TRANSPORT_MODE",
         ]
 
         self.echo_suppressor = ServerEchoSuppressor()
@@ -207,7 +228,7 @@ class ServerController:
             transfer_dirs = ensure_shared_transfer_dirs()
             logger.info(f"Shared image transfer root: {transfer_dirs['root']}")
         except Exception as e:
-            logger.warning(f"Failed to prepare shared image transfer directories: {e}")
+            logger.warning(f"Failed to prepare shared image transfer directories: {format_exception(e)}")
         logger.info("Using new API server")
 
         def _conn_cb(client_connected: bool, client_id: str | None):
@@ -265,7 +286,7 @@ class ServerController:
         try:
             self.server.stop()
         except Exception as e:
-            logger.error(f"Error while stopping server: {e}", exc_info=True)
+            logger.error(f"Error while stopping server: {format_exception(e)}", exc_info=True)
 
         try:
             self.ConnectedToGame = False
@@ -294,7 +315,7 @@ class ServerController:
             task_manager = get_task_manager()
             task_manager.clear_all_tasks()
         except Exception as e:
-            logger.error(f"Error while cleaning up task manager: {e}")
+            logger.error(f"Error while cleaning up task manager: {format_exception(e)}")
 
         self.server = None
         self.event_bus = None
@@ -303,9 +324,9 @@ class ServerController:
         if self._destroyed or not self.event_bus:
             return
 
-        connections = getattr(self.server, "active_connections", None) if self.server else None
-        if isinstance(connections, dict):
-            self.ConnectedToGame = bool(connections)
+        has_game_connection = getattr(self.server, "has_game_connection", None) if self.server else None
+        if callable(has_game_connection):
+            self.ConnectedToGame = bool(has_game_connection())
         else:
             self.ConnectedToGame = bool(client_connected)
         self.game_link.set_connected(self.ConnectedToGame)
@@ -317,7 +338,7 @@ class ServerController:
                 body = self._prepare_loaded_settings_body()
                 self.server.schedule_send_loaded_settings(client_id, body)
             except Exception as exc:
-                logger.warning(f"Failed to send initial settings to {client_id}: {exc}")
+                logger.warning(f"Failed to send initial settings to {client_id}: {format_exception(exc)}")
         elif not bool(client_connected) and client_id:
             self.echo_suppressor.forget_client(client_id)
             self.event_bus.emit(
@@ -329,9 +350,9 @@ class ServerController:
         if self._destroyed:
             return None
         srv = self.server
-        conns = getattr(srv, "active_connections", None) if srv else None
-        if isinstance(conns, dict):
-            return bool(conns)
+        has_game_connection = getattr(srv, "has_game_connection", None) if srv else None
+        if callable(has_game_connection):
+            return bool(has_game_connection())
         return None
 
     def _player_turn_owner(self) -> str:
@@ -376,14 +397,14 @@ class ServerController:
                         self.server._loop,
                     )
             except Exception as e:
-                logger.warning(f"Beat sync warmup failed: {e}")
+                logger.warning(f"Beat sync warmup failed: {format_exception(e)}")
 
         if key in self.settings_to_send:
             try:
                 body = self._prepare_loaded_settings_body()
                 self.server.schedule_broadcast_loaded_settings(body)
             except Exception as e:
-                logger.warning(f"Failed to push updated settings to clients ({key}): {e}")
+                logger.warning(f"Failed to push updated settings to clients ({key}): {format_exception(e)}")
 
     def _on_load_server_settings(self, event: Event):
         if self._destroyed or not self.server:
@@ -392,7 +413,7 @@ class ServerController:
             body = self._prepare_loaded_settings_body()
             self.server.schedule_broadcast_loaded_settings(body)
         except Exception as e:
-            logger.warning(f"LOAD_SERVER_SETTINGS broadcast failed: {e}")
+            logger.warning(f"LOAD_SERVER_SETTINGS broadcast failed: {format_exception(e)}")
 
     def _get_character_stats(self, character_id: str) -> Dict[str, float]:
         cid = str(character_id or "").strip()
@@ -436,7 +457,8 @@ class ServerController:
             if setting == 'BEAT_SYNC_AUTO_INSTALL':
                 settings[str(setting)] = False
                 continue
-            settings[str(setting)] = self._get_setting(setting)
+            default = True if setting == "MITA_DIALOGUE_AUTO" else None
+            settings[str(setting)] = self._get_setting(setting, default)
 
         characters_stats = self._collect_characters_stats()
 
@@ -456,9 +478,9 @@ class ServerController:
                 "mode": transport_raw,
             }
         except Exception as e:
-            logger.warning(f"Failed to describe shared image transfer settings: {e}")
+            logger.warning(f"Failed to describe shared image transfer settings: {format_exception(e)}")
 
-        body = {"settings": settings, "characters_stats": characters_stats}
+        body = {"settings": settings, "characters_stats": characters_stats, "settings_revision": int(getattr(self.settings, "revision", 0) or 0)}
         if shared_transfer:
             body["shared_image_transfer"] = shared_transfer
         return body
@@ -550,12 +572,9 @@ class ServerController:
                 engine=str(data.get("engine") or ""),
                 ts=data.get("ts", None),
                 final=bool(data.get("final", True)),
-                autosend=bool(data.get("autosend", False)),
-                delay_sec=float(data.get("delay_sec", 0.0) or 0.0),
-                merge_input=bool(data.get("merge_input", True)),
             )
         except Exception as exc:
-            logger.warning(f"Не удалось отправить asr_text в игру: {exc}")
+            logger.warning(f"Не удалось отправить asr_text в игру: {format_exception(exc)}")
             self._report_asr_undelivered(data)
             return
 
@@ -583,29 +602,34 @@ class ServerController:
         p = event.data or {}
         client_id = str(p.get("client_id") or "")
         sender = str(p.get("sender") or "Player")
+        sender_kind = p.get("sender_kind")
         text = str(p.get("text") or "")
         incoming_message_id = p.get("message_id")
         origin_message_id = p.get("origin_message_id")
+        presentation_message_id = str(p.get("presentation_message_id") or "")
+        character_id = str(p.get("character_id") or "")
 
-        if not text.strip():
+        if not text.strip() or sender_kind is not DialogueActorKind.PLAYER:
             return
 
         if not self.echo_suppressor.should_echo_incoming(
             client_id=client_id,
             sender=sender,
+            sender_kind=sender_kind,
             text=text,
             incoming_message_id=str(incoming_message_id) if incoming_message_id else None,
             origin_message_id=str(origin_message_id) if origin_message_id else None,
         ):
             return
 
-        ui_role = "user" if sender == "Player" else "assistant"
         self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
-            "role": ui_role,
+            "role": "user",
             "response": text,
             "is_initial": False,
             "emotion": "",
-            "speaker_name": ("" if sender == "Player" else sender),
+            "speaker_name": "",
+            "message_id": presentation_message_id,
+            "character_id": character_id,
         })
 
 

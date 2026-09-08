@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ui.mvvm import UiEffect, UiIntent
+from services.contracts import DialogueRuntimeSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,9 +16,11 @@ class ChatPanelState:
     settings_category: str = "api"
     backend_ready: bool = False
     can_send: bool = False
+    active_generation_count: int = 0
     has_text: bool = False
     staged_count: int = 0
     revision: int = 0
+    dialogue_snapshot: DialogueRuntimeSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +28,7 @@ class ChatPanelActions:
     reload_history: Callable[[], Any]
     clear_chat: Callable[[], Any]
     send_message: Callable[[], Any]
+    cancel_active_generations: Callable[[], Any]
     open_settings: Callable[[str], Any]
     show_image: Callable[[bytes], Any]
     surface_ready: Callable[[Any], Any]

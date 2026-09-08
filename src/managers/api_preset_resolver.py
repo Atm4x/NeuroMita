@@ -1,5 +1,6 @@
 # src/managers/api_preset_resolver.py
 from __future__ import annotations
+from core.error_utils import format_exception
 
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,7 @@ from core.services import use
 from services.contracts import ApiPresetService, ProtocolBuilderService
 from main_logger import logger
 from managers.protocol_registry import get_protocol_registry
+from presets.model_profiles import resolve_model_profile
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,23 @@ class ApiPresetResolver:
                 for k, v in oc.items():
                     capabilities[str(k)] = v
 
+        model_profile = resolve_model_profile(
+            api_model,
+            (preset or {}).get("model_profiles"),
+            (preset or {}).get("model_profile_overrides"),
+            default_safe=dialect_id == "gemini_generate_content",
+        )
+        if model_profile:
+            capabilities["model_profile"] = model_profile
+            if model_profile.get("safe_mode"):
+                capabilities.update({
+                    "tools_native": False,
+                    "tools_prompt_enabled": False,
+                    "streaming": False,
+                    "streaming_with_tools": False,
+                    "reasoning_control": "",
+                })
+
         # headers: let ProtocolsController build final headers/auth,
         # but allow preset overrides to contribute extra headers.
         extra_headers: Dict[str, str] = {}
@@ -180,7 +199,7 @@ class ApiPresetResolver:
             chain.append(main)
             seen_keys.add((int(preset_id) if preset_id else 0, str(main.api_model or "")))
         except Exception as e:
-            logger.error(f"[ApiPresetResolver] resolve_chain: main resolve failed: {e}", exc_info=True)
+            logger.error(f"[ApiPresetResolver] resolve_chain: main resolve failed: {format_exception(e)}", exc_info=True)
 
         # Fallback entries are stored in the main preset dict
         main_raw = self._load_preset_full(preset_id) or {}
@@ -207,7 +226,7 @@ class ApiPresetResolver:
             try:
                 ps = self.resolve(fb_pid, model_override=fb_model or None)
             except Exception as e:
-                logger.warning(f"[ApiPresetResolver] fallback resolve failed for {fb_pid}: {e}")
+                logger.warning(f"[ApiPresetResolver] fallback resolve failed for {fb_pid}: {format_exception(e)}")
                 continue
 
             key = (fb_pid, str(ps.api_model or ""))
@@ -233,7 +252,7 @@ class ApiPresetResolver:
                         pid = getattr(pm, "id", None)
                         return pid if isinstance(pid, int) else None
         except Exception as e:
-            logger.error(f"[ApiPresetResolver] Failed to resolve preset id by name '{display_name}': {e}", exc_info=True)
+            logger.error(f"[ApiPresetResolver] Failed to resolve preset id by name '{display_name}': {format_exception(e)}", exc_info=True)
         return None
 
     def apply_key_rotation(self, preset: PresetSettings, attempt: int) -> PresetSettings:
@@ -311,7 +330,7 @@ class ApiPresetResolver:
         try:
             return use(ApiPresetService).get_full(int(preset_id))
         except Exception as e:
-            logger.error(f"[ApiPresetResolver] Failed to load preset: {e}", exc_info=True)
+            logger.error(f"[ApiPresetResolver] Failed to load preset: {format_exception(e)}", exc_info=True)
         return None
 
     def _pick_fallback_preset_id(self) -> Optional[int]:
@@ -366,7 +385,7 @@ class ApiPresetResolver:
             if isinstance(built, dict) and built.get("url") and isinstance(built.get("headers"), dict):
                 return str(built["url"]), dict(built["headers"])
         except Exception as e:
-            logger.warning(f"[ApiPresetResolver] build_http_request failed, fallback: {e}")
+            logger.warning(f"[ApiPresetResolver] build_http_request failed, fallback: {format_exception(e)}")
 
         # Fallback (should rarely happen): use protocol registry directly
         reg = get_protocol_registry()

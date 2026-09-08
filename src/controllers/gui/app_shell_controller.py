@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import base64
 import os
@@ -6,6 +7,7 @@ import uuid
 from typing import Any, Callable
 
 from core.events import Events, get_event_bus
+from domain.conversation_message_ids import ConversationMessageIds
 from core.services import services, use
 from main_logger import logger
 from services.contracts import (
@@ -15,6 +17,7 @@ from services.contracts import (
     GameLinkService,
     LocalVoiceService,
     ModelStateService,
+    PlayerMessageSource,
     SettingsService,
     SpeechService,
     TelegramService,
@@ -70,9 +73,9 @@ class AppShellController:
         self._presentation.app.detach_backend()
 
     def backend_failed(self, error: BaseException | str) -> None:
-        message = str(error)
+        message = format_exception(error)
         if not isinstance(error, str):
-            message = f"Backend startup failed: {type(error).__name__}: {error}"
+            message = f"Backend startup failed: {format_exception(error)}"
         self._main_controller = None
         self._backend_error = message
         self._presentation.app.mark_failed(message)
@@ -101,11 +104,16 @@ class AppShellController:
             self._main_controller = None
             self._presentation.app.detach_backend()
 
-    def load_history(self) -> None:
-        self._event_bus.emit(Events.Model.LOAD_HISTORY)
+    def load_history(self, *, request_id: str = "", character_id: str = "") -> None:
+        self._event_bus.emit(Events.Model.LOAD_HISTORY, {
+            "request_id": str(request_id or ""),
+            "character_id": str(character_id or ""),
+        })
 
-    def load_more_history(self) -> None:
-        self._event_bus.emit(Events.Model.LOAD_MORE_HISTORY)
+    def load_more_history(self, *, character_id: str = "") -> None:
+        self._event_bus.emit(Events.Model.LOAD_MORE_HISTORY, {
+            "character_id": str(character_id or ""),
+        })
 
     def clear_chat(self) -> None:
         self._view.render_chat_cleared()
@@ -141,12 +149,16 @@ class AppShellController:
         audio = services().get_optional(AudioStateService)
         return not (audio and audio.is_waiting_answer())
 
+    def cancel_active_generations(self) -> None:
+        self._event_bus.emit(Events.Chat.CANCEL_ACTIVE_GENERATIONS)
+
     def send_message(
         self,
         *,
         system_input: str = "",
         image_data: list[bytes] | None = None,
         user_input: str | None = None,
+        trace_id: str | None = None,
         merge_input_from_entry: bool = False,
     ) -> bool:
         if not self.backend_ready:
@@ -188,6 +200,7 @@ class AppShellController:
                 camera_frames=camera_frames,
                 staged_image_data=staged_images,
                 character_id=character_id,
+                trace_id=trace_id,
                 from_entry=from_entry,
                 clear_entry_after_send=clear_entry_after_send,
             )
@@ -215,6 +228,7 @@ class AppShellController:
         camera_frames: list[Any],
         staged_image_data: list[Any],
         character_id: str,
+        trace_id: str | None = None,
         from_entry: bool,
         clear_entry_after_send: bool,
     ) -> None:
@@ -229,11 +243,12 @@ class AppShellController:
         if not bool(settings.get("ENABLE_IMAGE_ANALYSIS", True)):
             all_image_data = []
         all_image_data = self._dedupe_images(all_image_data)
+
         if not user_input and not system_input and not all_image_data:
             return
 
         req_id = uuid.uuid4().hex
-        user_message_id = f"in:{req_id}"
+        user_message_id = ConversationMessageIds.incoming(req_id)
         image_content = []
         if all_image_data:
             image_content = [
@@ -246,11 +261,11 @@ class AppShellController:
                 for image in all_image_data
             ]
             if not user_input:
-                label = _("<Изображения>", "<Images>")
+                label = _("<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>", "<Images>")
                 if staged_image_data and not current_image_data and not explicit_image_data:
-                    label = _("<Прикрепленные изображения>", "<Attached Images>")
+                    label = _("<\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>", "<Attached Images>")
                 elif (current_image_data or explicit_image_data) and not staged_image_data:
-                    label = _("<Изображение экрана>", "<Screen Image>")
+                    label = _("<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u044d\u043a\u0440\u0430\u043d\u0430>", "<Screen Image>")
                 image_content.insert(0, {"type": "text", "content": label + "\n"})
 
         self._view.render_outgoing_message(
@@ -267,8 +282,10 @@ class AppShellController:
                 "image_data": all_image_data,
                 "character_id": character_id,
                 "sender": "Player",
+                "player_message_source": PlayerMessageSource.APPLICATION.value,
                 "req_id": req_id,
                 "images_shown": bool(all_image_data),
+                "trace_id": trace_id,
             },
         )
         self._view.show_thinking_now()

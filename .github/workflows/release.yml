@@ -14,6 +14,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    outputs:
+      should_release: ${{ steps.release_meta.outputs.should_release }}
 
     steps:
       - name: Checkout
@@ -206,11 +208,12 @@ jobs:
 
           content = "\n".join([
               f"BUILD_MODE=full",
+              f"BUILD_IS_TEST=1",
               f"BUILD_OUTPUT_DIR={output}",
               f"BUILD_COPY_DIRS=extra\\Prompts,assets,libs",
               f"BUILD_FAST_COPY_DIRS=extra\\Prompts",
-              f"BUILD_COPY_FILES=extra\\init.py,extra\\Icon.png",
-              f"BUILD_ROOT_SCRIPTS=scripts\\Launcher.exe,scripts\\run.bat,scripts\\run.py,scripts\\init_triton.bat",
+              f"BUILD_COPY_FILES=NM_Logo.ico,assets\\launcher_ui\\NM_Logo.png",
+              f"BUILD_ROOT_SCRIPTS=scripts\\Launcher.exe,scripts\\run.bat,scripts\\run.py",
               f"BUILD_EXCLUDE_DOT_DIRS=1",
               f"BUILD_EXCLUDE_CHECKPOINTS=1",
               f"BUILD_CLEAN_OUTPUT=1",
@@ -228,6 +231,19 @@ jobs:
         if: steps.release_meta.outputs.should_release == 'true'
         shell: bash
         run: python build.py
+        env:
+          PYTHONUTF8: '1'
+
+      - name: Stamp test distribution metadata
+        if: steps.release_meta.outputs.should_release == 'true'
+        shell: bash
+        run: >
+          python scripts/stamp_distribution_metadata.py
+          --archive "PythonBuild-v${{ steps.ver.outputs.version }}.zip"
+          --contour test
+          --source-repo "${{ github.repository }}"
+          --source-tag "v${{ steps.ver.outputs.version }}"
+          --source-commit "${{ github.sha }}"
         env:
           PYTHONUTF8: '1'
 
@@ -258,3 +274,10 @@ jobs:
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  rebuild-release-manifest:
+    needs: build
+    if: needs.build.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-manifest.yml

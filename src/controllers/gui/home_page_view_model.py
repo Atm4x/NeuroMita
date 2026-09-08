@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import threading
 import time
@@ -10,6 +11,7 @@ from PyQt6.QtCore import QTimer
 from controllers.gui.intent_view_model import IntentViewModel
 from core.events import Events, get_event_bus
 from main_logger import logger
+from services.update_contour import target_for_contour
 from ui.pages.home_presentation import (
     HomeActivated,
     HomeApplyUpdatesRequested,
@@ -52,23 +54,23 @@ class _ProgressLogger:
         self._view_model = view_model
         self._prefix = prefix
 
-    def _set(self, marker: str, message: Any, level: str) -> None:
+    def _set(self, message: Any, level: str) -> None:
         getattr(logger, level, logger.info)(f"[{self._prefix}] {message}")
 
     def info(self, message: Any) -> None:
-        self._set("", message, "info")
+        self._set(message, "info")
 
     def warning(self, message: Any) -> None:
-        self._set("⚠ ", message, "warning")
+        self._set(message, "warning")
 
     def error(self, message: Any) -> None:
-        self._set("✗ ", message, "error")
+        self._set(message, "error")
 
     def success(self, message: Any) -> None:
-        self._set("✓ ", message, "info")
+        self._set(message, "info")
 
     def notify(self, message: Any) -> None:
-        self._set("★ ", message, "info")
+        self._set(message, "info")
 
 
 class HomePageViewModel(IntentViewModel[HomeState]):
@@ -197,7 +199,9 @@ class HomePageViewModel(IntentViewModel[HomeState]):
             )
         self.update_state(update_checking=True, error=None)
 
-        channel = str(self._settings.get("UPDATE_CHANNEL", "stable") or "stable")
+        channel = target_for_contour(
+            self._settings.get("UPDATE_CONTOUR", "release")
+        ).channel
         unity_dir = self._settings.get("UNITY_INSTALL_DIR") or None
 
         def worker() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -231,10 +235,10 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                 self._schedule_hide_progress()
 
         def failed(error: Exception) -> None:
-            self.update_state(update_checking=False, error=str(error))
+            self.update_state(update_checking=False, error=format_exception(error))
             if show_result:
                 self._set_progress(
-                    _("Ошибка проверки: {err}", "Check error: {err}").format(err=error),
+                    _("Ошибка проверки: {err}", "Check error: {err}").format(err=format_exception(error)),
                     0,
                     0,
                     busy=False,
@@ -245,9 +249,13 @@ class HomePageViewModel(IntentViewModel[HomeState]):
 
     def refresh_news(self) -> None:
         try:
+            target = target_for_contour(
+                self._settings.get("UPDATE_CONTOUR", "release")
+            )
+            self._news.set_repository(target.repo)
             self._news.load_async(self._host, self._on_news_ready)
         except Exception as exc:
-            logger.debug("Home release feed refresh failed: %s", exc)
+            logger.debug("Home release feed refresh failed: %s", format_exception(exc))
 
     def post_progress(
         self,
@@ -286,7 +294,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                         _(
                             "Не удалось запустить Unity: {err}",
                             "Failed to launch Unity: {err}",
-                        ).format(err=exc),
+                        ).format(err=format_exception(exc)),
                     )
                 )
 
@@ -321,6 +329,12 @@ class HomePageViewModel(IntentViewModel[HomeState]):
     ) -> None:
         py_available = bool((py_info or {}).get("available")) and not self._pending_restart()
         unity_available = bool((unity_info or {}).get("available"))
+        publish_update = getattr(self._app, "publish_python_update", None)
+        if callable(publish_update):
+            publish_update(
+                available=bool((py_info or {}).get("available")),
+                version=str((py_info or {}).get("latest_version") or ""),
+            )
         previous_py = self.state.python_update
         previous_unity = self.state.unity_update
         self.update_state(
@@ -408,7 +422,11 @@ class HomePageViewModel(IntentViewModel[HomeState]):
             "unavailable": "mdi.unity",
         }
         icon = icons[action]
-        if action == "apply" and not self._tester_code():
+        if (
+            action == "apply"
+            and target_for_contour(self._settings.get("UPDATE_CONTOUR", "release")).contour == "test"
+            and not self._tester_code()
+        ):
             icon = "fa6s.lock"
         changes = {
             "primary_action": action,
@@ -487,8 +505,9 @@ class HomePageViewModel(IntentViewModel[HomeState]):
             )
             self._schedule_hide_progress()
             return
+        target = target_for_contour(self._settings.get("UPDATE_CONTOUR", "release"))
         code = self._tester_code()
-        if not code:
+        if target.contour == "test" and not code:
             self._pending_continuation = "apply-updates"
             self.emit_effect(HomePromptTesterCode("apply-updates"))
             return
@@ -557,7 +576,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                 self._home.apply_updates(
                     update_python=update_python,
                     update_unity=update_unity,
-                    channel=str(settings.get("UPDATE_CHANNEL") or "stable"),
+                    channel=target_for_contour(settings.get("UPDATE_CONTOUR", "release")).channel,
                     tester_code=tester_code,
                     unity_dir=settings.get("UNITY_INSTALL_DIR") or None,
                     update_mode=str(settings.get("UPDATE_MODE") or "diff"),
@@ -619,9 +638,12 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                     100,
                     busy=False,
                 )
-            if python_applied and not cancel_event.is_set():
+            # A Python payload may already have been committed when a later
+            # Unity step fails or is cancelled.  Keep that restart requirement
+            # visible and ask only after the complete selected sequence ends.
+            if python_applied:
                 self._mark_python_restart_required(pending_python_version)
-            self._finish_operation(prompt_restart=python_applied and not cancel_event.is_set())
+            self._finish_operation(prompt_restart=python_applied)
 
         self.run_exclusive(
             "home-apply-updates",
@@ -658,10 +680,10 @@ class HomePageViewModel(IntentViewModel[HomeState]):
             operation_item_index=0,
             operation_item_total=0,
             can_cancel=False,
-            error=str(error),
+            error=format_exception(error),
         )
         self._set_progress(
-            _("Ошибка: {err}", "Error: {err}").format(err=error),
+            _("Ошибка: {err}", "Error: {err}").format(err=format_exception(error)),
             0,
             0,
             busy=False,
@@ -693,7 +715,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                     _(
                         "Не удалось закрыть Unity: {err}",
                         "Failed to close Unity: {err}",
-                    ).format(err=exc),
+                    ).format(err=format_exception(exc)),
                 )
             )
 
@@ -730,7 +752,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                     _(
                         "Не удалось открыть папку Unity: {err}",
                         "Failed to open Unity folder: {err}",
-                    ).format(err=exc),
+                    ).format(err=format_exception(exc)),
                 )
             )
 
@@ -747,7 +769,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                     _(
                         "Не удалось перезапустить приложение: {err}",
                         "Failed to restart the application: {err}",
-                    ).format(err=exc),
+                    ).format(err=format_exception(exc)),
                 )
             )
 
@@ -765,7 +787,7 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                 for item in items
             )
         except Exception as exc:
-            logger.debug("Failed to build home news items: %s", exc)
+            logger.debug("Failed to build home news items: %s", format_exception(exc))
             news = ()
         self._post_ui(
             lambda news=news: self.update_state(
@@ -1001,7 +1023,15 @@ class HomePageViewModel(IntentViewModel[HomeState]):
         self.emit_effect(HomeRefreshSidebar())
         self._refresh_local_state()
 
+    @staticmethod
+    def _is_ai_hub_install_event(event) -> bool:
+        data = event.data if isinstance(getattr(event, "data", None), dict) else {}
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        return str(meta.get("source") or "").strip().lower() == "ai_hub"
+
     def _on_install_started(self, event) -> None:
+        if self._is_ai_hub_install_event(event):
+            return
         if self.state.operation is not None:
             return
         data = event.data if isinstance(getattr(event, "data", None), dict) else {}
@@ -1009,6 +1039,8 @@ class HomePageViewModel(IntentViewModel[HomeState]):
         self.post_progress(title, 0, 100, busy=True)
 
     def _on_install_progress(self, event) -> None:
+        if self._is_ai_hub_install_event(event):
+            return
         if self.state.operation is not None:
             return
         data = event.data if isinstance(getattr(event, "data", None), dict) else {}
@@ -1028,7 +1060,9 @@ class HomePageViewModel(IntentViewModel[HomeState]):
                 busy=True,
             )
 
-    def _on_install_finished(self, _event) -> None:
+    def _on_install_finished(self, event) -> None:
+        if self._is_ai_hub_install_event(event):
+            return
         self._post_ui(self._handle_external_install_finished)
 
     def _handle_external_install_finished(self) -> None:
@@ -1037,13 +1071,15 @@ class HomePageViewModel(IntentViewModel[HomeState]):
         self._refresh_local_state()
 
     def _on_install_failed(self, event) -> None:
+        if self._is_ai_hub_install_event(event):
+            return
         if self.state.operation is not None:
             return
         data = event.data if isinstance(getattr(event, "data", None), dict) else {}
         message = str(data.get("error") or data.get("message") or _("ошибка", "error"))
         self._post_ui(
             lambda: self._set_progress(
-                _("Ошибка: {err}", "Error: {err}").format(err=message),
+                _("Ошибка: {err}", "Error: {err}").format(err=format_exception(message)),
                 0,
                 0,
                 busy=False,

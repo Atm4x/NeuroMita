@@ -17,8 +17,8 @@ class _SignalStub:
     def __init__(self):
         self.calls = []
 
-    def emit(self, payload=None):
-        self.calls.append(payload)
+    def emit(self, *args):
+        self.calls.append(None if not args else args[0] if len(args) == 1 else args)
 
 
 class StatusControllerTests(unittest.TestCase):
@@ -27,10 +27,12 @@ class StatusControllerTests(unittest.TestCase):
             show_thinking_signal=_SignalStub(),
             show_error_signal=_SignalStub(),
             hide_status_signal=_SignalStub(),
+            hide_generation_status_signal=_SignalStub(),
             pulse_error_signal=_SignalStub(),
             update_status_signal=_SignalStub(),
             show_voicing_signal=_SignalStub(),
             hide_voicing_signal=_SignalStub(),
+            update_chat_signal=_SignalStub(),
         )
         controller = StatusController.__new__(StatusController)
         controller.view = view
@@ -38,6 +40,8 @@ class StatusControllerTests(unittest.TestCase):
         controller.main_controller = None
         controller._last_detailed_error_text = ""
         controller._last_detailed_error_ts = 0.0
+        controller._last_chat_network_error_text = ""
+        controller._last_chat_network_error_ts = 0.0
         return controller, view
 
     def test_started_response_shows_character_thinking_by_default(self):
@@ -101,6 +105,30 @@ class StatusControllerTests(unittest.TestCase):
 
         self.assertEqual(view.show_error_signal.calls, [])
         self.assertEqual(view.pulse_error_signal.calls, [None])
+
+    def test_generation_activity_hides_thinking_only_after_last_request(self):
+        controller, view = self._make_controller()
+
+        controller._on_generation_activity_changed(SimpleNamespace(data={"active_count": 1}))
+        controller._on_generation_activity_changed(SimpleNamespace(data={"active_count": 0}))
+
+        self.assertEqual(view.hide_generation_status_signal.calls, [None])
+
+    def test_terminal_network_error_is_written_to_chat(self):
+        controller, view = self._make_controller()
+
+        controller._on_failed_response(SimpleNamespace(data={
+            "provider_error": {
+                "message": "Нет подключения к интернету.",
+                "code": "network.dns",
+                "retryable": True,
+            },
+        }))
+
+        self.assertEqual(
+            view.update_chat_signal.calls,
+            [("event", "⚠ Нет подключения к интернету.", False, "")],
+        )
 
 
 if __name__ == "__main__":

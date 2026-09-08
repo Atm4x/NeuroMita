@@ -1,18 +1,23 @@
-"""Auto-update from GitHub Releases.
+"""Auto-update from the CI-generated release manifest with GitHub API fallback.
 
 Controlled via features.env or Settings/settings.json:
   AUTO_UPDATE=0|1          — notify only / auto-apply Python part (default 0)
   AUTO_UPDATE_UNITY=0|1    — same for Unity part (default 0)
-  UPDATE_REPO              — release repository (default Atm4x/NeuroMita)
-  UPDATE_CHANNEL           — stable|beta (default stable)
+  UPDATE_CONTOUR           — test|release; persisted in Settings/settings.json
+                            fresh installs bootstrap from Settings/distribution.json
+                            test -> Atm4x/NeuroMita release catalog
+                            release -> VinerX/NeuroMita release catalog
   TESTER_CODE              — password for encrypted test archives
 
-Exit code 42 signals launch.py / run.bat to restart after Python update.
+Exit code 42 is the ordinary run.py restart. Self-updates that stage a new
+NeuroMita.pyz use the Launcher.exe post-exit activation handoff instead.
 """
 
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -20,11 +25,12 @@ import shutil
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
+import httpx
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+from core.networking import shared_http_client_registry
 
 from services.update_transaction import (
     DirectoryInstallTransaction,
@@ -37,6 +43,13 @@ from services.update_transaction import (
     verify_install_manifest,
     write_install_manifest,
 )
+from services.update_activation import (
+    active_zipapp_matches,
+    discard_activation_artifacts,
+    pending_activation_exists,
+    pending_zipapp_path,
+    stage_zipapp_for_activation,
+)
 from utils.archive_utils import (
     ArchiveCancelled,
     PasswordError,
@@ -44,6 +57,16 @@ from utils.archive_utils import (
     format_bytes,
     make_logger,
     wipe_dir,
+)
+from services.update_contour import (
+    UpdateTarget,
+    infer_initial_contour,
+    normalize_contour,
+    target_for_contour,
+)
+from services.release_catalog import (
+    ReleaseCatalogError,
+    discover_release_catalog,
 )
 from utils.release_assets import (
     Release,
@@ -53,6 +76,11 @@ from utils.release_assets import (
     parse_release,
     pick_from_release,
     raw_release_has_python_assets,
+)
+
+_UPDATE_HTTP_CLIENT = shared_http_client_registry().acquire(
+    "application-updater",
+    client_options={"follow_redirects": True},
 )
 
 _USER_AGENT = "NeuroMita-Updater/2.0"
@@ -121,7 +149,7 @@ def _copy_file_over(
             if not is_locked:
                 raise
             if time.monotonic() >= deadline:
-                log(f"Could not overwrite {dst}: {exc}")
+                log(f"Could not overwrite {dst}: {format_exception(exc)}")
                 return False
             time.sleep(0.25)
 
@@ -133,6 +161,7 @@ def _overlay_dir(
     preserve_prompts: bool = False,
     *,
     locked_retry_seconds: float = 0.0,
+    deferred_files: set[str] | None = None,
 ) -> None:
     """Наложить содержимое staging поверх base_path как diff.
 
@@ -150,7 +179,11 @@ def _overlay_dir(
     папки Prompts (правки пользователя выигрывают), но новые промпты из релиза
     всё равно добавляются.
     """
-    copied = skipped = preserved = 0
+    deferred = {
+        str(Path(item)).replace("\\", "/").casefold()
+        for item in (deferred_files or set())
+    }
+    copied = skipped = preserved = deferred_count = 0
     failed: list[Path] = []
     for root, _dirs, files in os.walk(staging):
         rel = Path(root).relative_to(staging)
@@ -158,6 +191,11 @@ def _overlay_dir(
         dst_root.mkdir(parents=True, exist_ok=True)
         for name in files:
             if not rel.parts and name == install_manifest_name():
+                continue
+            relative_path = rel / name
+            relative_key = str(relative_path).replace("\\", "/").casefold()
+            if relative_key in deferred:
+                deferred_count += 1
                 continue
             src = Path(root) / name
             dst = dst_root / name
@@ -189,6 +227,8 @@ def _overlay_dir(
     msg = f"Overlay update into {base_path}: {copied} written, {skipped} unchanged"
     if preserve_prompts:
         msg += f", {preserved} prompts kept"
+    if deferred_count:
+        msg += f", {deferred_count} runtime file(s) deferred until restart"
     log(msg + ".")
 
 
@@ -241,14 +281,20 @@ def _verify_python_application(
     base_path: Path,
     *,
     preserve_prompts: bool,
+    deferred_targets: dict[str, Path] | None = None,
 ) -> None:
+    deferred = {
+        str(Path(relative)).replace("\\", "/").casefold(): Path(target)
+        for relative, target in (deferred_targets or {}).items()
+    }
     manifest = verify_install_manifest(staging)
     files = manifest.get("files") or {}
     for relative, record in files.items():
         relative_path = Path(str(relative))
         if preserve_prompts and relative_path.parts and relative_path.parts[0].casefold() == "prompts":
             continue
-        target = base_path / relative_path
+        relative_key = str(relative_path).replace("\\", "/").casefold()
+        target = deferred.get(relative_key, base_path / relative_path)
         if not target.is_file():
             raise UpdateTransactionError(f"Applied Python file is missing: {relative}")
         expected_size = int(record.get("size") or 0)
@@ -274,7 +320,7 @@ def _install_full_archive(
     on_apply_started: Optional[Callable[[], None]] = None,
     locked_retry_seconds: float = 0.0,
     stop_event=None,
-) -> None:
+) -> dict[str, str]:
     """Установка обновления. Распаковка идёт в чистую временную папку (там
     надёжно срабатывает выравнивание единственного корневого каталога — иначе
     из-за логов в base_path обновление разворачивалось во вложенную папку), а
@@ -283,7 +329,9 @@ def _install_full_archive(
       mode="diff" (по умолчанию) — наложение поверх существующей папки: пишутся
         только изменившиеся файлы, ничего не удаляется. libs/python с
         зависимостями, .req_hash и локальные файлы переживают апдейт.
-      mode="full" — полная перезапись (wipe + перенос релиза), как раньше.
+      mode="full" — для запущенного self-hosted Python runtime безопасно
+        понижается до diff. Полный wipe работающей установки принципиально
+        нельзя выполнять из неё самой.
 
     preserve_prompts — сохранять локальные промпты (см. _overlay_dir/_full_replace).
     """
@@ -305,6 +353,7 @@ def _install_full_archive(
             shutil.rmtree(staging, ignore_errors=True)
         marker.unlink(missing_ok=True)
         staging.mkdir(parents=True, exist_ok=True)
+    deferred_targets: dict[str, Path] = {}
     try:
         if not reusable:
             extract_archive(
@@ -338,23 +387,48 @@ def _install_full_archive(
         if on_apply_started is not None:
             on_apply_started()
         base_path.mkdir(parents=True, exist_ok=True)
-        if mode == "full":
-            _full_replace(staging, base_path, log, preserve_prompts)
-        else:
-            _overlay_dir(
-                staging,
+        zipapp_candidate = staging / "NeuroMita.pyz"
+        if zipapp_candidate.is_file():
+            staged_zipapp = stage_zipapp_for_activation(
+                zipapp_candidate,
                 base_path,
-                log,
-                preserve_prompts,
-                locked_retry_seconds=locked_retry_seconds,
+                archive_sha256=archive_sha256,
             )
+            deferred_targets["NeuroMita.pyz"] = staged_zipapp.path
+            log(
+                "Staged NeuroMita.pyz for post-exit activation; the running zipapp "
+                "was left untouched."
+            )
+
+        effective_mode = str(mode or "diff").casefold()
+        if effective_mode == "full":
+            log(
+                "Python UPDATE_MODE=full cannot wipe a running self-hosted runtime; "
+                "applying the verified full archive as a safe overlay instead.",
+                "warning",
+            )
+        _overlay_dir(
+            staging,
+            base_path,
+            log,
+            preserve_prompts,
+            locked_retry_seconds=locked_retry_seconds,
+            deferred_files=set(deferred_targets),
+        )
         _verify_python_application(
             staging,
             base_path,
             preserve_prompts=preserve_prompts,
+            deferred_targets=deferred_targets,
         )
         log(f"Installed update contents into {base_path}")
+        return {
+            relative: str(target)
+            for relative, target in deferred_targets.items()
+        }
     except Exception:
+        if deferred_targets:
+            discard_activation_artifacts(base_path)
         if not marker.exists():
             shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -362,8 +436,46 @@ def _install_full_archive(
 
 # ── Repo / version helpers ────────────────────────────────────────────────────
 
+def _get_update_target() -> UpdateTarget:
+    # Lazy imports avoid coupling the updater module to GUI/settings startup.
+    # Before SettingsManager is initialized we still honor legacy tester hints
+    # once, so the transitional build does not jump testers to VinerX early.
+    try:
+        from core.app_paths import settings_path
+        from managers.settings_manager import SettingsManager
+
+        contour = normalize_contour(SettingsManager.get("UPDATE_CONTOUR", None))
+        if contour is None:
+            legacy = {
+                "UPDATE_REPO": SettingsManager.get("UPDATE_REPO", os.environ.get("UPDATE_REPO", "")),
+                "UPDATE_CHANNEL": SettingsManager.get(
+                    "UPDATE_CHANNEL", os.environ.get("UPDATE_CHANNEL", "")
+                ),
+                "TESTER_CODE": SettingsManager.get("TESTER_CODE", os.environ.get("TESTER_CODE", "")),
+            }
+            contour, _reason = infer_initial_contour(
+                legacy,
+                config_path=str(settings_path("settings.json")),
+            )
+    except Exception:
+        contour = "release"
+    return target_for_contour(contour)
+
+
+def get_update_target() -> dict[str, str]:
+    """Public read-only description used by the settings UI and diagnostics."""
+    target = _get_update_target()
+    return {
+        "contour": target.contour,
+        "repo": target.repo,
+        "channel": target.channel,
+    }
+
+
 def _get_repo() -> str:
-    return os.environ.get("UPDATE_REPO", "Atm4x/NeuroMita")
+    # Compatibility helper for old internal callers. Repository is no longer
+    # independently configurable: UPDATE_CONTOUR is the single source of truth.
+    return _get_update_target().repo
 
 
 def _get_current_version() -> str:
@@ -389,49 +501,25 @@ def _is_newer(remote_tag: str, local_version: str) -> bool:
 
 
 def _find_unity_executable(unity_dir: Path) -> Optional[Path]:
-    if not unity_dir.exists() or not unity_dir.is_dir():
-        return None
+    from core.unity_installation import find_unity_executable
 
-    # Ищем в корне и на один уровень вглубь (например UnityBuild/).
-    exe_files = list(unity_dir.glob("*.exe")) + list(unity_dir.glob("*/*.exe"))
-    if not exe_files:
-        return None
-
-    preferred_names = ("NeuroMita.exe", "NeuroMita-Unity.exe", "Unity.exe")
-    lower_map = {path.name.lower(): path for path in exe_files}
-    for name in preferred_names:
-        found = lower_map.get(name.lower())
-        if found is not None:
-            return found
-
-    for path in exe_files:
-        low = path.name.lower()
-        if "neuromita" in low or "unity" in low:
-            return path
-    return exe_files[0]
+    return find_unity_executable(unity_dir)
 
 
-# ── GitHub API ────────────────────────────────────────────────────────────────
+# ── Release discovery ────────────────────────────────────────────────────────
 
-def _api_get(url: str):
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"},
+def _fetch_releases(repo: str) -> list[dict]:
+    catalog = discover_release_catalog(
+        repo,
+        client=_UPDATE_HTTP_CLIENT,
+        timeout=8,
+        allow_api_fallback=True,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read())
-    except (urllib.error.URLError, OSError, json.JSONDecodeError):
-        return None
+    return catalog.releases
 
 
-def _fetch_latest_release(repo: str) -> Optional[dict]:
-    return _api_get(f"https://api.github.com/repos/{repo}/releases/latest")
-
-
-def _fetch_releases(repo: str, per_page: int = 20) -> list[dict]:
-    data = _api_get(f"https://api.github.com/repos/{repo}/releases?per_page={per_page}")
-    return data if isinstance(data, list) else []
+def _release_catalog_error(repo: str, error: Exception) -> str:
+    return f"Could not load release catalog for {repo}: {format_exception(error)}"
 
 
 def _published_sort_key(release: dict) -> str:
@@ -518,8 +606,6 @@ def _download(
     expected_sha256: str = "",
 ) -> str:
     """Resume a streamed download and atomically publish a verified archive."""
-    import requests
-
     expected_size = max(0, int(expected_size or 0))
     expected_sha256 = _expected_sha256(expected_sha256)
     cached_hash = _validate_cached_archive(
@@ -561,9 +647,15 @@ def _download(
                 if validator:
                     headers["If-Range"] = validator
 
-            with requests.get(url, stream=True, timeout=30, headers=headers) as response:
+            timeout = httpx.Timeout(connect=30.0, read=30.0, write=30.0, pool=10.0)
+            with _UPDATE_HTTP_CLIENT.stream(
+                "GET",
+                url,
+                timeout=timeout,
+                headers=headers,
+            ) as response:
                 if response.status_code != 416:
-                    response.raise_for_status()
+                    _UPDATE_HTTP_CLIENT.raise_for_status(response)
                     resumed = response.status_code == 206 and offset > 0
                     if not resumed:
                         offset = 0
@@ -591,7 +683,7 @@ def _download(
                     downloaded = offset
                     last_report = time.monotonic()
                     with partial.open("ab" if resumed else "wb") as output:
-                        for piece in response.iter_content(chunk_size=chunk_size):
+                        for piece in response.iter_bytes(chunk_size=chunk_size):
                             if stop_event is not None and stop_event.is_set():
                                 raise UpdateCancelled("Download cancelled")
                             if not piece:
@@ -605,7 +697,7 @@ def _download(
                     if on_progress is not None:
                         on_progress(downloaded, total or downloaded)
                 elif not (expected_size > 0 and offset == expected_size):
-                    response.raise_for_status()
+                    _UPDATE_HTTP_CLIENT.raise_for_status(response)
 
             actual_size = partial.stat().st_size if partial.exists() else 0
             if expected_size > 0 and actual_size != expected_size:
@@ -659,24 +751,100 @@ def _fetch_latest_unity_release_asset(
     return find_latest_unity_asset(releases, channel)
 
 
+def _normalized_install_path(base_path: Path) -> str:
+    resolved = str(base_path.resolve(strict=False))
+    return os.path.normcase(resolved) if os.name == "nt" else resolved
+
+
+def _python_installation_id(base_path: Path) -> str:
+    return hashlib.sha256(
+        _normalized_install_path(base_path).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def _updater_cache_root() -> Path:
+    override = os.environ.get("NEUROMITA_UPDATE_CACHE_DIR")
+    if override:
+        return Path(override)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "NeuroMita" / "Updater"
+    return Path(tempfile.gettempdir()) / "NeuroMita" / "Updater"
+
+
+def _python_workspace(base_path: Path) -> Path:
+    return _updater_cache_root() / _python_installation_id(base_path) / "python"
+
+
 def _python_journal_path(base_path: Path) -> Path:
-    return base_path.parent / f".{base_path.name}.update-state" / "python" / "operation.json"
+    return _python_workspace(base_path) / "operation.json"
 
 
 def _python_staging_path(base_path: Path) -> Path:
-    return base_path.parent / f".{base_path.name}.python-update-stage"
+    return _python_workspace(base_path) / "stage"
 
 
 def _python_stage_marker(staging: Path) -> Path:
+    if staging.name == "stage" and staging.parent.name == "python":
+        return staging.parent / ".stage.ready.json"
     return staging.parent / f".{staging.name}.ready.json"
 
 
 def _python_download_dir(base_path: Path) -> Path:
+    return _python_workspace(base_path) / "download"
+
+
+def _legacy_python_journal_path(base_path: Path) -> Path:
+    return base_path.parent / f".{base_path.name}.update-state" / "python" / "operation.json"
+
+
+def _legacy_python_staging_path(base_path: Path) -> Path:
+    return base_path.parent / f".{base_path.name}.python-update-stage"
+
+
+def _legacy_python_download_dir(base_path: Path) -> Path:
     return base_path.parent / f".{base_path.name}.update-download"
 
 
-def _set_python_operation_phase(base_path: Path, phase: str, **changes) -> dict:
-    journal = _python_journal_path(base_path)
+def _python_state_matches_target(state: dict, base_path: Path) -> bool:
+    target = str(state.get("target") or "")
+    if not target:
+        return False
+    return _normalized_install_path(Path(target)) == _normalized_install_path(base_path)
+
+
+def _python_state_is_resumable(state: dict) -> bool:
+    if not state:
+        return False
+    phase = str(state.get("phase") or "")
+    if phase in {"", "completed", "cancelled"}:
+        return False
+    if phase == "failed":
+        return "Could not apply" in str(state.get("error") or "")
+    return True
+
+
+def _python_active_journal_path(base_path: Path) -> Path:
+    current = _python_journal_path(base_path)
+    if current.is_file():
+        return current
+    legacy = _legacy_python_journal_path(base_path)
+    legacy_state = read_json(legacy)
+    if _python_state_is_resumable(legacy_state) and _python_state_matches_target(
+        legacy_state, base_path
+    ):
+        return legacy
+    return current
+
+
+def _set_python_operation_phase(
+    base_path: Path,
+    phase: str,
+    *,
+    journal_path: Optional[Path] = None,
+    **changes,
+) -> dict:
+    journal = journal_path or _python_journal_path(base_path)
     state = read_json(journal)
     state.update(changes)
     state.update(
@@ -749,12 +917,138 @@ def _python_stage_is_reusable(staging: Path, archive_sha256: str) -> bool:
         return False
 
 
-def _cleanup_python_reserve(base_path: Path, archive: Path) -> None:
-    staging = _python_staging_path(base_path)
-    shutil.rmtree(staging, ignore_errors=True)
-    _python_stage_marker(staging).unlink(missing_ok=True)
-    archive.unlink(missing_ok=True)
-    _archive_meta_path(archive).unlink(missing_ok=True)
+def _cleanup_python_reserve(
+    *,
+    journal: Path,
+    archive: Optional[Path],
+    staging: Path,
+    logger=None,
+) -> None:
+    """Best-effort cleanup after a terminally completed Python update."""
+    log = make_logger(logger, _LOG_PREFIX)
+    files = [_python_stage_marker(staging)]
+    if archive is not None:
+        files.extend(
+            [
+                archive,
+                _archive_meta_path(archive),
+                archive.with_suffix(archive.suffix + ".part"),
+                _archive_meta_path(archive.with_suffix(archive.suffix + ".part")),
+            ]
+        )
+    cleanup_failed = False
+
+    try:
+        shutil.rmtree(staging, ignore_errors=True)
+    except OSError as error:
+        cleanup_failed = True
+        log(f"Could not remove updater staging directory {staging}: {format_exception(error)}", "warning")
+    if staging.exists():
+        cleanup_failed = True
+
+    for path in files:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            cleanup_failed = True
+            log(f"Could not remove updater artifact {path}: {format_exception(error)}", "warning")
+        if path.exists():
+            cleanup_failed = True
+
+    if not cleanup_failed:
+        try:
+            journal.unlink(missing_ok=True)
+        except OSError as error:
+            cleanup_failed = True
+            log(f"Could not remove updater journal {journal}: {format_exception(error)}", "warning")
+        if journal.exists():
+            cleanup_failed = True
+    else:
+        log(
+            "Keeping the completed updater journal because cleanup left artifacts behind.",
+            "warning",
+        )
+
+    cleanup_dirs = []
+    if archive is not None:
+        cleanup_dirs.append(archive.parent)
+    cleanup_dirs.append(journal.parent)
+    if staging.parent == journal.parent:
+        cleanup_dirs.extend([journal.parent.parent, journal.parent.parent.parent])
+    else:
+        cleanup_dirs.append(journal.parent.parent)
+    seen: set[Path] = set()
+    for directory in cleanup_dirs:
+        directory = directory.resolve(strict=False)
+        if directory in seen:
+            continue
+        seen.add(directory)
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+
+
+def _python_state_archive_path_for_journal(
+    base_path: Path,
+    state: dict,
+    journal: Path,
+) -> Optional[Path]:
+    value = str(state.get("archive_path") or "")
+    if value:
+        return Path(value)
+    name = str(state.get("archive_name") or "")
+    if not name:
+        return None
+    download_dir = (
+        _legacy_python_download_dir(base_path)
+        if journal == _legacy_python_journal_path(base_path)
+        else _python_download_dir(base_path)
+    )
+    return download_dir / name
+
+
+def _python_state_staging_path_for_journal(
+    base_path: Path,
+    state: dict,
+    journal: Path,
+) -> Path:
+    value = str(state.get("staging") or "")
+    if value:
+        return Path(value)
+    if journal == _legacy_python_journal_path(base_path):
+        return _legacy_python_staging_path(base_path)
+    return _python_staging_path(base_path)
+
+
+def _cleanup_completed_python_operation(
+    base_path: Path,
+    journal: Path,
+    state: dict,
+    logger=None,
+) -> None:
+    _cleanup_python_reserve(
+        journal=journal,
+        archive=_python_state_archive_path_for_journal(base_path, state, journal),
+        staging=_python_state_staging_path_for_journal(base_path, state, journal),
+        logger=logger,
+    )
+
+
+def _cleanup_terminal_legacy_python_reserve(base_path: Path, logger=None) -> None:
+    journal = _legacy_python_journal_path(base_path)
+    state = read_json(journal)
+    if not state or not _python_state_matches_target(state, base_path):
+        return
+    if str(state.get("phase") or "") != "completed":
+        return
+    cleanup_state = dict(state)
+    cleanup_state.setdefault("staging", str(_legacy_python_staging_path(base_path)))
+    if not cleanup_state.get("archive_path") and cleanup_state.get("archive_name"):
+        cleanup_state["archive_path"] = str(
+            _legacy_python_download_dir(base_path) / str(cleanup_state["archive_name"])
+        )
+    _cleanup_completed_python_operation(base_path, journal, cleanup_state, logger=logger)
 
 
 # Максимум detached-перезапусков подряд для одной залоченной установки. Обычная
@@ -778,7 +1072,8 @@ def note_locked_restart_attempt(
     и цикл detached-перезапусков останавливается (вместо вечного спавна).
     """
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
-    state = read_json(_python_journal_path(base_path))
+    journal = _python_active_journal_path(base_path)
+    state = read_json(journal)
     attempts = int(state.get("restart_attempts") or 0) + 1
     limit = max(1, int(limit))
     exhausted = attempts >= limit
@@ -786,6 +1081,7 @@ def note_locked_restart_attempt(
         _set_python_operation_phase(
             base_path,
             "failed",
+            journal_path=journal,
             restart_attempts=attempts,
             error=(
                 "Update aborted: launcher files stayed locked after "
@@ -796,6 +1092,7 @@ def note_locked_restart_attempt(
         _set_python_operation_phase(
             base_path,
             str(state.get("phase") or "waiting_for_restart"),
+            journal_path=journal,
             restart_attempts=attempts,
         )
     return attempts, exhausted
@@ -808,17 +1105,26 @@ def get_python_update_info(
     channel: str = "stable",
 ) -> dict:
     """Return current/latest Python update information without installing."""
-    repo = _get_repo()
+    target = _get_update_target()
+    repo = target.repo
     local_version = _get_current_version()
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = target.channel
 
-    release = _select_python_release(repo, channel)
+    try:
+        release = _select_python_release(repo, channel)
+    except ReleaseCatalogError as error:
+        return {
+            "ok": False,
+            "component": "python",
+            "current_version": local_version,
+            "error": _release_catalog_error(repo, error),
+        }
     if release is None:
         return {
             "ok": False,
             "component": "python",
             "current_version": local_version,
-            "error": "Could not reach GitHub to check for updates",
+            "error": f"No Python release asset is available for {channel} channel",
         }
 
     remote_tag = str(release.tag or "")
@@ -850,8 +1156,9 @@ def get_unity_update_info(
     channel: str = "stable",
 ) -> dict:
     """Return current/latest Unity update information without installing."""
-    repo = _get_repo()
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    target = _get_update_target()
+    repo = target.repo
+    channel = target.channel
 
     if base_dir is None:
         base_dir = str(Path(sys.argv[0]).parent)
@@ -865,7 +1172,15 @@ def get_unity_update_info(
         else "0.0.0.0"
     )
 
-    release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
+    try:
+        release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
+    except ReleaseCatalogError as error:
+        return {
+            "ok": False,
+            "component": "unity",
+            "current_version": local_version,
+            "error": _release_catalog_error(repo, error),
+        }
     if release is None:
         return {
             "ok": False,
@@ -917,22 +1232,29 @@ def check_for_updates(
     """
     log = make_logger(logger, _LOG_PREFIX)
 
-    repo = _get_repo()
+    target = _get_update_target()
+    repo = target.repo
     local_version = _get_current_version()
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = target.channel
     tester_code = tester_code or os.environ.get("TESTER_CODE") or None
     update_mode = (update_mode or os.environ.get("UPDATE_MODE", "diff")).lower()
     if update_mode not in ("diff", "full"):
         update_mode = "diff"
     preserve_prompts = preserve_prompts or os.environ.get("UPDATE_PRESERVE_PROMPTS", "0") == "1"
 
+    log(f"Update contour: {target.contour} ({repo}, {channel})")
     log(f"Checking for updates ({repo}, channel={channel}, mode={update_mode}) ...")
 
-    release = _select_python_release(repo, channel)
+    try:
+        release = _select_python_release(repo, channel)
+    except ReleaseCatalogError as error:
+        message = _release_catalog_error(repo, error)
+        log(message, "warning")
+        return UpdateResult(component="python", ok=False, status="check_failed", error=message)
     if release is None:
-        message = "Could not reach GitHub to check for updates"
+        message = f"No Python release asset is available for {channel} channel"
         log(message, "warning")
         return UpdateResult(component="python", ok=False, status="check_failed", error=message)
 
@@ -979,6 +1301,31 @@ def check_for_updates(
     if base_dir is None:
         base_dir = str(Path(sys.argv[0]).parent)
     base_path = Path(base_dir)
+    legacy_state = read_json(_legacy_python_journal_path(base_path))
+    if _python_state_is_resumable(legacy_state) and _python_state_matches_target(
+        legacy_state, base_path
+    ):
+        pending_phase = str(legacy_state.get("phase") or "waiting_for_restart")
+        return UpdateResult(
+            component="python",
+            ok=False,
+            status=(
+                pending_phase
+                if pending_phase in {
+                    "waiting_for_credentials",
+                    "waiting_for_restart",
+                    "waiting_for_activation",
+                }
+                else "pending"
+            ),
+            restart_required=pending_phase in {
+                "waiting_for_restart",
+                "waiting_for_activation",
+            },
+            version=str(legacy_state.get("version") or ""),
+            error=str(legacy_state.get("error") or "A previous update is pending recovery"),
+        )
+    _cleanup_terminal_legacy_python_reserve(base_path, logger=logger)
     dl_dir = _python_download_dir(base_path)
     dl_dir.mkdir(parents=True, exist_ok=True)
     temp_archive = dl_dir / python_asset.name
@@ -1034,7 +1381,7 @@ def check_for_updates(
         if is_patch:
             try:
                 _set_python_operation_phase(base_path, "extracting")
-                _install_full_archive(
+                deferred_activation = _install_full_archive(
                     temp_archive, base_path, tester_code, log,
                     mode="diff", preserve_prompts=preserve_prompts,
                     staging=staging,
@@ -1048,7 +1395,7 @@ def check_for_updates(
             except (PasswordError, ArchiveCancelled, UpdateCancelled):
                 raise
             except Exception as e:
-                log(f"Patch failed ({e}), falling back to full update ...", "warning")
+                log(f"Patch failed ({format_exception(e)}), falling back to full update ...", "warning")
                 temp_archive.unlink(missing_ok=True)
                 _archive_meta_path(temp_archive).unlink(missing_ok=True)
                 full_asset = _fetch_full_fallback_asset(repo, channel)
@@ -1081,7 +1428,7 @@ def check_for_updates(
                     archive_path=str(full_archive),
                 )
                 _set_python_operation_phase(base_path, "extracting")
-                _install_full_archive(
+                deferred_activation = _install_full_archive(
                     full_archive, base_path, tester_code, log,
                     mode=update_mode, preserve_prompts=preserve_prompts,
                     staging=staging,
@@ -1094,7 +1441,7 @@ def check_for_updates(
                 )
         else:
             _set_python_operation_phase(base_path, "extracting")
-            _install_full_archive(
+            deferred_activation = _install_full_archive(
                 temp_archive, base_path, tester_code, log,
                 mode=update_mode, preserve_prompts=preserve_prompts,
                 staging=staging,
@@ -1105,14 +1452,63 @@ def check_for_updates(
                 on_apply_started=apply_started,
                 stop_event=stop_event,
             )
-        _set_python_operation_phase(
-            base_path,
-            "completed",
-            completed_at=int(time.time()),
-            archive_sha256=archive_hash,
-        )
-        _cleanup_python_reserve(base_path, active_archive)
+        pending_zipapp = deferred_activation.get("NeuroMita.pyz")
+        if pending_zipapp:
+            pending_path = Path(pending_zipapp)
+            pending_hash = file_sha256(pending_path)
+            _set_python_operation_phase(
+                base_path,
+                "waiting_for_activation",
+                archive_sha256=archive_hash,
+                pending_zipapp=str(pending_path),
+                pending_zipapp_sha256=pending_hash,
+            )
+        else:
+            _set_python_operation_phase(
+                base_path,
+                "completed",
+                completed_at=int(time.time()),
+                archive_sha256=archive_hash,
+            )
+            try:
+                _cleanup_python_reserve(
+                    journal=_python_journal_path(base_path),
+                    archive=active_archive,
+                    staging=staging,
+                    logger=logger,
+                )
+            except Exception as cleanup_error:
+                log(
+                    f"Update installed successfully, but updater cache cleanup failed: {format_exception(cleanup_error)}",
+                    "warning",
+                )
         _emit_stage(on_stage, "Completed", 4, 4, False)
+
+        if pending_zipapp:
+            log(
+                f"Update {remote_tag} is verified and staged. NeuroMita.pyz will be "
+                "activated only after the current process exits.",
+                "success",
+            )
+            result = UpdateResult(
+                component="python",
+                ok=True,
+                status="waiting_for_activation",
+                changed=True,
+                restart_required=True,
+                version=remote_tag,
+                archive_sha256=archive_hash,
+            )
+            if restart_on_success:
+                from utils.app_restart import restart_app
+
+                if not restart_app():
+                    log(
+                        "Automatic update restart could not be handed to Launcher.exe; "
+                        "the verified update remains pending.",
+                        "warning",
+                    )
+            return result
 
         if restart_on_success:
             log(f"Update {remote_tag} installed successfully. Restarting ...", "success")
@@ -1130,7 +1526,7 @@ def check_for_updates(
         )
 
     except UpdateFilesLocked as error:
-        _set_python_operation_phase(base_path, "waiting_for_restart", error=str(error))
+        _set_python_operation_phase(base_path, "waiting_for_restart", error=format_exception(error))
         log(
             "Running launcher files will be replaced during the controlled restart.",
             "warning",
@@ -1144,11 +1540,11 @@ def check_for_updates(
             changed=True,
             restart_required=True,
             version=remote_tag,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
         )
     except (UpdateCancelled, ArchiveCancelled) as error:
-        _set_python_operation_phase(base_path, "cancelled", error=str(error))
+        _set_python_operation_phase(base_path, "cancelled", error=format_exception(error))
         log("Python update cancelled; downloaded data was kept for resume.", "warning")
         return UpdateResult(
             component="python",
@@ -1156,11 +1552,11 @@ def check_for_updates(
             status="cancelled",
             cancelled=True,
             version=remote_tag,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
         )
     except PasswordError as error:
-        _set_python_operation_phase(base_path, "waiting_for_credentials", error=str(error))
+        _set_python_operation_phase(base_path, "waiting_for_credentials", error=format_exception(error))
         log("Archive is password-protected. Set TESTER_CODE in settings to unlock.", "error")
         log(f"Archive kept for retry: {active_archive}")
         return UpdateResult(
@@ -1168,18 +1564,18 @@ def check_for_updates(
             ok=False,
             status="waiting_for_credentials",
             version=remote_tag,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
         )
     except Exception as error:
-        _set_python_operation_phase(base_path, "failed", error=str(error))
-        log(f"Update failed: {error}", "error")
+        _set_python_operation_phase(base_path, "failed", error=format_exception(error))
+        log(f"Update failed: {format_exception(error)}", "error")
         return UpdateResult(
             component="python",
             ok=False,
             status="failed",
             version=remote_tag,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
         )
 
@@ -1196,12 +1592,78 @@ def resume_pending_python_update(
 ) -> UpdateResult:
     """Finish a previously authorized Python install from its durable reserve."""
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
-    state = read_json(_python_journal_path(base_path))
+    journal = _python_active_journal_path(base_path)
+    state = read_json(journal)
     phase = str(state.get("phase") or "")
+    if phase == "completed":
+        _cleanup_completed_python_operation(base_path, journal, state, logger=logger)
+        _cleanup_terminal_legacy_python_reserve(base_path, logger=logger)
+        return UpdateResult(component="python", ok=True, status="no_pending_operation")
+    if not state:
+        _cleanup_terminal_legacy_python_reserve(base_path, logger=logger)
+        return UpdateResult(component="python", ok=True, status="no_pending_operation")
+    if phase == "waiting_for_activation":
+        expected_hash = str(state.get("pending_zipapp_sha256") or "").strip().lower()
+        version = str(state.get("version") or "")
+        archive_hash = str(state.get("archive_sha256") or "")
+        if pending_activation_exists(base_path):
+            return UpdateResult(
+                component="python",
+                ok=True,
+                status="waiting_for_activation",
+                restart_required=True,
+                version=version,
+                archive_sha256=archive_hash,
+                recovered=True,
+            )
+        if active_zipapp_matches(base_path, expected_hash):
+            _set_python_operation_phase(
+                base_path,
+                "completed",
+                journal_path=journal,
+                completed_at=int(time.time()),
+            )
+            completed_state = read_json(journal)
+            discard_activation_artifacts(base_path)
+            _cleanup_completed_python_operation(
+                base_path,
+                journal,
+                completed_state,
+                logger=logger,
+            )
+            return UpdateResult(
+                component="python",
+                ok=True,
+                status="activated",
+                changed=False,
+                restart_required=False,
+                version=version,
+                archive_sha256=archive_hash,
+                recovered=True,
+            )
+        error = (
+            "Pending NeuroMita.pyz disappeared before activation and the active "
+            "zipapp does not match the verified staged hash."
+        )
+        _set_python_operation_phase(
+            base_path,
+            "failed",
+            journal_path=journal,
+            error=error,
+        )
+        return UpdateResult(
+            component="python",
+            ok=False,
+            status="failed",
+            version=version,
+            error=error,
+            archive_sha256=archive_hash,
+            recovered=True,
+        )
     failed_from_locked_file = phase == "failed" and "Could not apply" in str(
         state.get("error") or ""
     )
-    if not state or phase in {"", "completed", "cancelled"} or (
+    if phase in {"", "cancelled"} or (
         phase == "failed" and not failed_from_locked_file
     ):
         return UpdateResult(component="python", ok=True, status="no_pending_operation")
@@ -1245,8 +1707,10 @@ def resume_pending_python_update(
             error="Pending Python update journal is incomplete",
         )
 
-    archive = Path(str(state.get("archive_path") or _python_download_dir(base_path) / asset.name))
-    staging = _python_staging_path(base_path)
+    archive = Path(
+        str(state.get("archive_path") or (_python_download_dir(base_path) / asset.name))
+    )
+    staging = Path(str(state.get("staging") or _python_staging_path(base_path)))
     archive_hash = str(state.get("archive_sha256") or "")
     log = make_logger(logger, _LOG_PREFIX)
 
@@ -1254,6 +1718,7 @@ def resume_pending_python_update(
         _set_python_operation_phase(
             base_path,
             "stage_ready",
+            journal_path=journal,
             archive_sha256=archive_hash,
             archive_path=str(archive),
         )
@@ -1262,6 +1727,7 @@ def resume_pending_python_update(
         _set_python_operation_phase(
             base_path,
             "applying",
+            journal_path=journal,
             archive_sha256=archive_hash,
             archive_path=str(archive),
         )
@@ -1269,7 +1735,7 @@ def resume_pending_python_update(
 
     try:
         if not _python_stage_is_reusable(staging, archive_hash):
-            _set_python_operation_phase(base_path, "downloading")
+            _set_python_operation_phase(base_path, "downloading", journal_path=journal)
             _emit_stage(on_stage, "Downloading", 1, 4, True)
             archive_hash = _download(
                 asset.url,
@@ -1282,10 +1748,11 @@ def resume_pending_python_update(
             _set_python_operation_phase(
                 base_path,
                 "archive_verified",
+                journal_path=journal,
                 archive_sha256=archive_hash,
                 archive_path=str(archive),
             )
-        _set_python_operation_phase(base_path, "extracting")
+        _set_python_operation_phase(base_path, "extracting", journal_path=journal)
         _emit_stage(on_stage, "Extracting", 2, 4, True)
         _install_full_archive(
             archive,
@@ -1306,10 +1773,22 @@ def resume_pending_python_update(
         _set_python_operation_phase(
             base_path,
             "completed",
+            journal_path=journal,
             completed_at=int(time.time()),
             archive_sha256=archive_hash,
         )
-        _cleanup_python_reserve(base_path, archive)
+        try:
+            _cleanup_python_reserve(
+                journal=journal,
+                archive=archive,
+                staging=staging,
+                logger=logger,
+            )
+        except Exception as cleanup_error:
+            log(
+                f"Update installed successfully, but updater cache cleanup failed: {format_exception(cleanup_error)}",
+                "warning",
+            )
         _emit_stage(on_stage, "Completed", 4, 4, False)
         log(f"Recovered Python update {version}; restart required.", "success")
         return UpdateResult(
@@ -1323,49 +1802,69 @@ def resume_pending_python_update(
             recovered=True,
         )
     except UpdateFilesLocked as error:
-        _set_python_operation_phase(base_path, "waiting_for_restart", error=str(error))
+        _set_python_operation_phase(
+            base_path,
+            "waiting_for_restart",
+            journal_path=journal,
+            error=format_exception(error),
+        )
         return UpdateResult(
             component="python",
             ok=False,
             status="waiting_for_restart",
             restart_required=True,
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
             recovered=True,
         )
     except (UpdateCancelled, ArchiveCancelled) as error:
-        _set_python_operation_phase(base_path, "cancelled", error=str(error))
+        _set_python_operation_phase(
+            base_path,
+            "cancelled",
+            journal_path=journal,
+            error=format_exception(error),
+        )
         return UpdateResult(
             component="python",
             ok=False,
             status="cancelled",
             cancelled=True,
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
             recovered=True,
         )
     except PasswordError as error:
-        _set_python_operation_phase(base_path, "waiting_for_credentials", error=str(error))
+        _set_python_operation_phase(
+            base_path,
+            "waiting_for_credentials",
+            journal_path=journal,
+            error=format_exception(error),
+        )
         return UpdateResult(
             component="python",
             ok=False,
             status="waiting_for_credentials",
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
             recovered=True,
         )
     except Exception as error:
-        _set_python_operation_phase(base_path, "failed", error=str(error))
-        log(f"Python update recovery failed: {error}", "error")
+        _set_python_operation_phase(
+            base_path,
+            "failed",
+            journal_path=journal,
+            error=format_exception(error),
+        )
+        log(f"Python update recovery failed: {format_exception(error)}", "error")
         return UpdateResult(
             component="python",
             ok=False,
             status="failed",
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=archive_hash,
             recovered=True,
         )
@@ -1393,12 +1892,18 @@ def _copy_preserved_unity_data(source: Path, stage: Path) -> None:
 
 
 def _unity_transaction(base_path: Path, unity_path: Path, log) -> DirectoryInstallTransaction:
-    return DirectoryInstallTransaction(
+    from core.unity_installation import validate_unity_update_target
+
+    safe_target = validate_unity_update_target(base_path, unity_path)
+    transaction = DirectoryInstallTransaction(
         component="unity",
-        target=unity_path,
+        target=safe_target,
         state_root=base_path / "_update_state",
         logger=log,
     )
+    if transaction.paths.backup.exists() or transaction.paths.backup.is_symlink():
+        validate_unity_update_target(base_path, transaction.paths.backup)
+    return transaction
 
 
 def _verify_unity_install(path: Path, on_progress=None) -> dict:
@@ -1430,17 +1935,28 @@ def _install_unity_asset(
 ) -> UpdateResult:
     log = make_logger(logger, _LOG_PREFIX)
     archive = base_path / "_update_download" / asset.name
-    transaction = _unity_transaction(base_path, unity_path, log)
-    transaction.begin(
-        {
-            "version": str(version),
-            "archive_url": str(asset.url),
-            "archive_name": str(asset.name),
-            "archive_path": str(archive),
-            "archive_size": int(asset.size or 0),
-            "archive_digest": str(asset.digest or ""),
-        }
-    )
+    try:
+        transaction = _unity_transaction(base_path, unity_path, log)
+        transaction.begin(
+            {
+                "version": str(version),
+                "archive_url": str(asset.url),
+                "archive_name": str(asset.name),
+                "archive_path": str(archive),
+                "archive_size": int(asset.size or 0),
+                "archive_digest": str(asset.digest or ""),
+            }
+        )
+    except (OSError, ValueError, UpdateTransactionError) as error:
+        message = f"Unsafe Unity update target: {format_exception(error)}"
+        log(message, "error")
+        return UpdateResult(
+            component="unity",
+            ok=False,
+            status="failed",
+            version=version,
+            error=message,
+        )
 
     try:
         initial_phase = transaction.phase
@@ -1545,7 +2061,7 @@ def _install_unity_asset(
             recovered=recovered,
         )
     except (UpdateCancelled, ArchiveCancelled) as error:
-        transaction.set_phase("cancelled", error=str(error))
+        transaction.set_phase("cancelled", error=format_exception(error))
         log("Unity installation cancelled; downloaded data was kept for resume.", "warning")
         return UpdateResult(
             component="unity",
@@ -1553,11 +2069,11 @@ def _install_unity_asset(
             status="cancelled",
             cancelled=True,
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=str(transaction.state.get("archive_sha256") or ""),
         )
     except PasswordError as error:
-        transaction.set_phase("waiting_for_credentials", error=str(error))
+        transaction.set_phase("waiting_for_credentials", error=format_exception(error))
         log("Unity archive is password-protected. Set TESTER_CODE in settings.", "error")
         log(f"Archive kept for retry: {archive}")
         return UpdateResult(
@@ -1565,19 +2081,19 @@ def _install_unity_asset(
             ok=False,
             status="waiting_for_credentials",
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=str(transaction.state.get("archive_sha256") or ""),
         )
     except Exception as error:
         if transaction.phase != "rolled_back":
-            transaction.set_phase("failed", error=str(error))
-        log(f"Unity update failed: {error}", "error")
+            transaction.set_phase("failed", error=format_exception(error))
+        log(f"Unity update failed: {format_exception(error)}", "error")
         return UpdateResult(
             component="unity",
             ok=False,
             status="failed",
             version=version,
-            error=str(error),
+            error=format_exception(error),
             archive_sha256=str(transaction.state.get("archive_sha256") or ""),
         )
 
@@ -1602,7 +2118,15 @@ def resume_pending_unity_update(
         if recorded_target
         else Path(unity_dir) if unity_dir else base_path / "NeuroMita-Unity"
     )
-    transaction = _unity_transaction(base_path, target, make_logger(logger, _LOG_PREFIX))
+    try:
+        transaction = _unity_transaction(base_path, target, make_logger(logger, _LOG_PREFIX))
+    except (OSError, ValueError, UpdateTransactionError) as error:
+        return UpdateResult(
+            component="unity",
+            ok=False,
+            status="failed",
+            error=f"Unsafe Unity recovery target: {format_exception(error)}",
+        )
     state = transaction.state
     phase = str(state.get("phase") or "")
     if not state or phase in {"", "completed", "rolled_back", "cancelled", "failed"}:
@@ -1659,10 +2183,11 @@ def check_for_unity_updates(
     stop_event=None,
 ) -> UpdateResult:
     log = make_logger(logger, _LOG_PREFIX)
-    repo = _get_repo()
+    target = _get_update_target()
+    repo = target.repo
     if auto_update is None:
         auto_update = os.environ.get("AUTO_UPDATE_UNITY", "0") == "1"
-    channel = (channel or os.environ.get("UPDATE_CHANNEL", "stable")).lower()
+    channel = target.channel
     tester_code = tester_code or os.environ.get("TESTER_CODE") or None
     base_path = Path(base_dir) if base_dir else Path(sys.argv[0]).parent
     unity_path = Path(unity_dir) if unity_dir else base_path / "NeuroMita-Unity"
@@ -1670,8 +2195,14 @@ def check_for_unity_updates(
     install_complete = _find_unity_executable(unity_path) is not None
     local_version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "0.0.0.0"
 
+    log(f"Update contour: {target.contour} ({repo}, {channel})")
     log(f"Checking Unity updates ({repo}, channel={channel}) ...")
-    release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
+    try:
+        release, unity_asset = _fetch_latest_unity_release_asset(repo, channel)
+    except ReleaseCatalogError as error:
+        message = _release_catalog_error(repo, error)
+        log(message, "warning")
+        return UpdateResult(component="unity", ok=False, status="check_failed", error=message)
     if release is None or unity_asset is None:
         message = "Could not find a Unity release asset to check for updates"
         log(message, "warning")

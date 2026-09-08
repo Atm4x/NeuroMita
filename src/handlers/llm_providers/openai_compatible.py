@@ -5,6 +5,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Mapping, Optional
 
+from core.error_utils import format_exception
 from main_logger import logger
 from .base import (
     BaseProvider,
@@ -193,6 +194,7 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                     excl = set() if has_custom else {"custom_fields"}
                     if not caps.get("schema_reasoning", True):
                         excl.add("reasoning")
+                    excl.update(str(name) for name in caps.get("structured_exclude_fields") or () if str(name).strip())
                     segment_excl = set(caps.get("structured_segment_exclude_fields") or ())
                     if not caps.get("schema_intents", False):
                         segment_excl.add("intents")
@@ -345,7 +347,7 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                     raise build_stream_error(
                         self.name,
                         payload=chunk_payload,
-                        provider_message=f"Invalid provider stream chunk: {type(e).__name__}: {e}",
+                        provider_message=f"Invalid provider stream chunk: {format_exception(e)}",
                         code="stream.invalid_payload",
                         url=req.api_url,
                     ) from e

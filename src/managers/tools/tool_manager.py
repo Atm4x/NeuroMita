@@ -1,11 +1,13 @@
 # src/managers/tools/tool_manager.py
 from __future__ import annotations
+from core.error_utils import format_exception
 
 from importlib import import_module
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from main_logger import logger
+from core.performance_trace import perf_span
 from managers.tools.base import Tool
 from managers.tools.dialects.registry import ToolDialectRegistry
 
@@ -41,7 +43,7 @@ class _LazyTool(Tool):
             return instance
         except Exception as exc:
             self._load_error = exc
-            logger.warning(f"Tool {self._class_name} unavailable: {exc}")
+            logger.warning(f"Tool {self._class_name} unavailable: {format_exception(exc)}")
             raise
 
     @property
@@ -193,8 +195,14 @@ class ToolManager:
             if callable(setter):
                 setter(char_id)
 
-
-    def run(self, name: str, arguments: dict, *, context: Any = None):
+    def run(
+        self,
+        name: str,
+        arguments: dict,
+        *,
+        context: Any = None,
+        trace_id: str | None = None,
+    ):
         with self._lock:
             tool = self._tools.get(name)
         if not tool:
@@ -202,10 +210,12 @@ class ToolManager:
         try:
             contextual_runner = getattr(tool, "run_with_context", None)
             if context is not None and callable(contextual_runner):
-                return contextual_runner(context=context, **(arguments or {}))
-            return tool.run(**(arguments or {}))
+                with perf_span(trace_id, "tool.call", tool=name):
+                    return contextual_runner(context=context, **(arguments or {}))
+            with perf_span(trace_id, "tool.call", tool=name):
+                return tool.run(**(arguments or {}))
         except Exception as exc:
-            return f"[Tool-Error] {name} вызвал исключение: {exc}"
+            return f"[Tool-Error] {name} вызвал исключение: {format_exception(exc)}"
 
     def tools_prompt(self):
         return (

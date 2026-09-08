@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 # src/controllers/api_presets_controller.py
 import json
 import os
@@ -18,7 +19,7 @@ from core.task_supervisor import task_supervisor
 import httpx
 
 from presets.provider_host_metadata import infer_provider_currency
-from handlers.llm_providers.http_transport import LLMHttpTransport
+from handlers.llm_providers.http_transport import LLMHttpClient
 
 
 @dataclass
@@ -43,6 +44,7 @@ class ApiTemplate:
     url_tpl: str = ""
     default_model: str = ""
     known_models: List[str] = field(default_factory=list)
+    model_profiles: List[Dict[str, Any]] = field(default_factory=list)
 
     protocol_id: str = ""
 
@@ -69,6 +71,7 @@ class UserPreset:
     protocol_id: str = ""
     protocol_overrides: Dict[str, Any] = field(default_factory=dict)
     generation_overrides: Dict[str, Any] = field(default_factory=dict)
+    model_profile_overrides: Dict[str, Any] = field(default_factory=dict)
     openrouter_routing: Dict[str, Any] = field(default_factory=dict)
     # Ordered fallback chain. Each entry: {"preset_id": int, "model": str}.
     # "model" is optional (empty -> use that preset's default_model).
@@ -98,9 +101,11 @@ class ApiPresetsController(ApiPresetService):
         "tokens_per_second": 0.5,
     }
 
-    def __init__(self, http_transport: LLMHttpTransport | None = None):
+    def __init__(self, http_transport: LLMHttpClient | None = None):
         self.event_bus = get_event_bus()
-        self._http_transport = http_transport or LLMHttpTransport()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self._http_transport = http_transport or LLMHttpClient(service_id="api-presets")
         self._owns_http_transport = http_transport is None
 
         self.templates_path = settings_path("api_templates.json", create_parent=True)
@@ -122,7 +127,12 @@ class ApiPresetsController(ApiPresetService):
         self._migrate_old_api_keys()
 
     def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
         task_supervisor().cancel_owner(self, timeout=2.0)
+        self.event_bus.unsubscribe_owner(self)
         if self._owns_http_transport:
             self._http_transport.close()
 
@@ -175,7 +185,7 @@ class ApiPresetsController(ApiPresetService):
                 os.replace(tmp, path)
             return True
         except Exception as e:
-            logger.error(f"Failed to write json atomically: {path}: {e}", exc_info=True)
+            logger.error(f"Failed to write json atomically: {path}: {format_exception(e)}", exc_info=True)
             return False
 
     def _normalize_presets_order(self, order: Any) -> List[int]:
@@ -345,7 +355,7 @@ class ApiPresetsController(ApiPresetService):
             )
 
         except Exception as e:
-            logger.error(f"Ошибка при миграции старых ключей API: {e}", exc_info=True)
+            logger.error(f"Ошибка при миграции старых ключей API: {format_exception(e)}", exc_info=True)
 
     def _subscribe_to_events(self):
         self.event_bus.subscribe(Events.ApiPresets.SAVE_CUSTOM_PRESET, self._on_save_custom_preset, weak=False)
@@ -378,7 +388,7 @@ class ApiPresetsController(ApiPresetService):
             self._create_default_presets()
             logger.info(f"Created default user presets. Templates: {len(self.templates)}, Presets: {len(self.presets)}")
         except Exception as e:
-            logger.error(f"Failed to load preset data, fallback to full defaults: {e}", exc_info=True)
+            logger.error(f"Failed to load preset data, fallback to full defaults: {format_exception(e)}", exc_info=True)
             self._create_default_data()
 
     def _refresh_templates_from_code(self):
@@ -398,7 +408,7 @@ class ApiPresetsController(ApiPresetService):
                     for k, v in existing_payload.get("templates", {}).items()
                 }
             except Exception as e:
-                logger.warning(f"Failed to read existing api_templates.json for merge: {e}")
+                logger.warning(f"Failed to read existing api_templates.json for merge: {format_exception(e)}")
 
         for tid, tpl in code_templates.items():
             merged_models = set(tpl.known_models or [])
@@ -408,6 +418,10 @@ class ApiPresetsController(ApiPresetService):
                 if km:
                     merged_models.update(km)
             tpl.known_models = sorted(list(merged_models), reverse=True)
+
+            # Model profiles are compatibility metadata shipped by code.
+            # User-specific changes belong in model_profile_overrides; stale
+            # persisted profiles must not override a corrected capability matrix.
 
         self.templates = code_templates
         current_payload = {
@@ -460,6 +474,10 @@ class ApiPresetsController(ApiPresetService):
         if not isinstance(go, dict):
             go = {}
 
+        mpo = raw.get("model_profile_overrides", {}) or {}
+        if not isinstance(mpo, dict):
+            mpo = {}
+
         orr = raw.get("openrouter_routing", {}) or {}
         if not isinstance(orr, dict):
             orr = {}
@@ -480,6 +498,7 @@ class ApiPresetsController(ApiPresetService):
             protocol_id=protocol_id,
             protocol_overrides=dict(po),
             generation_overrides=dict(go),
+            model_profile_overrides=dict(mpo),
             openrouter_routing=dict(orr),
             fallbacks=fallbacks,
         )
@@ -563,7 +582,7 @@ class ApiPresetsController(ApiPresetService):
                 self._save_presets()
 
         except Exception as e:
-            logger.error(f"Failed to load presets file: {e}", exc_info=True)
+            logger.error(f"Failed to load presets file: {format_exception(e)}", exc_info=True)
             self.presets = {}
             self.presets_order = []
 
@@ -656,7 +675,7 @@ class ApiPresetsController(ApiPresetService):
             self._save_presets()
             logger.info(f"Migrated legacy custom presets only. Presets: {len(self.presets)}")
         except Exception as e:
-            logger.error(f"Failed to migrate legacy presets: {e}", exc_info=True)
+            logger.error(f"Failed to migrate legacy presets: {format_exception(e)}", exc_info=True)
             self._create_default_presets()
 
     def _create_default_presets(self):
@@ -755,6 +774,8 @@ class ApiPresetsController(ApiPresetService):
             "reserve_keys_distribute": bool(p.reserve_keys_distribute),
             "protocol_overrides": p.protocol_overrides or {},
             "generation_overrides": p.generation_overrides or {},
+            "model_profiles": tpl.model_profiles if tpl else [],
+            "model_profile_overrides": p.model_profile_overrides or {},
             "openrouter_routing": p.openrouter_routing or {},
             "fallbacks": [dict(fb) for fb in (p.fallbacks or [])],
         }
@@ -917,6 +938,12 @@ class ApiPresetsController(ApiPresetService):
                 go = {}
             up.generation_overrides = dict(go)
 
+        if "model_profile_overrides" in data:
+            mpo = data.get("model_profile_overrides") or {}
+            if not isinstance(mpo, dict):
+                mpo = {}
+            up.model_profile_overrides = dict(mpo)
+
         if "openrouter_routing" in data:
             orr = data.get("openrouter_routing") or {}
             if not isinstance(orr, dict):
@@ -1061,7 +1088,7 @@ class ApiPresetsController(ApiPresetService):
             self.event_bus.emit(Events.ApiPresets.PRESET_IMPORTED, {"id": new_id})
             return new_id
         except Exception as e:
-            logger.error(f"Failed to import preset: {e}", exc_info=True)
+            logger.error(f"Failed to import preset: {format_exception(e)}", exc_info=True)
             return None
 
     def import_preset(self, path: str) -> Optional[int]:
@@ -1369,8 +1396,8 @@ class ApiPresetsController(ApiPresetService):
                         message = "Connection successful"
                 except Exception as e:
                     success = False
-                    message = f"Parsing error: {str(e)}"
-                    logger.error(f"Test parsing error for {preset_id}: {e}", exc_info=True)
+                    message = f"Parsing error: {format_exception(e)}"
+                    logger.error(f"Test parsing error for {preset_id}: {format_exception(e)}", exc_info=True)
             elif status == 401:
                 message = "Invalid API key (Unauthorized)"
             elif status == 403:
@@ -1404,11 +1431,11 @@ class ApiPresetsController(ApiPresetService):
                 "message": "Connection failed. Check internet connection.",
             })
         except Exception as e:
-            logger.error(f"Test error for {preset_id}: {e}", exc_info=True)
+            logger.error(f"Test error for {preset_id}: {format_exception(e)}", exc_info=True)
             self.event_bus.emit(Events.ApiPresets.TEST_RESULT, {
                 "id": preset_id,
                 "success": False,
-                "message": f"Error: {str(e)}",
+                "message": f"Error: {format_exception(e)}",
             })
 
     def _on_update_preset_models(self, event: Event):

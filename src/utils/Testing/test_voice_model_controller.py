@@ -103,8 +103,9 @@ class _CatalogStub:
         self.gpu_vendor = gpu_vendor
         self.seen_contexts = []
 
-    def list_rows(self, **_kwargs):
-        return [
+    def list_rows(self, **kwargs):
+        self.seen_contexts.append(dict(kwargs))
+        rows = [
             {
                 "metadata": {
                     "id": f"tts:{component.item_id}",
@@ -124,6 +125,13 @@ class _CatalogStub:
             }
             for component in self._components
         ]
+        if kwargs.get("include_status"):
+            for row, component in zip(rows, self._components):
+                row["status"] = {
+                    "installed": bool(component._installed),
+                    "ready": bool(component._installed),
+                }
+        return rows
 
     def require_component(self, component_id):
         item_id = str(component_id).split(":", 1)[-1]
@@ -191,6 +199,64 @@ class VoiceModelControllerTests(unittest.TestCase):
         self.assertTrue(model["compat_supported"])
         self.assertIn("INTEL", model["gpu_vendor"])
         self.assertTrue(model["compat_warning"])
+
+    def test_all_real_f5_variants_expose_nonempty_device_choices(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce RTX 4060"
+
+        adapted = controller.finalize_model_settings(
+            F5TTSModel.MODEL_CONFIGS,
+            "NVIDIA",
+            ["cuda:0"],
+        )
+
+        models = {model["id"]: model for model in adapted}
+        for model_id in ("high", "high_clf5"):
+            settings = {item["key"]: item for item in models[model_id]["settings"]}
+            device = settings["device"]["options"]
+            self.assertEqual(device["values"], ["cuda:0", "cpu"])
+            self.assertEqual(device["default"], "cuda:0")
+
+        for model_id in ("high+low", "high_clf5+low"):
+            settings = {item["key"]: item for item in models[model_id]["settings"]}
+            f5_device = settings["f5rvc_f5_device"]["options"]
+            rvc_device = settings["f5rvc_rvc_device"]["options"]
+            self.assertEqual(f5_device["values"], ["cuda:0", "cpu"])
+            self.assertEqual(f5_device["default"], "cuda:0")
+            self.assertIn("cuda:0", rvc_device["values"])
+            self.assertNotIn("dml", rvc_device["values"])
+            self.assertTrue(rvc_device["values"])
+
+    def test_raw_f5_device_schemas_have_safe_fallback_choices(self):
+        for model in F5TTSModel.MODEL_CONFIGS:
+            settings = {item["key"]: item for item in model["settings"]}
+            device_keys = (
+                ("f5rvc_f5_device", "f5rvc_rvc_device")
+                if "+low" in model["id"]
+                else ("device",)
+            )
+            for key in device_keys:
+                options = settings[key]["options"]
+                self.assertTrue(options["values"])
+                self.assertIn(options["default"], options["values"])
+
+    def test_f5_keeps_generic_cuda_choice_before_device_enumeration(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce RTX 4060"
+
+        adapted = controller.finalize_model_settings(
+            F5TTSModel.MODEL_CONFIGS,
+            "NVIDIA",
+            [],
+        )
+
+        models = {model["id"]: model for model in adapted}
+        for model_id in ("high", "high_clf5"):
+            settings = {item["key"]: item for item in models[model_id]["settings"]}
+            self.assertEqual(
+                settings["device"]["options"]["values"],
+                ["cuda", "cpu"],
+            )
 
     def test_onnx_device_uses_directml_on_nvidia_without_offering_cuda(self):
         controller = self._make_controller_stub()
@@ -263,6 +329,30 @@ class VoiceModelControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.installed_models, {"edge_tts_rvc_cuda"})
         self.assertEqual(catalog.seen_contexts[0]["category"], "tts")
+        self.assertTrue(catalog.seen_contexts[0]["include_status"])
+
+    def test_refresh_installed_models_preserves_known_state_for_transient_probe(self):
+        controller = VoiceModelController.__new__(VoiceModelController)
+        controller._lock = threading.RLock()
+        controller.installed_models = {"medium+"}
+        catalog = SimpleNamespace(
+            list_rows=lambda **_kwargs: [
+                {
+                    "metadata": {"item_id": "medium+"},
+                    "status": {
+                        "ready": False,
+                        "probe_state": "timeout",
+                        "details": {"transient": True},
+                    },
+                }
+            ]
+        )
+        service_registry = SimpleNamespace(get=lambda _contract: catalog)
+
+        with patch("controllers.voice_model_controller.services", return_value=service_registry):
+            controller.refresh_installed_models()
+
+        self.assertEqual(controller.installed_models, {"medium+"})
 
 
     def test_default_model_structure_comes_from_main_process_installable_catalog(self):
@@ -317,6 +407,41 @@ class VoiceModelControllerTests(unittest.TestCase):
         result.add("other")
 
         self.assertEqual(controller.installed_models, {"high"})
+
+    def test_completed_tts_probe_updates_snapshot_and_requests_ui_refresh(self):
+        emitted = []
+        controller = VoiceModelController.__new__(VoiceModelController)
+        controller._lock = threading.RLock()
+        controller.installed_models = set()
+        controller.event_bus = SimpleNamespace(
+            emit=lambda name, data=None: emitted.append((name, data))
+        )
+
+        controller._on_component_status(
+            Event(
+                name="install_component_status",
+                data={
+                    "component_id": "tts:medium+",
+                    "status": {"ready": True, "installed": True},
+                },
+            )
+        )
+
+        self.assertEqual(controller.installed_models, {"medium+"})
+        self.assertEqual(emitted[0][0], "refresh_voice_model_panels")
+        self.assertEqual(emitted[0][1]["model_id"], "medium+")
+
+        controller._on_component_status(
+            Event(
+                name="install_component_status",
+                data={
+                    "component_id": "tts:medium+",
+                    "status": {"ready": False, "installed": False},
+                },
+            )
+        )
+
+        self.assertEqual(controller.installed_models, set())
 
 
 if __name__ == "__main__":

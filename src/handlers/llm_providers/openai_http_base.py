@@ -1,5 +1,6 @@
 # src/handlers/llm_providers/openai_http_base.py
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import json
 import re
@@ -213,7 +214,17 @@ class OpenAIHTTPProviderBase(BaseProvider):
 
         if transport == "openrouter":
             reasoning: Dict[str, Any] = {"enabled": enabled}
-            if enabled and budget > 0:
+            effort = str(extra.get("reasoning_effort") or "").strip().lower()
+            model_profile = (req.capabilities or {}).get("model_profile") or {}
+            thinking_profile = model_profile.get("thinking") if isinstance(model_profile, dict) else {}
+            allowed_efforts = {
+                str(value).strip().lower()
+                for value in (thinking_profile.get("allowed_levels") or [])
+                if str(value).strip()
+            } if isinstance(thinking_profile, dict) else set()
+            if enabled and effort and (not allowed_efforts or effort in allowed_efforts):
+                reasoning["effort"] = effort
+            elif enabled and budget > 0:
                 reasoning["max_tokens"] = budget
             payload["reasoning"] = reasoning
         elif transport == "deepseek":
@@ -300,6 +311,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
                 excl = set() if has_custom else {"custom_fields"}
                 if not caps.get("schema_reasoning", True):
                     excl.add("reasoning")
+                excl.update(str(name) for name in caps.get("structured_exclude_fields") or () if str(name).strip())
                 segment_excl = set(caps.get("structured_segment_exclude_fields") or ())
                 # intents is an internal Unity channel — hidden from the model
                 # unless the selected DSL main template explicitly enables support_intents.
@@ -407,7 +419,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
         except Exception as e:
             provider_error = build_provider_error(
                 self.name,
-                provider_message=f"JSON parse error: {e}",
+                provider_message=f"JSON parse error: {format_exception(e)}",
                 payload=getattr(resp, "text", None),
                 url=request_url,
             )
@@ -507,7 +519,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
                     raise build_stream_error(
                         self.name,
                         payload=chunk[:500],
-                        provider_message=f"Invalid JSON in provider stream: {e}",
+                        provider_message=f"Invalid JSON in provider stream: {format_exception(e)}",
                         code="stream.invalid_json",
                         url=api_url,
                     ) from e

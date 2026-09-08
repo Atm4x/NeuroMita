@@ -4,16 +4,23 @@
 контекста (ui.dialogs.context_viewer_dialog): обе стороны должны считать
 секции и проценты одинаково, а UI не должен импортировать backend-слои.
 """
+from core.error_utils import format_exception
 from typing import Any, Dict
 
 _SECTION_MARKERS = (
     ("[Available Tools]", "tools"),
-    ("[MiSide World State]", "MiSide World State"),
+    ("[Current Group Conversation]", "group conversation"),
+    ("[GAME_MASTER_DIRECTIVE]", "game master directive"),
+    ("[NeuroMita World State]", "NeuroMita World State"),
+    ("[MiSide World State]", "NeuroMita World State"),
+    ("[Character World Context]", "Character World Context"),
+    ("[Character Environment]", "Character Environment"),
     ("[System State]", "System State"),
     ("[Behavior State]", "System State"),
     ("[Current State]", "System State"),
     ("[Pending Reminders]", "reminders"),
     ("[HISTORY SUMMARY]", "history"),
+    ("[Runtime Core Directive", "runtime directives"),
     ("[Core Memory", "core memories"),
     ("<memory_islands>", "memories"),
     ("<active_memory>", "memories"),
@@ -55,7 +62,7 @@ def classify_message_section(msg: Dict[str, Any], is_last_user: bool,
     Модель областей:
       • «Активный контекст» — ТОЛЬКО блоки, которые мы сами намеренно
         инжектим как контекст хода (память, состояние, [Current/System State],
-        MiSide World State, контракты/возможности Unity, RAG). У них есть наши
+        NeuroMita World State, контракты/возможности Unity, RAG). У них есть наши
         маркеры-заголовки.
       • «История» — поток разговора: саммари, реплики диалога и прочие
         уже отработанные (отвеченные) реплики/события прошлых ходов, которые
@@ -120,7 +127,7 @@ def compute_token_usage(messages: Any) -> Dict[str, Any]:
         from managers.context_counter import ContextCounter
         counter = ContextCounter()
     except Exception as e:
-        return {"available": False, "note": f"ContextCounter unavailable: {e}"}
+        return {"available": False, "note": f"ContextCounter unavailable: {format_exception(e)}"}
 
     # Текущий триггер хода — последнее сообщение игрока: реальная реплика ЛИБО
     # idle-событие «игрок молчит», которое физически стоит последним и по смыслу

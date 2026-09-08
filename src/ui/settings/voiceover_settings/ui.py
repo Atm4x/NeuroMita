@@ -89,11 +89,11 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
 
         {'label': _('Настройки Telegram API', 'Telegram API Settings'), 'type': 'text'},
 
-        {'label': _('Telegram ID'), 'key': 'NM_TELEGRAM_API_ID', 'type': 'entry',
+        {'label': _('Telegram ID', 'Telegram ID'), 'key': 'NM_TELEGRAM_API_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('Telegram Hash'), 'key': 'NM_TELEGRAM_API_HASH', 'type': 'entry',
+        {'label': _('Telegram Hash', 'Telegram Hash'), 'key': 'NM_TELEGRAM_API_HASH', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('Telegram Phone'), 'key': 'NM_TELEGRAM_PHONE', 'type': 'entry',
+        {'label': _('Telegram Phone', 'Telegram Phone'), 'key': 'NM_TELEGRAM_PHONE', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
     ]
 
@@ -141,12 +141,21 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
     label_container.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
     self.local_voice_combobox = QComboBox()
-    self.local_voice_empty_status = tr_set(
-        QLabel(),
-        "Нет установленных моделей",
-        "No installed models",
+    self.local_voice_empty_status = QLabel(
+        _(
+            'Нет установленных моделей. <a href="install">Установить</a>',
+            'No installed models. <a href="install">Install</a>',
+        )
     )
     self.local_voice_empty_status.setObjectName("SeparatorLabel")
+    self.local_voice_empty_status.setTextFormat(Qt.TextFormat.RichText)
+    self.local_voice_empty_status.setTextInteractionFlags(
+        Qt.TextInteractionFlag.TextBrowserInteraction
+    )
+    self.local_voice_empty_status.setOpenExternalLinks(False)
+    self.local_voice_empty_status.linkActivated.connect(
+        lambda _href: actions.dispatch(OpenAIEngineSettings())
+    )
     self.local_voice_empty_status.setVisible(False)
 
     # Шестерёнка справа от модели → настройки конкретной модели (AI Hub, раздел TTS).
@@ -159,9 +168,9 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
         try:
             self.local_model_settings_btn.setIcon(qta.icon("fa5s.cog", color="#cccccc"))
         except Exception:
-            self.local_model_settings_btn.setText("⚙")
+            self.local_model_settings_btn.setText("")
     else:
-        self.local_model_settings_btn.setText("⚙")
+        self.local_model_settings_btn.setText("")
     def _open_current_model_settings():
         # Открываем AI Hub на разделе TTS и сразу выделяем текущую модель.
         # component_id в реестре — "tts:<model_id>" (см. make_component_id).

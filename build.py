@@ -1,9 +1,11 @@
-import pathlib
-import zipfile
 import os
+import json
+import pathlib
 import shutil
 import stat
+import subprocess
 import time
+import zipfile
 from pathlib import Path
 from typing import List, Tuple
 
@@ -38,22 +40,26 @@ for _k, _v in os.environ.items():
     if _k.startswith("BUILD_") or _k in ("NEUROMITA_BACKEND", "LAUNCH_PYTHON"):
         env[_k] = _v
 
+
 OUTPUT_DIR = Path(env.get("BUILD_OUTPUT_DIR", str(PROJECT_DIR / "build_output")))
 BUILD_MODE = env.get("BUILD_MODE", "full").lower()
+REBUILD_NATIVE_LAUNCHER = env.get("BUILD_REBUILD_LAUNCHER", "1") == "1"
 STRIP_EMBEDDED_UV = env.get("BUILD_STRIP_EMBEDDED_UV", "1") == "1"
+BUILD_IS_TEST = env.get("BUILD_IS_TEST", "1") == "1"
+UPDATE_CONTOUR = "test" if BUILD_IS_TEST else "release"
 
 # Фильтровать dot-папки (.cache, .git и т.п.) при копировании папок
 EXCLUDE_DOT_DIRS = env.get("BUILD_EXCLUDE_DOT_DIRS", "1") == "1"
 
 # Папки для full-режима: поддержка абсолютных путей
-_copy_dirs_raw = env.get("BUILD_COPY_DIRS", "Prompts")
+_copy_dirs_raw = env.get("BUILD_COPY_DIRS", "extra/Prompts")
 DIRS_TO_COPY: List[Tuple[Path, Path]] = [
     (resolve_path(d.strip(), PROJECT_DIR), OUTPUT_DIR / Path(d.strip()).name)
     for d in _copy_dirs_raw.split(",") if d.strip()
 ]
 
 # Папки для fast-режима
-_fast_dirs_raw = env.get("BUILD_FAST_COPY_DIRS", "Prompts")
+_fast_dirs_raw = env.get("BUILD_FAST_COPY_DIRS", "extra/Prompts")
 FAST_DIRS_TO_COPY: List[Tuple[Path, Path]] = [
     (resolve_path(d.strip(), PROJECT_DIR), OUTPUT_DIR / Path(d.strip()).name)
     for d in _fast_dirs_raw.split(",") if d.strip()
@@ -65,40 +71,80 @@ ALWAYS_DIRS_TO_COPY: List[Tuple[Path, Path]] = [
     (PROJECT_DIR / "docs" / "wiki", OUTPUT_DIR / "docs" / "wiki"),
 ]
 
-# Файлы, нужные в рантайме в ЛЮБОМ режиме сборки. init.py запускается шагом
-# инициализации Triton/Fish Speech (subprocess из корня билда) — без него
-# fast/промптерский билд падал с "can't open file init.py".
-_always_files_raw = env.get("BUILD_ALWAYS_COPY_FILES", "extra/init.py")
+# Дополнительные файлы, нужные в рантайме в любом режиме сборки.
+_always_files_raw = env.get("BUILD_ALWAYS_COPY_FILES", "")
 ALWAYS_FILES_TO_COPY: List[Tuple[Path, Path]] = [
     (resolve_path(f.strip(), PROJECT_DIR), OUTPUT_DIR / Path(f.strip()).name)
     for f in _always_files_raw.split(",") if f.strip()
 ]
 
 # Файлы только для full-режима: поддержка абсолютных путей
-_copy_files_raw = env.get("BUILD_COPY_FILES", "extra/Icon.png")
+_copy_files_raw = env.get(
+    "BUILD_COPY_FILES",
+    "assets/launcher_ui/NM_Logo.ico,assets/launcher_ui/NM_Logo.png",
+)
 FILES_TO_COPY: List[Tuple[Path, Path]] = [
     (resolve_path(f.strip(), PROJECT_DIR), OUTPUT_DIR / Path(f.strip()).name)
     for f in _copy_files_raw.split(",") if f.strip()
 ]
 
-# Скрипты запуска/установки для копирования в корень билда.
-# Launcher.exe — нативная (C) кнопка запуска: находит свою папку, проверяет
-# libs\python\python.exe и запускает run.py (см. scripts/launcher.c). Копируется
-# как есть, бинарь; вся логика установки/запуска — в run.py. run.bat оставляем
-# как запасной вариант запуска без .exe.
+# Launch and install scripts copied into the build root.
+# Launcher.exe delegates to run.bat and immediately releases its installed
+# image for auto-update (see scripts/launcher.c). All install/start behavior
+# remains in run.py, and both user entry points share the same batch contract.
 _root_scripts_raw = env.get(
     "BUILD_ROOT_SCRIPTS",
-    "scripts/Launcher.exe,scripts/run.bat,scripts/run.py,scripts/init_triton.bat",
+    "scripts/Launcher.exe,scripts/run.bat,scripts/run.py",
 )
 ROOT_SCRIPTS: List[Tuple[Path, Path]] = [
     (resolve_path(s.strip(), PROJECT_DIR), OUTPUT_DIR / Path(s.strip()).name)
     for s in _root_scripts_raw.split(",") if s.strip()
 ]
 
+
+def rebuild_native_launcher() -> None:
+    """Compile the native launcher before copying it into a full build."""
+    source = PROJECT_DIR / "scripts" / "launcher.c"
+    resource = PROJECT_DIR / "scripts" / "launcher.rc"
+    output = PROJECT_DIR / "scripts" / "Launcher.exe"
+    if not source.exists() or not resource.exists():
+        raise FileNotFoundError("Native launcher sources are missing.")
+
+    vswhere = Path(os.environ.get(
+        "VSWHERE_PATH",
+        r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe",
+    ))
+    if not vswhere.exists():
+        raise RuntimeError("Visual Studio vswhere.exe was not found; cannot rebuild Launcher.exe.")
+
+    installation = subprocess.check_output(
+        [str(vswhere), "-latest", "-products", "*",
+         "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+         "-property", "installationPath"],
+        text=True,
+        encoding="utf-8",
+    ).strip()
+    if not installation:
+        raise RuntimeError("No Visual Studio C++ toolchain was found; cannot rebuild Launcher.exe.")
+
+    vcvars = Path(installation) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+    if not vcvars.exists():
+        raise RuntimeError(f"Visual Studio environment script is missing: {vcvars}")
+
+    print("\nRebuilding native Launcher.exe...")
+    resource_object = PROJECT_DIR / "scripts" / "launcher.res"
+    command = (
+        f'call "{vcvars}" && '
+        f'rc.exe /nologo /fo "{resource_object}" "{resource}" && '
+        f'cl.exe /nologo /W4 /O2 /utf-8 /Fe:"{output}" "{source}" '
+        f'"{resource_object}"'
+    )
+    subprocess.run(command, cwd=PROJECT_DIR, check=True, shell=True)
+
 # Части пути, исключаемые из pyz
 EXCLUDED_PARTS = {
     "include", "Prompts", "PromptsCatalogue", "ReadmeFiles",
-    "MitaAiC#", "__pycache__", "Testing",
+    "MitaAiC#", "archive", "__pycache__", "Testing",
 }
 
 
@@ -159,6 +205,21 @@ def clean_output_dir() -> None:
         print(f"Очищаю выходную папку: {out}")
         _rmtree_robust(out)
     out.mkdir(parents=True, exist_ok=True)
+
+
+def write_distribution_metadata() -> Path:
+    """Write the update-contour marker consumed on a fresh installation."""
+    metadata_path = OUTPUT_DIR / "Settings" / "distribution.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "schema": 1,
+        "contour": UPDATE_CONTOUR,
+    }
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return metadata_path
 
 
 def _clear_readonly_and_retry(func, path, _exc):
@@ -335,10 +396,17 @@ if __name__ == "__main__":
     print(f"Фильтр backend Lib  : {'вкл' if EXCLUDE_MANAGED_BACKENDS else 'выкл'}")
     print(f"Очистка embedded uv : {'вкл' if STRIP_EMBEDDED_UV else 'выкл'}")
     print(f"Очистка output      : {'вкл' if CLEAN_OUTPUT else 'выкл'}")
+    print(f"Контур обновлений   : {UPDATE_CONTOUR}")
 
     if CLEAN_OUTPUT:
         clean_output_dir()
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+if BUILD_MODE in ("full", "fast"):
+    # Rebuilding the native launcher is optional and must not disable the rest
+    # of the build when the existing Launcher.exe is intentionally reused.
+    if REBUILD_NATIVE_LAUNCHER:
+        rebuild_native_launcher()
 
     pyz_filename = "NeuroMita.pyz"
     pyz_temp = PROJECT_DIR / pyz_filename
@@ -382,6 +450,9 @@ if __name__ == "__main__":
     if ROOT_SCRIPTS:
         print("\nКопирую скрипты запуска...")
         copy_entries(ROOT_SCRIPTS)
+
+    metadata_path = write_distribution_metadata()
+    print(f"\nМетка контура обновлений: {metadata_path}")
 
     if STRIP_EMBEDDED_UV:
         print("\nОчищаю uv из embedded Python...")

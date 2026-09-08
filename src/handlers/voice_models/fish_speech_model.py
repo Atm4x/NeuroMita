@@ -1,10 +1,10 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import os
 import sys
 import traceback
 import hashlib
-import json
 from datetime import datetime
 import subprocess
 from typing import Optional, Any, List, Dict
@@ -12,8 +12,9 @@ from typing import Optional, Any, List, Dict
 from .base_model import IVoiceModel
 from main_logger import logger
 
+from core.app_paths import base_dir, checkpoints_dir
 from core.services import services
-from services.contracts import GuiInteractionService
+from services.contracts import AIEngineAdministrationService, GuiInteractionService
 from utils import getTranslationVariant as _, get_character_voice_paths
 
 from core.backends import BackendKind
@@ -24,8 +25,14 @@ from handlers.voice_models.context import VoiceRuntimeContext
 from handlers.voice_models.install_plan_helpers import (
     patch_tts_with_rvc_audio,
     pip_uninstall_action,
+    remove_paths_action,
     rvc_python_compat_error,
     warning_action,
+)
+from handlers.voice_models.rvc_runtime_assets import (
+    CUDA_RVC_RUNTIME_ASSETS,
+    runtime_asset_download_action,
+    runtime_asset_requirements,
 )
 from installables.compatibility_specs import (
     FISH_CUDA_COMPATIBILITY,
@@ -35,6 +42,25 @@ from installables.compatibility_specs import (
 
 
 class FishSpeechInstallSpec:
+    _MODEL_REPO_URL = "https://huggingface.co/fishaudio/fish-speech-1.5/resolve/main"
+    _MODEL_ASSETS = (
+        ("model.pth", f"{_MODEL_REPO_URL}/model.pth"),
+        ("tokenizer.tiktoken", f"{_MODEL_REPO_URL}/tokenizer.tiktoken"),
+        ("config.json", f"{_MODEL_REPO_URL}/config.json"),
+        (
+            "firefly-gan-vq-fsq-8x1024-21hz-generator.pth",
+            f"{_MODEL_REPO_URL}/firefly-gan-vq-fsq-8x1024-21hz-generator.pth",
+        ),
+    )
+
+    @classmethod
+    def checkpoint_dir(cls) -> str:
+        return str(checkpoints_dir() / "fish-speech-1.5")
+
+    @classmethod
+    def _model_asset_path(cls, filename: str) -> str:
+        return os.path.join(cls.checkpoint_dir(), filename)
+
     @classmethod
     def supported_model_ids(cls) -> list[str]:
         return ["medium", "medium+", "medium+low"]
@@ -55,6 +81,17 @@ class FishSpeechInstallSpec:
             req.append(InstallRequirement(id="triton", kind="python_dist", spec="triton-windows<3.4", required=True))
         if mid == "medium+low":
             req.append(InstallRequirement(id="tts_with_rvc", kind="python_dist", spec="tts-with-rvc", required=True))
+        req.extend(
+            InstallRequirement(
+                id=f"fish_asset_{filename}",
+                kind="file",
+                path_fn=lambda _ctx, name=filename: cls._model_asset_path(name),
+                required=True,
+            )
+            for filename, _url in cls._MODEL_ASSETS
+        )
+        if mid == "medium+low":
+            req.extend(runtime_asset_requirements(CUDA_RVC_RUNTIME_ASSETS))
         return req
     
     @classmethod
@@ -80,101 +117,15 @@ class FishSpeechInstallSpec:
             return str(sp)
         return os.environ.get("NEUROMITA_PYTHON", sys.executable)
 
-    @classmethod
-    def _apply_triton_patches(cls, libs_path_abs: str, log_cb) -> None:
-        def _safe_write(path: str, new_text: str) -> None:
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_text)
-            except Exception as e:
-                log_cb(_(f"Ошибка записи {path}: {e}", f"Write error {path}: {e}"))
-
-        build_py_path = os.path.join(libs_path_abs, "triton", "runtime", "build.py")
-        if os.path.exists(build_py_path):
-            try:
-                with open(build_py_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-
-                new_line_tcc = 'cc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tcc", "tcc.exe")'
-                source2 = source
-
-                # patch tcc path (a bit tolerant)
-                if "tcc.exe" in source2 and "sysconfig.get_paths()" in source2 and "platlib" in source2:
-                    import re as _re
-                    source2 = _re.sub(
-                        r'cc\s*=\s*os\.path\.join\(\s*sysconfig\.get_paths\(\)\s*\[\s*"platlib"\s*\]\s*,\s*"triton"\s*,\s*"runtime"\s*,\s*"tcc"\s*,\s*"tcc\.exe"\s*\)',
-                        new_line_tcc,
-                        source2
-                    )
-
-                # remove -fPIC
-                source2 = source2.replace(
-                    'cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", out]',
-                    'cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi", "-o", out]'
-                )
-
-                if source2 != source:
-                    _safe_write(build_py_path, source2)
-                    log_cb(_("Патчи применены к triton/runtime/build.py", "Patched triton/runtime/build.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча build.py: {e}", f"Error patching build.py: {e}"))
-                log_cb(traceback.format_exc())
-        else:
-            log_cb(_("build.py не найден, патч пропущен", "build.py not found, patch skipped"))
-
-        windows_utils_path = os.path.join(libs_path_abs, "triton", "windows_utils.py")
-        if os.path.exists(windows_utils_path):
-            try:
-                with open(windows_utils_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_code = "output = subprocess.check_output(command, text=True).strip()"
-                new_code = (
-                    "output = subprocess.check_output(\n"
-                    "            command, text=True, creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True, "
-                    "stdin=subprocess.DEVNULL, stderr=subprocess.PIPE\n"
-                    "        ).strip()"
-                )
-                if old_code in source:
-                    _safe_write(windows_utils_path, source.replace(old_code, new_code))
-                    log_cb(_("Патч применён к triton/windows_utils.py", "Patched triton/windows_utils.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча windows_utils.py: {e}", f"Error patching windows_utils.py: {e}"))
-                log_cb(traceback.format_exc())
-
-        compiler_path = os.path.join(libs_path_abs, "triton", "backends", "nvidia", "compiler.py")
-        if os.path.exists(compiler_path):
-            try:
-                with open(compiler_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_line = 'version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")'
-                new_line = 'version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"], creationflags=subprocess.CREATE_NO_WINDOW, stderr=subprocess.PIPE, close_fds=True, stdin=subprocess.DEVNULL).decode("utf-8")'
-                if old_line in source:
-                    _safe_write(compiler_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/backends/nvidia/compiler.py", "Patched triton/backends/nvidia/compiler.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча compiler.py: {e}", f"Error patching compiler.py: {e}"))
-                log_cb(traceback.format_exc())
-
-        cache_py_path = os.path.join(libs_path_abs, "triton", "runtime", "cache.py")
-        if os.path.exists(cache_py_path):
-            try:
-                with open(cache_py_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                old_line = 'temp_dir = os.path.join(self.cache_dir, f"tmp.pid_{pid}_{rnd_id}")'
-                new_line = 'temp_dir = os.path.join(self.cache_dir, f"tmp.pid_{str(pid)[:5]}_{str(rnd_id)[:5]}")'
-                if old_line in source:
-                    _safe_write(cache_py_path, source.replace(old_line, new_line))
-                    log_cb(_("Патч применён к triton/runtime/cache.py", "Patched triton/runtime/cache.py"))
-            except Exception as e:
-                log_cb(_(f"Ошибка патча cache.py: {e}", f"Error patching cache.py: {e}"))
-                log_cb(traceback.format_exc())
-
     @staticmethod
     def _runtime_subprocess_env(python_paths: list[str]) -> dict[str, str]:
+        from core.torch_compile_runtime import configure_compile_environment
+
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["PYTHONPATH"] = os.pathsep.join(python_paths)
+        env["NEUROMITA_RUNTIME_PYTHON_PATHS"] = os.pathsep.join(python_paths)
         dll_paths: list[str] = []
         for root in python_paths:
             for candidate in (
@@ -186,7 +137,36 @@ class FishSpeechInstallSpec:
                     dll_paths.append(candidate)
         if dll_paths:
             env["PATH"] = os.pathsep.join(dll_paths + [env.get("PATH", "")])
+        configure_compile_environment(python_paths, env)
         return env
+
+    @staticmethod
+    def _compile_entry_command(
+        python_executable: str,
+        python_paths: list[str],
+    ) -> list[str]:
+        candidates = [
+            str(path)
+            for path in python_paths
+            if str(path).lower().endswith(".pyz") and os.path.isfile(str(path))
+        ]
+        packaged_archive = os.path.join(
+            str(base_dir()),
+            "NeuroMita.pyz",
+        )
+        if os.path.isfile(packaged_archive) and packaged_archive not in candidates:
+            candidates.append(packaged_archive)
+        if candidates:
+            return [
+                python_executable,
+                os.path.abspath(candidates[0]),
+                "--internal-compile-fish-speech",
+            ]
+        return [
+            python_executable,
+            "-m",
+            "handlers.voice_models.compile_fish_speech",
+        ]
 
     @staticmethod
     def _track_subprocess(pip_installer, process) -> None:
@@ -205,87 +185,13 @@ class FishSpeechInstallSpec:
             clear(process)
 
     @classmethod
-    def _probe_triton_deps(
+    def _compile_call(
         cls,
-        python_executable: str,
-        python_paths: list[str],
-        pip_installer,
-    ) -> tuple[bool, dict, str]:
-        script = r'''
-import importlib, json, os, sys, traceback
-sys.path[:0] = json.loads(sys.argv[1])
-result = {"cuda_found": False, "winsdk_found": False, "msvc_found": False}
-try:
-    importlib.invalidate_caches()
-    import triton  # noqa: F401
-    if os.name == "nt":
-        from triton.windows_utils import find_cuda, find_winsdk, find_msvc
-        try:
-            value = find_cuda()
-            result["cuda_found"] = bool(value and value[0] and os.path.exists(str(value[0])))
-        except Exception:
-            pass
-        try:
-            value = find_winsdk(False)
-            result["winsdk_found"] = bool(value and isinstance(value[0], list) and value[0])
-        except Exception:
-            pass
-        try:
-            value = find_msvc(False)
-            cl_path = value[0] if value and len(value) >= 1 else None
-            inc_paths = value[1] if value and len(value) >= 2 else []
-            lib_paths = value[2] if value and len(value) >= 3 else []
-            result["msvc_found"] = bool(
-                (cl_path and os.path.exists(str(cl_path))) or inc_paths or lib_paths
-            )
-        except Exception:
-            pass
-    print("NEUROMITA_TRITON_PROBE=" + json.dumps(result, sort_keys=True))
-except Exception:
-    traceback.print_exc()
-    raise
-'''
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        process = subprocess.Popen(
-            [python_executable, "-c", script, json.dumps(python_paths)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-            env=cls._runtime_subprocess_env(python_paths),
-        )
-        cls._track_subprocess(pip_installer, process)
-        try:
-            try:
-                stdout, stderr = process.communicate(timeout=120.0)
-            except subprocess.TimeoutExpired:
-                terminate = getattr(pip_installer, "_terminate_process", None)
-                if callable(terminate):
-                    terminate(process, "Triton dependency probe timed out.")
-                else:
-                    process.kill()
-                stdout, stderr = process.communicate()
-                output = "\n".join(part for part in (stdout, stderr) if part).strip()
-                return False, {}, output or "Triton dependency probe timed out"
-        finally:
-            cls._untrack_subprocess(pip_installer, process)
-
-        output = "\n".join(part for part in (stdout, stderr) if part).strip()
-        if process.returncode != 0:
-            return False, {}, output
-        marker = "NEUROMITA_TRITON_PROBE="
-        for line in reversed(stdout.splitlines()):
-            if line.startswith(marker):
-                try:
-                    return True, dict(json.loads(line[len(marker):])), output
-                except Exception:
-                    break
-        return False, {}, output or "Triton probe returned no result"
-
-    @classmethod
-    def _ensure_triton_ready_call(cls, mode: str):
+        *,
+        optional: bool = False,
+        clear_only: bool = False,
+        clear_cache: bool = False,
+    ):
         def _fn(*, pip_installer=None, callbacks=None, ctx=None, **_kwargs) -> bool:
             cb = callbacks
             ctx = ctx or {}
@@ -307,103 +213,68 @@ except Exception:
             if pip_installer is None:
                 return False
 
-            libs_path_abs = cls._libs_path_abs(pip_installer)
             python_paths = [
                 os.path.abspath(str(path))
-                for path in (ctx.get("python_paths") or [libs_path_abs])
+                for path in (ctx.get("python_paths") or [cls._libs_path_abs(pip_installer)])
                 if str(path).strip()
             ]
-            script_path = cls._script_path(pip_installer)
-
-            status(_("Применение патчей Triton...", "Applying Triton patches..."))
-            cls._apply_triton_patches(libs_path_abs, log)
-
-            for attempt in range(2):
-                probe_ok, deps, probe_output = cls._probe_triton_deps(
-                    script_path,
-                    python_paths,
-                    pip_installer,
+            python_paths.extend(
+                str(path) for path in sys.path
+                if (
+                    str(path).lower().endswith(".pyz")
+                    or os.path.isfile(os.path.join(str(path), "handlers", "voice_models", "compile_fish_speech.py"))
                 )
-                if probe_ok:
-                    break
-                log(f"Triton subprocess probe failed:\n{probe_output}")
-                if "DLL load failed while importing libtriton" in probe_output:
-                    status(_("Ошибка загрузки Triton! Проверьте VC++ Redistributable.", "Triton load error! Check VC++ Redistributable."))
-                    gui = services().get_optional(GuiInteractionService)
-                    if gui is not None and gui.confirm("vc_redist", {}) and attempt == 0:
-                        continue
-                    return False
-                return False
+                and str(path) not in python_paths
+            )
+            script_path = cls._script_path(pip_installer)
+            from core.torch_compile_runtime import clear_compile_cache, compile_cache_status
 
-            # Dependencies dialog + optional init.py
-            if os.name == "nt":
-                status(_("Проверка зависимостей Triton...", "Checking Triton dependencies..."))
-                # CUDA Toolkit больше не является обязательным требованием для
-                # компиляции ядра Triton — для линковки достаточно MSVC/VC++
-                # (фидбэк Артёма: «убрать там CUDA, оставить максимум msvc»).
-                # Диалог зависимостей показываем ТОЛЬКО когда чего-то не хватает,
-                # иначе не дёргаем пользователя лишним окном, если всё готово.
-                if not bool(deps.get("msvc_found")):
-                    gui = services().get_optional(GuiInteractionService)
-                    proceed = gui.confirm("triton", deps) if gui is not None else True
-                    if not proceed:
-                        status(_("Инициализация ядра пропущена", "Kernel initialization skipped"))
-                        return True
+            if optional:
+                gui = services().get_optional(GuiInteractionService)
+                if gui is None or not gui.confirm("triton", compile_cache_status()):
+                    status(_("Компиляция отложена", "Compilation postponed"))
+                    return True
 
-            # Прогрев ядра запускает реальный синтез (init.py), которому нужен
-            # референс-голос. init.py использует Models/Mila.wav — если голоса
-            # Мит ещё не установлены, раньше шаг падал сырым FileNotFoundError и
-            # ронял всю установку движка (фидбэк Артёма: «провалившаяся установка
-            # из-за отсутствия моделей»). Движок при этом установлен корректно —
-            # ядро просто скомпилируется при первой реальной озвучке. Поэтому не
-            # валимся, а понятно сообщаем и пропускаем прогрев.
-            ref_wav = os.path.join("Models", "Mila.wav")
-            if not os.path.exists(ref_wav):
-                status(_(
-                    "Прогрев ядра пропущен: не установлены голоса Мит",
-                    "Kernel warm-up skipped: Mita voices are not installed",
-                ))
-                log(_(
-                    "Голоса Мит не найдены (нет Models/Mila.wav) — прогрев ядра Triton пропущен. "
-                    "Движок установлен корректно; установите голоса в AI Hub (категория «Голоса Мит»). "
-                    "Ядро автоматически скомпилируется при первой реальной озвучке.",
-                    "Mita voices not found (no Models/Mila.wav) — Triton kernel warm-up skipped. "
-                    "The engine is installed correctly; get the voices from AI Hub («Mita Voices»). "
-                    "The kernel will compile automatically on the first real voiceover.",
-                ))
+            engine = services().get_optional(AIEngineAdministrationService)
+            suspended = False
+            if engine is not None:
+                suspended = engine.suspend_for_maintenance(timeout=15.0)
+                if not suspended:
+                    raise RuntimeError("AI workers could not be suspended")
+            if clear_only or clear_cache:
+                status(_("Удаление кеша компиляции...", "Deleting compilation cache..."))
+                try:
+                    clear_compile_cache()
+                except Exception:
+                    if suspended and engine is not None:
+                        engine.resume_after_maintenance()
+                    raise
+            if clear_only:
+                if suspended and engine is not None:
+                    engine.resume_after_maintenance()
                 return True
 
-            status(_("Инициализация ядра Triton...", "Initializing Triton kernel..."))
-            try:
-                temp_dir = "temp"
-                os.makedirs(temp_dir, exist_ok=True)
-
-                init_script = os.path.abspath("init.py")
-                wrapper = (
-                    "import json, runpy, sys\n"
-                    "sys.path[:0] = json.loads(sys.argv[1])\n"
-                    "runpy.run_path(sys.argv[2], run_name='__main__')\n"
+            app_root = str(base_dir())
+            ref_wav = os.path.join(app_root, "Models", "Mila.wav")
+            if not os.path.exists(ref_wav):
+                message = _(
+                    "Для компиляции нужен Models/Mila.wav. Сначала установите голоса Мит.",
+                    "Models/Mila.wav is required for compilation. Install Mita voices first.",
                 )
+                log(message)
+                if suspended and engine is not None:
+                    engine.resume_after_maintenance()
+                return bool(optional)
+
+            status(_("Компиляция Fish Speech+...", "Compiling Fish Speech+..."))
+            try:
                 init_cmd = [
-                    script_path,
-                    "-c",
-                    wrapper,
-                    json.dumps(python_paths),
-                    init_script,
+                    *cls._compile_entry_command(script_path, python_paths),
+                    "--reference-audio",
+                    ref_wav,
                 ]
                 creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                # init.py печатает кириллицу (.project-root, reference-текст). На
-                # не-UTF-8 локали (напр. греческой cp1253) дочерний print() падает
-                # с UnicodeEncodeError и роняет шаг. Форсим UTF-8 в дочернем
-                # процессе — как это уже делает pip_installer для своих сабпроцессов.
                 child_env = cls._runtime_subprocess_env(python_paths)
-
-                # Стримим вывод init.py построчно вживую. Раньше здесь был
-                # subprocess.run(capture_output=True), который копил ВЕСЬ вывод и
-                # вываливал его разом только по завершении — из-за чего окно на
-                # «Инициализации ядра Triton…» молчало по несколько минут
-                # (фидбэк Артёма: «просто тупо молчаливая установка»). Popen +
-                # чтение по строкам даёт живой лог компиляции ядра.
                 proc = subprocess.Popen(
                     init_cmd,
                     stdout=subprocess.PIPE,
@@ -414,6 +285,7 @@ except Exception:
                     bufsize=1,
                     creationflags=creationflags,
                     env=child_env,
+                    cwd=app_root,
                 )
                 cls._track_subprocess(pip_installer, proc)
                 try:
@@ -430,18 +302,24 @@ except Exception:
                 finally:
                     cls._untrack_subprocess(pip_installer, proc)
 
-                ok = (proc.returncode == 0 and os.path.exists(os.path.join(temp_dir, "inited.wav")))
+                ok = proc.returncode == 0
                 if ok:
-                    status(_("Инициализация ядра успешно завершена!", "Kernel initialization completed successfully!"))
+                    status(_("Компиляция успешно завершена", "Compilation completed successfully"))
+                    if suspended and engine is not None:
+                        engine.resume_after_maintenance()
                     return True
 
-                status(_("Ошибка при инициализации ядра", "Error during kernel initialization"))
+                status(_("Ошибка компиляции Fish Speech+", "Fish Speech+ compilation failed"))
+                if suspended and engine is not None:
+                    engine.resume_after_maintenance()
                 return False
 
             except Exception as e:
-                log(_(f"Непредвиденная ошибка init.py: {e}", f"Unexpected init.py error: {e}"))
+                log(_(f"Ошибка компиляции: {format_exception(e)}", f"Compilation error: {format_exception(e)}"))
                 log(traceback.format_exc())
-                status(_("Ошибка инициализации ядра", "Kernel initialization error"))
+                status(_("Ошибка компиляции", "Compilation error"))
+                if suspended and engine is not None:
+                    engine.resume_after_maintenance()
                 return False
 
         return _fn
@@ -484,13 +362,41 @@ except Exception:
             )
         )
 
-        # Triton оставляем отдельным шагом (и окно/патчи — отдельно)
+        actions.append(
+            InstallAction(
+                type="download_http",
+                description=_(
+                    "Загрузка весов Fish Speech...",
+                    "Downloading Fish Speech weights...",
+                ),
+                progress=50,
+                progress_to=64,
+                files=[
+                    {"url": url, "dest": cls._model_asset_path(filename)}
+                    for filename, url in cls._MODEL_ASSETS
+                ],
+            )
+        )
+
+        if mid == "medium+low":
+            actions.append(
+                runtime_asset_download_action(
+                    CUDA_RVC_RUNTIME_ASSETS,
+                    description=_(
+                        "Загрузка моделей RVC...",
+                        "Downloading RVC model assets...",
+                    ),
+                    progress=65,
+                    progress_to=76,
+                )
+            )
+
         if mid in ("medium+", "medium+low"):
             actions.append(
                 InstallAction(
                     type="pip",
                     description=_("Установка Triton...", "Installing Triton..."),
-                    progress=65,
+                    progress=78,
                     packages=["triton-windows<3.4"],
                     extra_args=["--upgrade"],
                 )
@@ -498,9 +404,9 @@ except Exception:
             actions.append(
                 InstallAction(
                     type="call",
-                    description=_("Патчи/инициализация Triton...", "Patching/initializing Triton..."),
-                    progress=80,
-                    fn=cls._ensure_triton_ready_call(mid),
+                    description=_("Настройка компиляции Fish Speech+...", "Configuring Fish Speech+ compilation..."),
+                    progress=88,
+                    fn=cls._compile_call(optional=True),
                 )
             )
 
@@ -543,7 +449,12 @@ except Exception:
         if mid == "medium":
             return InstallPlan(
                 actions=[
-                    pip_uninstall_action(["fish-speech-lib"], description=_("Удаление fish-speech-lib...", "Uninstalling fish-speech-lib..."), progress=20)
+                    pip_uninstall_action(["fish-speech-lib"], description=_("Удаление fish-speech-lib...", "Uninstalling fish-speech-lib..."), progress=20),
+                    remove_paths_action(
+                        [cls.checkpoint_dir()],
+                        description=_("Удаление весов Fish Speech...", "Removing Fish Speech weights..."),
+                        progress=85,
+                    ),
                 ],
                 ok_status=_("Удалено", "Uninstalled"),
             )
@@ -558,7 +469,12 @@ except Exception:
                         packages,
                         description=_("Удаление компонентов Fish Speech...", "Uninstalling Fish Speech components..."),
                         progress=20,
-                    )
+                    ),
+                    remove_paths_action(
+                        [cls.checkpoint_dir()],
+                        description=_("Удаление весов Fish Speech...", "Removing Fish Speech weights..."),
+                        progress=85,
+                    ),
                 ],
                 ok_status=_("Удалено", "Uninstalled"),
             )
@@ -696,7 +612,7 @@ class FishSpeechModel(IVoiceModel):
                 {"key": "fsprvc_fsp_seed", "label": _("[FSP] Seed", "[FSP] Seed"), "type": "entry", "options": {"default": "0"},
                  "help": _("Сид генерации для Fish Speech+.", "Seed value for Fish Speech+.")},
                 {"key": "fsprvc_rvc_device", "label": _("[RVC] Устройство", "[RVC] Device"), "type": "combobox",
-                 "options": {"values": ["cuda:0", "cpu", "mps:0", "dml"], "default_nvidia": "cuda:0", "default_amd": "dml"},
+                 "options": {"values": ["cuda:0", "cpu"], "default": "cuda:0"},
                  "help": _("Устройство для части RVC.", "Device for RVC part.")},
                 {"key": "fsprvc_is_half", "label": _("[RVC] Half-precision", "[RVC] Half-precision"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False"},
@@ -741,6 +657,35 @@ class FishSpeechModel(IVoiceModel):
     def build_uninstall_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         return FishSpeechInstallSpec.build_uninstall_plan(model_id, ctx)
 
+    def build_initialize_plan(self, ctx: Dict[str, Any] | None = None) -> InstallPlan | None:
+        run_ctx = dict(ctx or {})
+        if self.model_id not in ("medium+", "medium+low"):
+            return None
+        mode = str(run_ctx.get("initialize_mode") or "compile")
+        clear_only = mode == "clear_cache"
+        return InstallPlan(
+            actions=[
+                InstallAction(
+                    type="call",
+                    description=(
+                        _("Удаление кеша компиляции...", "Deleting compilation cache...")
+                        if clear_only
+                        else _("Компиляция Fish Speech+...", "Compiling Fish Speech+...")
+                    ),
+                    progress=20 if clear_only else 10,
+                    fn=FishSpeechInstallSpec._compile_call(
+                        clear_only=clear_only,
+                        clear_cache=not clear_only,
+                    ),
+                )
+            ],
+            ok_status=(
+                _("Кеш компиляции удалён", "Compilation cache deleted")
+                if clear_only
+                else _("Компиляция завершена", "Compilation completed")
+            ),
+        )
+
     def _load_module(self):
         if self.fish_speech_module is not None:
             return
@@ -775,7 +720,7 @@ class FishSpeechModel(IVoiceModel):
                 open(marker, "w").close()
                 logger.info(f"Создан маркер .project-root для fish_speech_lib: {marker}")
         except Exception as ex:
-            logger.warning(f"Не удалось создать .project-root для fish_speech_lib: {ex}")
+            logger.warning(f"Не удалось создать .project-root для fish_speech_lib: {format_exception(ex)}")
 
     def get_display_name(self) -> str:
         mode = self._mode()
@@ -825,7 +770,17 @@ class FishSpeechModel(IVoiceModel):
             device = settings.get("fsprvc_fsp_device" if mode == "medium+low" else "device", "cuda")
             half = settings.get("fsprvc_fsp_half" if mode == "medium+low" else "half", "True" if compile_model else "False").lower() == "true"
 
-            self.current_fish_speech = self.fish_speech_module(device=device, half=half, compile_model=compile_model)
+            checkpoint_dir = FishSpeechInstallSpec.checkpoint_dir()
+            self.current_fish_speech = self.fish_speech_module(
+                device=device,
+                half=half,
+                compile_model=compile_model,
+                llama_checkpoint_path=checkpoint_dir,
+                decoder_checkpoint_path=os.path.join(
+                    checkpoint_dir,
+                    "firefly-gan-vq-fsq-8x1024-21hz-generator.pth",
+                ),
+            )
 
             self.parent.first_compiled = compile_model
             logger.info(f"FishSpeech инициализирован (compile={compile_model})")
@@ -955,7 +910,7 @@ class FishSpeechModel(IVoiceModel):
 
         except Exception as error:
             traceback.print_exc()
-            logger.info(f"Ошибка при создании озвучки с Fish Speech ({self.model_id}): {error}")
+            logger.info(f"Ошибка при создании озвучки с Fish Speech ({self.model_id}): {format_exception(error)}")
             return None
 
     def _mode(self) -> str:

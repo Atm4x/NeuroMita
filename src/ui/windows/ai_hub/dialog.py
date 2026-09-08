@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import datetime as _dt
 import html
@@ -295,8 +296,6 @@ class AIHubDialog(QDialog):
         pix = qpixmap("fa5s.magic", "#b74b7d", 22)
         if pix is not None:
             badge.setPixmap(pix)
-        else:
-            badge.setText("✦")
         header.addWidget(badge, 0)
 
         title_box = QVBoxLayout()
@@ -978,7 +977,7 @@ class AIHubDialog(QDialog):
             path.mkdir(parents=True, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         except Exception as exc:
-            logger.info(f"AI Hub: не удалось открыть папку моделей: {exc}")
+            logger.info(f"AI Hub: не удалось открыть папку моделей: {format_exception(exc)}")
 
     # Порядок и подписи групп внутри категории RAG.
     _GROUP_ORDER = {"embeddings": 0, "reranker": 1, "other": 2}
@@ -1622,7 +1621,10 @@ class AIHubDialog(QDialog):
             )
             rl.addWidget(cancel, 0)
         else:
-            cancel = QPushButton("✕")
+            cancel = QPushButton()
+            cancel_icon = qicon("fa6s.xmark", "#f3edf6")
+            if cancel_icon is not None:
+                cancel.setIcon(cancel_icon)
             cancel.setObjectName("AIHubQueueCancel")
             cancel.setCursor(Qt.CursorShape.PointingHandCursor)
             cancel.setFixedSize(18, 18)

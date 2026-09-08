@@ -75,6 +75,17 @@ QPushButton#ChatSendButtonPill:pressed { background-color: {accent_pressed}; }
 QPushButton#ChatSendButtonPill:disabled {
     background-color: {btn_disabled_bg}; color: {btn_disabled_fg};
 }
+QPushButton#ChatSendButtonPill[cancelMode="true"] {
+    background-color: {danger};
+    border-radius: 12px;
+    padding: 0px;
+}
+QPushButton#ChatSendButtonPill[cancelMode="true"]:hover {
+    background-color: {danger_hover};
+}
+QPushButton#ChatSendButtonPill[cancelMode="true"]:pressed {
+    background-color: {danger_pressed};
+}
 
 QPushButton#ScrollToBottomButton {
     border:none; border-radius:17px; background-color:{accent};
@@ -158,6 +169,117 @@ QFrame#SandboxInspectorCard {
     background-color: rgba({settings_panel_rgb}, 0.95);
     border: 1px solid {panel_border};
     border-radius: 16px;
+}
+QScrollArea#DialogueParticipantsList {
+    background-color: rgba(7, 7, 16, 0.42);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+}
+
+QScrollArea#DialogueParticipantsList::viewport {
+    background: transparent;
+}
+
+QFrame#DialogueParticipantRow {
+    background-color: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.045);
+    border-radius: 9px;
+}
+
+QFrame#DialogueParticipantRow:hover {
+    background-color: rgba({accent_rgb}, 0.08);
+    border: 1px solid rgba({accent_rgb}, 0.22);
+}
+
+QLabel#DialogueParticipantName {
+    color: {text};
+    font-size: 9pt;
+    font-weight: 700;
+}
+
+QLabel#DialogueParticipantId {
+    color: {muted};
+    font-size: 8pt;
+}
+
+QPushButton#DialogueModeSegment {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: {muted};
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 9px;
+    min-height: 30px;
+    padding: 4px 4px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+QPushButton#DialogueModeSegment:hover {
+    color: {text};
+    background-color: rgba({accent_rgb}, 0.12);
+    border: 1px solid rgba({accent_rgb}, 0.32);
+}
+
+QPushButton#DialogueModeSegment[checked="true"] {
+    color: #ffffff;
+    background-color: rgba({accent_rgb}, 0.74);
+    border: 1px solid rgba({accent_rgb}, 0.92);
+}
+
+QToolButton#DialogueTechnicalDetailsToggle {
+    color: {text};
+    background-color: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 9px;
+    padding: 7px 10px;
+    font-size: 9pt;
+    font-weight: 700;
+    text-align: left;
+}
+
+QToolButton#DialogueTechnicalDetailsToggle:hover,
+QToolButton#DialogueTechnicalDetailsToggle[expanded="true"] {
+    background-color: rgba({accent_rgb}, 0.12);
+    border: 1px solid rgba({accent_rgb}, 0.34);
+}
+
+QFrame#DialogueGmCommandCard {
+    background-color: rgba({accent_rgb}, 0.07);
+    border: 1px solid rgba({accent_rgb}, 0.28);
+    border-radius: 11px;
+}
+
+QLabel#DialogueGmCommandTitle {
+    color: {text};
+    font-size: 9pt;
+    font-weight: 800;
+}
+
+QLabel#DialogueGmCommandHint {
+    color: {muted};
+    font-size: 8pt;
+}
+
+QPlainTextEdit#DialogueGameMasterInstruction {
+    background-color: rgba(7, 7, 16, 0.78);
+    border: 1px solid rgba({accent_rgb}, 0.22);
+    border-radius: 8px;
+    color: {text};
+    padding: 6px 8px;
+}
+
+QPlainTextEdit#DialogueGameMasterInstruction:focus {
+    border: 1px solid rgba({accent_rgb}, 0.70);
+    background-color: rgba(7, 7, 16, 0.94);
+}
+
+QLabel#DialogueTechnicalDetails {
+    color: {muted};
+    background-color: rgba(7, 7, 16, 0.56);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 9px;
+    padding: 8px 10px;
+    font-family: "Consolas", "Cascadia Mono", "Courier New", monospace;
+    font-size: 8pt;
 }
 
 QLabel#SandboxHeroIcon {

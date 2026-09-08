@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 import platform
 import time
@@ -19,6 +20,7 @@ from services.contracts import (
     InstallableCatalogService,
     InstallableOperationsService,
     LocalVoiceService,
+    RuntimeFeatureService,
     VoiceModelService,
 )
 
@@ -61,8 +63,8 @@ class VoiceModelController(VoiceModelService):
         self.event_bus = get_event_bus()
         self._last_voiceover_refresh_reload_ts: float = 0.0
 
-        self.reload()
         self._subscribe_to_events()
+        self.reload()
 
     def _subscribe_to_events(self):
         eb = self.event_bus
@@ -70,8 +72,39 @@ class VoiceModelController(VoiceModelService):
 
         eb.subscribe(Events.Install.TASK_FINISHED, self._on_install_task_finished, weak=False)
         eb.subscribe(Events.Install.TASK_FAILED, self._on_install_task_failed, weak=False)
+        eb.subscribe(Events.Install.COMPONENT_STATUS, self._on_component_status, weak=False)
 
         eb.subscribe(Events.GUI.VOICEOVER_REFRESH, self._on_voiceover_refresh, weak=False)
+
+    def _on_component_status(self, event: Event) -> None:
+        data = event.data if isinstance(event.data, dict) else {}
+        component_id = str(data.get("component_id") or "").strip()
+        if not component_id.startswith("tts:"):
+            return
+
+        status = data.get("status") if isinstance(data.get("status"), dict) else {}
+        if not status or str(status.get("probe_state") or "").strip():
+            return
+
+        model_id = component_id.split(":", 1)[1].strip()
+        if not model_id:
+            return
+
+        ready = bool(status.get("ready"))
+        with self._lock:
+            if ready:
+                self.installed_models.add(model_id)
+            else:
+                self.installed_models.discard(model_id)
+
+        self.event_bus.emit(
+            Events.VoiceModel.REFRESH_MODEL_PANELS,
+            {
+                "component_id": component_id,
+                "model_id": model_id,
+                "ready": ready,
+            },
+        )
 
     def _on_voiceover_refresh(self, _event: Event):
         with self._lock:
@@ -197,7 +230,7 @@ class VoiceModelController(VoiceModelService):
                 f"Voice model settings auto-switched to CUDA after runtime refresh: {self.detected_cuda_devices}"
             )
         except Exception as e:
-            logger.warning(f"Failed to auto-switch voice model device settings to CUDA: {e}")
+            logger.warning(f"Failed to auto-switch voice model device settings to CUDA: {format_exception(e)}")
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -219,7 +252,7 @@ class VoiceModelController(VoiceModelService):
     def _task_op(self, data: dict) -> str:
         meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
         op = str(meta.get("op") or "").strip().lower()
-        if op in ("install", "uninstall"):
+        if op in ("install", "uninstall", "initialize"):
             return op
         tid = str(data.get("task_id") or "")
         if "uninstall" in tid:
@@ -244,6 +277,16 @@ class VoiceModelController(VoiceModelService):
 
     def dependencies_status(self) -> dict[str, Any]:
         return dict(self._handle_get_dependencies_status(Event(Events.VoiceModel.GET_DEPENDENCIES_STATUS)) or {})
+
+    def compile_status(self) -> dict[str, Any]:
+        from core.torch_compile_runtime import compile_cache_status
+
+        return dict(compile_cache_status())
+
+    def enable_long_paths(self) -> bool:
+        from core.torch_compile_runtime import enable_long_paths
+
+        return bool(enable_long_paths())
 
     def _handle_get_dependencies_status(self, event: Event):
         with self._lock:
@@ -273,7 +316,7 @@ class VoiceModelController(VoiceModelService):
                             (canonical_status or {}).get("details") or {}
                         )
             except Exception as exc:
-                logger.warning(f"Failed to read canonical backend statuses: {exc}")
+                logger.warning(f"Failed to read canonical backend statuses: {format_exception(exc)}")
         status["backend_statuses"] = backend_statuses
 
         with self._lock:
@@ -377,7 +420,7 @@ class VoiceModelController(VoiceModelService):
                     models.append(model)
                     seen.add(model_id)
         except Exception as exc:
-            logger.warning(f"Failed to build local voice catalog from installables: {exc}")
+            logger.warning(f"Failed to build local voice catalog from installables: {format_exception(exc)}")
 
         if models:
             return models
@@ -401,7 +444,7 @@ class VoiceModelController(VoiceModelService):
                 with open(self.settings_values_file, "r", encoding="utf-8") as f:
                     saved_values = json.load(f)
         except Exception as e:
-            logger.info(f"{_('Ошибка загрузки сохраненных значений из', 'Error loading saved values from')} {self.settings_values_file}: {e}")
+            logger.info(f"{_('Ошибка загрузки сохраненных значений из', 'Error loading saved values from')} {self.settings_values_file}: {format_exception(e)}")
             saved_values = {}
 
         merged_model_structure = copy.deepcopy(adapted_default_structure)
@@ -437,7 +480,7 @@ class VoiceModelController(VoiceModelService):
             if not isinstance(current, dict):
                 current = {}
         except Exception as e:
-            logger.warning(f"Failed to read {self.settings_values_file}: {e}")
+            logger.warning(f"Failed to read {self.settings_values_file}: {format_exception(e)}")
             current = {}
 
         def norm(v):
@@ -483,13 +526,13 @@ class VoiceModelController(VoiceModelService):
                     pass
             os.replace(tmp_path, self.settings_values_file)
         except Exception as e:
-            logger.error(f"Failed to write {self.settings_values_file}: {e}", exc_info=True)
+            logger.error(f"Failed to write {self.settings_values_file}: {format_exception(e)}", exc_info=True)
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
             except Exception:
                 pass
-            return {"changed": 0, "changed_by_model": {}, "error": str(e)}
+            return {"changed": 0, "changed_by_model": {}, "error": format_exception(e)}
 
         if changed_total:
             logger.info(f"Voice model settings saved: {changed_total} changes ({changed_by_model})")
@@ -527,7 +570,7 @@ class VoiceModelController(VoiceModelService):
             )
             verdict = dict(row.get("compatibility") or {})
         except Exception as exc:
-            logger.warning(f"Voice model compatibility is unavailable for '{model_id}': {exc}")
+            logger.warning(f"Voice model compatibility is unavailable for '{model_id}': {format_exception(exc)}")
             verdict = {
                 "supported": False,
                 "recommended": False,
@@ -581,7 +624,7 @@ class VoiceModelController(VoiceModelService):
             catalog = services().get(InstallableCatalogService)
             preview = catalog.install_preview(f"tts:{mid}")
         except Exception as exc:
-            logger.warning(f"Voice install preflight failed for '{mid}': {exc}")
+            logger.warning(f"Voice install preflight failed for '{mid}': {format_exception(exc)}")
             return {"blocked": False}
 
         backend_kind = str(preview.get("backend_kind") or "none")
@@ -650,13 +693,30 @@ class VoiceModelController(VoiceModelService):
     def refresh_installed_models(self):
         try:
             catalog = services().get(InstallableCatalogService)
-            installed = set(catalog.ready_item_ids("tts"))
+            rows = catalog.list_rows(
+                include_status=True,
+                category="tts",
+                status_category="tts",
+            )
         except Exception as exc:
-            logger.error(f"Failed to read canonical TTS readiness: {exc}", exc_info=True)
-            installed = set()
+            logger.error(f"Failed to read canonical TTS readiness: {format_exception(exc)}", exc_info=True)
+            return
 
         with self._lock:
-            self.installed_models = installed
+            for row in rows or ():
+                metadata = row.get("metadata") if isinstance(row, dict) else None
+                status = row.get("status") if isinstance(row, dict) else None
+                if not isinstance(metadata, dict) or not isinstance(status, dict):
+                    continue
+                if str(status.get("probe_state") or "").strip():
+                    continue
+                model_id = str(metadata.get("item_id") or "").strip()
+                if not model_id:
+                    continue
+                if bool(status.get("ready")):
+                    self.installed_models.add(model_id)
+                else:
+                    self.installed_models.discard(model_id)
 
     def start_install(self, model_id: str, *, with_ui: bool = True, timeout_sec: float = DEFAULT_INSTALL_TIMEOUT_SEC) -> bool:
         mid = str(model_id or "").strip()
@@ -666,7 +726,7 @@ class VoiceModelController(VoiceModelService):
             metadata = catalog.get_row(component_id, include_status=False)["metadata"]
             title = str(metadata.get("title") or mid)
         except Exception as exc:
-            logger.error(f"Unknown voice installable component for '{mid}': {exc}")
+            logger.error(f"Unknown voice installable component for '{mid}': {format_exception(exc)}")
             return False
 
         self.event_bus.emit(Events.VoiceModel.MODEL_INSTALL_STARTED, {"model_id": mid})
@@ -696,7 +756,7 @@ class VoiceModelController(VoiceModelService):
             component_id = f"tts:{mid}"
             catalog.get_row(component_id, include_status=False)
         except Exception as exc:
-            logger.error(f"Unknown voice installable component for '{mid}': {exc}")
+            logger.error(f"Unknown voice installable component for '{mid}': {format_exception(exc)}")
             return False
 
         self.event_bus.emit(Events.VoiceModel.MODEL_UNINSTALL_STARTED, {"model_id": mid})
@@ -717,6 +777,68 @@ class VoiceModelController(VoiceModelService):
                 "meta": {"kind": "voice", "item_id": mid, "op": "uninstall"},
             }
         )
+        return bool(admission.accepted)
+
+    def start_compile(
+        self,
+        model_id: str,
+        *,
+        clear_only: bool = False,
+        with_ui: bool = True,
+        timeout_sec: float = DEFAULT_INSTALL_TIMEOUT_SEC,
+    ) -> bool:
+        mid = str(model_id or "").strip()
+        if mid not in ("medium+", "medium+low"):
+            logger.error(f"Compilation is not supported for voice model '{mid}'")
+            return False
+        operations = services().get_optional(InstallableOperationsService)
+        if operations is None:
+            runtime = services().get_optional(RuntimeFeatureService)
+            feature_state: Any = None
+            if runtime is not None:
+                try:
+                    feature_state = runtime.snapshot().get("installables")
+                except Exception as exc:
+                    feature_state = {
+                        "snapshot_error": format_exception(exc),
+                    }
+            logger.error(
+                "Cannot start Fish Speech+ compilation: "
+                "InstallableOperationsService is not registered; "
+                f"RuntimeFeatureService registered={runtime is not None}; "
+                f"installables feature={feature_state!r}. "
+                "The caller must complete ensure_feature_async('installables') "
+                "before requesting compilation."
+            )
+            return False
+        self.event_bus.emit(
+            Events.VoiceModel.MODEL_COMPILE_STARTED,
+            {"model_id": mid, "clear_only": bool(clear_only)},
+        )
+        admission = operations.initialize(
+            {
+                "component_id": f"tts:{mid}",
+                "kind": "voice",
+                "item_id": mid,
+                "task_id": f"voice:initialize:{'clear' if clear_only else 'compile'}:{mid}",
+                "title": (
+                    _("Удаление компиляции Fish Speech+", "Deleting Fish Speech+ compilation")
+                    if clear_only
+                    else _("Компиляция Fish Speech+", "Compiling Fish Speech+")
+                ),
+                "initial_status": _("Подготовка...", "Preparing..."),
+                "timeout_sec": float(timeout_sec or DEFAULT_INSTALL_TIMEOUT_SEC),
+                "with_ui": bool(with_ui),
+                "install_style_variant": "ai_hub",
+                "initialize_mode": "clear_cache" if clear_only else "compile",
+                "meta": {"kind": "voice", "item_id": mid, "op": "initialize"},
+            }
+        )
+        if not admission.accepted:
+            logger.error(
+                f"Fish Speech+ compilation request rejected for '{mid}': "
+                f"{admission.error or 'unknown admission error'}"
+            )
         return bool(admission.accepted)
 
     def _schedule_install_state_refresh(
@@ -746,6 +868,11 @@ class VoiceModelController(VoiceModelService):
                     Events.VoiceModel.MODEL_UNINSTALL_FINISHED,
                     payload,
                 )
+            elif operation == "initialize":
+                self.event_bus.emit(
+                    Events.VoiceModel.MODEL_COMPILE_FINISHED,
+                    payload,
+                )
             else:
                 self.event_bus.emit(
                     Events.VoiceModel.MODEL_INSTALL_FINISHED,
@@ -762,7 +889,7 @@ class VoiceModelController(VoiceModelService):
                 refresh_state,
             )
         except RuntimeError as exc:
-            logger.debug(f"Voice model state refresh was skipped during shutdown: {exc}")
+            logger.debug(f"Voice model state refresh was skipped during shutdown: {format_exception(exc)}")
 
     def _on_install_task_finished(self, event: Event):
         data = event.data if isinstance(event.data, dict) else {}
@@ -866,6 +993,8 @@ class VoiceModelController(VoiceModelService):
                         )
                         if cuda_devices and allows_cuda:
                             final_values_list = list(cuda_devices) + non_cuda_options
+                        elif allows_cuda:
+                            final_values_list = list(base_nvidia_values)
                         else:
                             final_values_list = non_cuda_options or [
                                 v for v in base_other_values if v in ["cpu", "mps"]

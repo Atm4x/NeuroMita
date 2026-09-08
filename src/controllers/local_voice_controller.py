@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 import uuid
 import asyncio
@@ -35,13 +36,6 @@ class LocalVoiceController(LocalVoiceService):
 
         self._subscribe_to_events()
         logger.notify("LocalVoiceController успешно инициализирован (engine-proxy).")
-
-        try:
-            eng = self._get_engine()
-            if eng:
-                eng.call("tts", "ping", {})
-        except Exception:
-            pass
 
     def _get_engine(self):
         if self._engine is not None:
@@ -97,7 +91,7 @@ class LocalVoiceController(LocalVoiceService):
             raise RuntimeError("AI engine does not support managed runtime environments")
         validation_method = "init_model" if initialize else None
         validation_payload = (
-            {"model_id": str(model_id), "warmup": True}
+            {"model_id": str(model_id), "warmup": False}
             if initialize
             else None
         )
@@ -120,7 +114,13 @@ class LocalVoiceController(LocalVoiceService):
             raise RuntimeError("AI engine not available")
 
         fut = eng.call("tts", method, payload or {})
-        return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+        except TimeoutError as exc:
+            timeout_label = f"{float(timeout):g} seconds" if timeout is not None else "the configured deadline"
+            raise TimeoutError(
+                f"Local TTS request '{method}' timed out after {timeout_label}"
+            ) from exc
 
     def model_configs(self) -> list[dict[str, Any]]:
         return list(self._on_get_all_local_model_configs(Event(Events.Audio.GET_ALL_LOCAL_MODEL_CONFIGS)) or [])
@@ -128,8 +128,15 @@ class LocalVoiceController(LocalVoiceService):
     def is_installed(self, model_id: str) -> bool:
         return bool(self._on_check_model_installed(Event(Events.Audio.CHECK_MODEL_INSTALLED, {"model_id": model_id})))
 
-    def check_initialized(self, model_id: str, *, strict: bool = False) -> bool:
-        return bool(self._on_check_model_initialized(Event(Events.Audio.CHECK_MODEL_INITIALIZED, {"model_id": model_id, "strict": strict})))
+    def check_initialized(self, model_id: str, *, probe_worker: bool = False) -> bool:
+        return bool(
+            self._on_check_model_initialized(
+                Event(
+                    Events.Audio.CHECK_MODEL_INITIALIZED,
+                    {"model_id": model_id, "probe_worker": probe_worker},
+                )
+            )
+        )
 
     def select_model(self, model_id: str) -> bool:
         return bool(self._on_select_voice_model(Event(Events.Audio.SELECT_VOICE_MODEL, {"model_id": model_id})))
@@ -192,42 +199,24 @@ class LocalVoiceController(LocalVoiceService):
         if not model_id:
             return False
 
-        strict = bool((event.data or {}).get("strict", False))
+        probe_worker = bool((event.data or {}).get("probe_worker", False))
 
         cached = self._initialized_cache.get(model_id)
-        if cached is not None and not strict:
+        if not probe_worker:
             return bool(cached)
 
         eng = self._get_engine()
         if not eng:
-            return False if strict else (bool(cached) if cached is not None else False)
-
-        if strict:
-            try:
-                f = eng.call("tts", "check_initialized", {"model_id": model_id})
-                ok = bool(f.result(timeout=1.0))
-                self._initialized_cache[model_id] = ok
-                return ok
-            except Exception:
-                self._initialized_cache[model_id] = False
-                return False
+            return False
 
         try:
-            cfut = eng.call("tts", "check_initialized", {"model_id": model_id})
-
-            def _done(f):
-                try:
-                    ok = bool(f.result())
-                    self._initialized_cache[model_id] = ok
-                    self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
-                except Exception:
-                    self._initialized_cache.setdefault(model_id, False)
-
-            cfut.add_done_callback(_done)
+            future = eng.call("tts", "check_initialized", {"model_id": model_id})
+            initialized = bool(future.result(timeout=1.0))
+            self._initialized_cache[model_id] = initialized
+            return initialized
         except Exception:
-            pass
-
-        return bool(cached) if cached is not None else False
+            self._initialized_cache[model_id] = False
+            return False
 
     # -------------------- select/init/lang --------------------
 
@@ -237,8 +226,6 @@ class LocalVoiceController(LocalVoiceService):
             return False
 
         self._save_setting("NM_CURRENT_VOICEOVER", model_id)
-
-        self._initialized_cache.pop(model_id, None)
         return True
 
     async def _async_init_model(self, model_id: str):
@@ -272,12 +259,12 @@ class LocalVoiceController(LocalVoiceService):
                 self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
         except Exception as e:
-            logger.error(f"init model failed (tts engine): {e}", exc_info=True)
+            logger.error(f"init model failed (tts engine): {format_exception(e)}", exc_info=True)
             self._initialized_cache[model_id] = False
             self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {"status": _("Ошибка!", "Error!")})
             self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
                 "title": _("Ошибка", "Error"),
-                "message": f"{_('Критическая ошибка при инициализации модели:', 'Critical init error:')} {e}"
+                "message": f"{_('Критическая ошибка при инициализации модели:', 'Critical init error:')} {format_exception(e)}"
             })
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
@@ -404,6 +391,15 @@ class LocalVoiceController(LocalVoiceService):
         character_id: Optional[str] = None,
         voice_profile: Optional[Dict[str, Any]] = None,
     ) -> str:
+        model_id = str(self._get_setting("NM_CURRENT_VOICEOVER", "") or "").strip() or "low"
+        initialized = bool(self._initialized_cache.get(model_id, False))
+
+        if not initialized:
+            raise RuntimeError(
+                f"Local voice model '{model_id}' is not initialized. "
+                "Initialize it explicitly in the voice model settings before synthesis."
+            )
+
         resolved_profile = voice_profile if isinstance(voice_profile, dict) else None
         registry = use(CharacterRegistry)
 
@@ -417,16 +413,8 @@ class LocalVoiceController(LocalVoiceService):
         output_file = f"MitaVoices/output_{uuid.uuid4()}.wav"
         absolute_audio_path = os.path.abspath(output_file)
         os.makedirs(os.path.dirname(absolute_audio_path), exist_ok=True)
-        model_id = str(self._get_setting("NM_CURRENT_VOICEOVER", "") or "").strip() or "low"
 
-        initialize = not bool(self._initialized_cache.get(model_id, False))
-        await self._ensure_model_environment(model_id, initialize=initialize)
-        if initialize:
-            # Модель инициализировалась попутно, первым запросом озвучки. Без
-            # уведомления UI плашка голоса навсегда оставалась «Требуется
-            # инициализация» при уже работающем синтезе.
-            self._initialized_cache[model_id] = True
-            self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
+        await self._ensure_model_environment(model_id, initialize=False)
         result_path = await self._engine_call_async(
             "synthesize",
             {

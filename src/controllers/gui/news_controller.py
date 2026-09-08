@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import re
 import threading
@@ -9,12 +10,18 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
 
 from main_logger import logger
+from core.networking import shared_http_client_registry
+from services.release_catalog import discover_release_catalog
 from utils.release_assets import raw_release_has_launcher_assets
 from ui.widgets.launcher_dashboard_helpers import DashboardAction, NewsItem
 from utils import _
 
 
 NEWS_REPO = "Atm4x/NeuroMita"
+_HTTP_CLIENT = shared_http_client_registry().acquire(
+    "news",
+    client_options={"follow_redirects": True},
+)
 
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -30,8 +37,9 @@ class NewsReleasesStore:
     """Кэш ленты релизов. Владелец — presentation-хаб (`presentation.news`);
     раньше это состояние жило атрибутами на главном окне."""
 
-    def __init__(self) -> None:
+    def __init__(self, repository: str = NEWS_REPO) -> None:
         self.lock = threading.Lock()
+        self.repository = str(repository or NEWS_REPO).strip() or NEWS_REPO
         self.releases: list[dict[str, Any]] | None = None
         self.cards: list[dict[str, Any]] | None = None
         self.waiters: list[Callable[[list[dict[str, Any]]], None]] = []
@@ -41,13 +49,23 @@ class NewsReleasesStore:
         self.releases = None
         self.cards = None
 
+    def set_repository(self, repository: str) -> bool:
+        normalized = str(repository or NEWS_REPO).strip() or NEWS_REPO
+        with self.lock:
+            if normalized == self.repository:
+                return False
+            self.repository = normalized
+            self.releases = None
+            self.cards = None
+        return True
+
 
 def load_news_releases_async(
     store: NewsReleasesStore,
     target,
     on_ready: Callable[[list[dict[str, Any]]], None],
 ) -> None:
-    """Неблокирующая загрузка ленты релизов с GitHub.
+    """Неблокирующая загрузка ленты из release manifest с API fallback.
 
     `on_ready(releases)` вызывается ВСЕГДА:
       - сразу и синхронно, если данные уже в кэше;
@@ -58,7 +76,7 @@ def load_news_releases_async(
     Параллельные запросы коалесцируются: пока один поток грузит, остальные
     подписчики просто ждут его результат — повторного обращения к сети нет.
     Это и есть фикс зависания GUI: раньше `get_news_releases` дёргал
-    `requests.get(timeout=10)` прямо в GUI-потоке (кнопка «Обновить», старт
+    Синхронный сетевой запрос прямо в GUI-потоке (кнопка «Обновить», старт
     главной страницы) и при недоступном GitHub морозил окно на ~10 секунд.
     """
     if store.releases is not None:
@@ -99,27 +117,27 @@ def get_news_releases(store: NewsReleasesStore) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
+    repository = store.repository
     try:
-        import requests
-
-        response = requests.get(
-            f"https://api.github.com/repos/{NEWS_REPO}/releases",
+        catalog = discover_release_catalog(
+            repository,
+            client=_HTTP_CLIENT,
             timeout=10,
-            headers={"Accept": "application/vnd.github+json"},
+            allow_api_fallback=True,
         )
-        if response.status_code != 200:
-            logger.info(f"[news] Failed to fetch releases: HTTP {response.status_code}")
-            store.releases = []
-            store.cards = []
-            return []
-
-        raw_data = response.json() or []
-        data = [item for item in raw_data if raw_release_has_launcher_assets(item)]
+        data = [
+            item for item in catalog.releases
+            if raw_release_has_launcher_assets(item)
+        ]
+        logger.info(
+            f"[news] Loaded {len(data)} launcher releases from {catalog.source} "
+            f"for {repository}"
+        )
         store.releases = data
-        store.cards = _prepare_release_cards(data)
+        store.cards = _prepare_release_cards(data, repository=repository)
         return data
     except Exception as exc:
-        logger.info(f"[news] Failed to fetch releases: {exc}")
+        logger.info(f"[news] Failed to fetch releases from {repository}: {format_exception(exc)}")
         store.releases = []
         store.cards = []
         return []
@@ -169,24 +187,36 @@ def _build_release_preview(body: str, *, limit: int = 280) -> tuple[str, bool]:
     if not candidate_lines:
         return _("Без описания.", "No description."), False
 
-    summary = " ".join(candidate_lines).strip()[:limit]
-    has_details = meaningful_count > len(candidate_lines)
+    candidate = " ".join(candidate_lines).strip()
+    truncated_by_limit = len(candidate) > limit
+    has_details = meaningful_count > len(candidate_lines) or truncated_by_limit
+    summary = candidate[:limit].rstrip()
+    if truncated_by_limit:
+        word_boundary = summary.rfind(" ")
+        if word_boundary > limit // 2:
+            summary = summary[:word_boundary].rstrip()
+    if has_details:
+        summary = f"{summary} …"
     return summary, has_details
 
 
-def _prepare_release_cards(releases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    repo_url = f"https://github.com/{NEWS_REPO}/releases"
+def _prepare_release_cards(
+    releases: list[dict[str, Any]], *, repository: str = NEWS_REPO
+) -> list[dict[str, Any]]:
+    repo_url = f"https://github.com/{repository}/releases"
     prepared: list[dict[str, Any]] = []
     for release in releases:
         tag_name = str(release.get("tag_name") or "")
         name = str(release.get("name") or "").strip() or tag_name or _("Релиз", "Release")
         body = str(release.get("body") or "").strip()
-        summary, _has_details = _build_release_preview(body, limit=280)
+        summary, has_details = _build_release_preview(body, limit=280)
+        full_text = normalize_release_body(body)
         prepared.append(
             {
                 "name": name,
                 "tag_name": tag_name,
                 "summary": summary,
+                "full_text": full_text if has_details else "",
                 "published": str(release.get("published_at") or "")[:10],
                 "tag": "PRE-RELEASE" if release.get("prerelease") else "RELEASE",
                 "url": str(release.get("html_url") or repo_url),
@@ -200,7 +230,7 @@ def _get_prepared_release_cards(store: NewsReleasesStore) -> list[dict[str, Any]
     if cached is not None:
         return cached
     releases = get_news_releases(store)
-    prepared = _prepare_release_cards(releases)
+    prepared = _prepare_release_cards(releases, repository=store.repository)
     store.cards = prepared
     return prepared
 
@@ -348,7 +378,8 @@ def build_release_news_items(store: NewsReleasesStore, *, limit: int | None = 8)
         summary = str(release.get("summary") or "").strip() or build_release_summary("")
         published = str(release.get("published") or "")[:10]
         tag = str(release.get("tag") or "RELEASE")
-        url = str(release.get("url") or f"https://github.com/{NEWS_REPO}/releases")
+        url = str(release.get("url") or f"https://github.com/{store.repository}/releases")
+        full_text = str(release.get("full_text") or "").strip()
         items.append(
             NewsItem(
                 name,
@@ -356,7 +387,7 @@ def build_release_news_items(store: NewsReleasesStore, *, limit: int | None = 8)
                 tag=tag,
                 item_id=tag_name or name,
                 timestamp=published,
-                full_text="",
+                full_text=full_text,
                 action=DashboardAction(
                     _("Открыть релиз", "Open release"),
                     callback=lambda _checked=False, target_url=url: QDesktopServices.openUrl(QUrl(target_url)),

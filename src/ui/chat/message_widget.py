@@ -6,6 +6,7 @@ import os
 import math
 import time as _time
 import base64
+import re
 import qtawesome as qta
 from PyQt6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QScrollArea, QVBoxLayout,
@@ -33,6 +34,50 @@ AVATAR_MAP = {
     "Sleepy Mita":    "sleepy.png",
     "GameMaster":     "gamemaster.png",
 }
+
+def _normalise_avatar_identity(value: str) -> str:
+    """Return a stable lookup key for a character id or a UI display name."""
+    # The chat label can carry an addressing suffix (``Kind Mita → Cappie``),
+    # while Unity sends ids such as ``kind_mita``. Only the speaker part is
+    # relevant for its avatar.
+    speaker = str(value or "").split("→", 1)[0].strip()
+    return re.sub(r"[^a-z0-9]+", "", speaker.casefold())
+
+
+_AVATAR_ALIASES = {
+    _normalise_avatar_identity(display_name): filename
+    for display_name, filename in AVATAR_MAP.items()
+}
+_AVATAR_ALIASES.update({
+    "crazy": "crazy.png",
+    "kind": "kind.png",
+    "shorthair": "shorthair.png",
+    "ghost": "ghost.png",
+    "cappie": "cappie.png",
+    "mila": "mila.png",
+    "creepy": "creepy.png",
+    "sleepy": "sleepy.png",
+    "gamemaster": "gamemaster.png",
+})
+
+
+def _resolve_avatar_filename(character_name: str) -> str | None:
+    """Map Unity ids and display labels to a bundled avatar file name."""
+    identity = _normalise_avatar_identity(character_name)
+    if not identity:
+        return None
+
+    # Covers exact display names plus snake_case/camel-case Unity ids.
+    filename = _AVATAR_ALIASES.get(identity)
+    if filename:
+        return filename
+
+    # Preserve legacy support for labels with an additional suffix after the
+    # character name without allowing a generic "Mita" match.
+    for alias, mapped_filename in _AVATAR_ALIASES.items():
+        if len(alias) >= 4 and identity.startswith(alias):
+            return mapped_filename
+    return None
 
 AVATAR_SIZE = 36
 TAIL_W = 8
@@ -129,12 +174,7 @@ def _get_avatar_pixmap(character_name: str, role: str) -> QPixmap:
     cached = _AVATAR_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    filename = AVATAR_MAP.get(character_name)
-    if not filename and character_name:
-        for key, val in AVATAR_MAP.items():
-            if character_name.startswith(key):
-                filename = val
-                break
+    filename = _resolve_avatar_filename(character_name)
     if filename:
         path = os.path.join(_get_avatar_dir(), filename)
         if os.path.isfile(path):
@@ -149,22 +189,16 @@ def _get_avatar_pixmap(character_name: str, role: str) -> QPixmap:
 
 
 def resolve_character_avatar(character_id: str, size: int = 32, role: str = "assistant") -> QPixmap:
-    """Аватар персонажа по его ID ИЛИ display-name. В отличие от
-    _get_avatar_pixmap (матчит только точные/префиксные ключи AVATAR_MAP —
-    display-имена вида "Kind Mita"), понимает и голый id "KindMita", и "Kind".
-    Если реального файла нет — плашка с инициалом."""
+    """Аватар персонажа по Unity id или display-name.
+
+    Принимает, в частности, ``kind_mita``, ``KindMita`` и ``Kind Mita``.
+    Если реального файла нет — плашка с инициалом.
+    """
     char_id = (character_id or "").strip()
-    candidates = []
-    if char_id:
-        low = char_id.lower()
-        for key, fn in AVATAR_MAP.items():
-            kl = key.lower()
-            if kl.startswith(low) or low.startswith(kl.split()[0]):
-                candidates.append(fn)
-        candidates.append(f"{low}.png")
+    filename = _resolve_avatar_filename(char_id)
     avatar_dir = _get_avatar_dir()
-    for fn in candidates:
-        path = os.path.join(avatar_dir, fn)
+    if filename:
+        path = os.path.join(avatar_dir, filename)
         if os.path.isfile(path):
             pm = QPixmap(path)
             if not pm.isNull():
@@ -172,13 +206,22 @@ def resolve_character_avatar(character_id: str, size: int = 32, role: str = "ass
     return _placeholder_avatar(size, ROLE_COLORS.get(role, "#A78BFA"), char_id)
 
 class BubbleFrame(QFrame):
-    def __init__(self, role: str, tail_side: str | None = "left", parent=None):
+    def __init__(
+        self,
+        role: str,
+        tail_side: str | None = "left",
+        parent=None,
+        *,
+        tail_gutter_side: str | None = None,
+    ):
         super().__init__(parent)
         self._bg = CARD_BG.get(role, QColor(30, 30, 35, 240))
         self._border = CARD_BORDER.get(role, QColor(255, 255, 255, 15))
         self._tail_side = tail_side
-        left_margin = TAIL_W if tail_side == "left" else 0
-        right_margin = TAIL_W if tail_side == "right" else 0
+        self._tail_gutter_side = tail_gutter_side
+        effective_side = tail_side or tail_gutter_side
+        left_margin = TAIL_W if effective_side == "left" else 0
+        right_margin = TAIL_W if effective_side == "right" else 0
         self.setContentsMargins(left_margin + 12, 8, right_margin + 12, 8)
         self.setMinimumHeight(AVATAR_SIZE)
 
@@ -199,8 +242,9 @@ class BubbleFrame(QFrame):
         w, h = self.width(), self.height()
         r, tw, th = BUBBLE_RADIUS, TAIL_W, TAIL_H
 
-        if self._tail_side == "left": bx, by, bw, bh = tw, 0, w - tw, h
-        elif self._tail_side == "right": bx, by, bw, bh = 0, 0, w - tw, h
+        effective_side = self._tail_side or self._tail_gutter_side
+        if effective_side == "left": bx, by, bw, bh = tw, 0, w - tw, h
+        elif effective_side == "right": bx, by, bw, bh = 0, 0, w - tw, h
         else: bx, by, bw, bh = 0, 0, w, h
 
         path = QPainterPath()
@@ -373,7 +417,8 @@ class MessageWidget(QWidget):
 
     def __init__(self, role="assistant", speaker_name="", content_text="", show_avatar=True, font_size=12,
                  message_time="", show_timestamp=True, max_bubble_width=600, sample_id=None, message_id=None,
-                 show_rating_controls=False, rating_callback=None, parent=None):
+                 context_snapshot_id=None, show_rating_controls=False, rating_callback=None, parent=None,
+                 show_tail=True):
         super().__init__(parent)
         self._role = role
         self._speaker_name = speaker_name
@@ -382,6 +427,7 @@ class MessageWidget(QWidget):
         self._font_xs = max(7, font_size - 3)
         self._structured_panel = None
         self._sample_id = sample_id
+        self._context_snapshot_id = context_snapshot_id or None
         self._message_id = message_id
         self._show_rating_controls = bool(show_rating_controls)
         self._rating_callback = rating_callback
@@ -398,9 +444,11 @@ class MessageWidget(QWidget):
         outer.setSpacing(8)
         outer.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
-        tail_side = None
+        bubble_side = None
         if role not in ("system", "event", "think", "structured"):
-            tail_side = "right" if is_user else "left"
+            bubble_side = "right" if is_user else "left"
+        tail_side = bubble_side if show_tail else None
+        tail_gutter_side = bubble_side if bubble_side and not show_tail else None
 
         self._avatar_label = None
         if show_avatar and role not in ("system", "event", "think", "structured"):
@@ -421,7 +469,12 @@ class MessageWidget(QWidget):
 
         if is_user or role in ("system", "event"): outer.addStretch()
 
-        self._card = BubbleFrame(role, tail_side, self)
+        self._card = BubbleFrame(
+            role,
+            tail_side,
+            self,
+            tail_gutter_side=tail_gutter_side,
+        )
         if max_bubble_width > 0: self._card.setMaximumWidth(max_bubble_width)
         self._card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
@@ -453,7 +506,7 @@ class MessageWidget(QWidget):
                 qta.icon("fa6s.volume-high", color="#ff9cd2").pixmap(_vic, _vic)
             )
         except Exception:
-            self._voicing_label.setText("🔊")
+            self._voicing_label.clear()
         self._voicing_label.setVisible(False)
         name_row.addWidget(self._voicing_label)
 
@@ -470,7 +523,7 @@ class MessageWidget(QWidget):
             self._error_btn.setIcon(qta.icon("fa6s.circle-exclamation", color="#ff6b6b"))
             self._error_btn.setIconSize(QSize(_eic, _eic))
         except Exception:
-            self._error_btn.setText("⚠")
+            self._error_btn.setText("!")
         self._error_btn.setVisible(False)
         self._error_btn.clicked.connect(lambda: self.retry_requested.emit(self._message_id or ""))
         name_row.addWidget(self._error_btn)
@@ -555,6 +608,10 @@ class MessageWidget(QWidget):
         """То же для finetune-сэмпла: он создаётся только после ответа модели."""
         self._sample_id = sample_id or None
 
+    def set_context_snapshot_id(self, context_snapshot_id: str):
+        """Bind the immutable request snapshot when a streamed reply finishes."""
+        self._context_snapshot_id = context_snapshot_id or None
+
     def _add_rating_buttons(self, name_row, sample_id: str, font_size: int):
         try:
             import qtawesome as qta
@@ -569,7 +626,7 @@ class MessageWidget(QWidget):
             self._rate_up_btn.setIcon(qta.icon("fa5s.thumbs-up", color="#9CA3AF"))
             self._rate_up_btn.setFixedSize(16, 16)
             self._rate_up_btn.setFlat(True)
-            self._rate_up_btn.setToolTip("👍 " + _("Хороший ответ", "Good response"))
+            self._rate_up_btn.setToolTip(_("Хороший ответ", "Good response"))
             self._rate_up_btn.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0px; }")
             self._rate_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -577,7 +634,7 @@ class MessageWidget(QWidget):
             self._rate_down_btn.setIcon(qta.icon("fa5s.thumbs-down", color="#9CA3AF"))
             self._rate_down_btn.setFixedSize(16, 16)
             self._rate_down_btn.setFlat(True)
-            self._rate_down_btn.setToolTip("👎 " + _("Плохой ответ", "Bad response"))
+            self._rate_down_btn.setToolTip(_("Плохой ответ", "Bad response"))
             self._rate_down_btn.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0px; }")
             self._rate_down_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -641,7 +698,7 @@ class MessageWidget(QWidget):
                 regen_action.triggered.connect(lambda: self.regenerate_requested.emit(self._message_id or ""))
                 menu.addAction(regen_action)
                 ctx_action = QAction(_("Просмотреть контекст запроса", "View request context"), self)
-                _sid = self._sample_id or ""
+                _sid = self._context_snapshot_id or self._sample_id or ""
                 ctx_action.triggered.connect(lambda: self.view_context_requested.emit(_sid))
                 menu.addAction(ctx_action)
                 resp_ctx_action = QAction(_("Просмотреть контекст ответа", "View response context"), self)
@@ -722,9 +779,20 @@ class ImageWidget(QWidget):
             img_label.mousePressEvent = self._on_click
             bubble_layout.addWidget(img_label)
         else:
-            err_label = QLabel("⚠️ " + _("Ошибка загрузки", "Load error"), bubble)
-            err_label.setStyleSheet("color: #EF4444; padding: 12px; font-weight: bold;")
-            bubble_layout.addWidget(err_label)
+            error_row = QWidget(bubble)
+            error_layout = QHBoxLayout(error_row)
+            error_layout.setContentsMargins(12, 12, 12, 12)
+            error_layout.setSpacing(6)
+            error_icon = QLabel(error_row)
+            error_icon.setPixmap(
+                qta.icon("fa6s.triangle-exclamation", color="#EF4444").pixmap(16, 16)
+            )
+            error_layout.addWidget(error_icon)
+            err_label = QLabel(_("Ошибка загрузки", "Load error"), error_row)
+            err_label.setStyleSheet("color: #EF4444; font-weight: bold;")
+            error_layout.addWidget(err_label)
+            error_layout.addStretch()
+            bubble_layout.addWidget(error_row)
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -850,16 +918,18 @@ class ThinkBlockWidget(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(4)
 
-        self._header = QLabel(self)
-        self._header.setStyleSheet(f"color: #9CA3AF; font-weight: bold; font-size: {self._font_sm}pt; background: transparent; border: none;")
+        self._header = QPushButton(self)
+        self._header.setFlat(True)
+        self._header.setIcon(qta.icon("fa6s.brain", color="#9CA3AF"))
+        self._header.setStyleSheet(f"QPushButton {{ color: #9CA3AF; font-weight: bold; font-size: {self._font_sm}pt; background: transparent; border: none; text-align: left; padding: 0; }}")
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header.mousePressEvent = lambda e: self.toggle()
+        self._header.clicked.connect(self.toggle)
         # Автор у размышлений не выводится — аватар и имя принадлежат основному
         # пузырю ответа, а не мыслям (см. фидбэк по UI).
-        if is_streaming: self._header.setText("▼ 💭 " + _("Размышляет", "Thinking") + ".")
+        if is_streaming: self._header.setText("▼ " + _("Размышляет", "Thinking") + ".")
         else:
             arrow = "▶" if self._collapsed else "▼"
-            self._header.setText(f"{arrow} 💭 " + _("Размышления", "Reasoning"))
+            self._header.setText(f"{arrow} " + _("Размышления", "Reasoning"))
         layout.addWidget(self._header)
 
         self._content_label = QLabel(self)
@@ -879,7 +949,7 @@ class ThinkBlockWidget(QFrame):
         self._collapsed = not self._collapsed
         self._content_label.setVisible(not self._collapsed)
         arrow = "▶" if self._collapsed else "▼"
-        self._header.setText(f"{arrow} 💭 " + _("Размышления", "Reasoning"))
+        self._header.setText(f"{arrow} " + _("Размышления", "Reasoning"))
 
     def append_content(self, text: str):
         self._content_text += text
@@ -888,7 +958,7 @@ class ThinkBlockWidget(QFrame):
     def finalize(self):
         self._is_streaming = False
         self._stop_animation()
-        self._header.setText("▼ 💭 " + _("Размышления", "Reasoning"))
+        self._header.setText("▼ " + _("Размышления", "Reasoning"))
 
     def _start_animation(self):
         from PyQt6.QtCore import QTimer
@@ -905,4 +975,4 @@ class ThinkBlockWidget(QFrame):
         phases = [".  ", ".. ", "..."]
         self._anim_phase = (self._anim_phase + 1) % 3
         dots = phases[self._anim_phase]
-        self._header.setText("▼ 💭 " + _("Размышляет", "Thinking") + dots)
+        self._header.setText("▼ " + _("Размышляет", "Thinking") + dots)

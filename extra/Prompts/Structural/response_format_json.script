@@ -80,7 +80,7 @@ SET LOCAL p_schema_fields = """  "segments": [
       "interactions": ["interaction_target"],
 """ + p_intents_schema_field + """
       "face_params": ["param"],""" + p_schema_game_fields + """
-      "target": "character_name",
+      "target": "exact active character identifier",
       "hint": "hint text",
       "allow_sleep": true/false
     }
@@ -111,7 +111,7 @@ SET LOCAL p_graph_schema_fields = """  "segments": [
       "interactions": ["interaction_target"],
 """ + p_intents_schema_field + """
       "face_params": ["param"],""" + p_schema_game_fields + """
-      "target": "character_name",
+      "target": "exact active character identifier",
       "hint": "hint text",
       "allow_sleep": true/false
     }
@@ -140,6 +140,9 @@ Field descriptions:
 
 Rules:
 - "text" is REQUIRED in every segment. All other segment fields are optional — omit if not needed.
+- "target" is an optional addressee of this segment's spoken text. Use the exact active character identifier from [Multi-Character Environment]. Omit it when speaking to the Player.
+- To address multiple interlocutors, write separate segments and set the matching "target" on each addressed segment.
+- Never emit top-level "target", "targets" or "next_turns" fields. Python transports segment meaning; the Unity-side client owns automatic turn routing.
 - attitude_change, boredom_change, stress_change: 0 is normal and the most common value for an ordinary neutral reply. Use small changes (about -2 to +2) only when your feelings actually shift; reserve larger values for clearly significant moments, and never leave the existing scale. Returning 0 for all three is perfectly fine.
 - memory_add/memory_update/memory_delete/memory_merge: TOP-LEVEL fields ONLY — NEVER place them inside segments. Omit entirely if no memory operations needed (do NOT output empty arrays).
 - Create a memory only when it is likely to matter later: stable player preferences, promises, conflicts, trust, relationship shifts, or important story events. Do NOT memorize greetings, small talk, the current room, distance, held item, lighting, temporary animations or other short-lived world data. Prefer updating an existing memory over adding a near-duplicate.
@@ -172,6 +175,9 @@ Field descriptions:
 
 Rules:
 - "text" is REQUIRED in every segment. All other segment fields are optional — omit if not needed.
+- "target" is an optional addressee of this segment's spoken text. Use the exact active character identifier from [Multi-Character Environment]. Omit it when speaking to the Player.
+- To address multiple interlocutors, write separate segments and set the matching "target" on each addressed segment.
+- Never emit top-level "target", "targets" or "next_turns" fields. Python transports segment meaning; the Unity-side client owns automatic turn routing.
 - attitude_change, boredom_change, stress_change: 0 is normal and the most common value for an ordinary neutral reply. Use small changes (about -2 to +2) only when your feelings actually shift; reserve larger values for clearly significant moments, and never leave the existing scale. Returning 0 for all three is perfectly fine.
 - memory_add/memory_update/memory_delete/memory_merge: TOP-LEVEL fields ONLY — NEVER place them inside segments. Omit entirely if no memory operations needed (do NOT output empty arrays).
 - Create a memory only when it is likely to matter later: stable player preferences, promises, conflicts, trust, relationship shifts, or important story events. Do NOT memorize greetings, small talk, the current room, distance, held item, lighting, temporary animations or other short-lived world data. Prefer updating an existing memory over adding a near-duplicate.

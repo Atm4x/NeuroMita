@@ -42,6 +42,18 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
             BackendKind.ONNX,
         )
 
+    def test_cuda_rvc_rejects_obsolete_directml_setting(self):
+        class _Parent:
+            current_model_id = EDGE_TTS_RVC_CUDA_ID
+
+            @staticmethod
+            def load_model_settings(_model_id):
+                return {}
+
+        model = EdgeTTSRVCCudaModel(_Parent(), EDGE_TTS_RVC_CUDA_ID)
+
+        self.assertEqual(model._resolve_runtime_device("dml"), "cuda:0")
+
     def test_install_requirements_use_explicit_rvc_package(self):
         cuda_specs = [req.spec for req in EdgeTTSRVCCudaModel.requirements(EDGE_TTS_RVC_CUDA_ID, {})]
         onnx_specs = [req.spec for req in EdgeTTSRVCOnnxModel.requirements(EDGE_TTS_RVC_ONNX_ID, {})]
@@ -50,6 +62,60 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
         self.assertIn("tts-with-rvc-onnx[dml]", onnx_specs)
         self.assertIn("edge-tts>=6.1.9,<8.0.0", cuda_specs)
         self.assertIn("edge-tts>=6.1.9,<8.0.0", onnx_specs)
+
+    def test_runtime_assets_are_backend_specific(self):
+        with tempfile.TemporaryDirectory() as base_dir, patch.dict(
+            os.environ,
+            {"NEUROMITA_BASE_DIR": base_dir},
+            clear=False,
+        ):
+            cuda_files = {
+                Path(req.path_fn({})).name
+                for req in EdgeTTSRVCCudaModel.requirements(EDGE_TTS_RVC_CUDA_ID, {})
+                if req.kind == "file"
+            }
+            onnx_files = {
+                Path(req.path_fn({})).name
+                for req in EdgeTTSRVCOnnxModel.requirements(EDGE_TTS_RVC_ONNX_ID, {})
+                if req.kind == "file"
+            }
+
+        self.assertEqual(cuda_files, {"hubert_base.pt", "rmvpe.pt"})
+        self.assertEqual(onnx_files, {"vec-768-layer-12.onnx", "rmvpe.onnx"})
+
+    def test_install_plan_downloads_runtime_assets_into_application_base_dir(self):
+        with tempfile.TemporaryDirectory() as base_dir, patch.dict(
+            os.environ,
+            {"NEUROMITA_BASE_DIR": base_dir},
+            clear=False,
+        ), patch.object(
+            EdgeTTSRVCCudaModel,
+            "is_model_installed",
+            return_value=False,
+        ), patch.object(
+            EdgeTTSRVCOnnxModel,
+            "is_model_installed",
+            return_value=False,
+        ):
+            cuda_plan = EdgeTTSRVCCudaModel.build_install_plan_for_model(
+                EDGE_TTS_RVC_CUDA_ID, {"gpu_vendor": "NVIDIA"}
+            )
+            onnx_plan = EdgeTTSRVCOnnxModel.build_install_plan_for_model(
+                EDGE_TTS_RVC_ONNX_ID, {"gpu_vendor": "AMD"}
+            )
+
+        cuda_download = next(action for action in cuda_plan.actions if action.type == "download_http")
+        onnx_download = next(action for action in onnx_plan.actions if action.type == "download_http")
+        self.assertEqual(
+            {Path(item["dest"]) for item in cuda_download.files},
+            {Path(base_dir) / "hubert_base.pt", Path(base_dir) / "rmvpe.pt"},
+        )
+        self.assertEqual(
+            {Path(item["dest"]) for item in onnx_download.files},
+            {Path(base_dir) / "vec-768-layer-12.onnx", Path(base_dir) / "rmvpe.onnx"},
+        )
+        self.assertTrue(all("huggingface.co" in item["url"] for item in cuda_download.files))
+        self.assertTrue(all("huggingface.co" in item["url"] for item in onnx_download.files))
 
     def test_cuda_settings_keep_full_f0_method_catalog(self):
         config = EdgeTTSRVCCudaModel._find_model_config(EDGE_TTS_RVC_CUDA_ID)
@@ -255,9 +321,13 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
                 return {}
 
         model = EdgeTTSRVCCudaModel(_Parent(), EDGE_TTS_RVC_CUDA_ID)
-        with patch("os.getcwd", return_value=r"C:\RuntimeRoot"), patch.dict(
+        with patch.dict(
             "os.environ",
-            {"NEUROMITA_MODELS_DIR": r"C:\RuntimeRoot\Models", "NEUROMITA_LIB_DIR": r"C:\RuntimeRoot\Lib"},
+            {
+                "NEUROMITA_BASE_DIR": r"C:\RuntimeRoot",
+                "NEUROMITA_MODELS_DIR": r"C:\RuntimeRoot\Models",
+                "NEUROMITA_LIB_DIR": r"C:\RuntimeRoot\Lib",
+            },
             clear=False,
         ):
             candidates = model._hubert_candidate_paths()

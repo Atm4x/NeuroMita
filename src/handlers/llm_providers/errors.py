@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import ast
 import json
@@ -9,6 +10,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
 import httpx
+from core.networking import NetworkRequestError
 
 from utils import _, mask_sensitive
 
@@ -230,6 +232,21 @@ def _looks_like_unsupported_thinking_error(status_code: Optional[int], provider_
     )
 
 
+def _looks_like_context_window_error(provider_message: str) -> bool:
+    low = (provider_message or "").lower()
+    return any(
+        marker in low
+        for marker in (
+            "exceed_context_size_error",
+            "exceeds the available context size",
+            "exceeds the context window",
+            "context length exceeded",
+            "maximum context length",
+            "max context length",
+        )
+    )
+
+
 def _friendly_message(status_code: Optional[int], provider_message: str) -> tuple[str, str]:
     low = (provider_message or "").lower()
 
@@ -270,6 +287,15 @@ def _friendly_message(status_code: Optional[int], provider_message: str) -> tupl
                 "This provider does not support the thinking parameter. Disable thinking mode for this preset.",
             ),
             _("Unsupported thinking parameter.", "Unsupported thinking parameter."),
+        )
+
+    if _looks_like_context_window_error(provider_message):
+        return (
+            _(
+                "Запрос не поместился в контекст модели. Уменьшите историю или промпт, либо увеличьте размер контекста загруженной модели.",
+                "The request does not fit in the model context. Reduce the history or prompt, or increase the context size of the loaded model.",
+            ),
+            _("Model context limit exceeded.", "Model context limit exceeded."),
         )
 
     if status_code == 400:
@@ -491,6 +517,18 @@ def coerce_provider_error(provider: str, exc: Exception, *, url: Optional[str] =
     if isinstance(exc, LLMProviderError):
         return exc
 
+    if isinstance(exc, NetworkRequestError):
+        return LLMProviderError(
+            provider=provider,
+            friendly_message=exc.message,
+            provider_message=exc.detail or exc.message,
+            status_code=exc.status_code,
+            retryable=exc.retryable,
+            code=exc.code,
+            phase=exc.phase,
+            url=exc.url or url,
+        )
+
     transport_error = _find_httpx_transport_error(exc)
     if isinstance(transport_error, httpx.TimeoutException):
         phase = _httpx_error_phase(transport_error)
@@ -531,7 +569,7 @@ def coerce_provider_error(provider: str, exc: Exception, *, url: Optional[str] =
         except Exception:
             payload = getattr(response, "text", None)
 
-    provider_message = _compact_text(getattr(exc, "message", None)) or _compact_text(str(exc))
+    provider_message = _compact_text(getattr(exc, "message", None)) or _compact_text(format_exception(exc))
     return build_provider_error(
         provider,
         status_code=status_code,

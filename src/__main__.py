@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import multiprocessing as mp
 import os
@@ -12,6 +13,47 @@ startup_trace.mark("entry.module_loaded")
 
 os.environ.setdefault("QT_API", "pyqt6")
 os.environ.setdefault("UV_LINK_MODE", "copy")
+
+
+def _configure_startup_console() -> None:
+    """Brand the temporary Windows console used during GUI startup."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from pathlib import Path
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        window = kernel32.GetConsoleWindow()
+        if not window:
+            return
+        user32.SetWindowTextW(window, "NeuroMita — запуск")
+        base_dir = Path(os.environ.get("NEUROMITA_BASE_DIR", Path.cwd()))
+        icon_path = base_dir / "assets" / "launcher_ui" / "NM_Logo.ico"
+        if icon_path.is_file():
+            icon = user32.LoadImageW(None, str(icon_path), 1, 32, 32, 0x10 | 0x40)
+            if icon:
+                user32.SendMessageW(window, 0x0080, 1, icon)
+                user32.SendMessageW(window, 0x0080, 0, icon)
+    except Exception:
+        pass
+
+
+def _hide_startup_console() -> None:
+    """Hide the startup console after the main GUI has been shown."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        console_window = ctypes.windll.kernel32.GetConsoleWindow()
+        if console_window:
+            ctypes.windll.user32.ShowWindow(console_window, 0)
+    except Exception:
+        pass
+
+
+_configure_startup_console()
 
 
 @dataclass(frozen=True)
@@ -177,6 +219,13 @@ def _run_gui(runtime, startup_mode: str) -> int:
     logger.info("GUI composition root создан")
 
     main_window.show()
+    _hide_startup_console()
+    try:
+        from utils.win_titlebar import apply_dark_titlebar
+
+        apply_dark_titlebar(main_window)
+    except Exception:
+        pass
     startup_trace.mark("gui.window_shown")
     app.processEvents()
     startup_trace.mark("gui.first_paint")
@@ -196,7 +245,7 @@ def _run_gui(runtime, startup_mode: str) -> int:
             if home_page is not None:
                 home_page.refresh_status_cards()
         except Exception as exc:
-            logger.error(f"Failed to attach GUI backend: {exc}", exc_info=True)
+            logger.error(f"Failed to attach GUI backend: {format_exception(exc)}", exc_info=True)
             try:
                 controller.close_app()
             except Exception:
@@ -204,7 +253,7 @@ def _run_gui(runtime, startup_mode: str) -> int:
             on_backend_failed(exc)
 
     def on_backend_failed(error: BaseException) -> None:
-        message = f"Backend startup failed: {type(error).__name__}: {error}"
+        message = f"Backend startup failed: {format_exception(error)}"
         logger.error(message)
         gui_root.backend_failed(error)
 
@@ -247,6 +296,15 @@ def _run_gui(runtime, startup_mode: str) -> int:
     backend_loader.request_shutdown()
     if not backend_loader.wait(timeout=5.0):
         logger.warning("GUI backend startup thread did not stop within 5 seconds")
+    try:
+        from PyQt6.QtCore import QCoreApplication, QEvent
+
+        gui_root.close()
+        main_window.deleteLater()
+        backend_loader.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    except Exception as exc:
+        logger.error(f"Failed to finalize GUI objects: {format_exception(exc)}", exc_info=True)
     if result < 0:
         logger.critical(
             "Qt event loop terminated with an invalid negative exit code: %d",
@@ -271,6 +329,12 @@ def _run_headless(runtime, options: StartupOptions) -> int:
 
 def main() -> int:
     mp.freeze_support()
+    if len(sys.argv) > 1 and sys.argv[1] == "--internal-compile-fish-speech":
+        sys.argv = ["compile_fish_speech", *sys.argv[2:]]
+        from handlers.voice_models.compile_fish_speech import main as compile_fish_speech
+
+        compile_fish_speech()
+        return 0
     options = _consume_startup_options(sys.argv)
     startup_trace.configure(mode=options.mode)
     startup_trace.mark("entry.options_parsed", mode=options.mode)

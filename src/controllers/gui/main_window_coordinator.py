@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 from typing import Any, Callable
 
@@ -23,14 +24,14 @@ class MainWindowCoordinator:
             raise RuntimeError("Main window coordinator is already closed")
         view = self._view
         view.page_map = {}
-        view._deferred_main_pages = {"sandbox", "news", "developer", "wiki", "logs"}
+        view._deferred_main_pages = {"sandbox", "news", "wiki", "logs"}
         view._page_building = set()
         view._page_placeholders = {}
         view._pending_page_actions = {}
         try:
             apply_section_visibility(view)
         except Exception as exc:
-            logger.debug("Failed to apply settings section visibility: %s", exc)
+            logger.debug("Failed to apply settings section visibility: %s", format_exception(exc))
         self.ensure_page("home", eager=True)
         self.switch_page("home", activate=False)
         view.apply_initial_geometry(1560, 920)
@@ -40,23 +41,13 @@ class MainWindowCoordinator:
             prebuild_settings = False
         if prebuild_settings:
             QTimer.singleShot(450, self.prebuild_settings_page)
-        self.prefetch_release_feed()
-
-    def prefetch_release_feed(self) -> None:
-        try:
-            self._presentation.news.load_async(
-                self._view,
-                lambda _releases: None,
-            )
-        except Exception as exc:
-            logger.debug("Release feed prefetch failed: %s", exc)
 
     def prebuild_settings_page(self) -> None:
         try:
             if not getattr(self._view, "page_map", {}).get("settings"):
                 self.ensure_page("settings")
         except Exception as exc:
-            logger.debug("Settings page prebuild failed: %s", exc)
+            logger.debug("Settings page prebuild failed: %s", format_exception(exc))
 
     def ensure_page(self, page_key: str, *, eager: bool = False):
         view = self._view
@@ -123,13 +114,13 @@ class MainWindowCoordinator:
             logger.error(
                 "Failed to build main page '%s': %s",
                 page_key,
-                exc,
+                format_exception(exc),
                 exc_info=True,
             )
             view._page_building.discard(page_key)
             label = placeholder.findChild(QLabel)
             if label is not None:
-                label.setText(f"Failed to load {page_key}: {exc}")
+                label.setText(f"Failed to load {page_key}: {format_exception(exc)}")
             return
         index = view.page_stack.indexOf(placeholder)
         if index >= 0:
@@ -168,6 +159,7 @@ class MainWindowCoordinator:
                 reload_history=view.load_chat_history,
                 clear_chat=view.clear_chat_display,
                 send_message=view.send_message,
+                cancel_active_generations=view.cancel_active_generations,
                 open_settings=lambda category: self.show_settings_category(
                     category,
                     force=True,
@@ -202,15 +194,7 @@ class MainWindowCoordinator:
             view.SETTINGS_PANEL_WIDTH = page.SETTINGS_PANEL_WIDTH
             view.SETTINGS_SIDEBAR_WIDTH = page.SETTINGS_SIDEBAR_WIDTH
             view.settings_resize_handle = page.settings_resize_handle
-            return page
-        if page_key == "developer":
-            page = factory(
-                view,
-                view_models.finetune_data(view),
-                view._page_actions,
-                getattr(view, "settings_binding", None),
-            )
-            view.developer_page = page
+            page.preload_registered_sections()
             return page
         if page_key == "logs":
             page = factory(view, view_models.logs_page(view), view._page_actions)
@@ -363,6 +347,9 @@ class MainWindowCoordinator:
             layout,
         )
 
+    def preload_settings_sections(self, preloads) -> None:
+        self._presentation.settings_sections.preload_sections(preloads)
+
     def sync_settings_mode_widgets(self, mode_value) -> None:
         from PyQt6.QtCore import Qt
         from ui.pages.settings.settings_presentation import get_mode_label
@@ -472,6 +459,10 @@ class MainWindowCoordinator:
         self._closed = True
         view = self._view
 
+        from core.task_supervisor import task_supervisor
+
+        task_supervisor().cancel_owner(view, timeout=0.25)
+
         # Page widgets outlive this coordinator until Qt destroys the main
         # window. Close their presentation models explicitly before the global
         # TaskSupervisor is shut down; otherwise queued refreshes can race with
@@ -494,7 +485,7 @@ class MainWindowCoordinator:
                 except Exception as exc:
                     logger.debug(
                         "Page presentation model close failed during shutdown: %s",
-                        exc,
+                        format_exception(exc),
                     )
                 closed_models.add(id(model))
 
@@ -505,7 +496,7 @@ class MainWindowCoordinator:
             try:
                 page.on_deactivated()
             except Exception as exc:
-                logger.debug("Current page deactivation failed during shutdown: %s", exc)
+                logger.debug("Current page deactivation failed during shutdown: %s", format_exception(exc))
         pending = getattr(view, "_pending_page_actions", None)
         if isinstance(pending, dict):
             pending.clear()

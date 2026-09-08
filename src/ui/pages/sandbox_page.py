@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 
 import qtawesome as qta
@@ -345,7 +346,7 @@ class _SandboxStatusRow(QWidget):
 
 
 class _GameLinkStatusRow(QWidget):
-    """Строка статуса связи с игрой (мод MiSide) в панели «Статус».
+    """Строка статуса связи с игрой NeuroMita в панели «Статус».
 
     В отличие от _SandboxStatusRow (там переключатель включает подсистему), тут
     плашка отражает ЖИВОЕ состояние TCP-связи с модом — её двигает
@@ -804,8 +805,8 @@ class SandboxPage(QWidget):
         status_text = {
             "idle": "—",
             "running": _("Генерация…", "Generating…"),
-            "success": _("✓ Успех", "✓ Success"),
-            "error": _("✗ Ошибка", "✗ Error"),
+            "success": _("Успех", "Success"),
+            "error": _("Ошибка", "Error"),
         }.get(request.status, str(request.status or "—"))
         if request.status == "error" and request.error:
             status_text = f"{status_text}: {request.error}"
@@ -2207,7 +2208,7 @@ class SandboxPage(QWidget):
                 view_context=self._page_actions.view_debug_context,
             )
         except Exception as exc:
-            err = QLabel(f"[debug_settings error] {exc}")
+            err = QLabel(f"[debug_settings error] {format_exception(exc)}")
             err.setWordWrap(True)
             debug_panel_layout.addWidget(err)
         layout.addWidget(debug_panel_strip)

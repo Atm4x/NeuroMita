@@ -21,6 +21,7 @@ class SettingsSectionSpec:
     subtitle: TextPair
     min_mode: str
     builder_ref: str | SectionBuilder
+    preload_key: str | None = None
 
 
 SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
@@ -83,6 +84,7 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         ),
         min_mode="advanced",
         builder_ref="ui.settings.voiceover_settings:setup_voiceover_controls",
+        preload_key="voice_status",
     ),
     SettingsSectionSpec(
         key="microphone",
@@ -155,6 +157,18 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         ),
         min_mode="advanced",
         builder_ref="updates",
+    ),
+    SettingsSectionSpec(
+        key="data_collection",
+        icon_name="fa6s.database",
+        nav_label=("Сбор данных", "Data Collection"),
+        title=("Сбор данных", "Data Collection"),
+        subtitle=(
+            "Сохранение, оценка и экспорт данных для дообучения.",
+            "Collect, rate and export data for fine-tuning.",
+        ),
+        min_mode="full",
+        builder_ref="data_collection",
     ),
 )
 

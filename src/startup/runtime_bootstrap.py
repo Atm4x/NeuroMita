@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import faulthandler
 import json
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from services.update_contour import target_for_contour
 from startup.startup_profiler import startup_trace
 
 
@@ -164,7 +166,7 @@ def _configure_paths(base_dir: str) -> str:
     except Exception as exc:
         logging.getLogger(__name__).warning(
             "Failed to activate main runtime environment paths: %s",
-            exc,
+            format_exception(exc),
             exc_info=True,
         )
         main_paths = ()
@@ -213,7 +215,7 @@ def _schedule_runtime_cleanup(logger: Any) -> None:
             RuntimeEnvironmentManager(Path(runtime_root)).cleanup_inactive_overlays()
             logger.info("Inactive runtime overlay cleanup completed")
         except Exception as exc:
-            logger.warning(f"Inactive runtime overlay cleanup failed: {exc}", exc_info=True)
+            logger.warning(f"Inactive runtime overlay cleanup failed: {format_exception(exc)}", exc_info=True)
 
     from core.task_supervisor import task_supervisor
 
@@ -225,14 +227,30 @@ def _schedule_runtime_cleanup(logger: Any) -> None:
     )
 
 
+def _native_faulthandler_enabled() -> bool:
+    override = os.environ.get("NEUROMITA_ENABLE_NATIVE_FAULTHANDLER")
+    if override is not None:
+        return override.strip().lower() in {"1", "true", "yes", "on"}
+    return sys.platform != "win32"
+
+
 def _configure_crash_logging(base_dir: str):
-    crash_log = None
+    if not _native_faulthandler_enabled():
+        return None
+
     try:
         crash_path = os.path.join(base_dir, "NeuroMitaCrash.log")
         crash_log = open(crash_path, "a", buffering=1, encoding="utf-8")
+    except OSError:
+        faulthandler.enable()
+        return None
+
+    try:
         faulthandler.enable(file=crash_log, all_threads=True)
     except Exception:
+        crash_log.close()
         faulthandler.enable()
+        return None
     return crash_log
 
 
@@ -288,7 +306,7 @@ def _load_environment(base_dir: str, logger: Any) -> None:
                 f"Файл окружения не найден: {env_path}. Используются системные значения."
             )
     except Exception as exc:
-        logger.warning(f"Не удалось загрузить features.env: {exc}")
+        logger.warning(f"Не удалось загрузить features.env: {format_exception(exc)}")
 
     os.environ.setdefault("WHISPER_ONNX_DEBUG", "1")
 
@@ -328,6 +346,20 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
             if python_recovery.changed:
                 logger.info("Recovered an interrupted Python installation; restarting.")
                 raise SystemExit(42)
+            if python_recovery.status == "waiting_for_activation":
+                from services.update_activation import UPDATE_RESTART_EXIT_CODE
+                from utils.app_restart import spawn_launcher_after_exit
+
+                logger.info(
+                    "A verified NeuroMita.pyz is pending post-exit activation; "
+                    "handing control to Launcher.exe."
+                )
+                if spawn_launcher_after_exit():
+                    raise SystemExit(UPDATE_RESTART_EXIT_CODE)
+                logger.error(
+                    "Pending Python activation could not be handed to Launcher.exe. "
+                    "Keeping the current runtime unchanged."
+                )
             if python_recovery.status == "waiting_for_restart":
                 from updater import note_locked_restart_attempt
 
@@ -360,7 +392,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
         except SystemExit:
             raise
         except Exception as exc:
-            logger.warning(f"Python installation recovery failed: {exc}")
+            logger.warning(f"Python installation recovery failed: {format_exception(exc)}")
 
         try:
             recovery = resume_pending_unity_update(
@@ -374,7 +406,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
             elif not recovery.ok and recovery.status not in {"waiting_for_credentials"}:
                 logger.warning(f"Unity installation recovery failed: {recovery.error}")
         except Exception as exc:
-            logger.warning(f"Unity installation recovery failed: {exc}")
+            logger.warning(f"Unity installation recovery failed: {format_exception(exc)}")
 
         auto_update = enabled("AUTO_UPDATE", False)
         check_updates = enabled("AUTO_UPDATE_CHECK", auto_update)
@@ -384,7 +416,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
                 check_for_updates(
                     base_dir=base_dir,
                     logger=logger,
-                    channel=settings.get("UPDATE_CHANNEL", "stable"),
+                    channel=target_for_contour(settings.get("UPDATE_CONTOUR", "release")).channel,
                     tester_code=settings.get("TESTER_CODE") or None,
                     auto_update=apply_update,
                     restart_on_success=apply_update,
@@ -394,7 +426,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
             except SystemExit:
                 raise
             except Exception as exc:
-                logger.warning(f"Python update check failed: {exc}")
+                logger.warning(f"Python update check failed: {format_exception(exc)}")
 
         if auto_update:
             run_python_check(apply_update=True)
@@ -415,12 +447,12 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
                     base_dir=base_dir,
                     logger=logger,
                     unity_dir=settings.get("UNITY_INSTALL_DIR") or None,
-                    channel=settings.get("UPDATE_CHANNEL", "stable"),
+                    channel=target_for_contour(settings.get("UPDATE_CONTOUR", "release")).channel,
                     tester_code=settings.get("TESTER_CODE") or None,
                     auto_update=apply_update,
                 )
             except Exception as exc:
-                logger.warning(f"Unity update check failed: {exc}")
+                logger.warning(f"Unity update check failed: {format_exception(exc)}")
 
         if auto_update_unity:
             run_unity_check(apply_update=True)
@@ -432,7 +464,7 @@ def _run_update_checks(base_dir: str, logger: Any) -> None:
                 daemon=True,
             ).start()
     except Exception as exc:
-        logger.warning(f"Update check failed: {exc}")
+        logger.warning(f"Update check failed: {format_exception(exc)}")
 
 
 def _run_torch_bootstrap(_libs_dir: str, logger: Any) -> None:
@@ -456,7 +488,7 @@ def _ensure_project_root(base_dir: str, logger: Any) -> None:
             pass
         logger.info(f"Файл '{marker}' создан.")
     except Exception as exc:
-        logger.warning(f"Не удалось создать project-root marker: {exc}")
+        logger.warning(f"Не удалось создать project-root marker: {format_exception(exc)}")
 
 
 def _prime_onnxruntime(_logger: Any) -> None:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import gc
 import os
@@ -23,6 +24,7 @@ from handlers.voice_models.edge_tts_rvc_model import (
 )
 from handlers.voice_models.fish_speech_model import FishSpeechModel
 from handlers.voice_models.f5_tts_model import F5TTSModel
+from handlers.voice_models.omnivoice_model import OmniVoiceModel
 
 
 class LocalVoice:
@@ -54,9 +56,16 @@ class LocalVoice:
         rvc_handler = edge_rvc_cuda_handler if self.provider == "NVIDIA" else edge_rvc_onnx_handler
         fish_handler = FishSpeechModel(self, "fish_handler", rvc_handler=rvc_handler)
         f5_handler = F5TTSModel(self, "f5_handler", rvc_handler=rvc_handler)
+        omnivoice_handler = OmniVoiceModel(self, "omnivoice_handler")
 
         self._registry: Dict[str, IVoiceModel] = self._build_registry_from_handlers(
-            [edge_rvc_cuda_handler, edge_rvc_onnx_handler, fish_handler, f5_handler]
+            [
+                edge_rvc_cuda_handler,
+                edge_rvc_onnx_handler,
+                omnivoice_handler,
+                fish_handler,
+                f5_handler,
+            ]
         )
 
         if not self._registry:
@@ -65,6 +74,7 @@ class LocalVoice:
                 EDGE_TTS_RVC_ONNX_ID: edge_rvc_onnx_handler,
                 SILERO_RVC_CUDA_ID: edge_rvc_cuda_handler,
                 SILERO_RVC_ONNX_ID: edge_rvc_onnx_handler,
+                "omnivoice": omnivoice_handler,
                 "medium": fish_handler,
                 "medium+": fish_handler,
                 "medium+low": fish_handler,
@@ -122,7 +132,7 @@ class LocalVoice:
                     configs.append(cfg)
                     seen.add(cid)
             except Exception as e:
-                logger.warning(f"LocalVoice.get_all_model_configs error: {e}")
+                logger.warning(f"LocalVoice.get_all_model_configs error: {format_exception(e)}")
         return configs
 
     def is_model_installed(self, model_id: str) -> bool:
@@ -179,7 +189,7 @@ class LocalVoice:
             )
             ok = bool(model.initialize(init=init))
         except Exception as e:
-            logger.error(f"initialize_model failed for {model_id}: {e}", exc_info=True)
+            logger.error(f"initialize_model failed for {model_id}: {format_exception(e)}", exc_info=True)
             ok = False
 
         if ok:
@@ -214,7 +224,7 @@ class LocalVoice:
             try:
                 model.cleanup_state()
             except Exception as exc:
-                logger.warning(f"Voice model cleanup failed for {type(model).__name__}: {exc}")
+                logger.warning(f"Voice model cleanup failed for {type(model).__name__}: {format_exception(exc)}")
 
         self.active_model_instance = None
         self.current_model_id = None
@@ -237,7 +247,7 @@ class LocalVoice:
                     return all_settings.get(model_id, {}) if isinstance(all_settings, dict) else {}
             return {}
         except Exception as e:
-            logger.info(f"load_model_settings error for {model_id}: {e}")
+            logger.info(f"load_model_settings error for {model_id}: {format_exception(e)}")
             return {}
 
     def convert_wav_to_stereo(
@@ -266,7 +276,7 @@ class LocalVoice:
             return output_path
         except ffmpeg.Error as fe:
             err = fe.stderr.decode(errors="ignore") if getattr(fe, "stderr", None) else ""
-            logger.error(f"FFmpeg error:\n{err}\n{traceback.format_exc()}")
+            logger.error(f"FFmpeg error:\n{format_exception(err)}\n{traceback.format_exc()}")
             return None
         except Exception:
             logger.error(f"convert_wav_to_stereo error:\n{traceback.format_exc()}")
@@ -278,9 +288,10 @@ class LocalVoice:
 
         mid = self.current_model_id
         if not self.is_model_initialized(mid):
-            ok = self.initialize_model(mid, init=False)
-            if not ok:
-                raise RuntimeError(f"Failed to initialize model '{mid}'")
+            raise RuntimeError(
+                f"Voice model '{mid}' is not initialized. "
+                "Initialize it explicitly before requesting synthesis."
+            )
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)) or ".", exist_ok=True)
 

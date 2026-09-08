@@ -1,9 +1,11 @@
+from core.error_utils import format_exception
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPlainTextEdit, QProgressBar,
-    QApplication, QWidget, QPushButton, QFileDialog, QTabWidget
+    QApplication, QWidget, QPushButton, QFileDialog, QTabWidget, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QTime
 from PyQt6.QtGui import QFont, QTextCursor, QGuiApplication
+import qtawesome as qta
 from utils import getTranslationVariant as _
 
 import re
@@ -383,7 +385,7 @@ class VoiceInstallationWindow(QDialog):
         pkg_total = stats.get("packages_total")
         if pkg_total:
             done = pkg_done if isinstance(pkg_done, int) else 0
-            self.packages_label.setText(_("📦 Пакеты: ", "📦 Packages: ") + f"{done} / {pkg_total}")
+            self.packages_label.setText(_("Пакеты: ", "Packages: ") + f"{done} / {pkg_total}")
         else:
             self.packages_label.setText("")
 
@@ -403,9 +405,9 @@ class VoiceInstallationWindow(QDialog):
         warnings = int(stats.get("warnings") or 0)
         issues = []
         if errors:
-            issues.append(f"✖ {errors}")
+            issues.append(_("Ошибок: {count}", "Errors: {count}").format(count=errors))
         if warnings:
-            issues.append(f"⚠ {warnings}")
+            issues.append(_("Предупреждений: {count}", "Warnings: {count}").format(count=warnings))
         self.issues_label.setStyleSheet("color: #ff5555;" if errors else "color: #ffb86c;")
         self.issues_label.setText("   " + "  ".join(issues) if issues else "")
         if errors:
@@ -643,7 +645,7 @@ class VoiceInstallationWindow(QDialog):
                 with open(fname, "w", encoding="utf-8") as f:
                     f.write(self._raw_log_text() or "\n".join(self._full_log_lines))
             except Exception as ex:
-                logger.error(f"Не удалось сохранить лог: {ex}")
+                logger.error(f"Не удалось сохранить лог: {format_exception(ex)}")
 
     def _clear_log_screen_only(self):
         # Очистка только видимой области; полный лог остаётся для копирования/сохранения
@@ -917,7 +919,7 @@ class VoiceActionWindow(QDialog):
                 with open(fname, "w", encoding="utf-8") as f:
                     f.write("\n".join(self._full_log_lines))
             except Exception as ex:
-                logger.error(f"Не удалось сохранить лог: {ex}")
+                logger.error(f"Не удалось сохранить лог: {format_exception(ex)}")
 
     def _clear_log_screen_only(self):
         self._display_lines.clear()
@@ -939,7 +941,8 @@ class VCRedistWarningDialog(QDialog):
     def __init__(self, open_documentation, parent=None):
         super().__init__(parent)
         self._open_documentation = open_documentation
-        self.setWindowTitle(_("⚠️ Ошибка загрузки Triton", "⚠️ Triton Load Error"))
+        self.setWindowTitle(_("Ошибка загрузки Triton", "Triton Load Error"))
+        self.setWindowIcon(qta.icon("fa6s.triangle-exclamation", color="#ffb86c"))
         self.setModal(True)
         self.setMinimumSize(500, 250)
 
@@ -1017,15 +1020,17 @@ class TritonDependenciesDialog(QDialog):
         *,
         open_documentation,
         refresh_status,
+        enable_long_paths,
         parent=None,
         dependencies_status=None,
     ):
         super().__init__(parent)
         self._open_documentation = open_documentation
         self._refresh_status = refresh_status
-        self.setWindowTitle(_("⚠️ Зависимости Triton", "⚠️ Triton Dependencies"))
+        self._enable_long_paths = enable_long_paths
+        self.setWindowTitle(_("Компиляция Fish Speech+", "Fish Speech+ compilation"))
         self.setModal(True)
-        self.setMinimumSize(700, 350)
+        self.setMinimumSize(660, 360)
 
         # Эталонная сине-серая гамма (как остальной UI), а не старый плоский #1e1e1e
         # (фидбэк Артёма: «окошко не в том оформлении как все»).
@@ -1060,36 +1065,53 @@ class TritonDependenciesDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        title_label = QLabel(_("Статус зависимостей Triton:", "Triton Dependency Status:"))
-        title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        title_label = QLabel(_("Предварительная компиляция — по желанию", "Precompilation is optional"))
+        title_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         layout.addWidget(title_label)
 
-        self.status_layout = QHBoxLayout()
-        self._update_status_display()
-        layout.addLayout(self.status_layout)
-
-        self.warning_label = QLabel(_("⚠️ Для компиляции ядра Triton нужен MSVC (VC++ Build Tools)!",
-                                     "⚠️ Triton kernel compilation requires MSVC (VC++ Build Tools)!"))
-        self.warning_label.setStyleSheet("color: orange; font-weight: bold;")
-        # CUDA Toolkit больше не является обязательным требованием (фидбэк Артёма):
-        # для линковки ядра достаточно MSVC/VC++. Предупреждение зависит только от MSVC.
-        msvc_found = self.dependencies_status.get('msvc_found', False)
-        self.warning_label.setVisible(not msvc_found)
-        layout.addWidget(self.warning_label)
-
         info_text = _(
-            "Для Fish Speech+ нужен только Microsoft VC++ Build Tools.\n"
-            "Triton Windows уже содержит TinyCC и не требует Windows SDK или CUDA Toolkit.\n"
-            "Установите VC++ Build Tools, затем обновите статус. Если компиляция всё равно не сработает,\n"
-            "попробуйте ручную инициализацию через `init_triton.bat` в корне программы.",
-            "Fish Speech+ only requires Microsoft VC++ Build Tools.\n"
-            "Triton Windows already includes TinyCC and does not require the Windows SDK or CUDA Toolkit.\n"
-            "Install VC++ Build Tools, then refresh the status. If compilation still fails,\n"
-            "try manual initialization with `init_triton.bat` in the program's root folder."
+            "Fish Speech+ может собрать CUDA-ядра сейчас или автоматически при первой озвучке. "
+            "Triton Windows уже содержит нужные компилятор и CUDA-файлы — отдельная ручная установка обычно не нужна.\n\n"
+            "Позже компиляцию можно запустить, пересоздать или удалить в настройках самой модели Fish Speech+.",
+            "Fish Speech+ can build CUDA kernels now or automatically on first voiceover. "
+            "Triton Windows already bundles the required compiler and CUDA files, so manual installation is usually unnecessary.\n\n"
+            "Later you can compile, rebuild, or delete the cache in the Fish Speech+ model settings."
         )
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
+
+        later_link = QLabel(_(
+            '<a href="fish_compile">Где компилировать или удалить кеш позже</a>',
+            '<a href="fish_compile">Where to compile or delete the cache later</a>',
+        ))
+        later_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        later_link.linkActivated.connect(
+            lambda _href: self._open_documentation("installation_guide.html#fish_compile")
+        )
+        layout.addWidget(later_link)
+
+        links = QLabel(
+            '<a href="https://github.com/triton-lang/triton-windows">Triton Windows</a> · '
+            '<a href="https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation">Windows: long paths</a>'
+        )
+        links.setOpenExternalLinks(True)
+        links.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        layout.addWidget(links)
+
+        self.long_paths_label = QLabel()
+        layout.addWidget(self.long_paths_label)
+        self.long_paths_button = QPushButton(_("Разрешить длинные пути", "Enable long paths"))
+        self.long_paths_button.clicked.connect(self._on_enable_long_paths)
+        layout.addWidget(self.long_paths_button, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self.acknowledge = QCheckBox(_(
+            "Я понимаю: компиляция займёт время и нагрузит видеокарту",
+            "I understand compilation takes time and will use the GPU",
+        ))
+        self.acknowledge.toggled.connect(self._update_compile_enabled)
+        layout.addWidget(self.acknowledge)
+        self._update_status_display()
 
         layout.addStretch()
 
@@ -1099,63 +1121,45 @@ class TritonDependenciesDialog(QDialog):
         docs_button.clicked.connect(self._on_docs_clicked)
         button_layout.addWidget(docs_button)
 
-        refresh_button = QPushButton(_("Обновить статус", "Refresh Status"))
-        refresh_button.clicked.connect(self._on_refresh_status)
-        button_layout.addWidget(refresh_button)
-
         button_layout.addStretch()
 
-        skip_button = QPushButton(_("Пропустить инициализацию", "Skip Initialization"))
+        skip_button = QPushButton(_("Сделать позже", "Do it later"))
         skip_button.clicked.connect(lambda: self._set_choice_and_accept('skip'))
         button_layout.addWidget(skip_button)
 
-        continue_button = QPushButton(_("Продолжить инициализацию", "Continue Initialization"))
-        continue_button.setObjectName("ContinueButton")
-        continue_button.clicked.connect(lambda: self._set_choice_and_accept('continue'))
-        button_layout.addWidget(continue_button)
+        self.continue_button = QPushButton(_("Компилировать сейчас", "Compile now"))
+        self.continue_button.setObjectName("ContinueButton")
+        self.continue_button.clicked.connect(lambda: self._set_choice_and_accept('continue'))
+        self.continue_button.setEnabled(False)
+        button_layout.addWidget(self.continue_button)
 
         layout.addLayout(button_layout)
 
     def _update_status_display(self):
-        while self.status_layout.count():
-            item = self.status_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        items = [
-            ("MSVC (VC++):", self.dependencies_status.get('msvc_found', False)),
-        ]
-
-        for text, found in items:
-            item_widget = QWidget()
-            item_layout = QHBoxLayout(item_widget)
-            item_layout.setContentsMargins(0, 0, 15, 0)
-
-            label = QLabel(text)
-            label.setFont(QFont("Segoe UI", 9))
-            item_layout.addWidget(label)
-
-            status_text = _("Найден", "Found") if found else _("Не найден", "Not Found")
-            status_color = "#4CAF50" if found else "#F44336"
-            status_label = QLabel(status_text)
-            status_label.setFont(QFont("Segoe UI", 9))
-            status_label.setStyleSheet(f"color: {status_color};")
-            item_layout.addWidget(status_label)
-
-            self.status_layout.addWidget(item_widget)
-
-        self.status_layout.addStretch()
-
-        if hasattr(self, 'warning_label'):
-            msvc_found = self.dependencies_status.get('msvc_found', False)
-            self.warning_label.setVisible(not msvc_found)
+        enabled = bool(self.dependencies_status.get("long_paths_enabled"))
+        self.long_paths_label.setText(
+            _("Длинные пути Windows: включены", "Windows long paths: enabled")
+            if enabled else _("Длинные пути Windows: выключены", "Windows long paths: disabled")
+        )
+        self.long_paths_label.setStyleSheet(f"color: {'#76d39b' if enabled else '#ffbd69'};")
+        self.long_paths_button.setVisible(os.name == "nt" and not enabled)
 
     def _on_refresh_status(self):
         self.dependencies_status = dict(self._refresh_status() or {})
         self._update_status_display()
 
+    def _on_enable_long_paths(self):
+        self.long_paths_button.setEnabled(False)
+        self._enable_long_paths()
+        self._on_refresh_status()
+        self.long_paths_button.setEnabled(True)
+
+    def _update_compile_enabled(self):
+        if hasattr(self, "continue_button"):
+            self.continue_button.setEnabled(self.acknowledge.isChecked())
+
     def _on_docs_clicked(self):
-        self._open_documentation("installation_guide.html")
+        self._open_documentation("installation_guide.html#fish_compile")
 
     def _set_choice_and_accept(self, choice):
         self.choice = choice

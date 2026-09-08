@@ -1,7 +1,9 @@
 # src/controllers/model_controller.py
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import base64
+import dataclasses
 import json
 import datetime
 import re
@@ -13,6 +15,7 @@ from typing import Optional, Any
 from handlers.chat_handler import ChatModel
 from utils import _, redact_image_payloads
 from core.character_locks import character_generation_lock, character_lock
+from core.cancellation import OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
 from core.executors import Pools, executors
 from core.services import services, use
@@ -28,6 +31,7 @@ from services.contracts import (
     UtilityGenerationRequest,
     UtilityGenerationResult,
     SettingsService,
+    parse_dialogue_turn_context,
 )
 
 from managers.api_preset_resolver import ApiPresetResolver
@@ -38,12 +42,14 @@ from managers.history_ui_projector import HistoryUiProjector
 from managers.model_pricing_manager import ModelPricingManager, known_model_context_length
 from managers.tools.models import ToolExecutionContext
 from core.request_policy import RequestPolicy, resolve_policy
+from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
-MAX_MCP_COMPLETION_CHARS = 12_000
+from domain.world_character_relations import get_world_context_text
 
+MAX_MCP_COMPLETION_CHARS = 12_000
 from utils.structured_response_parser import (
-    parse_structured_response,
+    parse_structured_response_with_meta,
     structured_response_to_result_dict,
     StructuredResponseParseError,
 )
@@ -110,9 +116,7 @@ class ModelController(GenerationService, ModelStateService):
     def __init__(self, settings):
         self.settings = settings
         self._settings_service = use(SettingsService)
-        self._settings_subscription = self._settings_service.subscribe(
-            self._on_setting_changed
-        )
+        self._settings_subscription = None
         self.event_bus = get_event_bus()
 
         # UI history paging
@@ -120,6 +124,7 @@ class ModelController(GenerationService, ModelStateService):
         self.total_messages_in_history = 0
         self.loaded_messages_offset = 0
         self.loading_more_history = False
+        self._history_character_id = ""
 
         self.preset_resolver = ApiPresetResolver(settings=self.settings, event_bus=self.event_bus)
         self.model = ChatModel(settings, on_mcp_completion=self._on_mcp_task_complete)
@@ -148,6 +153,9 @@ class ModelController(GenerationService, ModelStateService):
 
         services().register(GenerationService, self, replace=True)
         self._subscribe_to_events()
+        self._settings_subscription = self._settings_service.subscribe(
+            self._on_setting_changed
+        )
 
     # ---------------------------------------------------------------------
     # Character resolution via CharacterRegistry
@@ -204,13 +212,20 @@ class ModelController(GenerationService, ModelStateService):
         value = change.value
 
         if key == "CHARACTER":
-            self.event_bus.emit(Events.Character.SET_CURRENT, {"character_id": str(value or "")})
-            # обновим legacy ссылки
-            self._refresh_chat_model_character_refs()
+            event_bus = getattr(self, "event_bus", None)
+            if event_bus is not None:
+                event_bus.emit(
+                    Events.Character.SET_CURRENT,
+                    {"character_id": str(value or "")},
+                )
+            if getattr(self, "model", None) is not None:
+                self._refresh_chat_model_character_refs()
             return
 
-        if hasattr(self.model, "cfg") and self.model.cfg:
-            self.model.cfg.apply_setting(key, value)
+        model = getattr(self, "model", None)
+        cfg = getattr(model, "cfg", None)
+        if cfg is not None:
+            cfg.apply_setting(key, value)
 
     def submit_internal_turn(
         self,
@@ -452,6 +467,7 @@ class ModelController(GenerationService, ModelStateService):
                 "user_input": prompt_request.user_input,
                 "system_input": prompt_request.system_input,
                 "rag_context": prompt_request.rag_context,
+                "core_memory_context": prompt_request.core_memory_context,
                 "hidden_user_context": prompt_request.hidden_user_context,
                 "memory_limit": prompt_request.memory_limit,
                 "is_game_master": prompt_request.is_game_master,
@@ -479,7 +495,7 @@ class ModelController(GenerationService, ModelStateService):
             }
             collector.save_capture(record)
         except Exception as e:
-            logger.warning(f"[ModelController] Failed to capture generation input: {e}")
+            logger.warning(f"[ModelController] Failed to capture generation input: {format_exception(e)}")
 
     # ---------------------------------------------------------------------
     # History UI
@@ -557,7 +573,7 @@ class ModelController(GenerationService, ModelStateService):
 
         except Exception as e:
             logger.warning(
-                f"[ModelController] append_history_message failed for {getattr(ch_ref, 'char_id', '?')}: {e}",
+                f"[ModelController] append_history_message failed for {getattr(ch_ref, 'char_id', '?')}: {format_exception(e)}",
                 exc_info=True)
             return False
 
@@ -749,119 +765,134 @@ class ModelController(GenerationService, ModelStateService):
 
         return mm
 
+    def _publish_history_commit(self, write_result, *, character_id: str) -> None:
+        if write_result is None:
+            return
+        message_ids = [
+            str(getattr(write_result, "user_message_id", "") or ""),
+            str(getattr(write_result, "assistant_message_id", "") or ""),
+        ]
+        message_ids = [message_id for message_id in message_ids if message_id]
+        if not message_ids:
+            return
+        committed = tuple(getattr(write_result, "committed_recipient_ids", ()) or ())
+        if not committed:
+            return
+        self.event_bus.emit(Events.History.MESSAGES_COMMITTED, {
+            "message_ids": message_ids,
+            "character_ids": list(committed),
+            "character_id": str(character_id or ""),
+        })
+
     def _on_load_history(self, event: Event):
-        """
-        Загрузка первой страницы истории (самые свежие сообщения).
-        """
+        """Load the newest history page for the character captured by the UI request."""
+        payload = event.data if isinstance(getattr(event, "data", None), dict) else {}
+        request_id = str(payload.get("request_id") or "")
+        requested_character_id = str(payload.get("character_id") or "").strip()
+
         self.loaded_messages_offset = 0
         self.total_messages_in_history = 0
         self.loading_more_history = False
 
-        ch = self._get_current_character_ref()
+        ch = (
+            self._get_character_ref(requested_character_id)
+            if requested_character_id
+            else self._get_current_character_ref()
+        )
+        character_id = str(getattr(ch, "char_id", "") or requested_character_id) if ch else requested_character_id
+        self._history_character_id = character_id
+        response_base = {
+            "request_id": request_id,
+            "character_id": character_id,
+        }
+
         if not ch:
-            self.event_bus.emit("history_loaded", {"messages": [], "total_messages": 0, "loaded_offset": 0})
+            self.event_bus.emit("history_loaded", {
+                **response_base,
+                "messages": [],
+                "total_messages": 0,
+                "loaded_offset": 0,
+            })
             return
 
-        # [ИСПРАВЛЕНО] Оптимизация SQL
         hm = getattr(ch, "history_manager", None)
-
-        # Проверяем, поддерживает ли HM новые методы пагинации
         if hm and hasattr(hm, "get_total_messages_count") and hasattr(hm, "get_recent_messages"):
             self.total_messages_in_history = hm.get_total_messages_count()
-
-            # Загружаем только последние N сообщений
-            # Offset 0 = самые последние
             raw_messages = hm.get_recent_messages(limit=self.lazy_load_batch_size, offset=0)
-
             self.loaded_messages_offset = len(raw_messages)
-
-            # Проекция для UI (цвета, мета-теги)
             prepared = self.ui_projector.project_for_ui(raw_messages)
-            if isinstance(prepared, list):
-                prepared = [
-                    self._fix_projected_ui_message(r, m)
-                    for r, m in zip(raw_messages, prepared)
-                ]
-
             self.event_bus.emit("history_loaded", {
+                **response_base,
                 "messages": prepared,
                 "total_messages": self.total_messages_in_history,
-                "loaded_offset": self.loaded_messages_offset
+                "loaded_offset": self.loaded_messages_offset,
             })
-        else:
-            # Fallback (Старый метод: грузим всё)
-            chat_history = ch.load_history()
-            all_messages = chat_history.get("messages", []) or []
-            self.total_messages_in_history = len(all_messages)
+            return
 
-            prepared_all = self.ui_projector.project_for_ui(all_messages)
-            if isinstance(prepared_all, list):
-                prepared_all = [
-                    self._fix_projected_ui_message(r, m)
-                    for r, m in zip(all_messages, prepared_all)
-                ]
-            # Берем хвост списка
-            max_display = self.lazy_load_batch_size
-            start_index = max(0, self.total_messages_in_history - max_display)
-            messages_to_load = prepared_all[start_index:]
-
-            self.loaded_messages_offset = len(messages_to_load)
-
-            self.event_bus.emit("history_loaded", {
-                "messages": messages_to_load,
-                "total_messages": self.total_messages_in_history,
-                "loaded_offset": self.loaded_messages_offset
-            })
+        chat_history = ch.load_history()
+        all_messages = chat_history.get("messages", []) or []
+        self.total_messages_in_history = len(all_messages)
+        prepared_all = self.ui_projector.project_for_ui(all_messages)
+        max_display = self.lazy_load_batch_size
+        messages_to_load = prepared_all[-max_display:] if max_display > 0 else []
+        self.loaded_messages_offset = len(messages_to_load)
+        self.event_bus.emit("history_loaded", {
+            **response_base,
+            "messages": messages_to_load,
+            "total_messages": self.total_messages_in_history,
+            "loaded_offset": self.loaded_messages_offset,
+        })
 
     def _on_load_more_history(self, event: Event):
-        """
-        Подгрузка старых сообщений при скролле вверх.
-        """
+        """Load an older page for the same character as the active history projection."""
+        payload = event.data if isinstance(getattr(event, "data", None), dict) else {}
+        requested_character_id = str(payload.get("character_id") or self._history_character_id or "").strip()
         if self.loaded_messages_offset >= self.total_messages_in_history:
             return
 
         self.loading_more_history = True
         try:
-            ch = self._get_current_character_ref()
-            if not ch: return
+            ch = (
+                self._get_character_ref(requested_character_id)
+                if requested_character_id
+                else self._get_current_character_ref()
+            )
+            if not ch:
+                return
+            character_id = str(getattr(ch, "char_id", "") or requested_character_id)
+            if self._history_character_id and character_id.casefold() != self._history_character_id.casefold():
+                return
 
             hm = getattr(ch, "history_manager", None)
-
-            # [ИСПРАВЛЕНО] Оптимизация SQL
             if hm and hasattr(hm, "get_recent_messages"):
-                # offset равен текущему количеству загруженных (мы идем от конца вглубь)
                 raw_messages = hm.get_recent_messages(
                     limit=self.lazy_load_batch_size,
-                    offset=self.loaded_messages_offset
+                    offset=self.loaded_messages_offset,
                 )
-
                 if raw_messages:
                     self.loaded_messages_offset += len(raw_messages)
                     prepared = self.ui_projector.project_for_ui(raw_messages)
-
                     self.event_bus.emit("more_history_loaded", {
                         "messages": prepared,
-                        "loaded_offset": self.loaded_messages_offset
+                        "loaded_offset": self.loaded_messages_offset,
+                        "character_id": character_id,
                     })
-            else:
-                # Fallback
-                chat_history = ch.load_history()
-                all_messages = chat_history.get("messages", []) or []
-                self.total_messages_in_history = len(all_messages)  # Обновляем на всякий случай
+                return
 
-                prepared_all = self.ui_projector.project_for_ui(all_messages)
-
-                end_index = self.total_messages_in_history - self.loaded_messages_offset
-                start_index = max(0, end_index - self.lazy_load_batch_size)
-
-                messages_to_prepend = prepared_all[start_index:end_index]
-
-                if messages_to_prepend:
-                    self.loaded_messages_offset += len(messages_to_prepend)
-                    self.event_bus.emit("more_history_loaded", {
-                        "messages": messages_to_prepend,
-                        "loaded_offset": self.loaded_messages_offset
-                    })
+            chat_history = ch.load_history()
+            all_messages = chat_history.get("messages", []) or []
+            self.total_messages_in_history = len(all_messages)
+            prepared_all = self.ui_projector.project_for_ui(all_messages)
+            end_index = self.total_messages_in_history - self.loaded_messages_offset
+            start_index = max(0, end_index - self.lazy_load_batch_size)
+            messages_to_prepend = prepared_all[start_index:end_index]
+            if messages_to_prepend:
+                self.loaded_messages_offset += len(messages_to_prepend)
+                self.event_bus.emit("more_history_loaded", {
+                    "messages": messages_to_prepend,
+                    "loaded_offset": self.loaded_messages_offset,
+                    "character_id": character_id,
+                })
         finally:
             self.loading_more_history = False
 
@@ -996,7 +1027,7 @@ class ModelController(GenerationService, ModelStateService):
             # было запроса), чтобы она отражала текущие настройки, а не залипала.
             return redact_image_payloads(list(getattr(built, "messages", []) or []))
         except Exception as e:
-            logger.debug(f"[ModelController] warm base prompt failed for {cid}: {e}")
+            logger.debug(f"[ModelController] warm base prompt failed for {cid}: {format_exception(e)}")
             return None
 
     def _build_current_context_messages(self) -> tuple[str, list[dict], int]:
@@ -1336,8 +1367,8 @@ class ModelController(GenerationService, ModelStateService):
                 provider=getattr(last_error, "provider", None) if last_error else None,
             )
         except Exception as e:
-            logger.error(f"Ошибка при {request.kind}: {e}", exc_info=True)
-            return UtilityGenerationResult(ok=False, error=str(e), details=str(e))
+            logger.error(f"Ошибка при {request.kind}: {format_exception(e)}", exc_info=True)
+            return UtilityGenerationResult(ok=False, error=format_exception(e), details=format_exception(e))
         finally:
             if request.kind == "compress":
                 self.event_bus.emit(Events.Model.ON_COMPRESSION_FINISHED)
@@ -1347,6 +1378,8 @@ class ModelController(GenerationService, ModelStateService):
     # ---------------------------------------------------------------------
 
     def generate_chat(self, request: ChatGenerationRequest) -> Optional[ChatGenerationResult]:
+        if request.cancellation is not None:
+            request.cancellation.raise_if_cancelled()
         if request.character_id:
             char = self._get_character_ref(str(request.character_id))
             if char is None:
@@ -1367,10 +1400,17 @@ class ModelController(GenerationService, ModelStateService):
 
         # Полные генерации одной Миты идут последовательно, но этот gate не блокирует
         # короткие state-lock секции фонового summary/переменных во время сетевого I/O.
+        perf_mark(request.trace_id, "generation.character_lock_wait_started")
         with character_generation_lock(getattr(char, "char_id", "") or ""):
+            if request.cancellation is not None:
+                request.cancellation.raise_if_cancelled()
+            perf_mark(request.trace_id, "generation.character_lock_acquired")
             return self._generate_chat_serialized(request, char)
 
     def _generate_chat_serialized(self, request: ChatGenerationRequest, char) -> Optional[ChatGenerationResult]:
+        if request.dialogue is not None and not hasattr(request.dialogue, "participants"):
+            request.dialogue = parse_dialogue_turn_context(request.dialogue)
+
         user_input = request.user_input or ""
         visible_user_input = user_input
         system_input = request.system_input or ""
@@ -1388,33 +1428,63 @@ class ModelController(GenerationService, ModelStateService):
         task_uid = request.task_uid or None
         origin_request_id = request.origin_request_id or None
         origin_message_id = request.origin_message_id or None
+        trace_id = request.trace_id or None
 
-        policy = request.policy or resolve_policy(model_event_type=str(event_type))
+        normalized_event_type = str(event_type or "").strip().lower()
+        if normalized_event_type in {"game_master_observe", "game_master_command"}:
+            policy = resolve_policy(model_event_type=normalized_event_type)
+        else:
+            policy = request.policy or resolve_policy(model_event_type=str(event_type))
 
         char_id = getattr(char, "char_id", "") or ""
         char_name = getattr(char, "name", "") or ""
+        is_game_master = char_id.casefold() == "gamemaster"
 
         rag_context = ""
-        if bool(self.settings.get("RAG_ENABLED", False)) and policy.react_level != 1:
+        core_memory_context_text = ""
+        if request.cancellation is not None:
+            request.cancellation.raise_if_cancelled()
+        if (
+            not is_game_master
+            and bool(self.settings.get("RAG_ENABLED", False))
+            and policy.react_level != 1
+        ):
             prompt_set_path = getattr(char, "base_data_path", None)
-            rag_context = self.process_rag(char_id, system_input, user_input, prompt_set_path=prompt_set_path)
+            with perf_span(trace_id, "generation.rag"):
+                rag_context = self.process_rag(char_id, system_input, user_input, prompt_set_path=prompt_set_path)
+        if request.cancellation is not None:
+            request.cancellation.raise_if_cancelled()
 
         # Core-memory triggers (e.g. the code 23 easter egg) are exact hooks:
         # they fire on precise player input, independent of RAG availability or
         # embedding similarity of a two-digit message.
-        try:
-            from managers.core_memory_triggers import core_memory_context
-            _core_ctx = core_memory_context(user_input, character_id=char_id)
-            if _core_ctx:
-                rag_context = f"{_core_ctx}\n\n{rag_context}" if rag_context else _core_ctx
-        except Exception as _core_err:
-            logger.warning(f"[{char_id}] core-memory trigger check failed (ignored): {_core_err}")
+        if not is_game_master:
+            try:
+                from managers.core_memory_triggers import core_memory_context
+                core_memory_context_text = core_memory_context(user_input, character_id=char_id)
+            except Exception as _core_err:
+                logger.warning(f"[{char_id}] core-memory trigger check failed (ignored): {format_exception(_core_err)}")
 
         game_state = (
             copy.deepcopy(request.game_state)
             if request.game_state
             else self.game_state.to_prompt_dict()
         )
+
+        # World lore is character-specific. Resolve it on this request's
+        # private snapshot so concurrent Mita generations cannot leak one
+        # another's interpretation into global GameState or history.
+        character_world = str(
+            game_state.get("worldMita")
+            or game_state.get("worldPlayer")
+            or ""
+        ).strip()
+        character_world_context = get_world_context_text(
+            character_id=char_id,
+            world_id=character_world,
+        )
+        if character_world_context:
+            game_state["character_world_context"] = character_world_context
 
         with self._temporary_system_infos_lock:
             extra_system_infos = list(self._temporary_system_infos.get(char_id, ()))
@@ -1441,7 +1511,6 @@ class ModelController(GenerationService, ModelStateService):
         separate_prompts = bool(self.settings.get("SEPARATE_PROMPTS", True))
         save_missed_history = bool(self.settings.get("SAVE_MISSED_HISTORY", True))
         memory_limit = int(_cfg_get("memory_limit", 40))
-        is_game_master = (char_id == "GameMaster")
 
         # Пресет резолвим ДО capabilities. Раньше capabilities брались у текущего
         # пресета, а запрос уходил в пресет персонажа — structured_output мог не
@@ -1459,13 +1528,20 @@ class ModelController(GenerationService, ModelStateService):
                 f"mode={effective_capabilities.get('structured_output_mode', 'json_schema')}"
             )
         except Exception as e:
-            logger.warning(f"[ModelController] Failed to resolve preset capabilities: {e}")
+            logger.warning(f"[ModelController] Failed to resolve preset capabilities: {format_exception(e)}")
 
         remote_only_segment_fields = self._remote_only_structured_segment_fields()
         if remote_only_segment_fields:
             effective_capabilities["structured_segment_exclude_fields"] = remote_only_segment_fields
 
-        _tools_on = bool(self.settings.get("TOOLS_ON", True))
+        if is_game_master:
+            effective_capabilities["structured_output"] = True
+
+        _tools_on = (
+            bool(self.settings.get("TOOLS_ON", True))
+            and not is_game_master
+            and bool(effective_capabilities.get("tools_prompt_enabled", True))
+        )
         _tools_mode = str(self.settings.get("TOOLS_MODE", "native"))
         if _tools_mode == "off":
             _tools_on = False
@@ -1481,7 +1557,7 @@ class ModelController(GenerationService, ModelStateService):
                 schema = self.model.tool_manager._filtered_schema(_enabled_tools)
                 effective_capabilities["tools_prompt"] = _render_tools_for_prompt(schema)
             except Exception as e:
-                logger.warning(f"[ModelController] Failed to build tools prompt: {e}")
+                logger.warning(f"[ModelController] Failed to build tools prompt: {format_exception(e)}")
                 _tools_on = False
 
         with character_lock(char_id):
@@ -1571,13 +1647,15 @@ class ModelController(GenerationService, ModelStateService):
 
             try:
                 if len(image_data) > 1:
-                    seq_desc = self.image_description_handler.describe_sequence(image_data, context_hint=_image_context_hint)
+                    with perf_span(trace_id, "generation.image_description", mode="sequence"):
+                        seq_desc = self.image_description_handler.describe_sequence(image_data, context_hint=_image_context_hint)
                     if seq_desc and not seq_desc.startswith("["):
                         hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_seq}\n[Scene: {seq_desc}]"
                         image_descriptions = {_detail: seq_desc}
                         logger.info(f"[ModelController] Non-native sequence mode: {len(image_data)} frames described as one scene.")
                 else:
-                    descriptions = self.image_description_handler.describe(image_data, context_hint=_image_context_hint)
+                    with perf_span(trace_id, "generation.image_description", mode="single"):
+                        descriptions = self.image_description_handler.describe(image_data, context_hint=_image_context_hint)
                     if descriptions:
                         desc_text = "\n".join(
                             f"[Image {i + 1}: {d}]" for i, d in enumerate(descriptions)
@@ -1587,7 +1665,7 @@ class ModelController(GenerationService, ModelStateService):
                         logger.info(f"[ModelController] Non-native image mode: replaced {len(descriptions)} image(s) with text descriptions.")
                 image_data = []  # don't send images to main model
             except Exception as _desc_exc:
-                logger.warning(f"[ModelController] Image description fallback failed: {_desc_exc}")
+                logger.warning(f"[ModelController] Image description fallback failed: {format_exception(_desc_exc)}")
 
         prompt_request = PromptBuildRequest(
             character=char,
@@ -1597,6 +1675,7 @@ class ModelController(GenerationService, ModelStateService):
             system_input=system_input,
             external_result=external_result,
             rag_context=rag_context,
+            core_memory_context=core_memory_context_text,
             hidden_user_context=hidden_user_context,
             image_data=image_data,
             memory_limit=memory_limit,
@@ -1609,6 +1688,10 @@ class ModelController(GenerationService, ModelStateService):
             sender=sender,
             participants=participants,
             capabilities=effective_capabilities,
+            dialogue=request.dialogue,
+            player_message_source=request.player_message_source,
+            previous_player_message_source=request.previous_player_message_source,
+            gm_instruction_override=request.gm_instruction_override,
         )
         self._capture_generation_input(
             request=request,
@@ -1622,10 +1705,15 @@ class ModelController(GenerationService, ModelStateService):
         )
 
         try:
-            with character_lock(char_id):
-                prompt_data = use(PromptBuilderService).build(prompt_request)
+            with perf_span(trace_id, "generation.prompt_build"):
+                with character_lock(char_id):
+                    prompt_data = use(PromptBuilderService).build(prompt_request)
+            if request.cancellation is not None:
+                request.cancellation.raise_if_cancelled()
+        except OperationCancelledError:
+            raise
         except Exception as e:
-            logger.error(f"Ошибка при сборке промпта: {e}", exc_info=True)
+            logger.error(f"Ошибка при сборке промпта: {format_exception(e)}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
                 "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
             })
@@ -1677,18 +1765,27 @@ class ModelController(GenerationService, ModelStateService):
                 structured_model_cls = None
 
         try:
+            if request.cancellation is not None:
+                request.cancellation.raise_if_cancelled()
             use_stream_cb = stream_callback if policy.allow_streaming else None
-            llm_response = self.model.generate(
-                combined_messages,
-                stream_callback=use_stream_cb,
-                stream_event_callback=(stream_event_callback if policy.allow_streaming else None),
-                preset_id=preset_id,
-                request_id=str(req_id or task_uid or origin_message_id or ""),
-                origin_request_id=str(origin_request_id or ""),
-                event_type=str(event_type or "chat"),
-                capabilities_override=effective_capabilities,
-                structured_model=structured_model_cls,
-            )
+            with perf_span(trace_id, "llm.total", streaming=bool(policy.allow_streaming)):
+                llm_response = self.model.generate(
+                    combined_messages,
+                    stream_callback=use_stream_cb,
+                    stream_event_callback=(stream_event_callback if policy.allow_streaming else None),
+                    preset_id=preset_id,
+                    request_id=str(req_id or task_uid or origin_message_id or ""),
+                    origin_request_id=str(origin_request_id or ""),
+                    event_type=str(event_type or "chat"),
+                    capabilities_override=effective_capabilities,
+                    request_options_override={
+                        "trace_id": trace_id,
+                        "cancellation": request.cancellation,
+                    },
+                    structured_model=structured_model_cls,
+                    context_character_id=char_id,
+                    context_character_name=char_name,
+                )
 
             if not llm_response or not llm_response.text:
                 error_message = getattr(llm_response, "error_message", None) or _(
@@ -1716,6 +1813,11 @@ class ModelController(GenerationService, ModelStateService):
                 )
 
             raw_text = llm_response.text
+            trace = get_trace(trace_id)
+            if trace is not None:
+                trace.set_attribute("provider", llm_response.provider_name or "")
+                trace.set_attribute("model", llm_response.model or "")
+                trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
 
             if original_image_data and bool(self.settings.get("IMAGE_INLINE_DESCRIPTION", False)):
@@ -1751,6 +1853,7 @@ class ModelController(GenerationService, ModelStateService):
                     image_source=image_source,
                     req_id=req_id,
                     task_uid=task_uid,
+                    trace_id=trace_id,
                     event_type=event_type,
                     combined_messages=combined_messages,
                     preset_id=preset_id,
@@ -1760,8 +1863,15 @@ class ModelController(GenerationService, ModelStateService):
                     image_descriptions=image_descriptions,
                     structured_model_cls=structured_model_cls,
                     sample_id=sample_id,
+                    dialogue=request.dialogue,
                 )
                 if structured_result is not None:
+                    structured_result = dataclasses.replace(
+                        structured_result,
+                        context_snapshot_id=str(
+                            (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
+                        ),
+                    )
                     self._consume_temporary_system_infos(char_id, extra_system_infos)
                 return structured_result
 
@@ -1771,16 +1881,11 @@ class ModelController(GenerationService, ModelStateService):
                 visible_raw, inline_graph_json = _strip_graph_tag(visible_raw)
 
             with character_lock(char_id):
-                processed = char.process_response_nlp_commands(
-                    visible_raw,
-                    self.settings.get("SAVE_MISSED_MEMORY", False),
-                )
-                targets: list[str] = []
-                if hasattr(char, "consume_pending_targets"):
-                    try:
-                        targets = char.consume_pending_targets()
-                    except Exception:
-                        targets = []
+                with perf_span(trace_id, "generation.nlp_postprocess"):
+                    processed = char.process_response_nlp_commands(
+                        visible_raw,
+                        self.settings.get("SAVE_MISSED_MEMORY", False),
+                    )
                 if hasattr(char, "flush_variables"):
                     char.flush_variables()
                 created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
@@ -1790,8 +1895,6 @@ class ModelController(GenerationService, ModelStateService):
                         voice_profile = char.to_voice_profile()
                     except Exception:
                         voice_profile = None
-            target = targets[-1] if targets else "Player"
-
             final_text = processed
             if bool(self.settings.get("REPLACE_IMAGES_WITH_PLACEHOLDERS", False)):
                 final_text = re.sub(
@@ -1813,24 +1916,28 @@ class ModelController(GenerationService, ModelStateService):
 
             assistant_message_id = ""
             if policy.write_to_history:
-                assistant_message_id = self.event_writer.write_turn(
-                    responder_character_id=char_id,
-                    sender=sender,
-                    participants=participants,
-                    user_input=visible_user_input,
-                    image_data=original_image_data,
-                    image_source=image_source,
-                    image_descriptions=image_descriptions,
-                    req_id=req_id,
-                    origin_message_id=origin_message_id,
-                    assistant_text=final_text,
-                    assistant_target=target,
-                    event_type=event_type,
-                    task_uid=task_uid,
-                    thinking=think_text or None,
-                    llm_usage=usage_snapshot,
-                    sample_id=sample_id,
-                )
+                with perf_span(trace_id, "generation.history_write"):
+                    history_write = self.event_writer.write_turn(
+                        responder_character_id=char_id,
+                        sender=sender,
+                        participants=participants,
+                        user_input=visible_user_input,
+                        image_data=original_image_data,
+                        image_source=image_source,
+                        image_descriptions=image_descriptions,
+                        req_id=req_id,
+                        origin_message_id=origin_message_id,
+                        assistant_text=final_text,
+                        assistant_target="Player",
+                        event_type=event_type,
+                        task_uid=task_uid,
+                        thinking=think_text or None,
+                        llm_usage=usage_snapshot,
+                        sample_id=sample_id,
+                        dialogue=request.dialogue,
+                    )
+                    assistant_message_id = history_write.assistant_message_id
+                    self._publish_history_commit(history_write, character_id=char_id)
 
             self._store_last_usage(
                 llm_response.usage,
@@ -1858,16 +1965,19 @@ class ModelController(GenerationService, ModelStateService):
                 text=final_text,
                 character_id=char_id,
                 voice_profile=voice_profile,
-                target=target,
-                targets=targets,
                 think=think_text or None,
                 message_id=assistant_message_id,
                 sample_id=sample_id or "",
+                context_snapshot_id=str(
+                    (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
+                ),
             )
 
+        except OperationCancelledError:
+            raise
         except Exception as e:
-            logger.error(f"Error during LLM generation/processing: {e}", exc_info=True)
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": str(e)})
+            logger.error(f"Error during LLM generation/processing: {format_exception(e)}", exc_info=True)
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": format_exception(e)})
             return None
 
     # Default RAG output templates
@@ -1993,7 +2103,7 @@ class ModelController(GenerationService, ModelStateService):
                             f"(mem={len(mem_lines)}, hist={len(hist_lines)}, graph={len(graph_lines)}).")
                         return rag_block
             except Exception as e:
-                logger.warning(f"[{char_id}] Failed to run RAG (ignored): {e}", exc_info=True)
+                logger.warning(f"[{char_id}] Failed to run RAG (ignored): {format_exception(e)}", exc_info=True)
         return ""
 
     # ---------------------------------------------------------------------
@@ -2022,6 +2132,7 @@ class ModelController(GenerationService, ModelStateService):
         req_id: str | None,
         task_uid: str | None,
         event_type: str,
+        trace_id: str | None = None,
         combined_messages: list | None = None,
         preset_id: int | None = None,
         tools_on: bool = False,
@@ -2030,25 +2141,26 @@ class ModelController(GenerationService, ModelStateService):
         image_descriptions: dict[str, str] | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        dialogue: Any = None,
     ) -> Optional[ChatGenerationResult]:
         try:
-            structured = parse_structured_response(visible_raw, model_cls=structured_model_cls)
+            with perf_span(trace_id, "generation.structured_postprocess", stage="parse"):
+                parse_outcome = parse_structured_response_with_meta(
+                    visible_raw,
+                    model_cls=structured_model_cls,
+                )
+                structured = parse_outcome.response
         except StructuredResponseParseError as e:
             logger.error(
-                f"[ModelController] Failed to parse structured response for {char_id}: {e}. "
+                f"[ModelController] Failed to parse structured response for {char_id}: {format_exception(e)}. "
                 f"Falling back to legacy processing."
             )
             # Fallback to legacy tag-based processing
             with character_lock(char_id):
-                processed = char.process_response_nlp_commands(
-                    visible_raw, self.settings.get("SAVE_MISSED_MEMORY", False)
-                )
-                fallback_targets: list[str] = []
-                if hasattr(char, "consume_pending_targets"):
-                    try:
-                        fallback_targets = char.consume_pending_targets()
-                    except Exception:
-                        fallback_targets = []
+                with perf_span(trace_id, "generation.nlp_postprocess"):
+                    processed = char.process_response_nlp_commands(
+                        visible_raw, self.settings.get("SAVE_MISSED_MEMORY", False)
+                    )
                 if hasattr(char, "flush_variables"):
                     char.flush_variables()
                 voice_profile = None
@@ -2057,8 +2169,6 @@ class ModelController(GenerationService, ModelStateService):
                         voice_profile = char.to_voice_profile()
                     except Exception:
                         voice_profile = None
-            fallback_target = fallback_targets[-1] if fallback_targets else "Player"
-
             usage_cost_fallback = pricing_info.estimate_usage_cost(usage) if pricing_info else None
             self._store_last_usage(
                 usage,
@@ -2074,10 +2184,10 @@ class ModelController(GenerationService, ModelStateService):
                 text=processed,
                 character_id=char_id,
                 voice_profile=voice_profile,
-                target=fallback_target,
-                targets=fallback_targets,
                 think=think_text or None,
                 sample_id=sample_id or "",
+                structured_parse_level="legacy_fallback",
+                control_plane_trusted=False,
             )
 
         self._sanitize_structured_segment_fields(structured, capabilities)
@@ -2089,12 +2199,6 @@ class ModelController(GenerationService, ModelStateService):
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
             )
-            targets: list[str] = []
-            if hasattr(char, "consume_pending_targets"):
-                try:
-                    targets = char.consume_pending_targets()
-                except Exception:
-                    targets = []
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
@@ -2104,8 +2208,6 @@ class ModelController(GenerationService, ModelStateService):
                     voice_profile = char.to_voice_profile()
                 except Exception:
                     voice_profile = None
-        target = targets[-1] if targets else "Player"
-
         # --- Tool call path ---
         _active_tools = enabled_tools or []
         _tool_max_depth = int(self.settings.get("TOOL_MAX_DEPTH", 2))
@@ -2142,6 +2244,7 @@ class ModelController(GenerationService, ModelStateService):
                 image_source=image_source,
                 req_id=req_id,
                 task_uid=task_uid,
+                trace_id=trace_id,
                 event_type=event_type,
                 combined_messages=combined_messages or [],
                 preset_id=preset_id,
@@ -2150,8 +2253,8 @@ class ModelController(GenerationService, ModelStateService):
                 structured_model_cls=structured_model_cls,
                 sample_id=sample_id,
                 image_descriptions=image_descriptions,
-                targets=targets,
                 voice_profile=voice_profile,
+                dialogue=dialogue,
             )
 
         # Extract reasoning from structured response (if model used the reasoning field)
@@ -2164,7 +2267,8 @@ class ModelController(GenerationService, ModelStateService):
                     think_text = schema_reasoning
 
         # Build the result dict with segments
-        result_dict = structured_response_to_result_dict(structured)
+        with perf_span(trace_id, "generation.structured_postprocess", stage="result"):
+            result_dict = structured_response_to_result_dict(structured)
         # Remove reasoning from debug display — it's shown as a think block
         result_dict.pop("reasoning", None)
         # Attach raw LLM JSON for the debug panel (not saved to history)
@@ -2201,25 +2305,29 @@ class ModelController(GenerationService, ModelStateService):
         if policy.write_to_history:
             history_dict = {k: v for k, v in result_dict.items()
                             if not k.startswith("_") or k == "_raw_json"}
-            assistant_message_id = self.event_writer.write_turn(
-                responder_character_id=char_id,
-                sender=sender,
-                participants=participants,
-                user_input=user_input,
-                image_data=image_data,
-                image_source=image_source,
-                image_descriptions=_structured_image_descriptions,
-                req_id=req_id,
-                origin_message_id=origin_message_id,
-                assistant_text=final_text,
-                assistant_target=target,
-                event_type=event_type,
-                task_uid=task_uid,
-                structured_data=history_dict,
-                thinking=think_text or None,
-                llm_usage=usage_snapshot,
-                sample_id=sample_id,
-            )
+            with perf_span(trace_id, "generation.history_write"):
+                history_write = self.event_writer.write_turn(
+                    responder_character_id=char_id,
+                    sender=sender,
+                    participants=participants,
+                    user_input=user_input,
+                    image_data=image_data,
+                    image_source=image_source,
+                    image_descriptions=_structured_image_descriptions,
+                    req_id=req_id,
+                    origin_message_id=origin_message_id,
+                    assistant_text=final_text,
+                    assistant_target="Player",
+                    event_type=event_type,
+                    task_uid=task_uid,
+                    structured_data=history_dict,
+                    thinking=think_text or None,
+                    llm_usage=usage_snapshot,
+                    sample_id=sample_id,
+                    dialogue=dialogue,
+                )
+                assistant_message_id = history_write.assistant_message_id
+                self._publish_history_commit(history_write, character_id=char_id)
 
         self._store_last_usage(
             usage,
@@ -2244,7 +2352,7 @@ class ModelController(GenerationService, ModelStateService):
                 }
                 inline_graph_json = _json.dumps(graph_payload, ensure_ascii=False)
             except Exception as _ge:
-                logger.warning(f"[ModelController] Failed to build graph JSON from structured entities/relations: {_ge}")
+                logger.warning(f"[ModelController] Failed to build graph JSON from structured entities/relations: {format_exception(_ge)}")
 
         # Notify graph extraction (and any future subscribers).
         self.event_bus.emit(Events.History.MESSAGE_COMPLETED, {
@@ -2262,12 +2370,12 @@ class ModelController(GenerationService, ModelStateService):
             text=final_text,
             character_id=char_id,
             voice_profile=voice_profile,
-            target=target,
-            targets=targets,
             think=think_text or None,
             structured=result_dict,
             message_id=assistant_message_id,
             sample_id=sample_id or "",
+            structured_parse_level=parse_outcome.parse_level,
+            control_plane_trusted=parse_outcome.control_plane_trusted,
         )
 
     # ---------------------------------------------------------------------
@@ -2301,11 +2409,12 @@ class ModelController(GenerationService, ModelStateService):
         preset_id: int | None,
         enabled_tools: list,
         tool_depth: int,
+        trace_id: str | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
         image_descriptions: dict[str, str] | None = None,
-        targets: list[str] | None = None,
         voice_profile=None,
+        dialogue: Any = None,
     ) -> Optional[ChatGenerationResult]:
         """
         Handle a tool_call from a structured response:
@@ -2325,9 +2434,6 @@ class ModelController(GenerationService, ModelStateService):
         result_dict["_raw_json"] = visible_raw
         first_text = result_dict.get("response", "")
 
-        targets = list(targets or [])
-        target = targets[-1] if targets else "Player"
-
         # Write first turn to history
         usage_cost_fallback = pricing_info.estimate_usage_cost(usage) if pricing_info else None
         usage_snapshot = self._build_usage_snapshot(
@@ -2341,7 +2447,7 @@ class ModelController(GenerationService, ModelStateService):
 
         first_assistant_message_id = ""
         if policy.write_to_history:
-            first_assistant_message_id = self.event_writer.write_turn(
+            history_write = self.event_writer.write_turn(
                 responder_character_id=char_id,
                 sender=sender,
                 participants=participants,
@@ -2352,14 +2458,17 @@ class ModelController(GenerationService, ModelStateService):
                 req_id=req_id,
                 origin_message_id=origin_message_id,
                 assistant_text=first_text,
-                assistant_target=target,
+                assistant_target="Player",
                 event_type=event_type,
                 task_uid=task_uid,
                 structured_data=result_dict,
                 thinking=think_text or None,
                 llm_usage=usage_snapshot,
                 sample_id=sample_id,
+                dialogue=dialogue,
             )
+            first_assistant_message_id = history_write.assistant_message_id
+            self._publish_history_commit(history_write, character_id=char_id)
 
         # Emit first response to UI (shows "I'll check that" message)
         self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
@@ -2371,8 +2480,6 @@ class ModelController(GenerationService, ModelStateService):
             "character_id": char_id or "",
             "character_name": char_name or "",
             "speaker_name": char_name or "",
-            "target": target,
-            "targets": targets,
             "structured_data": result_dict,
             "message_id": first_assistant_message_id,
         }, delivery=EventDelivery.ORDERED)
@@ -2398,10 +2505,11 @@ class ModelController(GenerationService, ModelStateService):
                 tool_name,
                 tool_args,
                 context=tool_context,
+                trace_id=trace_id,
             )
         except Exception as e:
-            tool_result = f"[Tool error: {e}]"
-            logger.error(f"[ModelController] Tool '{tool_name}' failed: {e}", exc_info=True)
+            tool_result = f"[Tool error: {format_exception(e)}]"
+            logger.error(f"[ModelController] Tool '{tool_name}' failed: {format_exception(e)}", exc_info=True)
 
         self.event_bus.emit(Events.Model.ON_TOOL_DONE, {
             "tool_name": tool_name,
@@ -2412,7 +2520,7 @@ class ModelController(GenerationService, ModelStateService):
             "response": f"[Tool: {tool_name}]\n{tool_result}",
             "is_initial": False,
             "emotion": "",
-            "character_id": "",
+            "character_id": char_id or "",
             "character_name": "",
             "speaker_name": "",
         }, delivery=EventDelivery.ORDERED)
@@ -2450,12 +2558,16 @@ class ModelController(GenerationService, ModelStateService):
             "character_name": char_name or char_id or "Мита",
         })
 
-        llm_response_2 = self.model.generate(
-            combined_messages_v2,
-            preset_id=preset_id,
-            capabilities_override=(capabilities or None),
-            structured_model=structured_model_cls,
-        )
+        with perf_span(trace_id, "llm.total", phase="tool_followup"):
+            llm_response_2 = self.model.generate(
+                combined_messages_v2,
+                preset_id=preset_id,
+                capabilities_override=(capabilities or None),
+                request_options_override={"trace_id": trace_id} if trace_id else None,
+                structured_model=structured_model_cls,
+                context_character_id=char_id,
+                context_character_name=char_name,
+            )
 
         if not llm_response_2 or not llm_response_2.text:
             logger.error(f"[ModelController] Second LLM call after tool '{tool_name}' returned empty.")
@@ -2471,11 +2583,11 @@ class ModelController(GenerationService, ModelStateService):
                 text=first_text,
                 character_id=char_id,
                 voice_profile=voice_profile,
-                target=target,
-                targets=targets,
                 think=think_text or None,
                 structured=result_dict,
                 message_id=first_assistant_message_id,
+                structured_parse_level="tool_intermediate",
+                control_plane_trusted=False,
             )
 
         visible_raw_2, think_text_2 = self._split_response_thinking(llm_response_2)
@@ -2511,6 +2623,7 @@ class ModelController(GenerationService, ModelStateService):
             image_source=image_source,
             req_id=req_id,
             task_uid=task_uid,
+            trace_id=trace_id,
             event_type=event_type,
             combined_messages=combined_messages_v2,
             preset_id=preset_id,
@@ -2520,6 +2633,7 @@ class ModelController(GenerationService, ModelStateService):
             image_descriptions=image_descriptions,
             structured_model_cls=structured_model_cls,
             sample_id=sample_id_2,
+            dialogue=dialogue,
         )
 
     # ---------------------------------------------------------------------
@@ -2544,8 +2658,8 @@ class ModelController(GenerationService, ModelStateService):
             else:
                 self.event_bus.emit("reload_prompts_failed", {"error": "Download failed"})
         except Exception as e:
-            logger.error(f"Ошибка при обновлении промптов: {e}", exc_info=True)
-            self.event_bus.emit("reload_prompts_failed", {"error": str(e)})
+            logger.error(f"Ошибка при обновлении промптов: {format_exception(e)}", exc_info=True)
+            self.event_bus.emit("reload_prompts_failed", {"error": format_exception(e)})
 
     # ---------------------------------------------------------------------
     # Helpers

@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover - schema must import even without logging
 # Python-side version of the structured-response protocol. The model never
 # supplies this value; it is stamped into the outgoing result dict so downstream
 # consumers (Unity, debug dumps) can tell which response contract produced it.
-RESPONSE_PROTOCOL_VERSION = 2
+RESPONSE_PROTOCOL_VERSION = 3
 
 def _to_gemini_schema(schema: dict) -> dict:
     """
@@ -256,7 +256,14 @@ class ResponseSegment(BaseModel):
 
     start_game: Optional[str] = Field(default=None, description="Game ID to start")
     end_game: Optional[str] = Field(default=None, description="Game ID to end")
-    target: Optional[str] = Field(default=None, description="Target character name for this segment")
+    target: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional addressee of this segment's spoken text. Use the exact active character "
+            "identifier from the Multi-Character Environment; omit it when speaking to the Player. "
+            "This is not a Unity object target or an action command."
+        ),
+    )
     hint: Optional[str] = Field(default=None, description="Hint text to display")
     allow_sleep: Optional[bool] = Field(default=None, description="Whether to allow sleep")
 
@@ -289,7 +296,17 @@ class ResponseSegment(BaseModel):
                 logger.warning("[StructuredResponse] Dropping intent with invalid type: %r", item)
                 continue
             payload = item.get("payload")
-            if not isinstance(payload, dict):
+            if isinstance(payload, str):
+                try:
+                    decoded = _json.loads(payload)
+                    payload = decoded if isinstance(decoded, dict) else {}
+                except Exception:
+                    logger.warning(
+                        "[StructuredResponse] Intent '%s' payload is not valid JSON, defaulting to {}",
+                        itype,
+                    )
+                    payload = {}
+            elif not isinstance(payload, dict):
                 if payload is not None:
                     logger.warning(
                         "[StructuredResponse] Intent '%s' payload is not an object, defaulting to {}",
@@ -328,6 +345,7 @@ class StructuredResponse(BaseModel):
         description="Ordered list of response segments with positional commands",
     )
 
+    # Кому передать слово после этой реплики. Поле уходит провайдеру только когда
     # Secret reveal flag — set to true when the character's secret is discovered.
     # Processed by character-specific logic (e.g. CrazyMita sets secretExposed variable).
     secret_exposed: Optional[bool] = Field(
@@ -497,6 +515,24 @@ class StructuredResponse(BaseModel):
             tc_props["args"] = {
                 "type": "string",
                 "description": 'JSON-encoded tool arguments, e.g. {"query": "search term"}',
+            }
+        except (KeyError, TypeError):
+            pass
+        # Gemini cannot express free-form object properties after
+        # additionalProperties is removed. Encode arbitrary intent payloads as
+        # JSON strings for the provider, then decode them in _sanitize_intents.
+        try:
+            intent_props = (
+                schema["properties"]["segments"]["items"]
+                ["properties"]["intents"]["items"]["properties"]
+            )
+            intent_props["payload"] = {
+                "type": "string",
+                "description": (
+                    "JSON-encoded intent payload object. Its keys and values "
+                    "MUST exactly follow [Unity Intent Contract]. Use {} only "
+                    "when that contract explicitly allows an empty payload."
+                ),
             }
         except (KeyError, TypeError):
             pass

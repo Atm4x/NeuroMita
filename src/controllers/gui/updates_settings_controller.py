@@ -1,15 +1,16 @@
 """Settings panel for Python/Unity updates."""
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import os
 from controllers.gui.async_runner import run_async
 from pathlib import Path
 from typing import Callable
 
+import qtawesome as qta
 from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -23,7 +24,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from core.unity_installation import (
+    find_unity_executable as find_installed_unity_executable,
+    unity_install_dir,
+)
 from main_logger import logger
+from services.update_contour import target_for_contour
 from ui.gui_templates import create_section_header
 from ui.widgets.tr_combobox import TRQComboBox
 from utils import getTranslationVariant as _
@@ -66,13 +72,12 @@ def setup_updates_settings_controls(
         except Exception:
             logger.error(f"[updates_ui] Failed to persist setting {key!r}", exc_info=True)
 
+    def _current_update_target():
+        return target_for_contour(self.settings.get("UPDATE_CONTOUR", "release"))
+
     def _current_unity_dir() -> Path:
-        base_dir = os.environ.get("NEUROMITA_BASE_DIR", "")
-        unity_path = Path(base_dir) / "NeuroMita-Unity"
-        unity_dir_setting = self.settings.get("UNITY_INSTALL_DIR", "")
-        if unity_dir_setting:
-            unity_path = Path(unity_dir_setting)
-        return unity_path
+        configured = str(self.settings.get("UNITY_INSTALL_DIR", "") or "").strip() or None
+        return unity_install_dir(configured)
 
     def _current_unity_version() -> str:
         try:
@@ -99,30 +104,7 @@ def setup_updates_settings_controls(
                 logger.warning("[updates_ui] Failed to refresh sidebar version label", exc_info=True)
 
     def _find_unity_executable(unity_dir: Path) -> Path | None:
-        if not unity_dir.exists() or not unity_dir.is_dir():
-            return None
-
-        exe_files = list(unity_dir.glob("*.exe"))
-        if not exe_files:
-            return None
-
-        preferred_names = (
-            "NeuroMita.exe",
-            "NeuroMita-Unity.exe",
-            "Unity.exe",
-        )
-        lower_map = {path.name.lower(): path for path in exe_files}
-        for name in preferred_names:
-            found = lower_map.get(name.lower())
-            if found is not None:
-                return found
-
-        for path in exe_files:
-            low = path.name.lower()
-            if "neuromita" in low or "unity" in low:
-                return path
-
-        return exe_files[0]
+        return find_installed_unity_executable(unity_dir)
 
     def _refresh_version_labels():
         py_ver = _pending_python_restart_version()
@@ -177,7 +159,7 @@ def setup_updates_settings_controls(
     def _format_component_info(title: str, info: dict) -> str:
         if not info.get("ok"):
             err = info.get("error") or _("Неизвестная ошибка", "Unknown error")
-            return f"{title}\n{_('Ошибка проверки', 'Check error')}: {err}"
+            return f"{title}\n{_('Ошибка проверки', 'Check error')}: {format_exception(err)}"
 
         current_version = info.get("current_version") or "?"
         latest_version = info.get("latest_version") or "?"
@@ -229,12 +211,14 @@ def setup_updates_settings_controls(
         try:
             from updater import get_python_update_info, get_unity_update_info
 
-            channel = self.settings.get("UPDATE_CHANNEL", "stable")
+            target = _current_update_target()
+            channel = target.channel
             base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
             unity_dir = self.settings.get("UNITY_INSTALL_DIR") or None
 
             logger.info(
-                f"[updates_ui] Check-only params: channel={channel}, base_dir={base_dir}, unity_dir={unity_dir}"
+                f"[updates_ui] Check-only params: contour={target.contour}, repo={target.repo}, "
+                f"channel={channel}, base_dir={base_dir}, unity_dir={unity_dir}"
             )
 
             py_info = get_python_update_info(base_dir=base_dir, channel=channel)
@@ -251,7 +235,7 @@ def setup_updates_settings_controls(
                 _set_status(_("Новых обновлений не найдено.", "No new updates found."))
         except Exception as e:
             logger.error("[updates_ui] Check-only action failed", exc_info=True)
-            _set_status_level(f"{_('Ошибка проверки', 'Check error')}: {e}", "error")
+            _set_status_level(f"{_('Ошибка проверки', 'Check error')}: {format_exception(e)}", "error")
         finally:
             _hide_progress()
             _set_buttons_enabled(True)
@@ -294,13 +278,15 @@ def setup_updates_settings_controls(
                 get_unity_update_info,
             )
 
-            channel = self.settings.get("UPDATE_CHANNEL", "stable")
+            target = _current_update_target()
+            channel = target.channel
             tester_code = self.settings.get("TESTER_CODE") or None
             base_dir = os.environ.get("NEUROMITA_BASE_DIR") or None
             unity_dir = self.settings.get("UNITY_INSTALL_DIR") or None
 
             logger.info(
-                f"[updates_ui] Install params: channel={channel}, base_dir={base_dir}, unity_dir={unity_dir}, "
+                f"[updates_ui] Install params: contour={target.contour}, repo={target.repo}, "
+                f"channel={channel}, base_dir={base_dir}, unity_dir={unity_dir}, "
                 f"tester_code={'set' if tester_code else 'empty'}"
             )
 
@@ -321,16 +307,16 @@ def setup_updates_settings_controls(
                     _set_status(msg)
 
                 def warning(self, msg):
-                    _set_status_level(f"⚠ {msg}", "warning")
+                    _set_status_level(str(msg), "warning")
 
                 def error(self, msg):
-                    _set_status_level(f"✗ {msg}", "error")
+                    _set_status_level(str(msg), "error")
 
                 def success(self, msg):
-                    _set_status_level(f"✓ {msg}", "success")
+                    _set_status_level(str(msg), "success")
 
                 def notify(self, msg):
-                    _set_status_level(f"★ {msg}", "notify")
+                    _set_status_level(str(msg), "notify")
 
             ui_log = _UiLogger()
 
@@ -353,7 +339,7 @@ def setup_updates_settings_controls(
                 if not python_result.ok:
                     raise RuntimeError(python_result.error or "Python update failed")
                 py_applied = bool(python_result)
-                python_pending_restart = python_result.status == "waiting_for_restart"
+                python_pending_restart = bool(python_result.restart_required)
 
             if bool(unity_info.get("available")) and not python_pending_restart:
                 _set_status(_("Устанавливаю Unity-обновление...", "Installing Unity update..."))
@@ -386,7 +372,7 @@ def setup_updates_settings_controls(
             _refresh_version_labels()
         except Exception as e:
             logger.error("[updates_ui] Install action failed", exc_info=True)
-            _set_status_level(f"{_('Ошибка установки', 'Install error')}: {e}", "error")
+            _set_status_level(f"{_('Ошибка установки', 'Install error')}: {format_exception(e)}", "error")
         finally:
             _hide_progress()
             _set_buttons_enabled(True)
@@ -405,9 +391,11 @@ def setup_updates_settings_controls(
             _set_status_level(_("Запускаю Unity...", "Launching Unity..."), "notify")
         except Exception as e:
             logger.error("[updates_ui] Failed to launch Unity", exc_info=True)
-            _set_status_level(f"{_('Ошибка запуска Unity', 'Unity launch error')}: {e}", "error")
+            _set_status_level(f"{_('Ошибка запуска Unity', 'Unity launch error')}: {format_exception(e)}", "error")
 
     def _ensure_tester_code() -> bool:
+        if _current_update_target().contour != "test":
+            return True
         current = tester_entry.text().strip()
         if current:
             return True
@@ -486,46 +474,58 @@ def setup_updates_settings_controls(
         except Exception:
             pass
 
-    # Channel
-    channel_row = QWidget()
-    channel_row.setObjectName("UpdatesChannelRow")
-    channel_row.setStyleSheet("QWidget#UpdatesChannelRow { background: transparent; }")
-    channel_layout = QHBoxLayout(channel_row)
-    channel_layout.setContentsMargins(0, 4, 0, 0)
-    channel_layout.setSpacing(8)
-
-    channel_lbl = tr_set(QLabel(), "Канал обновлений:", "Update channel:")
-    channel_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
-    channel_layout.addWidget(channel_lbl)
-
-    channel_combo = QComboBox()
-    channel_combo.setStyleSheet(
+    # Update contour (read-only; the contour is the single source of truth)
+    target = _current_update_target()
+    readonly_value_style = (
+        "QLabel { background-color: rgba(16,13,25,0.76); "
+        "border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
+        "color: #f3edf6; padding: 7px 10px; }"
+    )
+    combo_style = (
         "QComboBox { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
         "color: #f3edf6; padding: 7px 10px; }"
         "QComboBox:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
         "QComboBox::drop-down { border: none; width: 26px; }"
         "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(183, 75, 125,0.24); color: #f3edf6; selection-background-color: rgba(183, 75, 125,0.30); }"
     )
-    channel_combo.addItems(["stable", "beta"])
-    current_channel = self.settings.get("UPDATE_CHANNEL", "stable")
-    idx = channel_combo.findText(current_channel)
-    if idx >= 0:
-        channel_combo.setCurrentIndex(idx)
-    tr_set(channel_combo, "stable - официальные релизы.\n"
-            "beta - включая пре-релизы.",
-            "stable - official releases.\n"
-            "beta - including pre-releases.", "setToolTip")
 
-    def _save_channel(text: str):
-        if text == self.settings.get("UPDATE_CHANNEL", "stable"):
-            return
-        logger.info(f"[updates_ui] UPDATE_CHANNEL -> {text}")
-        _persist_setting("UPDATE_CHANNEL", text)
+    contour_row = QWidget()
+    contour_row.setObjectName("UpdatesContourRow")
+    contour_row.setStyleSheet("QWidget#UpdatesContourRow { background: transparent; }")
+    contour_layout = QHBoxLayout(contour_row)
+    contour_layout.setContentsMargins(0, 4, 0, 0)
+    contour_layout.setSpacing(8)
+    contour_lbl = tr_set(QLabel(), "Контур обновлений:", "Update contour:")
+    contour_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    contour_lbl.setFixedWidth(120)
+    contour_layout.addWidget(contour_lbl)
+    contour_value = tr_set(
+        QLabel(),
+        "Тестовый" if target.contour == "test" else "Стабильный",
+        "Test" if target.contour == "test" else "Stable",
+    )
+    contour_value.setStyleSheet(readonly_value_style)
+    contour_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    contour_layout.addWidget(contour_value)
+    contour_layout.addStretch()
+    parent.addWidget(contour_row)
 
-    channel_combo.activated.connect(lambda _index: QTimer.singleShot(0, lambda: _save_channel(channel_combo.currentText())))
-    channel_layout.addWidget(channel_combo)
-    channel_layout.addStretch()
-    parent.addWidget(channel_row)
+    repo_row = QWidget()
+    repo_row.setObjectName("UpdatesRepoRow")
+    repo_row.setStyleSheet("QWidget#UpdatesRepoRow { background: transparent; }")
+    repo_layout = QHBoxLayout(repo_row)
+    repo_layout.setContentsMargins(0, 4, 0, 0)
+    repo_layout.setSpacing(8)
+    repo_lbl = tr_set(QLabel(), "Репозиторий:", "Repository:")
+    repo_lbl.setStyleSheet("QLabel { color: #bca9bb; font-size: 12px; }")
+    repo_lbl.setFixedWidth(120)
+    repo_layout.addWidget(repo_lbl)
+    repo_value = QLabel(target.repo)
+    repo_value.setStyleSheet(readonly_value_style)
+    repo_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    repo_layout.addWidget(repo_value)
+    repo_layout.addStretch()
+    parent.addWidget(repo_row)
 
     # Update mode (diff / full)
     mode_row = QWidget()
@@ -540,7 +540,7 @@ def setup_updates_settings_controls(
     mode_layout.addWidget(mode_lbl)
 
     mode_combo = TRQComboBox()
-    mode_combo.setStyleSheet(channel_combo.styleSheet())
+    mode_combo.setStyleSheet(combo_style)
     # data: "diff"/"full"; подписи переводятся вживую.
     mode_combo.add_tr_item("Дифф (только изменённые файлы)", "Diff (changed files only)", value="diff")
     mode_combo.add_tr_item("Полная перезапись", "Full replace", value="full")
@@ -655,6 +655,7 @@ def setup_updates_settings_controls(
 
     tester_entry.editingFinished.connect(_save_tester)
     tester_layout.addWidget(tester_entry)
+    tester_row.setVisible(target.contour == "test")
     parent.addWidget(tester_row)
 
     self._tester_code_entry = tester_entry
@@ -682,7 +683,8 @@ def setup_updates_settings_controls(
     unity_entry.setText(self.settings.get("UNITY_INSTALL_DIR", ""))
     unity_layout.addWidget(unity_entry)
 
-    unity_browse = QPushButton("📁")
+    unity_browse = QPushButton()
+    unity_browse.setIcon(qta.icon("fa6s.folder-open", color="#f2b6d8"))
     unity_browse.setFixedWidth(36)
     tr_set(unity_browse, "Выбрать папку", "Browse folder", "setToolTip")
 

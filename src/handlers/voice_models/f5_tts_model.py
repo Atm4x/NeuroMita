@@ -1,7 +1,9 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import os
 import hashlib
+from copy import deepcopy
 from datetime import datetime
 import asyncio
 from typing import Optional, Any, List, Dict
@@ -10,6 +12,7 @@ from .base_model import IVoiceModel
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
 
+from core.app_paths import checkpoints_dir
 from core.backends import BackendKind, get_backend_service
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
@@ -19,13 +22,66 @@ from handlers.voice_models.install_plan_helpers import (
     rvc_python_compat_error,
     warning_action,
 )
+from handlers.voice_models.rvc_runtime_assets import (
+    CUDA_RVC_RUNTIME_ASSETS,
+    ONNX_RVC_RUNTIME_ASSETS,
+    runtime_asset_download_action,
+    runtime_asset_requirements,
+)
 from installables.compatibility_specs import (
     F5_CPU_FALLBACK_COMPATIBILITY,
     F5_RVC_FALLBACK_COMPATIBILITY,
 )
 from handlers.voice_models.context import VoiceRuntimeContext
 
+
+def _f5_device_options() -> dict[str, Any]:
+    return {
+        "values": ["cuda", "cpu"],
+        "default": "cuda",
+        "values_nvidia": ["cuda", "cpu"],
+        "default_nvidia": "cuda",
+        "values_amd": ["cpu"],
+        "default_amd": "cpu",
+        "values_intel": ["cpu"],
+        "default_intel": "cpu",
+        "values_other": ["cpu"],
+        "default_other": "cpu",
+    }
+
+
+def _rvc_device_options() -> dict[str, Any]:
+    return {
+        "values": ["cuda:0", "cpu"],
+        "default": "cuda:0",
+        "values_nvidia": ["cuda:0", "cpu"],
+        "default_nvidia": "cuda:0",
+        "values_amd": ["dml", "cpu"],
+        "default_amd": "dml",
+        "values_intel": ["dml", "cpu"],
+        "default_intel": "dml",
+        "values_other": ["cpu", "dml"],
+        "default_other": "cpu",
+    }
+
+
+def _f5_device_setting() -> dict[str, Any]:
+    return {
+        "key": "device",
+        "label": _("Устройство", "Device"),
+        "type": "combobox",
+        "options": _f5_device_options(),
+        "help": _("Устройство для части F5‑TTS.", "Device for F5‑TTS part."),
+    }
+
+
 class F5TTSInstallSpec:
+    _VOCODER_REPO_URL = "https://huggingface.co/charactr/vocos-mel-24khz/resolve/main"
+    _VOCODER_ASSETS = (
+        ("config.yaml", f"{_VOCODER_REPO_URL}/config.yaml"),
+        ("pytorch_model.bin", f"{_VOCODER_REPO_URL}/pytorch_model.bin"),
+    )
+
     @classmethod
     def _log_final_check_failure(cls, result: dict, callbacks=None) -> None:
         log = getattr(callbacks, "log", None) if callbacks is not None else None
@@ -92,6 +148,20 @@ class F5TTSInstallSpec:
         spec = cls._rvc_package_spec(ctx)
         return spec.split("[", 1)[0]
 
+    @classmethod
+    def _rvc_runtime_assets(cls, ctx: dict):
+        if cls._rvc_package_spec(ctx).startswith("tts-with-rvc-onnx"):
+            return ONNX_RVC_RUNTIME_ASSETS
+        return CUDA_RVC_RUNTIME_ASSETS
+
+    @classmethod
+    def vocoder_dir(cls) -> str:
+        return str(checkpoints_dir() / "vocos-mel-24khz")
+
+    @classmethod
+    def _vocoder_asset_path(cls, filename: str) -> str:
+        return os.path.join(cls.vocoder_dir(), filename)
+
     # --- Языковые веса F5 -------------------------------------------------
     # Раньше веса были захардкожены на русскую модель (F5-TTS_RUSSIAN), хотя
     # карточка обещала «RUSSIAN / ENGLISH». Теперь набор весов выбирается по
@@ -113,26 +183,29 @@ class F5TTSInstallSpec:
         "https://huggingface.co/QingyuLiu1/Cross-Lingual_F5-TTS/resolve/main/"
         "vocab.txt?download=true"
     )
+    _EN_SPEAKING_RATE_URL = (
+        "https://huggingface.co/QingyuLiu1/Cross-Lingual_F5-TTS/resolve/main/"
+        "syllables_gce_20000.safetensors?download=true"
+    )
 
     @classmethod
-    def resolve_language(cls, ctx: dict) -> str:
-        """Язык весов F5: ctx['voice_language'] → настройка VOICE_LANGUAGE → 'ru'."""
-        raw = str((ctx or {}).get("voice_language") or "").strip().lower()
-        if raw in ("ru", "en"):
-            return raw
-        try:
-            from managers.settings_manager import SettingsManager
-            v = str(SettingsManager.get("VOICE_LANGUAGE", "ru") or "ru").strip().lower()
-        except Exception:
-            v = "ru"
-        return "en" if v == "en" else "ru"
+    def is_cross_lingual(cls, model_id: str) -> bool:
+        return str(model_id or "").strip() in {"high_clf5", "high_clf5+low"}
+
+    @classmethod
+    def is_rvc(cls, model_id: str) -> bool:
+        return str(model_id or "").strip() in {"high+low", "high_clf5+low"}
+
+    @classmethod
+    def variant(cls, model_id: str) -> str:
+        return "en" if cls.is_cross_lingual(model_id) else "ru"
 
     @classmethod
     def model_dir_for_lang(cls, lang: str) -> str:
         """Папка весов для языка. RU остаётся в корне checkpoints/F5-TTS
         (обратная совместимость с уже скачанными весами), EN/мультиязычные —
         в подпапке, чтобы наборы весов не перетирали друг друга."""
-        base = os.path.join("checkpoints", "F5-TTS")
+        base = str(checkpoints_dir() / "F5-TTS")
         return base if lang == "ru" else os.path.join(base, lang)
 
     @classmethod
@@ -141,6 +214,10 @@ class F5TTSInstallSpec:
             return [
                 {"url": cls._EN_CKPT_URL, "dest": ckpt_dest},
                 {"url": cls._EN_VOCAB_URL, "dest": vocab_dest},
+                {
+                    "url": cls._EN_SPEAKING_RATE_URL,
+                    "dest": os.path.join(os.path.dirname(ckpt_dest), "speaking_rate.safetensors"),
+                },
             ]
         return [
             {"url": cls._RU_CKPT_URL, "dest": ckpt_dest},
@@ -149,7 +226,7 @@ class F5TTSInstallSpec:
 
     @classmethod
     def supported_model_ids(cls) -> list[str]:
-        return ["high", "high+low"]
+        return ["high", "high_clf5", "high+low", "high_clf5+low"]
 
     @classmethod
     def title(cls, model_id: str) -> str:
@@ -158,7 +235,8 @@ class F5TTSInstallSpec:
     @classmethod
     def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
         backend_kind = cls.required_backend(model_id, ctx)
-        model_dir = cls.model_dir_for_lang(cls.resolve_language(ctx))
+        variant = cls.variant(model_id)
+        model_dir = cls.model_dir_for_lang(variant)
         ckpt = os.path.join(model_dir, "model.safetensors")
         vocab = os.path.join(model_dir, "vocab.txt")
 
@@ -169,8 +247,33 @@ class F5TTSInstallSpec:
             InstallRequirement(id="ckpt", kind="file", path=ckpt, required=True),
             InstallRequirement(id="vocab", kind="file", path=vocab, required=True),
         ]
+        if variant == "en":
+            req.extend(
+                [
+                    InstallRequirement(id="pyphen", kind="python_dist", spec="pyphen", required=True),
+                    InstallRequirement(
+                        id="speaking_rate",
+                        kind="file",
+                        path=os.path.join(model_dir, "speaking_rate.safetensors"),
+                        required=True,
+                    ),
+                ]
+            )
+        else:
+            req.append(
+                InstallRequirement(id="ruaccent", kind="python_dist", spec="ruaccent", required=True)
+            )
+        req.extend(
+            InstallRequirement(
+                id=f"vocoder_asset_{filename}",
+                kind="file",
+                path_fn=lambda _ctx, name=filename: cls._vocoder_asset_path(name),
+                required=True,
+            )
+            for filename, _url in cls._VOCODER_ASSETS
+        )
 
-        if str(model_id) == "high+low":
+        if cls.is_rvc(model_id):
             req.append(
                 InstallRequirement(
                     id="tts_with_rvc",
@@ -179,6 +282,7 @@ class F5TTSInstallSpec:
                     required=True,
                 )
             )
+            req.extend(runtime_asset_requirements(cls._rvc_runtime_assets(ctx)))
 
         return req
 
@@ -195,8 +299,8 @@ class F5TTSInstallSpec:
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
         backend_kind = cls.required_backend(mid, ctx)
-        lang = cls.resolve_language(ctx)
-        compat_warning = rvc_python_compat_error(cls._rvc_package_spec(ctx)) if mid == "high+low" else None
+        lang = cls.variant(mid)
+        compat_warning = rvc_python_compat_error(cls._rvc_package_spec(ctx)) if cls.is_rvc(mid) else None
         if cls.is_installed(mid, ctx):
             return InstallPlan(
                 required_backend=backend_kind,
@@ -225,9 +329,9 @@ class F5TTSInstallSpec:
             # with AttributeError: module 'numpy' has no attribute 'long'.
             "numpy<2.0",
             "scipy<1.13",
-            "ruaccent",
         ]
-        if mid == "high+low":
+        pkgs.append("pyphen" if cls.is_cross_lingual(mid) else "ruaccent")
+        if cls.is_rvc(mid):
             pkgs.insert(0, cls._rvc_package_spec(ctx))
 
         actions.append(
@@ -258,10 +362,39 @@ class F5TTSInstallSpec:
                 type="download_http",
                 description=weights_desc,
                 progress=60,
-                progress_to=90,
+                progress_to=82,
                 files=cls._weight_files(lang, ckpt_dest, vocab_dest),
             )
         )
+
+        actions.append(
+            InstallAction(
+                type="download_http",
+                description=_(
+                    "Загрузка вокодера F5-TTS...",
+                    "Downloading F5-TTS vocoder...",
+                ),
+                progress=83,
+                progress_to=90,
+                files=[
+                    {"url": url, "dest": cls._vocoder_asset_path(filename)}
+                    for filename, url in cls._VOCODER_ASSETS
+                ],
+            )
+        )
+
+        if cls.is_rvc(mid):
+            actions.append(
+                runtime_asset_download_action(
+                    cls._rvc_runtime_assets(ctx),
+                    description=_(
+                        "Загрузка моделей RVC...",
+                        "Downloading RVC model assets...",
+                    ),
+                    progress=91,
+                    progress_to=96,
+                )
+            )
 
         ctx_outer = dict(ctx or {})
 
@@ -293,15 +426,32 @@ class F5TTSInstallSpec:
     @classmethod
     def build_uninstall_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id)
-        pkgs = ["f5-tts", "ruaccent"]
-        if mid == "high+low":
-            pkgs = [cls._rvc_uninstall_package(ctx)] + pkgs
+        model_dir = cls.model_dir_for_lang(cls.variant(mid))
+        paths = [
+            os.path.join(model_dir, "model.safetensors"),
+            os.path.join(model_dir, "vocab.txt"),
+        ]
+        if cls.is_cross_lingual(mid):
+            paths.append(os.path.join(model_dir, "speaking_rate.safetensors"))
+
+        actions = []
+        if cls.is_rvc(mid):
+            actions.append(
+                pip_uninstall_action(
+                    [cls._rvc_uninstall_package(ctx)],
+                    description=_("Удаление компонентов RVC...", "Uninstalling RVC components..."),
+                )
+            )
+        actions.append(
+            remove_paths_action(
+                paths,
+                description=_("Удаление файлов модели...", "Removing model files..."),
+                progress=85,
+            )
+        )
 
         return InstallPlan(
-            actions=[
-                pip_uninstall_action(pkgs, description=_("Удаление компонентов...", "Uninstalling components...")),
-                remove_paths_action([os.path.join("checkpoints", "F5-TTS")], description=_("Удаление файлов модели...", "Removing model files..."), progress=85),
-            ],
+            actions=actions,
             ok_status=_("Удалено", "Uninstalled"),
         )
 
@@ -309,28 +459,30 @@ class F5TTSModel(IVoiceModel):
     def __init__(self, parent: VoiceRuntimeContext, model_id: str, rvc_handler: Optional[IVoiceModel] = None):
         super().__init__(parent, model_id)
         self.f5_pipeline_module = None
+        self.clf5_pipeline_module = None
         self.current_f5_pipeline = None
         self.rvc_handler = rvc_handler
         self.ruaccent_instance = None
-        self._import_attempted = False
+        self._import_attempted_variants = set()
         self._initialized_lang = None
 
     MODEL_CONFIGS = [
         {
             "id": "high",
-            "name": "F5-TTS",
+            "name": _("F5-TTS (Русский)", "F5-TTS (Russian)"),
             "min_vram": 4, "rec_vram": 8,
             "gpu_vendor": ["NVIDIA", "AMD", "INTEL", "CPU"],
             "size_gb": 4,
             "backend": "cpu",
             "compatibility": F5_CPU_FALLBACK_COMPATIBILITY,
-            "languages": ["Russian", "English"],
+            "languages": ["Russian"],
             "intents": [_("Эмоции", "Emotion"), _("Качество", "Quality")],
             "description": _(
                 "Эмоциональная диффузионная модель с высоким качеством. Самая требовательная к GPU.",
                 "Emotional diffusion model with high quality. Most GPU‑demanding."
             ),
             "settings": [
+                _f5_device_setting(),
                 {"key": "speed", "label": _("Скорость речи", "Speech Speed"), "type": "entry", "options": {"default": "1.0"},
                  "help": _("Множитель скорости: 1.0 — нормальная.", "Speed multiplier: 1.0 is normal.")},
                 {"key": "nfe_step", "label": _("Шаги диффузии", "Diffusion Steps"), "type": "entry", "options": {"default": "32"},
@@ -341,19 +493,50 @@ class F5TTSModel(IVoiceModel):
                  "help": _("Инициализация генератора случайности.", "Random seed.")},
                 {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
                  "help": _("Итоговая громкость.", "Final loudness.")},
-                {"key": "use_ruaccent", "label": _("Использовать RUAccent", "Use RUAccent"), "type": "checkbutton", "options": {"default": False},
+                {"key": "use_ruaccent", "label": _("Использовать RUAccent", "Use RUAccent"), "type": "checkbutton", "options": {"default": True},
                  "help": _("Улучшение ударений для русского.", "Better Russian stress handling.")}
             ]
         },
         {
+            "id": "high_clf5",
+            "name": _(
+                "Cross-Lingual F5-TTS (Английский и китайский)",
+                "Cross-Lingual F5-TTS (English & Chinese)",
+            ),
+            "min_vram": 4, "rec_vram": 8,
+            "gpu_vendor": ["NVIDIA", "AMD", "INTEL", "CPU"],
+            "size_gb": 4,
+            "backend": "cpu",
+            "compatibility": F5_CPU_FALLBACK_COMPATIBILITY,
+            "languages": ["English", "Chinese"],
+            "intents": [_(("Кросс-языковое клонирование"), "Cross-lingual cloning"), _("Качество", "Quality")],
+            "description": _(
+                "Кросс-языковая F5-TTS для клонирования голоса по русскому референсу и синтеза английской или китайской речи.",
+                "Cross-lingual F5-TTS that clones a Russian reference voice and synthesizes English or Chinese speech."
+            ),
+            "settings": [
+                _f5_device_setting(),
+                {"key": "speed", "label": _("Скорость речи", "Speech Speed"), "type": "entry", "options": {"default": "1.0"},
+                 "help": _("Множитель скорости: 1.0 — нормальная.", "Speed multiplier: 1.0 is normal.")},
+                {"key": "nfe_step", "label": _("Шаги диффузии", "Diffusion Steps"), "type": "entry", "options": {"default": "32"},
+                 "help": _("Больше шагов — лучше качество, медленнее.", "More steps — better quality, slower.")},
+                {"key": "remove_silence", "label": _("Удалять тишину", "Remove Silence"), "type": "checkbutton", "options": {"default": True},
+                 "help": _("Обрезать тишину в начале/конце.", "Trim silence at head/tail.")},
+                {"key": "seed", "label": _("Seed", "Seed"), "type": "entry", "options": {"default": "0"},
+                 "help": _("Инициализация генератора случайности.", "Random seed.")},
+                {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
+                 "help": _("Итоговая громкость.", "Final loudness.")},
+            ]
+        },
+        {
             "id": "high+low",
-            "name": "F5-TTS + RVC",
+            "name": _("F5-TTS + RVC (Русский)", "F5-TTS + RVC (Russian)"),
             "min_vram": 6, "rec_vram": 8,
             "gpu_vendor": ["NVIDIA", "AMD", "INTEL", "CPU"],
             "size_gb": 7,
             "backend": "cpu",
             "compatibility": F5_RVC_FALLBACK_COMPATIBILITY,
-            "languages": ["Russian", "English"],
+            "languages": ["Russian"],
             "intents": [_("Эмоции", "Emotion"), _("Конверсия голоса", "Voice conversion")],
             "description": _(
                 "F5‑TTS с последующей конверсией тембра через RVC.",
@@ -361,16 +544,10 @@ class F5TTSModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "f5rvc_f5_device", "label": _("[F5] Устройство", "[F5] Device"), "type": "combobox",
-                 "options": {"values_nvidia": ["cuda", "cpu"], "default_nvidia": "cuda",
-                             "values_amd": ["cpu"], "default_amd": "cpu",
-                             "values_intel": ["cpu"], "default_intel": "cpu",
-                             "values_other": ["cpu"], "default_other": "cpu"},
+                 "options": _f5_device_options(),
                  "help": _("Устройство для части F5‑TTS.", "Device for F5‑TTS part.")},
                 {"key": "f5rvc_rvc_device", "label": _("[RVC] Устройство RVC", "[RVC] RVC Device"), "type": "combobox",
-                 "options": {"values_nvidia": ["dml", "cuda:0", "cpu"], "default_nvidia": "cuda:0",
-                             "values_amd": ["dml", "cpu"], "default_amd": "dml",
-                             "values_intel": ["dml", "cpu"], "default_intel": "dml",
-                             "values_other": ["cpu", "dml"], "default_other": "cpu"},
+                 "options": _rvc_device_options(),
                  "help": _("Устройство для части RVC.", "Device for RVC part.")},
 
                 {"key": "f5rvc_f5_speed", "label": _("[F5] Скорость речи", "[F5] Speech Speed"), "type": "entry", "options": {"default": "1.0"},
@@ -403,11 +580,38 @@ class F5TTSModel(IVoiceModel):
 
                 {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
                  "help": _("Итоговая громкость.", "Final loudness.")},
-                {"key": "f5rvc_use_ruaccent", "label": _("Использовать RUAccent", "Use RUAccent"), "type": "checkbutton", "options": {"default": False},
+                {"key": "f5rvc_use_ruaccent", "label": _("Использовать RUAccent", "Use RUAccent"), "type": "checkbutton", "options": {"default": True},
                  "help": _("Улучшение ударений для русского.", "Better Russian stress handling.")}
             ]
         }
     ]
+
+    _cross_lingual_rvc_config = deepcopy(MODEL_CONFIGS[-1])
+    _cross_lingual_rvc_config.update(
+        {
+            "id": "high_clf5+low",
+            "name": _(
+                "Cross-Lingual F5-TTS + RVC (Английский и китайский)",
+                "Cross-Lingual F5-TTS + RVC (English & Chinese)",
+            ),
+            "languages": ["English", "Chinese"],
+            "intents": [
+                _("Кросс-языковое клонирование", "Cross-lingual cloning"),
+                _("Конверсия голоса", "Voice conversion"),
+            ],
+            "description": _(
+                "Cross-Lingual F5-TTS с последующей конверсией тембра через RVC.",
+                "Cross-Lingual F5-TTS followed by timbre conversion through RVC.",
+            ),
+        }
+    )
+    _cross_lingual_rvc_config["settings"] = [
+        setting
+        for setting in _cross_lingual_rvc_config["settings"]
+        if setting.get("key") != "f5rvc_use_ruaccent"
+    ]
+    MODEL_CONFIGS.append(_cross_lingual_rvc_config)
+    del _cross_lingual_rvc_config
 
     def get_model_configs(self) -> List[Dict[str, Any]]:
         return self.MODEL_CONFIGS
@@ -430,66 +634,102 @@ class F5TTSModel(IVoiceModel):
 
     def get_display_name(self) -> str:
         mode = self._mode()
-        return "F5-TTS + RVC" if mode == "high+low" else "F5-TTS"
+        if F5TTSInstallSpec.is_cross_lingual(mode):
+            return (
+                _(
+                    "Cross-Lingual F5-TTS + RVC (Английский и китайский)",
+                    "Cross-Lingual F5-TTS + RVC (English & Chinese)",
+                )
+                if F5TTSInstallSpec.is_rvc(mode)
+                else _(
+                    "Cross-Lingual F5-TTS (Английский и китайский)",
+                    "Cross-Lingual F5-TTS (English & Chinese)",
+                )
+            )
+        return (
+            _("F5-TTS + RVC (Русский)", "F5-TTS + RVC (Russian)")
+            if mode == "high+low"
+            else _("F5-TTS (Русский)", "F5-TTS (Russian)")
+        )
 
     def _load_module(self):
-        if self.f5_pipeline_module is not None:
+        cross_lingual = F5TTSInstallSpec.is_cross_lingual(self._mode())
+        variant = "en" if cross_lingual else "ru"
+        pipeline = self.clf5_pipeline_module if cross_lingual else self.f5_pipeline_module
+        if pipeline is not None or variant in self._import_attempted_variants:
             return
-        if self._import_attempted:
-            return
-        self._import_attempted = True
+        self._import_attempted_variants.add(variant)
         try:
-            from handlers.voice_models.pipelines.f5_pipeline import F5TTSPipeline
-            self.f5_pipeline_module = F5TTSPipeline
+            if cross_lingual:
+                from handlers.voice_models.pipelines.clf5_pipeline import CrossLingualF5TTSPipeline
+                self.clf5_pipeline_module = CrossLingualF5TTSPipeline
+            else:
+                from handlers.voice_models.pipelines.f5_pipeline import F5TTSPipeline
+                self.f5_pipeline_module = F5TTSPipeline
         except Exception as ex:
-            logger.info(f"F5_TTS import failed: {ex}")
-            self.f5_pipeline_module = None
+            logger.info(f"F5_TTS import failed: {format_exception(ex)}")
+            if cross_lingual:
+                self.clf5_pipeline_module = None
+            else:
+                self.f5_pipeline_module = None
 
     def initialize(self, init: bool = False) -> bool:
         mode = self._mode()
-        # Веса выбираем по языку озвучки (VOICE_LANGUAGE): RU лежат в корне
-        # checkpoints/F5-TTS, мультиязычные/EN — в подпапке. Это тот же выбор,
-        # что и при установке (F5TTSInstallSpec), поэтому пути совпадают.
-        lang = str(getattr(self.parent, "voice_language", "ru") or "ru").strip().lower()
-        lang = "en" if lang == "en" else "ru"
-        # initialized_for оставляем равным mode (его сравнивают с model_id в
-        # is_model_initialized), а язык держим отдельно: при смене ru↔en без
-        # смены mode пайплайн надо пересобрать под другие веса.
-        if self.initialized and self.initialized_for == mode and getattr(self, "_initialized_lang", None) == lang:
+        variant = F5TTSInstallSpec.variant(mode)
+        if self.initialized and self.initialized_for == mode:
             return True
+        if F5TTSInstallSpec.is_cross_lingual(mode):
+            self.ruaccent_instance = None
 
         self._load_module()
-        if self.f5_pipeline_module is None:
+        selected_pipeline = (
+            self.clf5_pipeline_module
+            if F5TTSInstallSpec.is_cross_lingual(mode)
+            else self.f5_pipeline_module
+        )
+        if selected_pipeline is None:
             logger.error("F5 pipeline not available. Install dependencies first.")
             self.initialized = False
             self.initialized_for = None
             return False
 
-        model_dir = F5TTSInstallSpec.model_dir_for_lang(lang)
+        model_dir = F5TTSInstallSpec.model_dir_for_lang(variant)
         ckpt_path = os.path.join(model_dir, "model.safetensors")
         vocab_path = os.path.join(model_dir, "vocab.txt")
+        required_files = [ckpt_path, vocab_path]
+        if F5TTSInstallSpec.is_cross_lingual(mode):
+            required_files.append(os.path.join(model_dir, "speaking_rate.safetensors"))
 
-        if not all(os.path.exists(p) for p in [ckpt_path, vocab_path]):
+        if not all(os.path.exists(p) for p in required_files):
             logger.error(
-                f"Missing F5-TTS model files in {model_dir} (language '{lang}'). "
-                f"Install the '{lang}' weights via AI Hub."
+                f"Missing F5-TTS model files in {model_dir} (variant '{variant}'). "
+                f"Install model '{mode}' via AI Hub."
             )
             self.initialized = False
             self.initialized_for = None
             return False
 
         settings = self.parent.load_model_settings(mode)
-        device_key = "f5rvc_f5_device" if mode == "high+low" else "device"
+        device_key = "f5rvc_f5_device" if F5TTSInstallSpec.is_rvc(mode) else "device"
         device = settings.get(device_key, "cuda" if self.parent.provider == "NVIDIA" else "cpu")
 
-        self.current_f5_pipeline = self.f5_pipeline_module(
+        pipeline_class = selected_pipeline
+        pipeline_kwargs = dict(
             model="F5TTS_v1_Base",
             ckpt_file=ckpt_path,
             vocab_file=vocab_path,
+            load_vocoder_from_local=True,
+            vocoder_local_path=F5TTSInstallSpec.vocoder_dir(),
             device=device,
         )
+        if F5TTSInstallSpec.is_cross_lingual(mode):
+            pipeline_kwargs["speaking_rate_ckpt_file"] = os.path.join(
+                model_dir,
+                "speaking_rate.safetensors",
+            )
+        self.current_f5_pipeline = pipeline_class(**pipeline_kwargs)
 
-        if mode == "high+low":
+        if F5TTSInstallSpec.is_rvc(mode):
             if self.rvc_handler and not self.rvc_handler.initialized:
                 ok = self.rvc_handler.initialize(init=False)
                 if not ok:
@@ -500,15 +740,16 @@ class F5TTSModel(IVoiceModel):
 
         self.initialized = True
         self.initialized_for = mode
-        self._initialized_lang = lang
+        self._initialized_lang = variant
         return True
 
     def cleanup_state(self):
         super().cleanup_state()
         self.current_f5_pipeline = None
         self.f5_pipeline_module = None
+        self.clf5_pipeline_module = None
         self.ruaccent_instance = None
-        self._import_attempted = False
+        self._import_attempted_variants = set()
         self._initialized_lang = None
         try:
             if self.rvc_handler and self.rvc_handler.initialized:
@@ -518,8 +759,10 @@ class F5TTSModel(IVoiceModel):
 
     def _load_ruaccent_if_needed(self, settings: dict):
         mode = self._mode()
-        use_ruaccent_key = "f5rvc_use_ruaccent" if mode == "high+low" else "use_ruaccent"
-        if not settings.get(use_ruaccent_key, False) or self.ruaccent_instance is not None:
+        if F5TTSInstallSpec.is_cross_lingual(mode):
+            return
+        use_ruaccent_key = "f5rvc_use_ruaccent" if F5TTSInstallSpec.is_rvc(mode) else "use_ruaccent"
+        if not settings.get(use_ruaccent_key, True) or self.ruaccent_instance is not None:
             return
         try:
             from ruaccent import RUAccent
@@ -535,7 +778,7 @@ class F5TTSModel(IVoiceModel):
                 tiny_mode=False
             )
         except Exception as e:
-            logger.warning(f"RUAccent init failed: {e}")
+            logger.warning(f"RUAccent init failed: {format_exception(e)}")
             self.ruaccent_instance = None
 
     def _apply_ruaccent(self, text: str) -> str:
@@ -552,7 +795,7 @@ class F5TTSModel(IVoiceModel):
 
         mode = self._mode()
         settings = self.parent.load_model_settings(mode)
-        is_combined_model = mode == "high+low"
+        is_combined_model = F5TTSInstallSpec.is_rvc(mode)
 
         output_file = kwargs.get("output_file")
         if not output_file:
@@ -609,7 +852,7 @@ class F5TTSModel(IVoiceModel):
             )
             return None
 
-        if self.ruaccent_instance is not None:
+        if not F5TTSInstallSpec.is_cross_lingual(mode) and self.ruaccent_instance is not None:
             text = self._apply_ruaccent(text)
             if ref_text_content:
                 ref_text_content = self._apply_ruaccent(ref_text_content)
@@ -688,7 +931,7 @@ class F5TTSModel(IVoiceModel):
                             pass
                     produced = rvc_output_path
             except Exception as e:
-                logger.warning(f"RVC post-process failed: {e}")
+                logger.warning(f"RVC post-process failed: {format_exception(e)}")
 
         return produced
 

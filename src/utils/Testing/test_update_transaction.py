@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import sys
 import threading
-import types
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -19,19 +17,236 @@ from services.update_transaction import (
     verify_install_manifest,
     write_install_manifest,
 )
+from services.release_catalog import ReleaseCatalogError
+from services.update_contour import UpdateTarget
+from core.unity_installation import UnsafeUnityInstallPath, validate_unity_update_target
 from updater import (
     UpdateCancelled,
     _archive_meta_path,
     _download,
     _install_unity_asset,
+    _legacy_python_download_dir,
+    _legacy_python_journal_path,
+    _legacy_python_staging_path,
+    _begin_python_operation,
+    _python_download_dir,
     _python_journal_path,
     _python_stage_marker,
     _python_staging_path,
+    _python_installation_id,
+    _python_workspace,
+    _install_full_archive,
+    get_unity_update_info,
     note_locked_restart_attempt,
     resume_pending_python_update,
+    resume_pending_unity_update,
+)
+from services.update_activation import (
+    activation_marker_path,
+    pending_zipapp_path,
 )
 from utils.archive_utils import extract_archive
 from utils.release_assets import ReleaseAsset
+
+
+@pytest.fixture(autouse=True)
+def _isolated_python_update_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("NEUROMITA_UPDATE_CACHE_DIR", str(tmp_path / "update-cache"))
+
+
+def test_python_update_workspace_stays_outside_install_parent(tmp_path: Path) -> None:
+    base = tmp_path / "Desktop" / "NeuroMitaBuild"
+    other = tmp_path / "Desktop" / "OtherNeuroMitaBuild"
+    base.mkdir(parents=True)
+    other.mkdir(parents=True)
+
+    workspace = _python_workspace(base)
+    assert workspace != _python_workspace(other)
+    assert workspace.is_relative_to(tmp_path / "update-cache")
+    assert not workspace.is_relative_to(base.parent)
+    assert _python_installation_id(base) != _python_installation_id(other)
+
+
+def test_unity_check_distinguishes_catalog_failure_from_missing_asset(tmp_path: Path) -> None:
+    target = UpdateTarget("release", "VinerX/NeuroMita", "stable")
+    with (
+        patch("updater._get_update_target", return_value=target),
+        patch("updater._find_unity_executable", return_value=None),
+        patch(
+            "updater._fetch_latest_unity_release_asset",
+            side_effect=ReleaseCatalogError("manifest and API unavailable"),
+        ),
+    ):
+        unavailable = get_unity_update_info(base_dir=str(tmp_path))
+
+    assert unavailable["ok"] is False
+    assert "Could not load release catalog" in unavailable["error"]
+    assert "Could not find a Unity release asset" not in unavailable["error"]
+
+    with (
+        patch("updater._get_update_target", return_value=target),
+        patch("updater._find_unity_executable", return_value=None),
+        patch("updater._fetch_latest_unity_release_asset", return_value=(None, None)),
+    ):
+        missing = get_unity_update_info(base_dir=str(tmp_path))
+
+    assert missing["ok"] is False
+    assert "Could not find a Unity release asset" in missing["error"]
+
+
+def test_new_python_operation_records_cache_paths(tmp_path: Path) -> None:
+    base = tmp_path / "Desktop" / "NeuroMitaBuild"
+    base.mkdir(parents=True)
+    asset = ReleaseAsset(
+        name="PythonBuild-v2.zip",
+        url="https://example/PythonBuild-v2.zip",
+        size=123,
+        digest="sha256:" + "a" * 64,
+    )
+
+    state = _begin_python_operation(
+        base,
+        version="v2",
+        asset=asset,
+        mode="diff",
+        preserve_prompts=True,
+        is_patch=False,
+    )
+
+    assert Path(state["archive_path"]).parent == _python_download_dir(base)
+    assert Path(state["staging"]) == _python_staging_path(base)
+    assert Path(state["archive_path"]).is_relative_to(tmp_path / "update-cache")
+    assert not list(base.parent.glob(f".{base.name}.*"))
+
+
+def test_legacy_python_recovery_uses_original_reserve_and_cleans_it(tmp_path: Path) -> None:
+    base = tmp_path / "Desktop" / "NeuroMitaBuild"
+    base.mkdir(parents=True)
+    (base / "payload.txt").write_text("old", encoding="utf-8")
+    staging = _legacy_python_staging_path(base)
+    staging.mkdir()
+    (staging / "payload.txt").write_text("new", encoding="utf-8")
+    archive_hash = "d" * 64
+    manifest = build_install_manifest(
+        staging,
+        component="python",
+        version="v2",
+        archive_sha256=archive_hash,
+    )
+    write_install_manifest(staging, manifest)
+    atomic_write_json(
+        _python_stage_marker(staging),
+        {"schema": 1, "archive_sha256": archive_hash},
+    )
+    archive = _legacy_python_download_dir(base) / "PythonBuild-v2.zip"
+    atomic_write_json(
+        _legacy_python_journal_path(base),
+        {
+            "schema": 1,
+            "component": "python",
+            "target": str(base),
+            "phase": "applying",
+            "authorized": True,
+            "version": "v2",
+            "archive_name": archive.name,
+            "archive_url": "https://example/PythonBuild-v2.zip",
+            "archive_path": str(archive),
+            "archive_size": 0,
+            "archive_digest": "",
+            "archive_sha256": archive_hash,
+            "staging": str(staging),
+            "mode": "diff",
+            "preserve_prompts": True,
+        },
+    )
+
+    result = resume_pending_python_update(base_dir=str(base))
+
+    assert result.ok and result.changed and result.recovered
+    assert (base / "payload.txt").read_text(encoding="utf-8") == "new"
+    assert not _legacy_python_staging_path(base).exists()
+    assert not _legacy_python_download_dir(base).exists()
+    assert not _legacy_python_journal_path(base).exists()
+    assert not list(base.parent.glob(f".{base.name}.*"))
+
+
+def test_waiting_for_credentials_keeps_new_cache_for_retry(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMitaBuild"
+    base.mkdir()
+    archive = _python_download_dir(base) / "PythonBuild-v2.zip"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"encrypted")
+    staging = _python_staging_path(base)
+    staging.mkdir()
+    atomic_write_json(
+        _python_journal_path(base),
+        {
+            "schema": 1,
+            "component": "python",
+            "target": str(base),
+            "phase": "waiting_for_credentials",
+            "authorized": True,
+            "version": "v2",
+            "archive_name": archive.name,
+            "archive_url": "https://example/PythonBuild-v2.zip",
+            "archive_path": str(archive),
+            "archive_sha256": "e" * 64,
+            "staging": str(staging),
+        },
+    )
+
+    result = resume_pending_python_update(base_dir=str(base))
+
+    assert result.status == "waiting_for_credentials"
+    assert archive.exists()
+    assert _python_journal_path(base).exists()
+
+
+def test_successful_recovery_survives_cleanup_failure(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMitaBuild"
+    base.mkdir()
+    (base / "payload.txt").write_text("old", encoding="utf-8")
+    staging = _python_staging_path(base)
+    staging.mkdir(parents=True)
+    (staging / "payload.txt").write_text("new", encoding="utf-8")
+    archive_hash = "f" * 64
+    write_install_manifest(
+        staging,
+        build_install_manifest(
+            staging,
+            component="python",
+            version="v2",
+            archive_sha256=archive_hash,
+        ),
+    )
+    atomic_write_json(
+        _python_stage_marker(staging),
+        {"schema": 1, "archive_sha256": archive_hash},
+    )
+    archive = _python_download_dir(base) / "PythonBuild-v2.zip"
+    atomic_write_json(
+        _python_journal_path(base),
+        {
+            "schema": 1,
+            "component": "python",
+            "target": str(base),
+            "phase": "applying",
+            "version": "v2",
+            "archive_name": archive.name,
+            "archive_url": "https://example/PythonBuild-v2.zip",
+            "archive_path": str(archive),
+            "archive_sha256": archive_hash,
+            "staging": str(staging),
+            "mode": "diff",
+        },
+    )
+
+    with patch("updater.shutil.rmtree", side_effect=OSError("locked")):
+        result = resume_pending_python_update(base_dir=str(base))
+
+    assert result.ok and result.changed
+    assert read_json(_python_journal_path(base))["phase"] == "completed"
+    assert staging.exists()
 
 
 def _make_verified_tree(root: Path, text: str, version: str = "v1") -> None:
@@ -77,6 +292,42 @@ def test_directory_commit_replaces_target_and_removes_backup(tmp_path: Path) -> 
     assert not (target / "old.txt").exists()
     assert not transaction.paths.backup.exists()
     assert transaction.phase == "completed"
+
+
+def test_directory_transaction_rejects_root_and_overlapping_state(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="filesystem root"):
+        DirectoryInstallTransaction(
+            component="unity",
+            target=Path(tmp_path.anchor),
+            state_root=tmp_path / "state",
+        )
+
+    target = tmp_path / "Unity"
+    with pytest.raises(RuntimeError, match="inside its target"):
+        DirectoryInstallTransaction(
+            component="unity",
+            target=target,
+            state_root=target / "state",
+        )
+
+
+def test_directory_transaction_preserves_unowned_artifact_collision(tmp_path: Path) -> None:
+    target = tmp_path / "Unity"
+    target.mkdir()
+    transaction = DirectoryInstallTransaction(
+        component="unity",
+        target=target,
+        state_root=tmp_path / "state",
+    )
+    transaction.paths.backup.mkdir()
+    sentinel = transaction.paths.backup / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="not owned"):
+        transaction.begin({"version": "v1", "archive_url": "https://example/update.zip"})
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert target.is_dir()
 
 
 def test_failed_verification_rolls_back_original_target(tmp_path: Path) -> None:
@@ -138,12 +389,24 @@ class _Response:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
 
-    def iter_content(self, chunk_size: int):
+    def iter_bytes(self, chunk_size: int):
         _ = chunk_size
         for index, piece in enumerate(self._pieces):
             if self._before_piece is not None:
                 self._before_piece(index)
             yield piece
+
+
+class _HttpClient:
+    def __init__(self, stream_factory):
+        self._stream_factory = stream_factory
+
+    def stream(self, *args, **kwargs):
+        return self._stream_factory(*args, **kwargs)
+
+    @staticmethod
+    def raise_for_status(response):
+        return response.raise_for_status()
 
 
 def test_download_resumes_existing_partial_file(tmp_path: Path) -> None:
@@ -156,8 +419,10 @@ def test_download_resumes_existing_partial_file(tmp_path: Path) -> None:
     )
     captured_headers: dict[str, str] = {}
 
-    def get(_url, *, stream, timeout, headers):
-        assert stream and timeout == 30
+    def stream(method, _url, *, timeout, headers):
+        assert method == "GET"
+        assert timeout.connect == 30.0
+        assert timeout.read == 30.0
         captured_headers.update(headers)
         return _Response(
             [b"def"],
@@ -165,8 +430,8 @@ def test_download_resumes_existing_partial_file(tmp_path: Path) -> None:
             headers={"Content-Range": "bytes 3-5/6", "ETag": "tag"},
         )
 
-    fake_requests = types.SimpleNamespace(get=get)
-    with patch.dict(sys.modules, {"requests": fake_requests}):
+    fake_http_client = _HttpClient(stream)
+    with patch("updater._UPDATE_HTTP_CLIENT", fake_http_client):
         digest = _download(
             "https://example/archive.zip",
             destination,
@@ -188,15 +453,15 @@ def test_cancelled_download_keeps_partial_for_next_resume(tmp_path: Path) -> Non
         if index == 1:
             stop.set()
 
-    fake_requests = types.SimpleNamespace(
-        get=lambda *_args, **_kwargs: _Response(
+    fake_http_client = _HttpClient(
+        lambda *_args, **_kwargs: _Response(
             [b"abc", b"def"],
             status=200,
             headers={"Content-Length": "6", "ETag": "tag"},
             before_piece=before_piece,
         )
     )
-    with patch.dict(sys.modules, {"requests": fake_requests}):
+    with patch("updater._UPDATE_HTTP_CLIENT", fake_http_client):
         with pytest.raises(UpdateCancelled):
             _download(
                 "https://example/archive.zip",
@@ -223,9 +488,115 @@ def _unity_asset(base: Path, files: dict[str, bytes]) -> ReleaseAsset:
     )
 
 
+def test_unity_target_validation_rejects_parent_and_unowned_directory(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+
+    with pytest.raises(UnsafeUnityInstallPath, match="parent"):
+        validate_unity_update_target(base, tmp_path)
+
+    personal = tmp_path / "Personal"
+    personal.mkdir()
+    sentinel = personal / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    with pytest.raises(UnsafeUnityInstallPath, match="not a recognized"):
+        validate_unity_update_target(base, personal)
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_unity_install_refuses_unowned_nonempty_target(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    target = tmp_path / "Personal"
+    target.mkdir()
+    sentinel = target / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    asset = _unity_asset(base, {"Build/Unity.exe": b"binary"})
+
+    result = _install_unity_asset(
+        base_path=base,
+        unity_path=target,
+        version="v1",
+        asset=asset,
+        tester_code=None,
+        logger=None,
+        on_progress=None,
+        on_extract_progress=None,
+        on_verify_progress=None,
+        on_stage=None,
+        stop_event=None,
+    )
+
+    assert not result.ok
+    assert "Unsafe Unity update target" in result.error
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (tmp_path / ".Personal.unity.backup").exists()
+
+
+def test_unity_recovery_refuses_unowned_recorded_target(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    target = tmp_path / "Personal"
+    target.mkdir()
+    sentinel = target / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    atomic_write_json(
+        base / "_update_state" / "unity" / "operation.json",
+        {
+            "schema": 1,
+            "component": "unity",
+            "target": str(target),
+            "phase": "target_backed_up",
+            "authorized": True,
+            "version": "v1",
+            "archive_name": "UnityBuild-v1.zip",
+            "archive_url": "https://example/UnityBuild-v1.zip",
+        },
+    )
+
+    result = resume_pending_unity_update(base_dir=str(base))
+
+    assert not result.ok
+    assert "Unsafe Unity recovery target" in result.error
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_unity_recovery_refuses_unrecognized_backup(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    target = tmp_path / "NeuroMita-Unity"
+    backup = tmp_path / ".NeuroMita-Unity.unity.backup"
+    backup.mkdir()
+    sentinel = backup / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    atomic_write_json(
+        base / "_update_state" / "unity" / "operation.json",
+        {
+            "schema": 1,
+            "component": "unity",
+            "target": str(target),
+            "stage": str(tmp_path / ".NeuroMita-Unity.unity.stage"),
+            "backup": str(backup),
+            "phase": "target_backed_up",
+            "authorized": True,
+            "version": "v1",
+            "archive_name": "UnityBuild-v1.zip",
+            "archive_url": "https://example/UnityBuild-v1.zip",
+        },
+    )
+
+    result = resume_pending_unity_update(base_dir=str(base))
+
+    assert not result.ok
+    assert "Unsafe Unity recovery target" in result.error
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not target.exists()
+
+
 def test_unity_install_activates_only_a_verified_staging_tree(tmp_path: Path) -> None:
     target = tmp_path / "NeuroMita-Unity"
     target.mkdir()
+    (target / "Unity.exe").write_bytes(b"old-binary")
     (target / "old.txt").write_text("old", encoding="utf-8")
     asset = _unity_asset(
         tmp_path,
@@ -284,7 +655,7 @@ def test_python_apply_resumes_from_verified_stage_without_redownload(tmp_path: P
     base.mkdir()
     (base / "payload.txt").write_text("old", encoding="utf-8")
     staging = _python_staging_path(base)
-    staging.mkdir()
+    staging.mkdir(parents=True)
     (staging / "payload.txt").write_text("new", encoding="utf-8")
     archive_hash = "b" * 64
     manifest = build_install_manifest(
@@ -325,7 +696,155 @@ def test_python_apply_resumes_from_verified_stage_without_redownload(tmp_path: P
     assert (base / "payload.txt").read_text(encoding="utf-8") == "new"
     assert not staging.exists()
     assert not _python_stage_marker(staging).exists()
-    assert read_json(_python_journal_path(base))["phase"] == "completed"
+    assert not _python_journal_path(base).exists()
+    assert not _python_workspace(base).exists()
+
+
+def _write_zipapp(path: Path, marker: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as output:
+        output.writestr("__main__.py", f"MARKER = {marker!r}\n")
+        output.writestr("package/data.txt", marker)
+
+
+def test_python_zipapp_is_staged_without_overwriting_running_archive(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    active = base / "NeuroMita.pyz"
+    _write_zipapp(active, "old")
+    old_bytes = active.read_bytes()
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_zipapp(source / "NeuroMita.pyz", "new")
+    (source / "payload.txt").write_text("new-payload", encoding="utf-8")
+    archive = tmp_path / "PythonBuild-v2.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for file in source.rglob("*"):
+            if file.is_file():
+                output.write(file, file.relative_to(source).as_posix())
+
+    deferred = _install_full_archive(
+        archive,
+        base,
+        None,
+        lambda *_args: None,
+        mode="diff",
+        archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+    )
+
+    assert active.read_bytes() == old_bytes
+    assert (base / "payload.txt").read_text(encoding="utf-8") == "new-payload"
+    assert deferred["NeuroMita.pyz"] == str(pending_zipapp_path(base))
+    assert pending_zipapp_path(base).is_file()
+    assert activation_marker_path(base).is_file()
+    with zipfile.ZipFile(pending_zipapp_path(base)) as staged:
+        assert "new" in staged.read("__main__.py").decode("utf-8")
+
+
+def test_pending_zipapp_activation_is_confirmed_after_launcher_promotion(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    active = base / "NeuroMita.pyz"
+    pending = pending_zipapp_path(base)
+    _write_zipapp(active, "old")
+    _write_zipapp(pending, "new")
+    pending_hash = hashlib.sha256(pending.read_bytes()).hexdigest()
+    activation_marker_path(base).parent.mkdir(parents=True, exist_ok=True)
+    activation_marker_path(base).write_text("{}", encoding="utf-8")
+
+    atomic_write_json(
+        _python_journal_path(base),
+        {
+            "schema": 1,
+            "component": "python",
+            "target": str(base),
+            "phase": "waiting_for_activation",
+            "version": "v2",
+            "archive_name": "PythonBuild-v2.zip",
+            "archive_url": "https://example/PythonBuild-v2.zip",
+            "archive_sha256": "a" * 64,
+            "pending_zipapp": str(pending),
+            "pending_zipapp_sha256": pending_hash,
+            "staging": str(_python_staging_path(base)),
+        },
+    )
+
+    waiting = resume_pending_python_update(base_dir=str(base))
+    assert waiting.ok
+    assert waiting.status == "waiting_for_activation"
+    assert waiting.restart_required
+
+    os.replace(pending, active)
+    activation_marker_path(base).unlink(missing_ok=True)
+
+    activated = resume_pending_python_update(base_dir=str(base))
+    assert activated.ok and activated.recovered
+    assert activated.status == "activated"
+    assert not activated.changed
+    assert not _python_journal_path(base).exists()
+    with zipfile.ZipFile(active) as archive:
+        assert "new" in archive.read("__main__.py").decode("utf-8")
+
+
+def test_corrupt_zipapp_is_rejected_before_active_archive_is_touched(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    active = base / "NeuroMita.pyz"
+    _write_zipapp(active, "old")
+    old_bytes = active.read_bytes()
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "NeuroMita.pyz").write_bytes(b"not-a-zipapp")
+    archive = tmp_path / "PythonBuild-v2.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.write(source / "NeuroMita.pyz", "NeuroMita.pyz")
+
+    with pytest.raises(RuntimeError, match="valid ZIP application"):
+        _install_full_archive(
+            archive,
+            base,
+            None,
+            lambda *_args: None,
+            mode="diff",
+            archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        )
+
+    assert active.read_bytes() == old_bytes
+    assert not pending_zipapp_path(base).exists()
+
+
+def test_failed_overlay_discards_staged_zipapp_activation(tmp_path: Path) -> None:
+    base = tmp_path / "NeuroMita"
+    base.mkdir()
+    active = base / "NeuroMita.pyz"
+    _write_zipapp(active, "old")
+    old_bytes = active.read_bytes()
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _write_zipapp(source / "NeuroMita.pyz", "new")
+    (source / "payload.txt").write_text("new payload", encoding="utf-8")
+    archive = tmp_path / "PythonBuild-v2.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.write(source / "NeuroMita.pyz", "NeuroMita.pyz")
+        output.write(source / "payload.txt", "payload.txt")
+
+    with patch("updater._overlay_dir", side_effect=RuntimeError("overlay failed")):
+        with pytest.raises(RuntimeError, match="overlay failed"):
+            _install_full_archive(
+                archive,
+                base,
+                None,
+                lambda *_args: None,
+                mode="diff",
+                archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+            )
+
+    assert active.read_bytes() == old_bytes
+    assert not pending_zipapp_path(base).exists()
+    assert not activation_marker_path(base).exists()
 
 
 def test_locked_python_update_waits_for_explicit_detached_handoff(
@@ -336,7 +855,7 @@ def test_locked_python_update_waits_for_explicit_detached_handoff(
     base.mkdir()
     (base / "Launcher.exe").write_bytes(b"old")
     staging = _python_staging_path(base)
-    staging.mkdir()
+    staging.mkdir(parents=True)
     (staging / "Launcher.exe").write_bytes(b"new")
     archive_hash = "c" * 64
     manifest = build_install_manifest(

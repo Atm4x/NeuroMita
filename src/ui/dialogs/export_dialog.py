@@ -3,6 +3,7 @@
 ExportDialog — диалог экспорта данных для дообучения.
 """
 from __future__ import annotations
+from core.error_utils import format_exception
 
 from datetime import datetime, timezone
 from typing import List
@@ -93,8 +94,8 @@ class ExportDialog(QDialog):
 
         self._rating_combo = QComboBox()
         self._rating_combo.addItem(tr("Все записи", "All records"), None)
-        self._rating_combo.addItem(tr("Без отрицательных (👍 и без оценки)", "No negatives (👍 and unrated)"), 0)
-        self._rating_combo.addItem(tr("Только 👍 положительные", "Only 👍 positive"), 1)
+        self._rating_combo.addItem(tr("Без отрицательных (положительные и без оценки)", "No negatives (positive and unrated)"), 0)
+        self._rating_combo.addItem(tr("Только положительные", "Only positive"), 1)
         self._rating_combo.currentIndexChanged.connect(self._update_count)
         self._rating_combo.setMinimumWidth(280)
         rating_layout.addWidget(self._rating_combo)
@@ -164,7 +165,7 @@ class ExportDialog(QDialog):
                 item.setCheckState(Qt.CheckState.Unchecked)
                 self._char_list.addItem(item)
         except Exception as e:
-            logger.error(f"ExportDialog populate_characters: {e}")
+            logger.error(f"ExportDialog populate_characters: {format_exception(e)}")
 
     # ── Filters ───────────────────────────────────────────────────────────────
 
@@ -207,7 +208,7 @@ class ExportDialog(QDialog):
             self._count_label.setText(tr("Записей подходит: ", "Records matched: ") + str(n))
             self._export_btn.setEnabled(n > 0)
         except Exception as e:
-            self._count_label.setText(f"Error: {e}")
+            self._count_label.setText(f"Error: {format_exception(e)}")
 
     # ── Export ────────────────────────────────────────────────────────────────
 
@@ -255,9 +256,9 @@ class ExportDialog(QDialog):
             self.accept()
 
         except Exception as e:
-            logger.error(f"ExportDialog export error: {e}", exc_info=True)
+            logger.error(f"ExportDialog export error: {format_exception(e)}", exc_info=True)
             QMessageBox.critical(
                 self,
                 tr("Ошибка", "Error"),
-                str(e)
+                format_exception(e)
             )

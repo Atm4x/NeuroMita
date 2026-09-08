@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import atexit
 import json
@@ -13,6 +14,7 @@ from core.app_paths import settings_path
 from core.settings_registry import SettingChange, SettingsRegistry, SettingsSubscription
 from core.task_supervisor import task_supervisor
 from main_logger import logger
+from services.update_contour import migrate_update_contour, target_for_contour
 
 
 class SettingsManager:
@@ -38,6 +40,7 @@ class SettingsManager:
         self._stopped = False
 
         loaded = self._read_settings_file()
+        contour_migration = migrate_update_contour(loaded, config_path=self.config_path)
         self.registry = SettingsRegistry(loaded, on_mutated=self._schedule_save)
         self.settings = self.registry
         SettingsManager.instance = self
@@ -46,6 +49,16 @@ class SettingsManager:
             self,
             "settings-saver",
             self._save_worker,
+        )
+        if contour_migration.changed:
+            self._schedule_save()
+        target = target_for_contour(loaded.get("UPDATE_CONTOUR"))
+        logger.info(
+            "Update contour: %s (%s, %s); source=%s",
+            target.contour,
+            target.repo,
+            target.channel,
+            contour_migration.reason,
         )
         atexit.register(self._stop_writer)
 
@@ -131,11 +144,11 @@ class SettingsManager:
             logger.info("Настройки загружены")
             return loaded if isinstance(loaded, dict) else {}
         except json.JSONDecodeError as exc:
-            logger.error(f"Не удалось загрузить настройки: {exc}")
+            logger.error(f"Не удалось загрузить настройки: {format_exception(exc)}")
             self._backup_corrupt_settings_file()
             return {}
         except OSError as exc:
-            logger.error(f"Не удалось загрузить настройки: {exc}")
+            logger.error(f"Не удалось загрузить настройки: {format_exception(exc)}")
             return {}
 
     def _backup_corrupt_settings_file(self) -> None:
@@ -146,10 +159,14 @@ class SettingsManager:
             shutil.copy2(self.config_path, backup_path)
             logger.warning(f"Повреждённые настройки сохранены в: {backup_path}")
         except OSError as exc:
-            logger.error(f"Не удалось сохранить резервную копию настроек: {exc}")
+            logger.error(f"Не удалось сохранить резервную копию настроек: {format_exception(exc)}")
 
     def load_settings(self) -> None:
-        self.registry.replace_all(self._read_settings_file(), notify=False)
+        loaded = self._read_settings_file()
+        migration = migrate_update_contour(loaded, config_path=self.config_path)
+        self.registry.replace_all(loaded, notify=False)
+        if migration.changed:
+            self._schedule_save()
 
     def _snapshot(self) -> dict[str, Any]:
         return self.registry.snapshot()
@@ -205,7 +222,7 @@ class SettingsManager:
             try:
                 self._write_file()
             except Exception as exc:
-                logger.error(f"Ошибка сохранения настроек: {exc}")
+                logger.error(f"Ошибка сохранения настроек: {format_exception(exc)}")
 
     def close(self) -> None:
         self._stop_writer()
@@ -231,6 +248,6 @@ class SettingsManager:
         try:
             self._write_file()
         except Exception as exc:
-            logger.error(f"Ошибка финального сохранения настроек: {exc}")
+            logger.error(f"Ошибка финального сохранения настроек: {format_exception(exc)}")
         self.registry.close()
         task_supervisor().cancel_owner(self, timeout=0.5)

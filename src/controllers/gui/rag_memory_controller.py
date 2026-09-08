@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 import threading
 
@@ -458,7 +459,7 @@ def _run_ttl_cleanup(gui) -> None:
         QMessageBox.critical(
             gui,
             _("Ошибка TTL", "TTL Error"),
-            str(e),
+            format_exception(e),
         )
 
 
@@ -482,7 +483,7 @@ def _run_graph_ttl_cleanup(gui) -> None:
                f"Removed: {counts['relations']} relations, {counts['entities']} entities."),
         )
     except Exception as e:
-        QMessageBox.critical(gui, _("Ошибка TTL графа", "Graph TTL Error"), str(e))
+        QMessageBox.critical(gui, _("Ошибка TTL графа", "Graph TTL Error"), format_exception(e))
 
 
 def _run_history_ttl_cleanup(gui) -> None:
@@ -503,7 +504,7 @@ def _run_history_ttl_cleanup(gui) -> None:
                f"Archived {count} messages (is_active=0)."),
         )
     except Exception as e:
-        QMessageBox.critical(gui, _("Ошибка TTL истории", "History TTL Error"), str(e))
+        QMessageBox.critical(gui, _("Ошибка TTL истории", "History TTL Error"), format_exception(e))
 
 
 def _run_entity_gc(gui, dry_run: bool = False) -> None:
@@ -1035,12 +1036,13 @@ def _build_embed_config(self, embed_provider_view_model, rag_install_view_model)
             ),
         },
 
-        {'type': 'button_group', 'buttons': [
-            {'label': _('Индекс нового', 'Index new'),
-             'command': lambda: _reindex_embeddings(self)},
-            {'label': _('Обновить статус', 'Refresh status'),
-             'command': lambda: _refresh_rag_install_status(rag_install_view_model)},
-        ]},
+        {
+            'type': 'widget',
+            'factory': lambda gui: _build_embedding_index_actions(
+                gui,
+                rag_install_view_model,
+            ),
+        },
 
         {'type': 'end'},
     ]
@@ -1049,6 +1051,21 @@ def _build_embed_config(self, embed_provider_view_model, rag_install_view_model)
 def _build_embed_provider_widget(gui, view_model):
     from ui.settings.embed_provider_settings import build_embed_provider_widget
     return build_embed_provider_widget(gui, view_model)
+
+
+def _build_embedding_index_actions(gui, rag_install_view_model):
+    from controllers.gui.character_settings_logic import (
+        active_reindex_all_dialog,
+        run_reindexing_all,
+    )
+    from ui.settings.embedding_index_actions import EmbeddingIndexActionsWidget
+
+    return EmbeddingIndexActionsWidget(
+        gui,
+        lambda: _refresh_rag_install_status(rag_install_view_model),
+        lambda: run_reindexing_all(gui),
+        active_reindex_all_dialog,
+    )
 
 
 def _build_graph_config(self, hc_provider_names) -> list:
@@ -1238,7 +1255,7 @@ def _run_memory_dedup(gui, dry_run: bool = True) -> None:
         QMessageBox.critical(
             gui,
             _("Ошибка дедупликации", "Deduplication error"),
-            str(e),
+            format_exception(e),
         )
 
 

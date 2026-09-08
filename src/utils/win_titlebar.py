@@ -15,6 +15,7 @@ below works on Windows 10 1809+ as well, so it's the portable option.
 """
 
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import sys
 
@@ -60,7 +61,7 @@ def apply_dark_titlebar(widget, enabled: bool = True) -> bool:
                 return True
         return False
     except Exception as exc:  # pragma: no cover - platform dependent
-        logger.debug(f"apply_dark_titlebar skipped: {exc}")
+        logger.debug(f"apply_dark_titlebar skipped: {format_exception(exc)}")
         return False
 
 
@@ -85,7 +86,7 @@ def install_dark_titlebar_sync(app, enabled: bool = True):
         class _DarkTitlebarFilter(QObject):
             def eventFilter(self, obj, event):
                 if isinstance(obj, QWidget) and obj.isWindow():
-                    if event.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange):
+                    if event.type() == QEvent.Type.Show:
                         apply_dark_titlebar(obj, enabled)
                 return False
 
@@ -101,5 +102,5 @@ def install_dark_titlebar_sync(app, enabled: bool = True):
                 pass
         return filt
     except Exception as exc:  # pragma: no cover - GUI dependent
-        logger.debug(f"install_dark_titlebar_sync skipped: {exc}")
+        logger.debug(f"install_dark_titlebar_sync skipped: {format_exception(exc)}")
         return None

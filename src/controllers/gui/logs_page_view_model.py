@@ -1,10 +1,11 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import os
-from pathlib import Path
 from typing import Any
 
 from controllers.gui.intent_view_model import IntentViewModel
+from core.app_paths import logs_dir, runtime_log_path
 from ui.pages.logs_presentation import (
     LogsPageState,
     LogsShowError,
@@ -41,7 +42,7 @@ class LogsPageViewModel(IntentViewModel[LogsPageState]):
 
     @staticmethod
     def _read_tail() -> str:
-        path = Path("NeuroMitaLogs.log")
+        path = runtime_log_path()
         if not path.exists():
             return _("Файл логов пока не создан.", "Log file does not exist yet.")
         with path.open("rb") as handle:
@@ -62,20 +63,19 @@ class LogsPageViewModel(IntentViewModel[LogsPageState]):
                 text=_(
                     "Не удалось прочитать лог: {err}",
                     "Failed to read log: {err}",
-                ).format(err=exc),
+                ).format(err=format_exception(exc)),
                 loading=False,
             )
         )
 
     def _open_folder(self) -> None:
-        path = Path("NeuroMitaLogs.log")
-        target = path.resolve().parent if path.exists() else Path.cwd()
+        target = logs_dir(create=True)
         try:
             os.startfile(str(target))  # type: ignore[attr-defined]  # Windows-only
         except Exception as exc:
             self.emit_effect(
                 LogsShowError(
                     _("Ошибка", "Error"),
-                    str(exc),
+                    format_exception(exc),
                 )
             )

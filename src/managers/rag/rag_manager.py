@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import logging
 import math
 import sqlite3
@@ -432,7 +433,7 @@ class RAGManager:
                 return None
             return vector
         except Exception as e:
-            logger.warning(f"RAGManager: не удалось декодировать embedding BLOB: {e}")
+            logger.warning(f"RAGManager: не удалось декодировать embedding BLOB: {format_exception(e)}")
             return None
 
     def _array_to_blob(self, array: np.ndarray) -> bytes:
@@ -459,6 +460,17 @@ class RAGManager:
             allow_when_rag_disabled=allow_when_rag_disabled,
             priority=priority,
         )
+
+    def _get_reindex_batch_size(self) -> int:
+        """Use the active embedding preset batch size during bulk indexing."""
+        try:
+            from handlers.embedding_presets import resolve_full_config
+
+            configured = (resolve_full_config().get("extra") or {}).get("batch_size")
+            batch_size = int(configured or self._get_int_setting("RAG_EMBED_BATCH_SIZE", 16))
+        except Exception:
+            batch_size = self._get_int_setting("RAG_EMBED_BATCH_SIZE", 16)
+        return batch_size if batch_size > 0 else 16
 
     # ------------------------------------------------------------------ #
     #  Sentence-level indexing helpers                                    #
@@ -546,7 +558,7 @@ class RAGManager:
             )
             hist_rows = cursor.fetchall() or []
         except Exception as e:
-            logger.warning(f"RAGManager: sentence index query failed (history): {e}")
+            logger.warning(f"RAGManager: sentence index query failed (history): {format_exception(e)}")
             hist_rows = []
 
         for row_id, content in hist_rows:
@@ -577,7 +589,7 @@ class RAGManager:
             )
             mem_rows = cursor.fetchall() or []
         except Exception as e:
-            logger.warning(f"RAGManager: sentence index query failed (memories): {e}")
+            logger.warning(f"RAGManager: sentence index query failed (memories): {format_exception(e)}")
             mem_rows = []
 
         for eternal_id, content in mem_rows:
@@ -623,7 +635,7 @@ class RAGManager:
                 logger.info(f"RAGManager: embedded {count} graph entities (model={model})")
             return count
         except Exception as e:
-            logger.warning(f"RAGManager: index_graph_entity_embeddings failed: {e}")
+            logger.warning(f"RAGManager: index_graph_entity_embeddings failed: {format_exception(e)}")
             return 0
 
     def update_memory_embedding(self, eternal_id: int, text: str):
@@ -631,7 +643,7 @@ class RAGManager:
         try:
             vector = self._get_embedding(text)
         except Exception as e:
-            logger.warning(f"RAGManager: embedding generation failed (memory) - ignored: {e}", exc_info=True)
+            logger.warning(f"RAGManager: embedding generation failed (memory) - ignored: {format_exception(e)}", exc_info=True)
             return
 
         if vector is None:
@@ -661,9 +673,9 @@ class RAGManager:
                 self._index_sentences(conn, "memories", eternal_id, text, model=model, min_len=min_len)
             conn.commit()
         except sqlite3.OperationalError as e:
-            logger.warning(f"RAGManager: sqlite operational error while updating memory embedding (ignored): {e}")
+            logger.warning(f"RAGManager: sqlite operational error while updating memory embedding (ignored): {format_exception(e)}")
         except Exception as e:
-            logger.warning(f"RAGManager: failed to update memory embedding (ignored): {e}", exc_info=True)
+            logger.warning(f"RAGManager: failed to update memory embedding (ignored): {format_exception(e)}", exc_info=True)
         finally:
             try:
                 if conn:
@@ -671,12 +683,102 @@ class RAGManager:
             except Exception:
                 pass
 
+    def update_history_embeddings(
+        self,
+        items: List[Tuple[int, str]],
+        *,
+        priority: str = "bulk",
+    ) -> int:
+        """Generate and persist history embeddings in a single batch."""
+        normalized: List[Tuple[int, str]] = []
+        for msg_id, text in items or []:
+            clean_text = str(text or "").strip()
+            if msg_id and clean_text:
+                normalized.append((int(msg_id), clean_text))
+        if not normalized:
+            return 0
+
+        try:
+            vectors = list(
+                self._get_embeddings(
+                    [text for _msg_id, text in normalized],
+                    priority=priority,
+                )
+                or []
+            )
+        except Exception as e:
+            logger.warning(
+                f"RAGManager: batch embedding generation failed (history) - ignored: {format_exception(e)}",
+                exc_info=True,
+            )
+            return 0
+
+        if len(vectors) != len(normalized):
+            logger.warning(
+                "RAGManager: history batch embedding count mismatch: texts=%s, vectors=%s",
+                len(normalized),
+                len(vectors),
+            )
+            vectors = (vectors + [None] * len(normalized))[:len(normalized)]
+
+        model = self._current_model_name()
+        configured_dims = self._current_dimensions()
+        sentence_level = bool(SettingsManager.get("RAG_SENTENCE_LEVEL", False))
+        min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
+        conn = None
+        stored = 0
+        try:
+            conn = self.db.get_connection()
+            for (msg_id, text), vector in zip(normalized, vectors):
+                if vector is None:
+                    continue
+                blob = self._array_to_blob(vector)
+                dims = configured_dims or int(vector.shape[0])
+                conn.execute(
+                    "UPDATE history SET embedding = ? WHERE id = ?",
+                    (blob, msg_id),
+                )
+                conn.execute(
+                    """INSERT OR REPLACE INTO embeddings
+                       (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
+                       VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
+                    (msg_id, self.character_id, model, dims, blob),
+                )
+                if sentence_level:
+                    self._index_sentences(
+                        conn,
+                        "history",
+                        msg_id,
+                        text,
+                        model=model,
+                        min_len=min_len,
+                    )
+                stored += 1
+            conn.commit()
+            return stored
+        except sqlite3.OperationalError as e:
+            logger.warning(
+                f"RAGManager: sqlite operational error while updating history embeddings (ignored): {format_exception(e)}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"RAGManager: failed to update history embeddings (ignored): {format_exception(e)}",
+                exc_info=True,
+            )
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+        return 0
+
     def update_history_embedding(self, msg_id: int, text: str):
         """Создает и сохраняет эмбеддинг для сообщения истории (без падений, RAG опционален)."""
         try:
             vector = self._get_embedding(text)
         except Exception as e:
-            logger.warning(f"RAGManager: embedding generation failed (history) - ignored: {e}", exc_info=True)
+            logger.warning(f"RAGManager: embedding generation failed (history) - ignored: {format_exception(e)}", exc_info=True)
             return
 
         if vector is None:
@@ -706,9 +808,9 @@ class RAGManager:
                 self._index_sentences(conn, "history", msg_id, text, model=model, min_len=min_len)
             conn.commit()
         except sqlite3.OperationalError as e:
-            logger.warning(f"RAGManager: sqlite operational error while updating history embedding (ignored): {e}")
+            logger.warning(f"RAGManager: sqlite operational error while updating history embedding (ignored): {format_exception(e)}")
         except Exception as e:
-            logger.warning(f"RAGManager: failed to update history embedding (ignored): {e}", exc_info=True)
+            logger.warning(f"RAGManager: failed to update history embedding (ignored): {format_exception(e)}", exc_info=True)
         finally:
             try:
                 if conn:
@@ -828,7 +930,7 @@ class RAGManager:
                 from managers.rag.pipeline.retrievers.graph import GraphRetriever
                 retrievers.append(GraphRetriever(graph_store=gs, cfg=cfg))
             except Exception as e:
-                logger.debug(f"[RAG][PIPE] GraphRetriever init failed (ignored): {e}", exc_info=True)
+                logger.debug(f"[RAG][PIPE] GraphRetriever init failed (ignored): {format_exception(e)}", exc_info=True)
 
         # Fast path: vector_only mode -> don't even run other retrievers
         if cfg.combine_mode == "vector_only":
@@ -839,7 +941,7 @@ class RAGManager:
             try:
                 buckets[r.name] = r.retrieve(qs)
             except Exception as e:
-                logger.debug(f"[RAG][PIPE] retriever \'{r.name}\' failed (ignored): {e}", exc_info=True)
+                logger.debug(f"[RAG][PIPE] retriever \'{r.name}\' failed (ignored): {format_exception(e)}", exc_info=True)
                 buckets[r.name] = []
 
         # --- choose combiner ---
@@ -878,7 +980,7 @@ class RAGManager:
             try:
                 enr.enrich(qs, cands)
             except Exception as e:
-                logger.debug(f"[RAG][PIPE] enricher \'{enr.name}\' failed (ignored): {e}", exc_info=True)
+                logger.debug(f"[RAG][PIPE] enricher \'{enr.name}\' failed (ignored): {format_exception(e)}", exc_info=True)
 
         # --- final rerank ---
         reranker = LinearReranker(cfg=cfg)
@@ -910,7 +1012,7 @@ class RAGManager:
                 self._last_query_timing["rerank_ms"] = (_time.perf_counter() - _t_ce0) * 1000
                 cands.sort(key=lambda c: float(c.score or 0.0), reverse=True)
             except Exception as _ce_err:
-                logger.debug(f"[RAG][cross_encoder] skipped: {_ce_err}", exc_info=True)
+                logger.debug(f"[RAG][cross_encoder] skipped: {format_exception(_ce_err)}", exc_info=True)
 
         if cfg.detailed_logs:
             RagDebugLogger(rag=self, cfg=cfg).log(qs, buckets, cands)
@@ -992,7 +1094,7 @@ class RAGManager:
                         )
                     conn.commit()
             except Exception as e:
-                logger.debug(f"[RAG] access tracking failed: {e}")
+                logger.debug(f"[RAG] access tracking failed: {format_exception(e)}")
 
         try:
             self._get_access_executor().submit(_do_track)
@@ -1040,9 +1142,7 @@ class RAGManager:
             if total == 0:
                 return 0
 
-            batch_size = self._get_int_setting("RAG_EMBED_BATCH_SIZE", 16)
-            if batch_size <= 0:
-                batch_size = 16
+            batch_size = self._get_reindex_batch_size()
 
             processed = 0
             updated_count = 0
@@ -1149,7 +1249,7 @@ class RAGManager:
         except TaskCancelledError:
             raise
         except Exception as e:
-            logger.error(f"Error during re-indexing: {e}", exc_info=True)
+            logger.error(f"Error during re-indexing: {format_exception(e)}", exc_info=True)
             return 0
         finally:
             try:
@@ -1191,9 +1291,7 @@ class RAGManager:
             if total == 0:
                 return 0
 
-            batch_size = self._get_int_setting("RAG_EMBED_BATCH_SIZE", 16)
-            if batch_size <= 0:
-                batch_size = 16
+            batch_size = self._get_reindex_batch_size()
 
             processed = 0
             updated_count = 0
@@ -1287,7 +1385,7 @@ class RAGManager:
         except TaskCancelledError:
             raise
         except Exception as e:
-            logger.error(f"Error during full re-indexing: {e}", exc_info=True)
+            logger.error(f"Error during full re-indexing: {format_exception(e)}", exc_info=True)
             return 0
         finally:
             try:

@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 import time
 import threading
@@ -31,7 +32,7 @@ class VoiceoverGuiController(BaseController):
         self._last_selected_model_id: str | None = None
         self._model_id_to_name: dict[str, str] = {}
 
-        self._autoload_done = False
+        self._startup_preload_done = False
 
         self._tg_connected: bool | None = None
         self._tg_last_attempt_ts: float = 0.0
@@ -115,20 +116,28 @@ class VoiceoverGuiController(BaseController):
             local_voice.initialize_model(model_id)
         except Exception as exc:
             logger.error(
-                f"Failed to schedule local voice initialization for '{model_id}': {exc}",
+                f"Failed to schedule local voice initialization for '{model_id}': {format_exception(exc)}",
                 exc_info=True,
             )
             self.event_bus.emit(
                 Events.GUI.SHOW_ERROR_MESSAGE,
-                {"title": _("Ошибка", "Error"), "message": str(exc)},
+                {"title": _("Ошибка", "Error"), "message": format_exception(exc)},
             )
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
-    def autoload_last_model_on_startup(self):
-        if self._autoload_done:
+    def preload_global_status_on_startup(self):
+        if self._startup_preload_done:
             return
-        self._autoload_done = True
-        self._ui(lambda: self._sync_everything(allow_autoload=True))
+        self._startup_preload_done = True
+        allow_autoload = bool(
+            self._effective_use_voice()
+            and self._effective_method() == "Local"
+            and _as_bool(self._get_setting("LOCAL_VOICE_LOAD_LAST", False))
+        )
+        self._ui(lambda: self._sync_everything(allow_autoload=allow_autoload))
+
+    def autoload_last_model_on_startup(self):
+        self.preload_global_status_on_startup()
 
     def _on_refresh(self, _event: Event):
         self._ui(lambda: self._sync_everything(allow_autoload=False))
@@ -161,10 +170,17 @@ class VoiceoverGuiController(BaseController):
             if key == "VOICE_LANGUAGE":
                 lang = str(value or self._get_setting("VOICE_LANGUAGE", "ru") or "ru")
                 self.event_bus.emit(Events.Audio.CHANGE_VOICE_LANGUAGE, {"language": lang})
-            # При включении TTS автозагрузка должна сработать сразу, а не только
-            # при запуске приложения. Остальные изменения настроек лишь
-            # обновляют состояние UI и не должны повторно запускать модель.
-            allow_autoload = key == "USE_VOICEOVER" and _as_bool(value)
+            autoload_trigger = key in {
+                "USE_VOICEOVER",
+                "VOICEOVER_METHOD",
+                "LOCAL_VOICE_LOAD_LAST",
+            }
+            allow_autoload = bool(
+                autoload_trigger
+                and self._effective_use_voice()
+                and self._effective_method() == "Local"
+                and _as_bool(self._get_setting("LOCAL_VOICE_LOAD_LAST", False))
+            )
             self._sync_everything(allow_autoload=allow_autoload)
             self.event_bus.emit(Events.GUI.UPDATE_STATUS_COLORS)
 
@@ -227,7 +243,7 @@ class VoiceoverGuiController(BaseController):
                 self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
                     "title": _("Ошибка", "Error"),
                     "message": _("Не удалось перезапустить нейро-ядро озвучки.", "Failed to restart voice AI engine.")
-                            + (f"\n\n{err}" if err else "")
+                            + (f"\n\n{format_exception(err)}" if err else "")
                 })
 
         self._ui(apply)
@@ -373,7 +389,11 @@ class VoiceoverGuiController(BaseController):
             installed_ids = self._canonical_installed_model_ids()
 
             installed = model_id in installed_ids
-            initialized = bool(installed and local_voice and local_voice.check_initialized(model_id))
+            initialized = bool(
+                installed
+                and local_voice
+                and local_voice.check_initialized(model_id, probe_worker=True)
+            )
             selected = bool(local_voice.select_model(model_id)) if initialized and local_voice else None
 
             return {
@@ -652,6 +672,8 @@ class VoiceoverGuiController(BaseController):
 
     def _maybe_autoload_local_model_from_snapshot(self, state: dict):
         if not self._backend_enabled():
+            return
+        if not self._effective_use_voice():
             return
         # При озвучке через Telegram локальная модель не нужна — грузить её
         # (несколько ГБ и минуты) только потому, что включили озвучку, нельзя.
@@ -1155,7 +1177,7 @@ class VoiceoverGuiController(BaseController):
                         {"window_id": "ai_hub", "payload": {"category": "voices"}},
                     )
                 except Exception as exc:
-                    logger.error(f"Failed to open AI Hub from models error: {exc}")
+                    logger.error(f"Failed to open AI Hub from models error: {format_exception(exc)}")
             return False
 
         self._loading_model_id = model_id
@@ -1223,7 +1245,7 @@ class VoiceoverGuiController(BaseController):
         try:
             return dict(catalog.get_row(f"tts:{model_id}", include_status=False) or {})
         except Exception as exc:
-            logger.warning(f"Cannot evaluate compatibility for voice model '{model_id}': {exc}")
+            logger.warning(f"Cannot evaluate compatibility for voice model '{model_id}': {format_exception(exc)}")
             return {}
 
     def _model_compatibility(self, model_id: str) -> dict[str, Any]:

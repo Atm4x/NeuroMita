@@ -41,12 +41,20 @@ def setup_model_interaction_controls(
                       'The model "thinks aloud" before filling other fields — improves quality for local models. '
                       'Disable if using native thinking or to save tokens.')},
         {'label': _('Режим размышлений (enable_thinking)', 'Enable thinking mode'), 'key': 'ENABLE_THINKING',
-         'type': 'checkbutton',
-         'default_checkbutton': False,
+         'type': 'combobox',
+         'options': [
+             (_('Не определять', 'Do not specify'), ''),
+             (_('Нет', 'No'), False),
+             (_('Да', 'Yes'), True),
+         ],
+         'default': '',
+         'depends_on_value': True,
          'tooltip': _('Для моделей Qwen3 и аналогичных: включает thinking-режим. '
-                      'Выключите если модель кладёт ответ в reasoning_content вместо content.',
+                      'Выберите «Не определять», чтобы не передавать параметр провайдеру; '
+                      '«Нет» и «Да» задают явное значение.',
                       'For Qwen3 and similar models: enables thinking mode. '
-                      'Disable if the model puts the response into reasoning_content instead of content.')},
+                      'Choose "Do not specify" to leave the parameter out of the provider request; '
+                      '"No" and "Yes" set an explicit value.')},
         {'label': _('Глубина размышлений', 'Reasoning effort'),
          'key': 'MODEL_REASONING_EFFORT', 'type': 'combobox',
          'options': ['low', 'medium', 'high'], 'default': 'medium',
@@ -230,9 +238,9 @@ def setup_model_interaction_controls(
              'system — system role only (may be ignored by Gemini).\n'
              'user — user role only with [SYSTEM INFO] tag.')},
 
-        {'label': _('GOOGLE API KEY'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
+        {'label': _('GOOGLE API KEY', 'GOOGLE API KEY'), 'key': 'GOOGLE_API_KEY', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
-        {'label': _('GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
+        {'label': _('GOOGLE CSE ID', 'GOOGLE CSE ID'), 'key': 'GOOGLE_CSE_ID', 'type': 'entry',
          'default': "", 'hide': bool(self.settings.get("HIDE_PRIVATE"))},
 
         {'type': 'end'},

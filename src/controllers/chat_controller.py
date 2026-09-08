@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 # src/controllers/chat_controller.py
 import os
 import tempfile
@@ -9,18 +10,27 @@ from typing import Any
 
 from main_logger import logger
 from handlers.llm_providers.base import StreamChannel
+from core.cancellation import CancellationToken, OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
+from domain.conversation_message_ids import ConversationMessageIds
 from core.executors import Pools, PoolSaturated, executors
 from core.services import use
 from managers.task_manager import TaskStatus
 from core.request_policy import RequestPolicy, resolve_policy
+from core.performance_trace import get_trace, perf_mark, perf_mark_once, performance_traces
 from services.contracts import (
     CharacterRegistry,
     ChatGenerationRequest,
     ChatGenerationResult,
     GenerationService,
+    GenerationActivityService,
+    PlayerMessageSource,
+    parse_dialogue_turn_context,
+    parse_player_message_source,
+    DialogueRuntimeSource,
 )
 from services.llm_stream import LLMStreamEvent, LLMStreamEventType
+from services.dialogue_runtime_state import get_dialogue_runtime_state_service
 from services.stream_presentation import TextDeltaCoalescer
 from schemas.structured_response import RESPONSE_PROTOCOL_VERSION
 
@@ -191,15 +201,18 @@ class StructuredJsonStreamFilter:
         return out
 
 
-class ChatController:
+class ChatController(GenerationActivityService):
     def __init__(self, settings):
         self.settings = settings
         self.event_bus = get_event_bus()
+        self.dialogue_runtime_state = get_dialogue_runtime_state_service()
 
-        # Генераций может идти несколько (игра + чат + idle), поэтому счётчик,
-        # а не bool: одиночный флаг гасил статус после первой завершившейся.
+        # Реестр охватывает UI, игру и фоновые запросы, включая ожидающие очередь.
+        # Токен нужен не только для статуса, но и для отмены конкретного HTTP-стрима.
         self._inflight_lock = threading.Lock()
-        self._inflight = 0
+        self._active_generations: dict[str, CancellationToken] = {}
+        self._player_message_source_lock = threading.Lock()
+        self._last_player_message_source = PlayerMessageSource.NONE
 
         self.staged_images = []
         self._owned_staged_images = set()
@@ -211,18 +224,44 @@ class ChatController:
     @property
     def llm_processing(self) -> bool:
         with self._inflight_lock:
-            return self._inflight > 0
+            return bool(self._active_generations)
 
-    def _enter_generation(self) -> None:
+    def active_generation_count(self) -> int:
         with self._inflight_lock:
-            self._inflight += 1
+            return len(self._active_generations)
 
-    def _exit_generation(self) -> None:
+    def _register_generation(self, operation_id: str, token: CancellationToken) -> None:
         with self._inflight_lock:
-            self._inflight = max(0, self._inflight - 1)
+            self._active_generations[operation_id] = token
+            active_count = len(self._active_generations)
+        self._emit_generation_activity(active_count)
+
+    def _finish_generation(self, operation_id: str) -> None:
+        with self._inflight_lock:
+            self._active_generations.pop(operation_id, None)
+            active_count = len(self._active_generations)
+        self._emit_generation_activity(active_count)
+
+    def _emit_generation_activity(self, active_count: int) -> None:
+        self.event_bus.emit(
+            Events.Chat.GENERATION_ACTIVITY_CHANGED,
+            {"active_count": active_count, "generating": active_count > 0},
+        )
+
+    def _on_cancel_active_generations(self, event: Event) -> int:
+        with self._inflight_lock:
+            tokens = tuple(self._active_generations.values())
+        for token in tokens:
+            token.cancel("Cancelled by user")
+        return len(tokens)
 
     def _subscribe_to_events(self):
         self.event_bus.subscribe(Events.Chat.SEND_MESSAGE, self._on_send_message, weak=False)
+        self.event_bus.subscribe(
+            Events.Chat.CANCEL_ACTIVE_GENERATIONS,
+            self._on_cancel_active_generations,
+            weak=False,
+        )
         self.event_bus.subscribe("send_periodic_image_request", self._on_send_periodic_image_request, weak=False)
         self.event_bus.subscribe(Events.Chat.CLEAR_CHAT, self._on_clear_chat, weak=False)
 
@@ -247,6 +286,28 @@ class ChatController:
         if not isinstance(data, dict):
             return "Player"
         return str(data.get("sender") or data.get("from") or "Player")
+
+    def _resolve_player_message_source_transition(
+        self,
+        raw_source: object,
+    ) -> tuple[PlayerMessageSource, PlayerMessageSource]:
+        """Return (current, previous-if-changed) for an explicit Player turn.
+
+        Background events do not carry a source and therefore cannot move the
+        transport state. The first explicit source establishes the baseline
+        without producing a synthetic "changed" marker.
+        """
+        current = parse_player_message_source(raw_source)
+        if current is PlayerMessageSource.NONE:
+            return current, PlayerMessageSource.NONE
+
+        with self._player_message_source_lock:
+            previous = self._last_player_message_source
+            self._last_player_message_source = current
+
+        if previous is PlayerMessageSource.NONE or previous is current:
+            return current, PlayerMessageSource.NONE
+        return current, previous
 
     def _normalize_participants(self, value: Any) -> list[str]:
         if not value:
@@ -295,6 +356,14 @@ class ChatController:
         policy: dict | None = None,
         images_shown: bool = False,
         game_state: dict | None = None,
+        dialogue: Any = None,
+        dialogue_source: DialogueRuntimeSource | str | None = None,
+        player_message_source: PlayerMessageSource | str | None = None,
+        previous_player_message_source: PlayerMessageSource | str | None = None,
+        gm_instruction_override: str | None = None,
+        trace_id: str | None = None,
+        operation_id: str = "",
+        cancellation: CancellationToken | None = None,
     ):
         """Полный путь одного запроса. Выполняется в пуле GENERATION.
 
@@ -303,16 +372,41 @@ class ChatController:
         игры, telegram), а вызывающий поток шины стоял на fut.result(600).
         """
         eff_policy = None
+        dialogue = parse_dialogue_turn_context(dialogue)
+        player_message_source = parse_player_message_source(player_message_source)
+        previous_player_message_source = parse_player_message_source(previous_player_message_source)
+        runtime_source = dialogue_source or DialogueRuntimeSource.UNITY
+        if not isinstance(runtime_source, DialogueRuntimeSource):
+            try:
+                runtime_source = DialogueRuntimeSource(str(runtime_source).strip().lower())
+            except ValueError:
+                runtime_source = DialogueRuntimeSource.NONE
+        if dialogue is not None and dialogue.conversation_id:
+            self.dialogue_runtime_state.update_from_context(dialogue, runtime_source)
+        trace_status = "ok"
+        trace_error_stage = ""
+        trace_error_type = ""
+        voiceover_pending = False
+        perf_mark(trace_id, "generation.worker_started")
         stream_id = str(task_uid or req_id or f"stream:{uuid.uuid4().hex}")
         stream_started = False
         stream_finished = False
         stream_current_role = None
         presentation_lock = threading.RLock()
         stream_coalescer = None
-        self._enter_generation()
         try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
             effective_event_type = str(event_type or "chat")
-            eff_policy = RequestPolicy.from_dict(policy) if isinstance(policy, dict) else resolve_policy(model_event_type=effective_event_type)
+            normalized_event_type = effective_event_type.strip().lower()
+            if normalized_event_type in {"game_master_observe", "game_master_command"}:
+                eff_policy = resolve_policy(model_event_type=normalized_event_type)
+            else:
+                eff_policy = (
+                    RequestPolicy.from_dict(policy)
+                    if isinstance(policy, dict)
+                    else resolve_policy(model_event_type=effective_event_type)
+                )
 
             if task_uid:
                 self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
@@ -334,6 +428,7 @@ class ChatController:
                         "stream_id": stream_id,
                         "chunk": text,
                         "role": role,
+                        "character_id": character_id or "",
                     }, delivery=EventDelivery.ORDERED)
 
             stream_coalescer = TextDeltaCoalescer(append_stream_chunk) if is_streaming else None
@@ -365,6 +460,7 @@ class ChatController:
                 nonlocal stream_current_role, stream_started
                 if not text:
                     return
+                perf_mark_once(trace_id, "response.first_visible_text")
                 if stream_coalescer is None:
                     return
                 if stream_current_role != "assistant":
@@ -397,6 +493,7 @@ class ChatController:
                         _emit_visible_assistant(piece)
 
             def stream_event_handler(event: LLMStreamEvent):
+                perf_mark_once(trace_id, "response.first_stream_event", kind=str(getattr(event, "type", "unknown")))
                 if not eff_policy.echo_to_ui:
                     return
                 if event.type is LLMStreamEventType.REASONING_DELTA:
@@ -427,12 +524,13 @@ class ChatController:
                 image_data = prepared if prepared else None
 
             if system_input and eff_policy.echo_to_ui and image_source != "mita_camera":
+                system_message_id = ConversationMessageIds.system()
                 ch = self._get_character_ref(character_id)
                 if ch and hasattr(ch, "history_manager"):
                     ch.history_manager.append_message({
                         "role": "system",
                         "content": system_input,
-                        "message_id": f"sys:{uuid.uuid4().hex}",
+                        "message_id": system_message_id,
                         "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
@@ -441,6 +539,7 @@ class ChatController:
                     "is_initial": False,
                     "emotion": "",
                     "character_id": character_id or "",
+                    "message_id": system_message_id,
                 }, delivery=EventDelivery.ORDERED)
 
             if image_data and eff_policy.echo_to_ui and not images_shown:
@@ -459,6 +558,7 @@ class ChatController:
                     "is_initial": False,
                     "emotion": "",
                     "character_id": character_id or "",
+                    "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
                 }, delivery=EventDelivery.ORDERED)
 
             result: ChatGenerationResult | None = use(GenerationService).generate_chat(
@@ -477,12 +577,23 @@ class ChatController:
                     origin_request_id=origin_request_id,
                     origin_message_id=origin_message_id,
                     task_uid=task_uid,
+                    trace_id=trace_id,
+                    cancellation=cancellation,
                     policy=eff_policy,
                     game_state=dict(game_state or {}),
+                    dialogue=parse_dialogue_turn_context(dialogue),
+                    player_message_source=player_message_source,
+                    previous_player_message_source=previous_player_message_source,
+                    gm_instruction_override=gm_instruction_override,
                 )
             )
 
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
+
             if result is None:
+                trace_status = "error"
+                trace_error_stage = "generation"
                 if task_uid:
                     self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                         "uid": task_uid,
@@ -494,13 +605,109 @@ class ChatController:
             response_text = result.text
             voice_profile = result.voice_profile
             effective_character_id = result.character_id or character_id
-            target = result.target
-            targets: list[str] = result.targets
             think_text = result.think
             structured_data = result.structured
             assistant_message_id = result.message_id
             sample_id = getattr(result, "sample_id", "") or ""
+            context_snapshot_id = getattr(result, "context_snapshot_id", "") or ""
+            structured_parse_level = getattr(result, "structured_parse_level", "") or ""
+            control_plane_trusted = bool(getattr(result, "control_plane_trusted", False))
+            perf_mark(trace_id, "response.generated", chars=len(response_text or ""))
+            trace = get_trace(trace_id)
+            if trace is not None:
+                trace.set_attribute("response_chars", len(response_text or ""))
 
+            # GameMaster may comment on a dialogue, but never participates in the
+            # Mita-to-Mita turn queue. Unity consumes only the semantic GM intents.
+            if str(effective_character_id or "").strip() == "GameMaster":
+                raw_system_input = str(system_input or "").strip()
+                configured_task = str(
+                    gm_instruction_override
+                    if gm_instruction_override is not None
+                    else self.settings.get("GM_SMALL_PROMPT", "")
+                ).strip()
+                has_explicit_test_task = "[INSTRUCTION]" in raw_system_input
+                if (
+                    not isinstance(structured_data, dict)
+                    and (configured_task or has_explicit_test_task)
+                ):
+                    structured_data = {"segments": []}
+                    control_plane_trusted = True
+
+                # A hidden moderator may legitimately emit only a structured
+                # broadcast intent. Keep a whitespace transport placeholder so
+                # the intent reaches Unity instead of being rejected as an
+                # empty natural-language response.
+                if not response_text and isinstance(structured_data, dict):
+                    response_text = " "
+                if isinstance(structured_data, dict):
+                    structured_data = dict(structured_data)
+                    # A task configured by the user is trusted control-plane input.
+                    # Prefer an explicit test instruction, otherwise use the live GM task.
+                    raw_system_input = str(system_input or "").strip()
+                    if "[INSTRUCTION]" in raw_system_input:
+                        explicit_instruction = raw_system_input.replace(
+                            "[INSTRUCTION]",
+                            "",
+                        ).replace(
+                            "[/INSTRUCTION]",
+                            "",
+                        ).strip()
+                    else:
+                        explicit_instruction = str(
+                            gm_instruction_override
+                            if gm_instruction_override is not None
+                            else self.settings.get("GM_SMALL_PROMPT", "")
+                        ).strip()
+                    has_actionable_directive = False
+                    segments = structured_data.get("segments", [])
+                    if not isinstance(segments, list):
+                        segments = []
+                        structured_data["segments"] = segments
+                    if explicit_instruction and not control_plane_trusted:
+                        segments = []
+                        structured_data["segments"] = segments
+                    for segment in segments:
+                        if not isinstance(segment, dict):
+                            continue
+                        intents = segment.get("intents", [])
+                        if not isinstance(intents, list):
+                            intents = []
+                        valid_intents = []
+                        for intent in intents:
+                            if not isinstance(intent, dict):
+                                continue
+                            intent_type = str(intent.get("type") or "").strip()
+                            payload = intent.get("payload")
+                            payload = dict(payload) if isinstance(payload, dict) else {}
+                            if intent_type == "dialogue.send_system_message":
+                                # Gemini occasionally emits an empty personal intent.
+                                # It is not executable and must not poison an otherwise
+                                # valid GameMaster turn.
+                                if not str(payload.get("character") or "").strip() or not str(payload.get("message") or "").strip():
+                                    continue
+                                has_actionable_directive = True
+                            if intent_type == "dialogue.broadcast_system_message":
+                                if explicit_instruction and not str(payload.get("message") or "").strip():
+                                    payload["message"] = explicit_instruction
+                                has_actionable_directive = (
+                                    has_actionable_directive
+                                    or bool(str(payload.get("message") or "").strip())
+                                )
+                            valid_intents.append({**intent, "type": intent_type, "payload": payload})
+                        segment["intents"] = valid_intents
+                    if explicit_instruction and not has_actionable_directive:
+                        # Explicit tester/GM instructions are authoritative. The
+                        # model may omit the action despite selecting narration;
+                        # preserve the scene directive as a deterministic fallback.
+                        carrier = next((item for item in segments if isinstance(item, dict)), None)
+                        if carrier is None:
+                            carrier = {"text": " ", "intents": []}
+                            segments.append(carrier)
+                        carrier.setdefault("intents", []).append({
+                            "type": "dialogue.broadcast_system_message",
+                            "payload": {"message": explicit_instruction},
+                        })
             if not response_text:
                 generation_error = str(getattr(result, "error", "") or "Empty response")
                 error_details = getattr(result, "error_details", None)
@@ -512,6 +719,8 @@ class ChatController:
                         "result": task_result,
                         "error": generation_error,
                     })
+                trace_status = "error"
+                trace_error_stage = "generation.empty_response"
                 if eff_policy.echo_to_ui and not getattr(result, "error", ""):
                     self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": "Пустой ответ модели"})
                 return None
@@ -538,42 +747,44 @@ class ChatController:
                             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                                 "uid": task_uid,
                                 "status": TaskStatus.VOICING,
-                                "result": self._build_task_result(response_text, target, structured_data, targets)
+                                "result": self._build_task_result(response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                             })
 
                         speaker = voice_profile.get("silero_command", "")
                         if self.settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
                             speaker = voice_profile.get("miku_tts_name", "Player")
 
+                        perf_mark(trace_id, "tts.requested")
                         self.event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
                             "text": response_text,
                             "speaker": speaker,
                             "task_uid": task_uid,
                             "character_id": effective_character_id,
                             "voice_profile": voice_profile,
-                            "target": target,
                             "message_id": assistant_message_id,
+                            "trace_id": trace_id,
                         })
+                        voiceover_pending = True
                     else:
                         if task_uid:
                             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                                 "uid": task_uid,
                                 "status": TaskStatus.SUCCESS,
-                                "result": self._build_task_result(response_text, target, structured_data, targets)
+                                "result": self._build_task_result(response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                             })
                 else:
                     if task_uid:
                         self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                             "uid": task_uid,
                             "status": TaskStatus.SUCCESS,
-                            "result": self._build_task_result(response_text, target, structured_data, targets)
+                            "result": self._build_task_result(response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                         })
             else:
                 if task_uid:
                     self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                         "uid": task_uid,
                         "status": TaskStatus.SUCCESS,
-                        "result": self._build_task_result(response_text, target, structured_data, targets)
+                        "result": self._build_task_result(response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                     })
 
             if is_streaming and eff_policy.echo_to_ui:
@@ -589,14 +800,17 @@ class ChatController:
                     "message_id": assistant_message_id or "",
                     "character_id": effective_character_id or "",
                     "sample_id": sample_id or "",
+                    "context_snapshot_id": context_snapshot_id or "",
                 }
                 if structured_data:
                     finish_payload["structured_data"] = structured_data
+                perf_mark(trace_id, "response.ui_complete")
                 self.event_bus.emit(Events.GUI.FINISH_STREAM_UI, finish_payload, delivery=EventDelivery.ORDERED)
                 stream_finished = True
                 # При стриминге весь текст (think и assistant) уже выведен
                 # в UI в реальном времени. Повторный UPDATE_CHAT_UI не нужен.
             elif (not is_streaming) and eff_policy.echo_to_ui:
+                perf_mark_once(trace_id, "response.first_visible_text")
                 # Для не-стриминга отправляем think перед основным ответом
                 if show_think_in_gui and think_text:
                     self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
@@ -609,7 +823,8 @@ class ChatController:
                         "emotion": "",
                         "character_id": effective_character_id or "",
                         "character_name": effective_character_name or "",
-                        "speaker_name": effective_character_name or ""
+                        "speaker_name": effective_character_name or "",
+                        "message_id": assistant_message_id or "",
                     }, delivery=EventDelivery.ORDERED)
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
                     "role": "assistant",
@@ -619,28 +834,42 @@ class ChatController:
                     "character_id": effective_character_id or "",
                     "character_name": effective_character_name or "",
                     "speaker_name": effective_character_name or "",
-                    "target": target,
-                    "targets": targets,
                     "structured_data": structured_data,
                     "message_id": assistant_message_id,
                     "sample_id": sample_id or "",
+                    "context_snapshot_id": context_snapshot_id or "",
                 }, delivery=EventDelivery.ORDERED)
+                perf_mark(trace_id, "response.ui_complete")
             self.event_bus.emit(Events.GUI.UPDATE_STATUS)
             self.event_bus.emit(Events.GUI.UPDATE_DEBUG_INFO)
             self.event_bus.emit(Events.GUI.UPDATE_TOKEN_COUNT)
 
             return response_text
 
+        except OperationCancelledError:
+            trace_status = "cancelled"
+            trace_error_stage = "generation.cancelled"
+            trace_error_type = "OperationCancelledError"
+            if task_uid:
+                self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
+                    "uid": task_uid,
+                    "status": TaskStatus.CANCELLED,
+                    "error": "Cancelled by user",
+                })
+            return None
         except Exception as e:
-            logger.error(f"Ошибка в обработке запроса: {e}", exc_info=True)
+            trace_status = "error"
+            trace_error_stage = "generation"
+            trace_error_type = type(e).__name__
+            logger.error(f"Ошибка в обработке запроса: {format_exception(e)}", exc_info=True)
             if task_uid:
                 self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                     "uid": task_uid,
                     "status": TaskStatus.FAILED_ON_GENERATION,
-                    "error": str(e)
+                    "error": format_exception(e)
                 })
             if eff_policy and eff_policy.echo_to_ui:
-                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": f"Ошибка: {str(e)[:50]}..."})
+                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": f"Ошибка: {format_exception(e)[:50]}..."})
             return None
         finally:
             if stream_coalescer is not None:
@@ -649,19 +878,39 @@ class ChatController:
                 try:
                     self.event_bus.emit(
                         Events.GUI.FINISH_STREAM_UI,
-                        {"stream_id": stream_id, "aborted": True},
+                        {
+                            "stream_id": stream_id,
+                            "character_id": character_id or "",
+                            "aborted": True,
+                        },
                         delivery=EventDelivery.ORDERED,
                     )
                 except Exception:
                     pass
-            self._exit_generation()
+            self._finish_generation(operation_id)
+            if trace_id and not voiceover_pending:
+                performance_traces().finish(
+                    trace_id,
+                    trace_status,
+                    error_stage=trace_error_stage,
+                    error_type=trace_error_type,
+                )
 
     def _submit_request(self, **kwargs) -> None:
         """Ставит запрос в пул генераций. Переполнение — явный отказ, а не рост очереди."""
         task_uid = kwargs.get("task_uid")
+        trace_id = kwargs.get("trace_id")
+        operation_id = str(trace_id or uuid.uuid4().hex)
+        cancellation = CancellationToken()
+        kwargs["operation_id"] = operation_id
+        kwargs["cancellation"] = cancellation
+        self._register_generation(operation_id, cancellation)
+        perf_mark(trace_id, "generation.enqueued")
         try:
             executors().try_submit(Pools.GENERATION, self._run_request, **kwargs)
         except PoolSaturated:
+            self._finish_generation(operation_id)
+            performance_traces().finish(trace_id, "rejected", error_stage="generation.pool", error_type="PoolSaturated")
             logger.warning("Очередь генераций переполнена — запрос отклонён.")
             if task_uid:
                 self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
@@ -673,9 +922,45 @@ class ChatController:
                 "error": "Слишком много запросов одновременно. Подождите ответа."
             })
 
+    def _ensure_perf_trace(self, data: dict) -> str:
+        trace_id = str(data.get("trace_id") or "").strip() or None
+        if trace_id and get_trace(trace_id) is not None:
+            return trace_id
+        trace = performance_traces().start(
+            source=self._resolve_perf_source(data),
+            trace_id=trace_id,
+            attributes={
+                "event_type": str(data.get("event_type") or "chat"),
+                "character_id": str(self._normalize_character_id(data) or ""),
+                "req_id": str(data.get("req_id") or ""),
+                "task_uid": str(data.get("task_uid") or ""),
+                "streaming": bool(self.settings.get("ENABLE_STREAMING", False)),
+                "voice_method": str(self.settings.get("VOICEOVER_METHOD", "") or ""),
+                "input_chars": len(str(data.get("user_input") or "")),
+                "image_count": len(data.get("image_data") or []) if isinstance(data.get("image_data"), list) else 0,
+            },
+        )
+        return trace.trace_id
+
+    @staticmethod
+    def _resolve_perf_source(data: dict) -> str:
+        event_type = str(data.get("event_type") or "chat")
+        if event_type in {"idle", "periodic", "camera", "camera_snapshot_result"}:
+            return event_type
+        image_source = str(data.get("image_source") or "").strip().lower()
+        if image_source == "mita_camera":
+            return "camera"
+        return "desktop"
+
     def _on_send_message(self, event: Event):
         data = event.data or {}
         image_data = data.get("image_data", [])
+        trace_id = self._ensure_perf_trace(data)
+        player_message_source, previous_player_message_source = (
+            self._resolve_player_message_source_transition(
+                data.get("player_message_source")
+            )
+        )
 
         # Запоминаем ручную отправку пользователя (без task_uid — это не игровой/
         # телеграм-ход), чтобы кнопка «отправить снова» на упавшем пузыре могла
@@ -703,16 +988,26 @@ class ChatController:
             policy=data.get("policy"),
             images_shown=bool(data.get("images_shown", False)),
             game_state=data.get("game_state"),
+            dialogue=data.get("dialogue"),
+            dialogue_source=data.get("dialogue_source"),
+            player_message_source=player_message_source,
+            previous_player_message_source=previous_player_message_source,
+            gm_instruction_override=data.get("gm_instruction_override"),
+            trace_id=trace_id,
         )
 
     @staticmethod
-    def _build_task_result(response_text: str, target: str, structured_data: dict | None = None, targets: list[str] | None = None) -> dict:
-        """Build the result dict for task_update, optionally including structured segments."""
+    def _build_task_result(
+        response_text: str,
+        structured_data: dict | None = None,
+        *,
+        structured_parse_level: str = "",
+        control_plane_trusted: bool = False,
+    ) -> dict:
+        """Build the response contract; addressees live only on individual segments."""
         result = {
             "response_protocol_version": RESPONSE_PROTOCOL_VERSION,
             "response": response_text,
-            "target": target,
-            "targets": targets or [],
         }
         if structured_data:
             result["segments"] = structured_data.get("segments", [])
@@ -723,6 +1018,8 @@ class ChatController:
             result["memory_update"] = structured_data.get("memory_update", [])
             result["memory_delete"] = structured_data.get("memory_delete", [])
             result["memory_merge"] = structured_data.get("memory_merge", [])
+            result["structured_parse_level"] = structured_parse_level
+            result["control_plane_trusted"] = bool(control_plane_trusted)
         return result
 
     def _on_get_llm_processing_status(self, event: Event):
@@ -730,6 +1027,7 @@ class ChatController:
 
     def _on_send_periodic_image_request(self, event: Event):
         data = event.data or {}
+        trace_id = self._ensure_perf_trace(data)
 
         if data.get("image_data"):
             self.event_bus.emit(Events.Capture.UPDATE_LAST_IMAGE_REQUEST_TIME)
@@ -746,6 +1044,8 @@ class ChatController:
             participants=self._normalize_participants(data.get("participants")),
             policy=data.get("policy"),
             game_state=data.get("game_state"),
+            dialogue=data.get("dialogue"),
+            trace_id=trace_id,
         )
 
     def _on_clear_chat(self, event: Event):
@@ -768,7 +1068,7 @@ class ChatController:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
             except Exception as e:
-                logger.warning(f"Failed to delete staged temp image {tmp_path}: {e}")
+                logger.warning(f"Failed to delete staged temp image {tmp_path}: {format_exception(e)}")
             finally:
                 self._owned_staged_images.discard(tmp_path)
         self.staged_images.clear()
@@ -1147,7 +1447,7 @@ class ChatController:
         message = {
             "role": role,
             "content": content,
-            "message_id": f"sys:{uuid.uuid4().hex}",
+            "message_id": ConversationMessageIds.system(),
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         character.history_manager.append_message(message)
@@ -1201,4 +1501,4 @@ class ChatController:
             self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
             logger.info(f"[ChatController] Snapshot загружен из {file_path}")
         except Exception as e:
-            logger.error(f"[ChatController] Ошибка загрузки snapshot: {e}", exc_info=True)
+            logger.error(f"[ChatController] Ошибка загрузки snapshot: {format_exception(e)}", exc_info=True)

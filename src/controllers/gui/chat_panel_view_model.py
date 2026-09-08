@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 from typing import Any, Callable
 
@@ -10,6 +11,7 @@ from services.contracts import (
     ApiPresetService,
     CaptureService,
     CharacterRegistry,
+    GenerationActivityService,
     SettingsService,
 )
 from ui.widgets.chat_panel_presentation import (
@@ -46,6 +48,20 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
                 self._bus.subscribe(event_name, self._on_dependency_changed, weak=False)
             )
         self.track_subscription(
+            self._bus.subscribe(
+                Events.Dialogue.RUNTIME_STATE_CHANGED,
+                self._on_runtime_state_changed,
+                weak=False,
+            )
+        )
+        self.track_subscription(
+            self._bus.subscribe(
+                Events.Chat.GENERATION_ACTIVITY_CHANGED,
+                self._on_generation_activity_changed,
+                weak=False,
+            )
+        )
+        self.track_subscription(
             self._settings.subscribe(
                 self._on_setting_changed,
                 keys=("AUTO_ATTACH_IMAGES", "ENABLE_CAMERA_CAPTURE", "LAST_API_PRESET_ID"),
@@ -77,12 +93,19 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
             self._capture_screen()
 
     def refresh(self) -> None:
-        def worker() -> tuple[str, tuple[str, str] | None, bool]:
+        def worker() -> tuple[str, tuple[str, str] | None, bool, int]:
             character_id = str(use(CharacterRegistry).current_id() or "")
-            return character_id, self._block_reason(character_id), bool(self._backend_ready())
+            activity = services().get_optional(GenerationActivityService)
+            active_count = activity.active_generation_count() if activity is not None else 0
+            return (
+                character_id,
+                self._block_reason(character_id),
+                bool(self._backend_ready()),
+                active_count,
+            )
 
-        def applied(payload: tuple[str, tuple[str, str] | None, bool]) -> None:
-            character_id, reason, backend_ready = payload
+        def applied(payload: tuple[str, tuple[str, str] | None, bool, int]) -> None:
+            character_id, reason, backend_ready, active_count = payload
             warning, category = reason if reason is not None else ("", "api")
             self.update_state(
                 character_id=character_id,
@@ -90,6 +113,7 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
                 warning=warning,
                 settings_category=category,
                 backend_ready=backend_ready,
+                active_generation_count=max(0, int(active_count)),
                 can_send=self._calculate_can_send(
                     self.state.has_text,
                     self.state.staged_count,
@@ -167,7 +191,7 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
 
             open_db_viewer(self._host, character_id=cid or None)
         except Exception as exc:
-            self.emit_effect(ChatShowError("History", str(exc)))
+            self.emit_effect(ChatShowError("History", format_exception(exc)))
 
     _MAX_STAGED_FILE_BYTES = 32 * 1024 * 1024
     _MAX_STAGED_TOTAL_BYTES = 64 * 1024 * 1024
@@ -242,7 +266,7 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
             "chat-stage-files",
             worker,
             self._stage_images,
-            lambda error: self.emit_effect(ChatShowError("Images", str(error))),
+            lambda error: self.emit_effect(ChatShowError("Images", format_exception(error))),
         )
 
     def _stage_images(self, images: tuple[bytes, ...]) -> None:
@@ -283,6 +307,15 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
 
     def _on_dependency_changed(self, event: Any) -> None:
         self._post_ui(self.refresh)
+
+    def _on_runtime_state_changed(self, event: Any) -> None:
+        snapshot = getattr(event, "data", None)
+        self._post_ui(lambda: self.update_state(dialogue_snapshot=snapshot))
+
+    def _on_generation_activity_changed(self, event: Any) -> None:
+        data = getattr(event, "data", None) or {}
+        active_count = max(0, int(data.get("active_count", 0) or 0))
+        self._post_ui(lambda: self.update_state(active_generation_count=active_count))
 
     def _on_setting_changed(self, change: Any) -> None:
         self._post_ui(self.refresh)

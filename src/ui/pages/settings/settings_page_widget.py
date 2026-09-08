@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import qtawesome as qta
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
@@ -18,7 +19,10 @@ from ui.pages.settings.section_registry import (
     SettingsSectionSpec,
     get_settings_section_specs,
 )
-from ui.pages.settings.section_access import is_section_enabled
+from ui.pages.settings.section_access import (
+    is_section_enabled,
+    migrate_legacy_section_settings,
+)
 from ui.pages.settings.settings_presentation import (
     PrepareSettingsSection,
     SettingsSectionFailed,
@@ -51,7 +55,10 @@ _SECTION_GUI_FEATURES: dict[str, str] = {
     "microphone": "speech",
 }
 
-_BACKEND_REQUIRED_SECTIONS = frozenset({"api", "characters", "models"})
+# Characters and model-runtime settings consume services materialized by the
+# conversation backend. API presets are application-scoped and deliberately do
+# not wait for optional voice/game initialization.
+_BACKEND_REQUIRED_SECTIONS = frozenset({"characters", "models"})
 
 
 def normalize_mode(value):
@@ -147,6 +154,8 @@ class SettingsPage(QWidget):
         self._settings = settings
         self.setObjectName("SettingsPageRoot")
 
+        migrate_legacy_section_settings(settings)
+
         self.settings_buttons = {}
         self._category_modes = {}
         self.settings_containers = {}
@@ -177,6 +186,15 @@ class SettingsPage(QWidget):
         # Сразу применяем карту видимости, иначе до первого клика в «Видимых
         # разделах» показываются все вкладки, включая отключённые.
         self.apply_section_visibility()
+
+    def preload_registered_sections(self) -> None:
+        preloads = tuple(
+            (spec.key, spec.preload_key)
+            for spec in get_settings_section_specs()
+            if spec.preload_key
+        )
+        if preloads:
+            self._page_actions.preload_settings_sections(preloads)
 
     def _set_current_category(self, category):
         self.current_settings_category = category
@@ -607,7 +625,7 @@ class SettingsPage(QWidget):
             self._set_section_placeholder(
                 page,
                 "error",
-                _("Компонент недоступен", "Component unavailable") + f": {error}",
+                _("Компонент недоступен", "Component unavailable") + f": {format_exception(error)}",
             )
         self._loading_sections.discard(category)
 
@@ -629,10 +647,10 @@ class SettingsPage(QWidget):
             logger.error(
                 "Failed to build settings section '%s': %s",
                 category,
-                exc,
+                format_exception(exc),
                 exc_info=True,
             )
-            self._set_section_placeholder(page, "error", f"Failed to load section: {exc}")
+            self._set_section_placeholder(page, "error", f"Failed to load section: {format_exception(exc)}")
         finally:
             self._loading_sections.discard(category)
 

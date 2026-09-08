@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import json
 from concurrent.futures import ThreadPoolExecutor
 import logging
@@ -15,6 +16,10 @@ from main_logger import logger
 from core.message_content import MessageContentCodec
 from managers.database_manager import DatabaseManager
 from managers.character_scoped_service import CharacterScopedService
+
+
+class HistoryBatchWriteError(RuntimeError):
+    """Raised after a completed history batch has been fully rolled back."""
 
 
 # TODO: Decompose — this class is 1100+ lines. Consider splitting into:
@@ -149,7 +154,7 @@ class HistoryManager(CharacterScopedService):
                     "RAGManager init failed for %s; retry in %.1fs: %s",
                     key,
                     delay,
-                    exc,
+                    format_exception(exc),
                     exc_info=True,
                 )
                 return None
@@ -190,6 +195,38 @@ class HistoryManager(CharacterScopedService):
                 cls._EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-embed")
             return cls._EMBED_EXECUTOR
 
+    def _schedule_history_embeddings(self, items: list[tuple[int, str]]) -> None:
+        """Schedule one RAG batch instead of individual provider requests."""
+        if not items or not self.rag:
+            return
+
+        normalized: list[tuple[int, str]] = []
+        for row_id, text in items:
+            clean_text = str(text or "").strip()
+            if row_id and clean_text:
+                normalized.append((int(row_id), clean_text))
+        if not normalized:
+            return
+
+        rag = self.rag
+
+        def _bulk_embed_job():
+            try:
+                rag.update_history_embeddings(normalized, priority="bulk")
+            except Exception as e:
+                logger.warning(
+                    f"RAG failed to update history embeddings batch (ignored): {format_exception(e)}",
+                    exc_info=True,
+                )
+
+        try:
+            self._get_embed_executor().submit(_bulk_embed_job)
+        except Exception as e:
+            logger.warning(
+                f"[HistoryManager] Failed to schedule embeddings batch (ignored): {format_exception(e)}",
+                exc_info=True,
+            )
+
     # ---------------------------------------------------------------------
     # Schema helpers
     # ---------------------------------------------------------------------
@@ -197,7 +234,7 @@ class HistoryManager(CharacterScopedService):
         try:
             self._history_cols = self.db.get_history_columns(refresh=True)
         except Exception as e:
-            logger.warning(f"Failed to read history schema: {e}", exc_info=True)
+            logger.warning(f"Failed to read history schema: {format_exception(e)}", exc_info=True)
             self._history_cols = set()
         return set(self._history_cols)
 
@@ -217,7 +254,7 @@ class HistoryManager(CharacterScopedService):
                 return 0
             return self.db.dedupe_history(character_id=self.storage_key)
         except Exception as e:
-            logger.warning(f"[HistoryManager] Dedup failed (ignored): {e}", exc_info=True)
+            logger.warning(f"[HistoryManager] Dedup failed (ignored): {format_exception(e)}", exc_info=True)
             return 0
 
     # Backward-compat: старое приватное имя могло вызываться из других мест
@@ -286,7 +323,7 @@ class HistoryManager(CharacterScopedService):
             return file_path
 
         except Exception as e:
-            logger.error(f"Failed to save base64 image to disk: {e}", exc_info=True)
+            logger.error(f"Failed to save base64 image to disk: {format_exception(e)}", exc_info=True)
             return base64_string
 
     def _image_file_to_base64(self, file_path: str) -> str:
@@ -307,7 +344,7 @@ class HistoryManager(CharacterScopedService):
 
             return f"data:image/{ext};base64,{encoded_string}"
         except Exception as e:
-            logger.error(f"Error converting file to base64: {e}", exc_info=True)
+            logger.error(f"Error converting file to base64: {format_exception(e)}", exc_info=True)
             return file_path
 
     # ---------------------------------------------------------------------
@@ -918,7 +955,7 @@ class HistoryManager(CharacterScopedService):
                 conn.commit()
                 return row_id
             except Exception as e:
-                logger.warning(f"History INSERT failed, fallback to minimal insert: {e}", exc_info=True)
+                logger.warning(f"History INSERT failed, fallback to minimal insert: {format_exception(e)}", exc_info=True)
                 try:
                     conn.rollback()
                 except Exception:
@@ -929,7 +966,7 @@ class HistoryManager(CharacterScopedService):
                     conn.commit()
                     return row_id
                 except Exception as e2:
-                    logger.error(f"History minimal INSERT failed: {e2}", exc_info=True)
+                    logger.error(f"History minimal INSERT failed: {format_exception(e2)}", exc_info=True)
                     try:
                         conn.rollback()
                     except Exception:
@@ -1152,7 +1189,7 @@ class HistoryManager(CharacterScopedService):
                     conn.rollback()
                 except Exception:
                     pass
-                logger.error(f"DB Error saving history atomically: {e}", exc_info=True)
+                logger.error(f"DB Error saving history atomically: {format_exception(e)}", exc_info=True)
                 return
             finally:
                 try:
@@ -1160,23 +1197,7 @@ class HistoryManager(CharacterScopedService):
                 except Exception:
                     pass
 
-        if not pending_embeddings or not self.rag:
-            return
-
-        rag = self.rag
-        items = list(pending_embeddings)
-
-        def _bulk_embed_job():
-            for row_id, text in items:
-                try:
-                    rag.update_history_embedding(int(row_id), str(text))
-                except Exception as e:
-                    logger.warning(f"RAG failed to update history embedding (ignored): {e}", exc_info=True)
-
-        try:
-            self._get_embed_executor().submit(_bulk_embed_job)
-        except Exception as e:
-            logger.warning(f"[HistoryManager] Failed to schedule embeddings job (ignored): {e}", exc_info=True)
+        self._schedule_history_embeddings(pending_embeddings)
 
     def save_history_separate(self) -> str:
         """Экспортирует текущую активную историю в JSON-файл (бекап/снапшот).
@@ -1197,37 +1218,18 @@ class HistoryManager(CharacterScopedService):
             logger.info(f"[HistoryManager] Snapshot сохранён: {target_path}")
             return target_path
         except Exception as e:
-            logger.error(f"[HistoryManager] Не удалось сохранить snapshot: {e}", exc_info=True)
+            logger.error(f"[HistoryManager] Не удалось сохранить snapshot: {format_exception(e)}", exc_info=True)
             return ""
 
     def _schedule_message_embedding(self, row_id: int | None, message: dict) -> None:
-        if not row_id or not self.rag:
+        if not row_id:
             return
 
         content_text = self._extract_text_for_embedding(message.get("content"))
         if not content_text:
             return
 
-        rag = self.rag
-        rid = int(row_id)
-        txt = str(content_text)
-
-        def _embed_job():
-            try:
-                rag.update_history_embedding(rid, txt)
-            except Exception as e:
-                logger.warning(
-                    f"RAG failed to update embedding for new message (ignored): {e}",
-                    exc_info=True,
-                )
-
-        try:
-            self._get_embed_executor().submit(_embed_job)
-        except Exception as e:
-            logger.warning(
-                f"[HistoryManager] Failed to schedule embedding for message (ignored): {e}",
-                exc_info=True,
-            )
+        self._schedule_history_embeddings([(int(row_id), str(content_text))])
 
     def add_messages(self, messages: list[dict]) -> list[int]:
         valid_messages = [msg for msg in messages or [] if isinstance(msg, dict)]
@@ -1252,23 +1254,25 @@ class HistoryManager(CharacterScopedService):
                         committed.append((int(row_id), msg))
                 conn.commit()
             except Exception as exc:
-                committed.clear()
-                logger.error(
-                    f"History batch INSERT failed; the complete turn was rolled back: {exc}",
-                    exc_info=True,
-                )
                 try:
                     conn.rollback()
                 except Exception:
                     pass
+                raise HistoryBatchWriteError(
+                    f"Failed to append a complete history batch for {self.storage_key}"
+                ) from exc
             finally:
                 try:
                     conn.close()
                 except Exception:
                     pass
 
+        pending_embeddings: list[tuple[int, str]] = []
         for row_id, msg in committed:
-            self._schedule_message_embedding(row_id, msg)
+            content_text = self._extract_text_for_embedding(msg.get("content"))
+            if content_text:
+                pending_embeddings.append((row_id, str(content_text)))
+        self._schedule_history_embeddings(pending_embeddings)
         return [row_id for row_id, _msg in committed]
 
     def add_message(self, message: dict):
@@ -1386,7 +1390,7 @@ class HistoryManager(CharacterScopedService):
                         (self.storage_key, self.storage_key),
                     )
                 except Exception as e:
-                    logger.warning(f"[HistoryManager] purge_deleted: {emb_table} cleanup failed: {e}")
+                    logger.warning(f"[HistoryManager] purge_deleted: {emb_table} cleanup failed: {format_exception(e)}")
             cur.execute(
                 "DELETE FROM history WHERE character_id=? AND is_deleted=1",
                 (self.storage_key,),
@@ -1447,7 +1451,7 @@ class HistoryManager(CharacterScopedService):
                 if total > 0:
                     conn.commit()
         except Exception as e:
-            logger.warning(f"[HistoryManager] apply_history_ttl_cleanup failed: {e}", exc_info=True)
+            logger.warning(f"[HistoryManager] apply_history_ttl_cleanup failed: {format_exception(e)}", exc_info=True)
 
         if total > 0:
             logger.info(f"[HistoryManager] TTL cleanup: archived {total} messages for '{self.storage_key}'")

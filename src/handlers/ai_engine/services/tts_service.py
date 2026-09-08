@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import os
 import uuid
@@ -13,7 +14,7 @@ class TTSService:
     """
     Универсальный TTS service поверх LocalVoice.
     Не знает про конкретные модели (Fish/F5/Edge).
-    Инициализация завершается только после успешного первого синтеза для модели.
+    Локальная инициализация и необязательный end-to-end warmup — разные операции.
     """
 
     def __init__(self, *, emit_event: Callable[[str, Any], None]):
@@ -107,17 +108,7 @@ class TTSService:
             self.emit_event("log", f"[tts:init] runtime initialized for model_id={model_id}")
 
             if do_warmup and self._warmup_status.get(model_id) != "ready":
-                try:
-                    warm = await asyncio.wait_for(
-                        self._warmup_model(lv, model_id),
-                        timeout=120.0,
-                    )
-                except asyncio.TimeoutError:
-                    warm = False
-                    self.emit_event(
-                        "log",
-                        f"[tts:init] warmup timed out for model_id={model_id}",
-                    )
+                warm = await self._warmup_model(lv, model_id)
                 self._warmup_status[model_id] = "ready" if warm else "failed"
                 if not warm:
                     self.emit_event(
@@ -149,6 +140,12 @@ class TTSService:
             # Выбор модели и синтез являются одной критической секцией. Иначе
             # параллельный запрос мог сменить mutable active_model_instance.
             async with get_scheduler().slot(Priority.TTS):
+                initialized = await asyncio.to_thread(lv.is_model_initialized, model_id)
+                if not initialized:
+                    raise RuntimeError(
+                        f"Voice model '{model_id}' is not initialized. "
+                        "Initialize it explicitly before requesting synthesis."
+                    )
                 await asyncio.to_thread(lv.select_model, model_id)
                 self._current_model_id = model_id
                 return await lv.voiceover(text=text, output_file=out_abs, character=character)
@@ -234,10 +231,10 @@ class TTSService:
             return True
 
         except RuntimeError as e:
-            self.emit_event("log", f"[tts:warmup] runtime error for model_id={model_id}: {e}")
+            self.emit_event("log", f"[tts:warmup] runtime error for model_id={model_id}: {format_exception(e)}")
             return False
         except Exception as exc:
-            self.emit_event("log", f"[tts:warmup] unexpected error for model_id={model_id}: {exc}")
+            self.emit_event("log", f"[tts:warmup] unexpected error for model_id={model_id}: {format_exception(exc)}")
             return False
         finally:
             for p in [out, produced]:

@@ -1,7 +1,9 @@
 import time
 
 from core.events import Event, Events
+from core.services import services
 from main_logger import logger
+from services.contracts import GenerationActivityService
 
 from .base_controller import BaseController
 
@@ -11,6 +13,8 @@ class StatusController(BaseController):
         super().__init__(main_controller, view)
         self._last_detailed_error_text = ""
         self._last_detailed_error_ts = 0.0
+        self._last_chat_network_error_text = ""
+        self._last_chat_network_error_ts = 0.0
 
     def subscribe_to_events(self):
         self.event_bus.subscribe(Events.GUI.UPDATE_STATUS_COLORS, self._on_update_status_colors, weak=False)
@@ -22,6 +26,11 @@ class StatusController(BaseController):
         self.event_bus.subscribe(Events.Model.ON_FAILED_RESPONSE_ATTEMPT, self._on_failed_response_attempt, weak=False)
         self.event_bus.subscribe(Events.Model.ON_FAILED_RESPONSE, self._on_failed_response, weak=False)
         self.event_bus.subscribe(Events.Model.ON_TOOL_EXECUTING, self._on_tool_executing, weak=False)
+        self.event_bus.subscribe(
+            Events.Chat.GENERATION_ACTIVITY_CHANGED,
+            self._on_generation_activity_changed,
+            weak=False,
+        )
         self.event_bus.subscribe(Events.GUI.SHOW_MITA_VOICING, self._on_show_voicing, weak=False)
         self.event_bus.subscribe(Events.GUI.HIDE_MITA_VOICING, self._on_hide_voicing, weak=False)
 
@@ -65,6 +74,12 @@ class StatusController(BaseController):
         else:
             logger.error("StatusController: view not found while hiding status")
 
+    def hide_generation_status(self):
+        if self.view and getattr(self.view, "hide_generation_status_signal", None):
+            self.view.hide_generation_status_signal.emit()
+        else:
+            logger.error("StatusController: generation status signal not found")
+
     def show_mita_error_pulse(self):
         logger.info("StatusController: show_mita_error_pulse")
         if self.view:
@@ -89,6 +104,10 @@ class StatusController(BaseController):
 
     def _on_started_response(self, event: Event):
         logger.info("StatusController: ON_STARTED_RESPONSE_GENERATION")
+        activity = services().get_optional(GenerationActivityService)
+        if activity is not None and activity.active_generation_count() == 0:
+            logger.info("StatusController: ignore stale generation-start event")
+            return
         character_name = None
         if event and isinstance(getattr(event, "data", None), dict):
             character_name = event.data.get("character_name")
@@ -108,7 +127,14 @@ class StatusController(BaseController):
 
     def _on_successful_response(self, event: Event):
         logger.info("StatusController: ON_SUCCESSFUL_RESPONSE")
-        self.hide_mita_status()
+        activity = services().get_optional(GenerationActivityService)
+        if activity is None or activity.active_generation_count() == 0:
+            self.hide_generation_status()
+
+    def _on_generation_activity_changed(self, event: Event):
+        data = event.data if event and isinstance(getattr(event, "data", None), dict) else {}
+        if max(0, int(data.get("active_count", 0) or 0)) == 0:
+            self.hide_generation_status()
 
     def _on_compression_finished(self, event: Event):
         logger.info("StatusController: ON_COMPRESSION_FINISHED")
@@ -135,6 +161,7 @@ class StatusController(BaseController):
         provider_error = data.get("provider_error")
         provider_message = provider_error.get("message") if isinstance(provider_error, dict) else ""
         error_message = provider_message or data.get("error", "Неизвестная ошибка")
+        provider_code = str(provider_error.get("code") or "") if isinstance(provider_error, dict) else ""
 
         if error_message and self._is_generic_generation_error(error_message):
             if self._last_detailed_error_text and (time.time() - self._last_detailed_error_ts) < 2.0:
@@ -145,6 +172,24 @@ class StatusController(BaseController):
             self._last_detailed_error_ts = time.time()
 
         self.show_mita_error(error_message)
+        if provider_code.startswith(("network.", "timeout.")):
+            self._show_network_error_in_chat(error_message)
+
+    def _show_network_error_in_chat(self, error_message: str) -> None:
+        message = str(error_message or "").strip()
+        if not message:
+            return
+        now = time.time()
+        if (
+            message == self._last_chat_network_error_text
+            and (now - self._last_chat_network_error_ts) < 2.0
+        ):
+            return
+        self._last_chat_network_error_text = message
+        self._last_chat_network_error_ts = now
+        signal = getattr(self.view, "update_chat_signal", None) if self.view else None
+        if signal is not None:
+            signal.emit("event", message, False, "")
 
     @staticmethod
     def _is_generic_generation_error(error_message: str) -> bool:

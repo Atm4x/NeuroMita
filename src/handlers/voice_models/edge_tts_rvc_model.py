@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import asyncio
 import gc
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from xml.sax.saxutils import escape
 
 from .base_model import IVoiceModel
+from core.app_paths import base_dir
 from core.backends import BackendKind
 from core.install_requirements import InstallRequirement, check_requirements
 from core.install_types import InstallAction, InstallPlan
@@ -24,6 +26,12 @@ from handlers.voice_models.install_plan_helpers import (
     pip_uninstall_action,
     rvc_python_compat_error,
     warning_action,
+)
+from handlers.voice_models.rvc_runtime_assets import (
+    CUDA_RVC_RUNTIME_ASSETS,
+    ONNX_RVC_RUNTIME_ASSETS,
+    runtime_asset_download_action,
+    runtime_asset_requirements,
 )
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
@@ -297,6 +305,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
     SUPPORTS_HALF = False
     SUPPORTS_RUNTIME_F0 = False
     PATCH_FAIRSEQ_CONFIGS = False
+    RVC_RUNTIME_ASSETS: tuple[tuple[str, str], ...] = ()
 
     EDGE_MODEL_ID = ""
     SILERO_MODEL_ID = ""
@@ -344,6 +353,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             )
         if cls._is_silero_model(model_id):
             req.append(InstallRequirement(id="silero", kind="python_dist", spec="silero", required=True))
+        req.extend(runtime_asset_requirements(cls.RVC_RUNTIME_ASSETS))
         return req
 
     @classmethod
@@ -379,7 +389,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                     log(_("Патч fairseq/dataclass/configs.py применён", "fairseq/dataclass/configs.py patched"))
                 return True
             except Exception as exc:
-                log(str(exc))
+                log(format_exception(exc))
                 log(traceback.format_exc())
                 return False
 
@@ -415,6 +425,18 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 packages=pkgs,
             )
         ]
+        if cls.RVC_RUNTIME_ASSETS:
+            actions.append(
+                runtime_asset_download_action(
+                    cls.RVC_RUNTIME_ASSETS,
+                    description=_(
+                        "Загрузка моделей RVC...",
+                        "Downloading RVC model assets...",
+                    ),
+                    progress=62,
+                    progress_to=88,
+                )
+            )
         if cls.PATCH_FAIRSEQ_CONFIGS:
             actions.append(
                 InstallAction(
@@ -514,7 +536,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                     )
                 return rvc_class
             except Exception as exc:
-                errors.append(f"{module_name}: {exc}")
+                errors.append(f"{module_name}: {format_exception(exc)}")
         raise ImportError(
             f"Unable to import TTS_RVC for '{cls.RVC_PACKAGE}'. Tried: "
             + "; ".join(errors)
@@ -587,7 +609,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
 
     def _hubert_candidate_paths(self) -> list[str]:
         roots = (
-            os.getcwd(),
+            str(base_dir()),
             os.environ.get("NEUROMITA_MODELS_DIR", os.path.abspath("Models")),
             os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib")),
         )
@@ -648,7 +670,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 f0_method = self._normalize_f0_method(settings.get(f0_key, self.RVC_DEFAULT_F0_METHOD))
                 model_path_to_use = self._default_model_path()
                 logger.info(
-                    f"RVC init context: cwd='{os.getcwd()}', "
+                    f"RVC init context: base_dir='{base_dir()}', "
                     f"models_dir='{os.environ.get('NEUROMITA_MODELS_DIR', os.path.abspath('Models'))}', "
                     f"hubert_candidates={self._describe_hubert_state()}"
                 )
@@ -688,7 +710,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             return True
         except Exception as exc:
             logger.error(
-                f"Failed to initialize {self.__class__.__name__}: {exc}. "
+                f"Failed to initialize {self.__class__.__name__}: {format_exception(exc)}. "
                 f"mode='{current_mode}', runtime='{runtime_mode}', "
                 f"hubert_candidates={self._describe_hubert_state()}",
                 exc_info=True,
@@ -898,10 +920,10 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
     ) -> Optional[str]:
         current_mode = str(getattr(self.parent, "current_model_id", "") or "").strip()
         if not self.initialized or self.initialized_for != current_mode:
-            if self.initialized:
-                self.cleanup_state()
-            if not self.initialize(init=False):
-                return None
+            raise RuntimeError(
+                f"RVC voice model is not initialized for mode '{current_mode}'. "
+                "Initialize the selected voice model explicitly before conversion."
+            )
 
         try:
             self._prepare_rvc_target(character, use_index_file)
@@ -920,7 +942,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             return self._convert_to_stereo(output_file_rvc, volume)
         except Exception as error:
             traceback.print_exc()
-            logger.info(f"RVC file conversion failed: {error}")
+            logger.info(f"RVC file conversion failed: {format_exception(error)}")
             return None
 
     async def _voiceover_edge_tts_rvc(
@@ -992,12 +1014,12 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 "Edge-TTS + RVC exceeded the vendor 300-second operation timeout. "
                 "The runtime was initialized successfully; the timeout occurred during synthesis/RVC. "
                 "For DirectML, try the PM F0 method if RMVPE remains too slow. "
-                f"Details: {error}"
+                f"Details: {format_exception(error)}"
             )
             return None
         except Exception as error:
             traceback.print_exc()
-            logger.info(f"Edge-TTS + RVC voiceover failed: {error}")
+            logger.info(f"Edge-TTS + RVC voiceover failed: {format_exception(error)}")
             return None
 
     async def _voiceover_silero_rvc(self, text, character=None, output_file: Optional[str] = None):
@@ -1048,7 +1070,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             return self._maybe_move_to_output(final_output_path, output_file)
         except Exception as error:
             traceback.print_exc()
-            logger.info(f"Silero + RVC voiceover failed: {error}")
+            logger.info(f"Silero + RVC voiceover failed: {format_exception(error)}")
             return None
         finally:
             if temp_wav and os.path.exists(temp_wav):
@@ -1072,6 +1094,7 @@ class EdgeTTSRVCCudaModel(EdgeTTSRVCBaseModel):
     SUPPORTS_HALF = True
     SUPPORTS_RUNTIME_F0 = True
     PATCH_FAIRSEQ_CONFIGS = True
+    RVC_RUNTIME_ASSETS = CUDA_RVC_RUNTIME_ASSETS
 
     EDGE_MODEL_ID = EDGE_TTS_RVC_CUDA_ID
     SILERO_MODEL_ID = SILERO_RVC_CUDA_ID
@@ -1105,6 +1128,15 @@ class EdgeTTSRVCCudaModel(EdgeTTSRVCBaseModel):
         },
     ]
 
+    def _resolve_runtime_device(self, value: Any) -> str:
+        requested = super()._resolve_runtime_device(value).lower()
+        if requested == "dml":
+            logger.warning(
+                "CUDA RVC received an obsolete DirectML setting; using cuda:0."
+            )
+            return self.RVC_DEFAULT_DEVICE
+        return requested
+
     def _load_rvc_class(self):
         _ensure_lib_path()
         return self._import_rvc_class()
@@ -1127,6 +1159,7 @@ class EdgeTTSRVCOnnxModel(EdgeTTSRVCBaseModel):
     SUPPORTS_HALF = False
     SUPPORTS_RUNTIME_F0 = True
     PATCH_FAIRSEQ_CONFIGS = False
+    RVC_RUNTIME_ASSETS = ONNX_RVC_RUNTIME_ASSETS
 
     EDGE_MODEL_ID = EDGE_TTS_RVC_ONNX_ID
     SILERO_MODEL_ID = SILERO_RVC_ONNX_ID

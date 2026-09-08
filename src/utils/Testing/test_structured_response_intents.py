@@ -97,6 +97,22 @@ class IntentsPassthroughTests(unittest.TestCase):
         self.assertEqual(intents[0].payload, {})
         self.assertTrue(any("intent" in m.lower() for m in captured.output))
 
+    def test_json_string_payload_is_decoded(self) -> None:
+        payload = {
+            "segments": [{
+                "text": "move",
+                "intents": [{
+                    "type": "actor.move_relative_to_player",
+                    "payload": '{"slot":"behind","distance":0.8}',
+                }],
+            }],
+        }
+        response = parse_structured_response(json.dumps(payload))
+        self.assertEqual(
+            response.segments[0].intents[0].payload,
+            {"slot": "behind", "distance": 0.8},
+        )
+
     def test_unknown_intent_type_not_blocked(self) -> None:
         payload = {
             "segments": [
@@ -125,6 +141,23 @@ class IntentsPassthroughTests(unittest.TestCase):
         self.assertNotIn("intents", seg)
 
 
+class NextTurnProtocolTests(unittest.TestCase):
+    def test_next_turns_are_not_part_of_the_llm_payload(self) -> None:
+        response = StructuredResponse.model_validate({
+            "segments": [{"text": "?????????."}],
+            # Unknown legacy routing data is ignored by the LLM schema.
+            "next_turns": [{"target_actor_id": "actor-crazy-1"}],
+        })
+        result = structured_response_to_result_dict(response)
+        self.assertNotIn("next_turns", result)
+        self.assertEqual(result["segments"][0]["text"], "?????????.")
+
+    def test_next_turns_are_hidden_from_provider_schemas(self) -> None:
+        openai = StructuredResponse.openai_response_format()
+        self.assertNotIn("next_turns", openai["json_schema"]["schema"]["properties"])
+        gemini = StructuredResponse.gemini_schema_dict()
+        self.assertNotIn("next_turns", gemini["properties"])
+
 class ProtocolVersionTests(unittest.TestCase):
     def test_protocol_version_stamped(self) -> None:
         response = parse_structured_response(json.dumps({"segments": [{"text": "hi"}]}))
@@ -152,6 +185,9 @@ class SchemaVisibilityTests(unittest.TestCase):
             exclude_segment_fields=seg_excl or None
         )
         self.assertIn("intents", _gemini_segment_props(gemini))
+
+        intent_props = _gemini_segment_props(gemini)["intents"]["items"]["properties"]
+        self.assertEqual(intent_props["payload"]["type"], "string")
 
     def test_reasoning_hidden_from_native_schema_when_disabled(self) -> None:
         # provider adds "reasoning" to exclude_fields when schema_reasoning is off

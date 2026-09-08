@@ -86,10 +86,24 @@ def test_text_for_closed_session_is_not_delivered_to_the_new_one():
     assert new.payloads() == []
 
 
-def test_primary_client_id_is_the_newest_session():
+def test_newest_game_session_owns_the_turn():
     with _Loop() as loop:
         srv = _server(loop, {"a#1": _FakeWriter(), "b#2": _FakeWriter()})
+        _declare_role(srv, loop, "a#1", "game")
+        _declare_role(srv, loop, "b#2", "game")
+
         assert srv.primary_client_id() == "b#2"
+
+
+def test_two_undeclared_clients_leave_the_turn_to_nobody():
+    """Кто из двух безымянных — игра, сервер не угадывает.
+
+    Раньше ход доставался самому свежему подключению, и подключившаяся утилита
+    молча перехватывала голос. Без объявленной роли фраза уходит в десктоп-чат.
+    """
+    with _Loop() as loop:
+        srv = _server(loop, {"a#1": _FakeWriter(), "b#2": _FakeWriter()})
+        assert srv.primary_client_id() == ""
 
 
 def _declare_role(srv, loop, client_id, role):
@@ -98,6 +112,40 @@ def _declare_role(srv, loop, client_id, role):
         srv.process_request({"action": "unknown_action", "client_role": role}, client_id),
         loop,
     ).result(timeout=5)
+
+
+def _hello(srv, loop, client_id, role):
+    return asyncio.run_coroutine_threadsafe(
+        srv.process_request({"action": "hello", "client_role": role}, client_id),
+        loop,
+    ).result(timeout=5)
+
+
+def test_handshake_answers_with_protocol_and_session():
+    writer = _FakeWriter()
+    with _Loop() as loop:
+        srv = _server(loop, {"game#1": writer})
+        _hello(srv, loop, "game#1", "game")
+
+    ack = writer.payloads()[0]
+    assert ack["type"] == "hello_ack"
+    assert ack["protocol_version"] == 1
+    assert ack["session_id"] == "game#1"
+    assert ack["client_role"] == "game"
+    assert ack["owns_player_input"] is True
+
+
+def test_role_cannot_be_changed_until_reconnect():
+    """Объявленная роль неизменна: иначе диагностический клиент уводил бы ход."""
+    with _Loop() as loop:
+        srv = _server(loop, {"game#1": _FakeWriter(), "tool#2": _FakeWriter()})
+        _declare_role(srv, loop, "game#1", "game")
+        _declare_role(srv, loop, "tool#2", "diagnostic")
+
+        _declare_role(srv, loop, "tool#2", "game")
+
+        assert srv.owns_player_input("tool#2") is False
+        assert srv.primary_client_id() == "game#1"
 
 
 def test_diagnostic_client_does_not_take_over_player_input():
@@ -130,6 +178,27 @@ def test_no_owner_when_only_diagnostic_clients_are_connected():
         assert srv.primary_client_id() == ""
 
 
+def test_game_connection_status_ignores_diagnostic_client():
+    with _Loop() as loop:
+        srv = _server(loop, {"tool#1": _FakeWriter()})
+        _declare_role(srv, loop, "tool#1", "diagnostic")
+
+        assert srv.has_game_connection() is False
+
+
+def test_game_connection_status_ignores_closing_writer():
+    class _ClosingWriter(_FakeWriter):
+        @staticmethod
+        def is_closing():
+            return True
+
+    with _Loop() as loop:
+        srv = _server(loop, {"game#1": _ClosingWriter()})
+        srv.client_roles["game#1"] = "game"
+
+        assert srv.has_game_connection() is False
+
+
 def test_partially_written_message_is_not_reported_as_delivered():
     """Оборванная на drain() запись — это «не доставлено», а не успех.
 
@@ -150,21 +219,21 @@ def test_partially_written_message_is_not_reported_as_delivered():
     assert writer.chunks  # часть байтов ушла в сокет — доставкой это не считается
 
 
-def test_payload_carries_utterance_id_and_policy():
+def test_payload_carries_utterance_id_without_unity_ui_policy():
     writer = _FakeWriter()
     with _Loop() as loop:
         srv = _server(loop, {"c#1": writer})
         srv.schedule_send_asr_text(
             client_id="c#1", text="раз", utterance_id="utt-42",
-            autosend=True, delay_sec=1.5, merge_input=False,
         ).result(timeout=5)
 
     payload = writer.payloads()[0]
     assert payload["type"] == "asr_text"
     assert payload["id"] == "utt-42"
-    assert payload["autosend"] is True
-    assert payload["delay_sec"] == 1.5
-    assert payload["merge_input"] is False
+    assert "instant_enabled" not in payload
+    assert "autosend" not in payload
+    assert "delay_sec" not in payload
+    assert "merge_input" not in payload
 
 
 # --------------------------- одна фраза = один ход ---------------------------
@@ -202,7 +271,7 @@ class _Speech:
         self.ctrl.asr_settings = _AsrSettings()
         self.ctrl.events_bus = self.bus = _Bus()
         self.desktop = []
-        self.ctrl._route_to_desktop = lambda text, autosend, delay: self.desktop.append(text)
+        self.ctrl._route_to_desktop = lambda text, autosend, delay, trace_id=None: self.desktop.append(text)
         self.ctrl._is_asr_duplicate = lambda text, now: False
         self.ctrl._instant_send_policy = lambda: (True, 0.0)
         self.ctrl._player_turn_owner = lambda: turn_owner

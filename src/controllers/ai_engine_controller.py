@@ -1,10 +1,12 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import multiprocessing as mp
 import os
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from queue import Full
 from concurrent.futures import CancelledError, Future, InvalidStateError
 from typing import Any, Callable, Dict, Iterable, Optional, Sequence
@@ -20,7 +22,7 @@ from core.daemon_executor import DaemonExecutor
 from core.services import services
 from core.runtime_environments import runtime_environments
 from core.task_supervisor import task_supervisor
-from main_logger import logger
+from main_logger import AIWorkerFileLogger, logger
 
 
 _VALID_MODES = frozenset(("auto", "shared", "split"))
@@ -78,6 +80,15 @@ class _WorkerUnavailable(RuntimeError):
     Отдельный тип нужен, чтобы отличить «рантайм как раз пересобирают» от
     настоящей ошибки вызова: первое можно переждать, второе — нет.
     """
+
+
+@dataclass(frozen=True)
+class _WorkerRuntimeValidationResult:
+    process_ready: bool
+    failed_services: frozenset[str] = frozenset()
+
+    def __bool__(self) -> bool:
+        return self.process_ready and not self.failed_services
 
 
 class _RuntimeSwitchGate:
@@ -647,7 +658,7 @@ class _Worker:
         for event in self.ready_by_service.values():
             event.clear()
         self._fail_pending(error)
-        logger.error(str(error))
+        logger.error(format_exception(error))
         try:
             get_event_bus().emit(
                 Events.AI.ENGINE_EVENT,
@@ -805,43 +816,57 @@ class _Worker:
                     pass
 
     def _log_loop(self):
-        while True:
+        worker_file_logger: AIWorkerFileLogger | None = None
+        try:
             try:
-                msg = self.log_q.get()
+                worker_file_logger = AIWorkerFileLogger(self.worker_name)
             except Exception:
-                proc = self.proc
-                if self.stopping.is_set() and (proc is None or not proc.is_alive()):
+                logger.exception(
+                    f"Failed to initialize log file for AI worker '{self.worker_name}'"
+                )
+
+            while True:
+                try:
+                    msg = self.log_q.get()
+                except Exception:
+                    proc = self.proc
+                    if self.stopping.is_set() and (proc is None or not proc.is_alive()):
+                        break
+                    time.sleep(0.05)
+                    continue
+
+                if msg is None:
                     break
-                time.sleep(0.05)
-                continue
+                if not isinstance(msg, dict):
+                    continue
 
-            if msg is None:
-                break
-            if not isinstance(msg, dict):
-                continue
-
-            level = str(msg.get("level") or "info").lower()
-            text = str(msg.get("message") or "")
-            detail = str(msg.get("detail") or "").strip()
-            self.last_status = text
-            if level == "error":
-                self.last_error = text
-
-            try:
+                level = str(msg.get("level") or "info").lower()
+                text = str(msg.get("message") or "")
+                detail = str(msg.get("detail") or "").strip()
+                self.last_status = text
                 if level == "error":
-                    logger.error(f"[AI:{self.worker_name}] {text}")
-                elif level == "warning":
-                    logger.warning(f"[AI:{self.worker_name}] {text}")
-                elif level == "success":
-                    logger.success(f"[AI:{self.worker_name}] {text}")
-                else:
-                    logger.info(f"[AI:{self.worker_name}] {text}")
-                if detail:
-                    logger.debug(
-                        f"[AI:{self.worker_name}] diagnostic traceback for {text}:\n{detail}"
-                    )
-            except Exception:
-                pass
+                    self.last_error = text
+
+                try:
+                    if worker_file_logger is not None:
+                        worker_file_logger.write(level, text, detail)
+                    if level == "error":
+                        logger.error(f"[AI:{self.worker_name}] {text}")
+                    elif level == "warning":
+                        logger.warning(f"[AI:{self.worker_name}] {text}")
+                    elif level == "success":
+                        logger.success(f"[AI:{self.worker_name}] {text}")
+                    else:
+                        logger.info(f"[AI:{self.worker_name}] {text}")
+                    if detail:
+                        logger.debug(
+                            f"[AI:{self.worker_name}] diagnostic traceback for {text}:\n{detail}"
+                        )
+                except Exception:
+                    pass
+        finally:
+            if worker_file_logger is not None:
+                worker_file_logger.close()
 
 
 class AIEngineController(AIEngineService, AIEngineAdministrationService):
@@ -932,7 +957,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                 python_paths = composition.paths
                 probe_modules = composition.probe_modules
             except Exception as exc:
-                logger.error(f"Failed to compose installed AI runtime: {exc}")
+                logger.error(f"Failed to compose installed AI runtime: {format_exception(exc)}")
                 python_paths = ()
                 probe_modules = ()
             shared = _Worker(
@@ -954,7 +979,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                     probe_modules = composition.probe_modules
                 except Exception as exc:
                     logger.error(
-                        f"Failed to compose isolated runtime for '{service}': {exc}"
+                        f"Failed to compose isolated runtime for '{service}': {format_exception(exc)}"
                     )
                     python_paths = ()
                     probe_modules = ()
@@ -1054,14 +1079,15 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
         *,
         ready_timeout: float,
         validations: Sequence[tuple[str, str, dict[str, Any], float]] = (),
-    ) -> bool:
+    ) -> _WorkerRuntimeValidationResult:
         if not self._wait_all_ready(worker, ready_timeout):
             detail = worker.last_error or getattr(worker, "last_status", "") or (
                 f"exitcode={getattr(worker.proc, 'exitcode', None)}"
             )
             logger.error(f"Candidate AI runtime did not become ready: {detail}")
-            return False
+            return _WorkerRuntimeValidationResult(process_ready=False)
 
+        failed_services: set[str] = set()
         for service_name, method, payload, method_timeout in validations:
             if not worker.supports(service_name):
                 continue
@@ -1078,13 +1104,23 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                         f"{service_name}.{method} returned a negative result"
                     )
             except Exception as exc:
-                detail = str(exc)
-                logger.error(
+                detail = format_exception(exc)
+                message = (
                     f"Candidate AI runtime validation failed for "
                     f"{service_name}.{method}: {detail}"
                 )
-                return False
-        return True
+                logger.error(message)
+                failed_services.add(service_name)
+                proc = worker.proc
+                if proc is None or not proc.is_alive():
+                    return _WorkerRuntimeValidationResult(
+                        process_ready=False,
+                        failed_services=frozenset(failed_services),
+                    )
+        return _WorkerRuntimeValidationResult(
+            process_ready=True,
+            failed_services=frozenset(failed_services),
+        )
 
     def _switch_to_composition(
         self,
@@ -1136,7 +1172,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                 )
                 return True
             except Exception as exc:
-                logger.error(f"Failed to promote shared AI runtime contract: {exc}")
+                logger.error(f"Failed to promote shared AI runtime contract: {format_exception(exc)}")
                 return False
 
         def restore_registry(snapshot) -> None:
@@ -1148,7 +1184,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
             try:
                 restore(snapshot)
             except Exception as exc:
-                logger.error(f"Failed to restore AI runtime registry: {exc}")
+                logger.error(f"Failed to restore AI runtime registry: {format_exception(exc)}")
 
         def cleanup_superseded_runtime_artifacts() -> None:
             if not promote:
@@ -1168,7 +1204,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                         cleanup_revisions(logical_id)
                     except Exception as exc:
                         logger.warning(
-                            f"Failed to clean superseded revision for '{logical_id}': {exc}"
+                            f"Failed to clean superseded revision for '{logical_id}': {format_exception(exc)}"
                         )
 
             cleanup_layers = getattr(
@@ -1181,7 +1217,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                     cleanup_layers()
                 except Exception as exc:
                     logger.warning(
-                        f"Failed to clean superseded AI backend layers: {exc}"
+                        f"Failed to clean superseded AI backend layers: {format_exception(exc)}"
                     )
 
         with self._runtime_switch_lock:
@@ -1238,19 +1274,28 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                         )
                         return False
 
-                    if previous_validations and not self._validate_worker_runtime(
-                        rollback,
-                        ready_timeout=bootstrap_timeout,
-                        validations=previous_validations,
-                    ):
-                        logger.error(
-                            "Previous shared AI runtime was restored, but one or more "
-                            "service models could not be reinitialized"
+                    if previous_validations:
+                        validation_result = self._validate_worker_runtime(
+                            rollback,
+                            ready_timeout=bootstrap_timeout,
+                            validations=previous_validations,
                         )
-                        self._notify_models_lost(
-                            (item[0] for item in previous_validations),
-                            "runtime rollback could not reinitialize service models",
-                        )
+                        if not validation_result.process_ready:
+                            rollback.stop(timeout=1.0)
+                            self._notify_models_lost(
+                                previous_services,
+                                "runtime rollback worker stopped during model restoration",
+                            )
+                            return False
+                        if validation_result.failed_services:
+                            logger.error(
+                                "Previous shared AI runtime was restored, but one or more "
+                                "service models could not be reinitialized"
+                            )
+                            self._notify_models_lost(
+                                validation_result.failed_services,
+                                "runtime rollback could not reinitialize service models",
+                            )
 
                     rollback.on_crash = self._on_worker_crash
                     with self._lock:
@@ -1268,7 +1313,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                             previous.stop(timeout=operation_timeout)
                         except Exception as exc:
                             logger.warning(
-                                f"Failed to stop current shared AI worker before switch: {exc}"
+                                f"Failed to stop current shared AI worker before switch: {format_exception(exc)}"
                             )
 
                     candidate = _Worker(
@@ -1388,7 +1433,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                             previous.stop(timeout=operation_timeout)
                         except Exception as exc:
                             logger.warning(
-                                f"Failed to stop superseded AI worker '{service_name}': {exc}"
+                                f"Failed to stop superseded AI worker '{service_name}': {format_exception(exc)}"
                             )
                 self._restart_attempts.clear()
                 cleanup_superseded_runtime_artifacts()
@@ -1411,7 +1456,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                 preferred_core_layer_ids=preferred_core_layer_ids,
             )
         except Exception as exc:
-            logger.error(f"AI runtime composition rejected: {exc}")
+            logger.error(f"AI runtime composition rejected: {format_exception(exc)}")
             return False
         return self._switch_to_composition(
             composition,
@@ -1482,11 +1527,12 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                     for item in self._validation_sequence()
                     if item[0] in candidate.service_names
                 )
-                if self._validate_worker_runtime(
+                validation_result = self._validate_worker_runtime(
                     candidate,
                     ready_timeout=_bootstrap_timeout(20.0),
                     validations=validations,
-                ):
+                )
+                if validation_result.process_ready:
                     with self._lock:
                         if self._workers.get(worker_key) is not crashed:
                             candidate.stop(timeout=1.0)
@@ -1500,6 +1546,13 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                         f"AI worker '{worker_key}' recovered after crash "
                         f"(exitcode={exit_code}, attempt={attempt})"
                     )
+                    if validation_result.failed_services:
+                        failed_list = ", ".join(sorted(validation_result.failed_services))
+                        self._notify_models_lost(
+                            validation_result.failed_services,
+                            f"AI worker recovered, but these services could not "
+                            f"restore their models: {failed_list}",
+                        )
                     return
                 candidate.stop(timeout=1.0)
                 self._restart_attempts[worker_key] = attempt
@@ -1574,7 +1627,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                 ok = bool(self.restart_service(service, timeout=timeout))
             except Exception as e:
                 ok = False
-                err = str(e)
+                err = format_exception(e)
 
             self.event_bus.emit(
                 Events.AI.SERVICE_RESTARTED,
@@ -2015,7 +2068,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
             except Exception as exc:
                 logger.error(
                     f"Cannot compose shared runtime for service={service_name} "
-                    f"item={model_id}: {exc}"
+                    f"item={model_id}: {format_exception(exc)}"
                 )
                 return False
 
@@ -2099,7 +2152,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                     selection=selection,
                 )
             except Exception as exc:
-                logger.error(f"Failed to compose AI runtime without '{record.logical_id}': {exc}")
+                logger.error(f"Failed to compose AI runtime without '{record.logical_id}': {format_exception(exc)}")
                 return False
 
             ready = self._switch_to_composition(
@@ -2218,7 +2271,7 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
                 self.mode = previous
                 self._stop_runtime_workers(timeout=timeout)
                 self._init_workers()
-                return {"ok": False, "error": str(exc), **self.topology_snapshot()}
+                return {"ok": False, "error": format_exception(exc), **self.topology_snapshot()}
             finally:
                 self._end_switch()
 

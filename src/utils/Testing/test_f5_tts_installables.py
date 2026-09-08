@@ -1,12 +1,168 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from core.install_requirements import InstallRequirement, check_requirements
-from handlers.voice_models.f5_tts_model import F5TTSInstallSpec
+from handlers.voice_models.f5_tts_model import F5TTSInstallSpec, F5TTSModel
 
 
 class F5TTSInstallablesTests(unittest.TestCase):
+    def test_cross_lingual_variant_has_own_assets_and_dependencies(self):
+        requirements = F5TTSInstallSpec.requirements(
+            "high_clf5",
+            {"gpu_vendor": "NVIDIA"},
+        )
+        specs = {req.spec for req in requirements if req.kind == "python_dist"}
+        files = {
+            Path(req.path_fn({}) if req.path_fn else req.path).name
+            for req in requirements
+            if req.kind == "file"
+        }
+
+        self.assertIn("pyphen", specs)
+        self.assertNotIn("ruaccent", specs)
+        self.assertIn("speaking_rate.safetensors", files)
+
+    def test_russian_variant_requires_ruaccent_and_enables_it_by_default(self):
+        requirements = F5TTSInstallSpec.requirements("high", {"gpu_vendor": "NVIDIA"})
+        specs = {req.spec for req in requirements if req.kind == "python_dist"}
+        defaults = F5TTSModel.default_settings_for_model("high")
+
+        self.assertIn("ruaccent", specs)
+        self.assertNotIn("pyphen", specs)
+        self.assertTrue(defaults["use_ruaccent"])
+
+    def test_cross_lingual_settings_do_not_expose_ruaccent(self):
+        keys = {
+            item["key"]
+            for item in F5TTSModel._find_model_config("high_clf5")["settings"]
+        }
+
+        self.assertNotIn("use_ruaccent", keys)
+
+    def test_cross_lingual_rvc_combines_clf5_and_rvc_requirements(self):
+        requirements = F5TTSInstallSpec.requirements(
+            "high_clf5+low",
+            {"gpu_vendor": "NVIDIA"},
+        )
+        specs = {req.spec for req in requirements if req.kind == "python_dist"}
+        files = {
+            Path(req.path_fn({}) if req.path_fn else req.path).name
+            for req in requirements
+            if req.kind == "file"
+        }
+        settings = F5TTSModel._find_model_config("high_clf5+low")["settings"]
+        setting_keys = {item["key"] for item in settings}
+
+        self.assertIn("pyphen", specs)
+        self.assertIn("tts-with-rvc", specs)
+        self.assertNotIn("ruaccent", specs)
+        self.assertIn("speaking_rate.safetensors", files)
+        self.assertIn("f5rvc_f5_nfe_step", setting_keys)
+        self.assertIn("f5rvc_rvc_pitch", setting_keys)
+        self.assertNotIn("f5rvc_use_ruaccent", setting_keys)
+
+    def test_rvc_variants_mirror_the_base_language_split(self):
+        russian = F5TTSModel._find_model_config("high+low")
+        cross_lingual = F5TTSModel._find_model_config("high_clf5+low")
+        russian_defaults = F5TTSModel.default_settings_for_model("high+low")
+
+        self.assertIn(russian["name"], {"F5-TTS + RVC (Русский)", "F5-TTS + RVC (Russian)"})
+        self.assertEqual(russian["languages"], ["Russian"])
+        self.assertTrue(russian_defaults["f5rvc_use_ruaccent"])
+        self.assertEqual(cross_lingual["languages"], ["English", "Chinese"])
+        self.assertNotIn(
+            "f5rvc_use_ruaccent",
+            {item["key"] for item in cross_lingual["settings"]},
+        )
+
+    def test_required_assets_include_vocoder_and_backend_specific_rvc(self):
+        with tempfile.TemporaryDirectory() as base_dir, patch.dict(
+            os.environ,
+            {
+                "NEUROMITA_BASE_DIR": base_dir,
+                "NEUROMITA_CHECKPOINTS_DIR": os.path.join(base_dir, "checkpoints"),
+            },
+            clear=False,
+        ):
+            cuda_files = {
+                Path(req.path_fn({}) if req.path_fn else req.path).name
+                for req in F5TTSInstallSpec.requirements(
+                    "high+low", {"gpu_vendor": "NVIDIA"}
+                )
+                if req.kind == "file"
+            }
+            onnx_files = {
+                Path(req.path_fn({}) if req.path_fn else req.path).name
+                for req in F5TTSInstallSpec.requirements(
+                    "high+low", {"gpu_vendor": "AMD"}
+                )
+                if req.kind == "file"
+            }
+
+        common = {"model.safetensors", "vocab.txt", "config.yaml", "pytorch_model.bin"}
+        self.assertTrue(common.issubset(cuda_files))
+        self.assertTrue(common.issubset(onnx_files))
+        self.assertTrue({"hubert_base.pt", "rmvpe.pt"}.issubset(cuda_files))
+        self.assertTrue({"vec-768-layer-12.onnx", "rmvpe.onnx"}.issubset(onnx_files))
+
+    def test_install_plan_downloads_vocoder_and_rvc_before_runtime(self):
+        with tempfile.TemporaryDirectory() as base_dir, patch.dict(
+            os.environ,
+            {
+                "NEUROMITA_BASE_DIR": base_dir,
+                "NEUROMITA_CHECKPOINTS_DIR": os.path.join(base_dir, "checkpoints"),
+            },
+            clear=False,
+        ), patch.object(F5TTSInstallSpec, "is_installed", return_value=False):
+            plan = F5TTSInstallSpec.build_install_plan(
+                "high+low", {"gpu_vendor": "NVIDIA"}
+            )
+
+        files = [
+            item
+            for action in plan.actions
+            if action.type == "download_http"
+            for item in action.files
+        ]
+        destinations = {Path(item["dest"]) for item in files}
+        self.assertIn(
+            Path(base_dir) / "checkpoints" / "vocos-mel-24khz" / "pytorch_model.bin",
+            destinations,
+        )
+        self.assertIn(Path(base_dir) / "hubert_base.pt", destinations)
+        self.assertIn(Path(base_dir) / "rmvpe.pt", destinations)
+
+    def test_model_and_vocoder_paths_use_checkpoint_override(self):
+        with (
+            tempfile.TemporaryDirectory() as base_dir,
+            tempfile.TemporaryDirectory() as checkpoint_dir,
+            patch.dict(
+                os.environ,
+                {
+                    "NEUROMITA_BASE_DIR": base_dir,
+                    "NEUROMITA_CHECKPOINTS_DIR": checkpoint_dir,
+                },
+                clear=False,
+            ),
+        ):
+            requirements = F5TTSInstallSpec.requirements(
+                "high",
+                {"gpu_vendor": "NVIDIA", "voice_language": "ru"},
+            )
+            file_paths = {
+                Path(req.path_fn({}) if req.path_fn else req.path)
+                for req in requirements
+                if req.kind == "file"
+            }
+
+        root = Path(checkpoint_dir).resolve()
+        self.assertTrue(file_paths)
+        self.assertTrue(all(path.is_relative_to(root) for path in file_paths))
+
     def test_high_low_uses_cuda_rvc_package_on_nvidia(self):
         specs = [req.spec for req in F5TTSInstallSpec.requirements("high+low", {"gpu_vendor": "NVIDIA"})]
 

@@ -22,7 +22,9 @@ from controllers.chat_controller import ChatController
 from core.events import Events, get_event_bus
 from core.executors import Pools, executors
 from core.services import services
+from managers.task_manager import TaskStatus
 from services.llm_stream import LLMStreamEvent, LLMStreamEventType
+from core.request_policy import resolve_policy
 from services.contracts import (
     CharacterRegistry,
     ChatGenerationRequest,
@@ -80,6 +82,20 @@ class _BlockingGeneration(GenerationService):
         raise AssertionError("не используется")
 
 
+class _CancellableGeneration(GenerationService):
+    def __init__(self):
+        self.entered = threading.Event()
+
+    def generate_chat(self, request: ChatGenerationRequest):
+        self.entered.set()
+        request.cancellation.wait(10)
+        request.cancellation.raise_if_cancelled()
+        return ChatGenerationResult(text="unexpected", character_id="Crazy")
+
+    def generate_utility(self, request):
+        raise AssertionError("не используется")
+
+
 class _StreamingGeneration(GenerationService):
     def __init__(self):
         self.request = None
@@ -100,9 +116,36 @@ class _StreamingGeneration(GenerationService):
         raise AssertionError("не используется")
 
 
+class _HiddenGameMasterGeneration(GenerationService):
+    def generate_chat(self, request: ChatGenerationRequest):
+        return ChatGenerationResult(
+            text="",
+            character_id="GameMaster",
+            structured={"actions": []},
+            structured_parse_level="direct",
+            control_plane_trusted=True,
+        )
+
+    def generate_utility(self, request):
+        raise AssertionError("?? ????????????")
+
+
 class _ImmediateGeneration(GenerationService):
     def generate_chat(self, request: ChatGenerationRequest):
         return ChatGenerationResult(text="ok", character_id="Crazy")
+
+    def generate_utility(self, request):
+        raise AssertionError("не используется")
+
+
+class _ThinkingGeneration(GenerationService):
+    def generate_chat(self, request: ChatGenerationRequest):
+        return ChatGenerationResult(
+            text="visible answer",
+            character_id="Crazy",
+            think="private reasoning",
+            message_id="out:thinking-task",
+        )
 
     def generate_utility(self, request):
         raise AssertionError("не используется")
@@ -120,6 +163,10 @@ class ChatRequestPipelineTests(unittest.TestCase):
         # ChatController подписывается с weak=False: без явной отписки прошлый
         # инстанс продолжит обрабатывать SEND_MESSAGE и сломает следующий тест.
         self.bus.unsubscribe(Events.Chat.SEND_MESSAGE, self.controller._on_send_message)
+        self.bus.unsubscribe(
+            Events.Chat.CANCEL_ACTIVE_GENERATIONS,
+            self.controller._on_cancel_active_generations,
+        )
         self.bus.unsubscribe(
             Events.Model.GET_LLM_PROCESSING_STATUS, self.controller._on_get_llm_processing_status
         )
@@ -153,6 +200,44 @@ class ChatRequestPipelineTests(unittest.TestCase):
             self.generation.threads[0].startswith(Pools.GENERATION),
             f"генерация ушла не в свой пул: {self.generation.threads[0]}",
         )
+
+    def test_cancel_stops_unity_generation_and_marks_task_cancelled(self):
+        generation = _CancellableGeneration()
+        services().register(GenerationService, generation, replace=True)
+        task_updates: list[dict] = []
+
+        def collect_task_update(event):
+            task_updates.append(event.data or {})
+
+        subscription = self.bus.subscribe(
+            Events.Task.UPDATE_TASK_STATUS,
+            collect_task_update,
+            weak=False,
+        )
+        try:
+            self.bus.emit(
+                Events.Chat.SEND_MESSAGE,
+                {"user_input": "hi", "task_uid": "unity-task"},
+                sync=True,
+            )
+            self.assertTrue(generation.entered.wait(3))
+            self.bus.emit(Events.Chat.CANCEL_ACTIVE_GENERATIONS, sync=True)
+
+            deadline = time.time() + 3
+            while self.controller.llm_processing and time.time() < deadline:
+                time.sleep(0.02)
+            self.bus.flush(3)
+
+            self.assertFalse(self.controller.llm_processing)
+            self.assertTrue(
+                any(
+                    update.get("uid") == "unity-task"
+                    and update.get("status") == TaskStatus.CANCELLED
+                    for update in task_updates
+                )
+            )
+        finally:
+            subscription.close()
 
     def test_inflight_counter_tracks_concurrent_requests(self):
         for _ in range(3):
@@ -200,6 +285,41 @@ class ChatRequestPipelineTests(unittest.TestCase):
         self.assertIsNone(generation.request.stream_callback)
         self.assertTrue(callable(generation.request.stream_event_callback))
 
+    def test_stream_ui_events_keep_character_scope(self):
+        generation = _StreamingGeneration()
+        services().register(GenerationService, generation, replace=True)
+        self.controller.settings = _StubSettings({"ENABLE_STREAMING": True})
+        seen: list[tuple[str, dict]] = []
+        subscriptions = [
+            self.bus.subscribe(
+                event_name,
+                lambda event, name=event_name: seen.append((name, dict(event.data or {}))),
+                weak=False,
+            )
+            for event_name in (
+                Events.GUI.PREPARE_STREAM_UI,
+                Events.GUI.APPEND_STREAM_CHUNK_UI,
+                Events.GUI.FINISH_STREAM_UI,
+            )
+        ]
+        try:
+            result = self.controller._run_request("hi", character_id="Crazy")
+            self.bus.flush(2)
+        finally:
+            for subscription in subscriptions:
+                subscription.close()
+
+        self.assertEqual(result, "hello")
+        self.assertEqual(
+            [name for name, _payload in seen],
+            [
+                Events.GUI.PREPARE_STREAM_UI,
+                Events.GUI.APPEND_STREAM_CHUNK_UI,
+                Events.GUI.FINISH_STREAM_UI,
+            ],
+        )
+        self.assertTrue(all(payload.get("character_id") == "Crazy" for _, payload in seen))
+
     def test_request_keeps_its_own_unity_context_snapshot(self):
         generation = _StreamingGeneration()
         services().register(GenerationService, generation, replace=True)
@@ -218,16 +338,32 @@ class ChatRequestPipelineTests(unittest.TestCase):
         self.assertEqual(generation.request.game_state, snapshot)
         self.assertIsNot(generation.request.game_state, snapshot)
 
+    def test_hidden_game_master_result_has_no_empty_ui_bubble(self):
+        services().register(GenerationService, _HiddenGameMasterGeneration(), replace=True)
+        self.controller.settings = _StubSettings({"GM_ALLOW_ROUTING": True})
+
+        with patch.object(self.controller.event_bus, "emit", wraps=self.controller.event_bus.emit) as emit:
+            result = self.controller._run_request(
+                "",
+                character_id="GameMaster",
+                event_type="game_master_observe",
+                policy={"echo_to_ui": True, "allow_streaming": True, "write_to_history": True},
+            )
+
+        self.assertEqual(result, "")
+        emitted_events = [call.args[0] for call in emit.call_args_list if call.args]
+        self.assertNotIn(Events.GUI.UPDATE_CHAT_UI, emitted_events)
+        self.assertNotIn(Events.Model.ON_FAILED_RESPONSE, emitted_events)
+
     def test_task_result_keeps_response_protocol_version(self):
         result = ChatController._build_task_result(
             "hello",
-            "Player",
             {"response_protocol_version": 2, "segments": [{"text": "hello"}]},
         )
-        self.assertEqual(result["response_protocol_version"], 2)
+        self.assertEqual(result["response_protocol_version"], 3)
 
-        plain_result = ChatController._build_task_result("hello", "Player", None)
-        self.assertEqual(plain_result["response_protocol_version"], 2)
+        plain_result = ChatController._build_task_result("hello", None)
+        self.assertEqual(plain_result["response_protocol_version"], 3)
 
     def test_non_stream_request_does_not_create_presentation_coalescer(self):
         services().register(GenerationService, _ImmediateGeneration(), replace=True)
@@ -240,6 +376,28 @@ class ChatRequestPipelineTests(unittest.TestCase):
             result = self.controller._run_request("hi", character_id="Crazy")
 
         self.assertEqual(result, "ok")
+
+    def test_non_stream_thinking_uses_assistant_message_identity(self):
+        services().register(GenerationService, _ThinkingGeneration(), replace=True)
+        self.controller.settings = _StubSettings({
+            "ENABLE_STREAMING": False,
+            "SHOW_THINK_IN_GUI": True,
+        })
+
+        with patch.object(self.controller.event_bus, "emit", wraps=self.controller.event_bus.emit) as emit:
+            result = self.controller._run_request("hi", character_id="Crazy")
+
+        self.assertEqual(result, "visible answer")
+        think_payloads = [
+            call.args[1]
+            for call in emit.call_args_list
+            if len(call.args) >= 2
+            and call.args[0] == Events.GUI.UPDATE_CHAT_UI
+            and isinstance(call.args[1], dict)
+            and call.args[1].get("role") == "think"
+        ]
+        self.assertEqual(len(think_payloads), 1)
+        self.assertEqual(think_payloads[0].get("message_id"), "out:thinking-task")
 
 
 if __name__ == "__main__":

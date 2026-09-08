@@ -4,8 +4,8 @@ import base64
 
 import qtawesome as qta
 
-from PyQt6.QtCore import QBuffer, QEvent, QIODevice, QPoint, Qt
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import QBuffer, QEvent, QIODevice, QPoint, QRectF, QSize, Qt
+from PyQt6.QtGui import QColor, QIcon, QKeyEvent, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 
 from localization.live import tr_set
 from ui.chat.chat_widget import ChatWidget
+from ui.chat.dialogue_presentation import format_conversation_title, format_runtime_source
 from ui.widgets.chat_panel_presentation import (
     ChatCaptureScreenRequested,
     ChatClearStagedRequested,
@@ -60,6 +61,7 @@ class ChatPanel(QWidget):
         self._state: ChatPanelState = view_model.state
         self._staged_images: list[bytes] = []
         self._conversation_title_label: QLabel | None = None
+        self._conversation_source_label: QLabel | None = None
         self.image_preview_bar: ImagePreviewBar | None = None
 
         self.attach_button: QPushButton
@@ -96,13 +98,53 @@ class ChatPanel(QWidget):
         self._state = state
         if self._conversation_title_label is not None:
             self._conversation_title_label.setText(
-                _("Разговор с ", "Conversation with ")
-                + (state.character_id or _("персонажем", "character"))
+                format_conversation_title(state.dialogue_snapshot, state.character_id)
             )
+        if self._conversation_source_label is not None:
+            source_label = format_runtime_source(state.dialogue_snapshot)
+            self._conversation_source_label.setText(source_label)
+            self._conversation_source_label.setVisible(bool(source_label))
         self.composer_warning_label.setText(state.warning)
         self.composer_bar.setVisible(not state.blocked)
         self.composer_warning.setVisible(state.blocked)
-        self.send_button.setEnabled(bool(state.can_send))
+        cancel_mode = state.active_generation_count > 0
+        self._set_send_button_mode(cancel_mode)
+        self.send_button.setEnabled(cancel_mode or bool(state.can_send))
+
+    def _set_send_button_mode(self, cancel_mode: bool) -> None:
+        if bool(self.send_button.property("cancelMode")) == cancel_mode:
+            return
+        self.send_button.setProperty("cancelMode", cancel_mode)
+        if cancel_mode:
+            self.send_button.setIcon(self._stop_icon())
+            self.send_button.setIconSize(QSize(20, 20))
+            self.send_button.setToolTip(_("Остановить генерацию", "Stop generation"))
+        else:
+            self.send_button.setIcon(
+                qta.icon("fa6s.paper-plane", color="white", scale_factor=0.85)
+            )
+            self.send_button.setIconSize(QSize(18, 18))
+            self.send_button.setToolTip(_("Отправить сообщение", "Send message"))
+        self.send_button.style().unpolish(self.send_button)
+        self.send_button.style().polish(self.send_button)
+
+    @staticmethod
+    def _stop_icon() -> QIcon:
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(QRectF(2.0, 2.0, 16.0, 16.0), 3.0, 3.0)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _on_send_button_clicked(self) -> None:
+        if self._state.active_generation_count > 0:
+            self._actions.cancel_active_generations()
+            return
+        self._actions.send_message()
 
     def _handle_effect(self, effect) -> None:
         if isinstance(effect, ChatImagesStaged):
@@ -267,6 +309,12 @@ class ChatPanel(QWidget):
         title.setObjectName("ChatStripTitle")
         layout.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         self._conversation_title_label = title
+
+        source_label = QLabel("")
+        source_label.setObjectName("ChatStripSourceBadge")
+        source_label.setVisible(False)
+        layout.addWidget(source_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._conversation_source_label = source_label
         layout.addStretch(1)
 
         history_button = QPushButton()
@@ -334,7 +382,7 @@ class ChatPanel(QWidget):
         self.user_entry.setFixedHeight(36)
         tr_set(
             self.user_entry,
-            "Напиши что-нибудь Crazy Mita…",
+            "Напиши что-нибудь Мите…",
             "Write something to Mita…",
             "setPlaceholderText",
         )
@@ -371,8 +419,9 @@ class ChatPanel(QWidget):
             qta.icon("fa6s.paper-plane", color="white", scale_factor=0.85), ""
         )
         self.send_button.setObjectName("ChatSendButtonPill")
-        self.send_button.clicked.connect(self._actions.send_message)
-        self.send_button.setFixedSize(38, 38)
+        self.send_button.clicked.connect(self._on_send_button_clicked)
+        self.send_button.setFixedSize(42, 42)
+        self.send_button.setIconSize(QSize(18, 18))
         self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
         tr_set(
             self.send_button,

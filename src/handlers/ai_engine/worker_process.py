@@ -1,9 +1,11 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import asyncio
 import importlib
 import inspect
 import json
+import multiprocessing as mp
 import os
 import site
 import sys
@@ -53,20 +55,9 @@ def _runtime_target_path(paths: list[str]) -> str | None:
 
 def _configure_torch_compile_cache(runtime_root: str) -> None:
     """Configure one persistent TorchInductor/Triton cache for all AI overlays."""
-    environment_root = os.path.abspath(
-        os.environ.get("NEUROMITA_ENVIRONMENT_DIR")
-        or os.path.join(runtime_root, "environment")
-    )
-    cache_root = os.path.join(environment_root, "cache")
+    from core.torch_compile_runtime import configure_compile_environment
 
-    try:
-        os.makedirs(cache_root, exist_ok=True)
-    except OSError:
-        return
-
-    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(cache_root, "torchinductor"))
-    os.environ.setdefault("TRITON_CACHE_DIR", os.path.join(cache_root, "triton"))
-    os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
+    configure_compile_environment()
 
 
 def _activate_site_directories(paths: list[str]) -> list[str]:
@@ -163,6 +154,9 @@ def _ensure_lib_on_path(python_paths: tuple[str, ...] | list[str] | None = None)
         for path in (python_paths or ())
         if str(path).strip()
     ]
+    from core.torch_compile_runtime import configure_compile_environment
+
+    configure_compile_environment(explicit_paths)
     ordered = list(dict.fromkeys(
         explicit_paths + ([main_core] if os.path.isdir(main_core) else [])
     ))
@@ -274,7 +268,7 @@ def _probe_runtime_modules(
             importlib.import_module(normalized)
         except Exception as exc:
             raise RuntimeError(
-                f"AI runtime probe failed while importing '{normalized}': {exc}"
+                f"AI runtime probe failed while importing '{normalized}': {format_exception(exc)}"
             ) from exc
 
 
@@ -396,7 +390,7 @@ async def _respond(res_queue, service_name: str, req_id, *, ok: bool, result=Non
         "service": service_name,
         "req_id": req_id,
         "ok": bool(ok),
-        **({"result": result} if ok else {"error": str(error)}),
+        **({"result": result} if ok else {"error": format_exception(error)}),
     }
 
     def _put() -> None:
@@ -422,7 +416,7 @@ async def _dispatch(service, service_name: str, method: str, payload: dict, req_
         _log(
             log_queue,
             "error",
-            f"[{service_name}.{method}] failed: {e}",
+            f"[{service_name}.{method}] failed: {format_exception(e)}",
             detail=traceback.format_exc(),
         )
         await _respond(res_queue, service_name, req_id, ok=False, error=e)
@@ -504,6 +498,23 @@ async def _worker_loop(
 
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
+    async def _parent_watch_loop() -> None:
+        parent = mp.parent_process()
+        if parent is None:
+            return
+        interval = _env_float("NEUROMITA_AI_PARENT_WATCH_INTERVAL", 1.0, minimum=0.2)
+        while True:
+            if not parent.is_alive():
+                _log(
+                    log_queue,
+                    "warning",
+                    f"Worker '{worker_name}' detected that its parent exited",
+                )
+                os._exit(1)
+            await asyncio.sleep(interval)
+
+    parent_watch_task = asyncio.create_task(_parent_watch_loop())
+
     async def _drain(timeout: float = 30.0) -> None:
         if not inflight:
             return
@@ -568,7 +579,12 @@ async def _worker_loop(
                 except Exception:
                     pass
             heartbeat_task.cancel()
-            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            parent_watch_task.cancel()
+            await asyncio.gather(
+                heartbeat_task,
+                parent_watch_task,
+                return_exceptions=True,
+            )
             _log(log_queue, "info", f"Worker '{worker_name}' shutdown")
             return
 
@@ -604,7 +620,7 @@ async def _worker_loop(
                 blocked_services.pop(service_name, None)
                 await _respond(res_queue, service_name, req_id, ok=True, result=True)
             except Exception as e:
-                _log(log_queue, "error", f"[{service_name}] restart failed: {e}\n{traceback.format_exc()}")
+                _log(log_queue, "error", f"[{service_name}] restart failed: {format_exception(e)}\n{traceback.format_exc()}")
                 await _respond(res_queue, service_name, req_id, ok=False, error=e)
             continue
 
@@ -651,7 +667,7 @@ async def _restart_service(services: dict[str, Any], service_name: str, *, res_q
         if hasattr(service, "shutdown"):
             await _maybe_await(service.shutdown())
     except Exception as e:
-        _log(log_queue, "warning", f"[{service_name}] shutdown before restart failed: {e}")
+        _log(log_queue, "warning", f"[{service_name}] shutdown before restart failed: {format_exception(e)}")
 
     new_service = _LazyService(
         service_name,

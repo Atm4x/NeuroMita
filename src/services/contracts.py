@@ -14,6 +14,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional
 
+from core.cancellation import CancellationToken
 from core.request_policy import RequestPolicy
 
 
@@ -23,6 +24,11 @@ from core.request_policy import RequestPolicy
 
 class SettingsService(ABC):
     """Единственный источник значений настроек."""
+
+    @property
+    def revision(self) -> int:
+        """Monotonic settings revision used by runtime mirrors."""
+        return 0
 
     @abstractmethod
     def get(self, key: str, default: Any = None) -> Any: ...
@@ -55,6 +61,28 @@ class SettingsService(ABC):
         replay: bool = False,
     ) -> Any:
         raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterEnvironmentSnapshot:
+    unity_installed: bool = False
+    python_update_available: bool | None = None
+    python_update_version: str = ""
+    voice_enabled: bool = False
+    voice_method: str = "Local"
+    voice_model_id: str = ""
+    voice_model_name: str = ""
+    voice_model_installed: bool = False
+    voice_model_initialized: bool = False
+    voice_pipeline_ready: bool | None = None
+
+
+class CharacterEnvironmentContextService(ABC):
+    @abstractmethod
+    def snapshot(self) -> CharacterEnvironmentSnapshot: ...
+
+    @abstractmethod
+    def publish_python_update(self, *, available: bool, version: str = "") -> None: ...
 
 
 class ASRSettingsService(ABC):
@@ -436,6 +464,218 @@ class HistoryService(ABC):
 
 
 # ---------------------------------------------------------------------------
+# Разговор
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class DialogueParticipant:
+    """Один участник текущего разговора в понимании Unity.
+
+    ``character_id`` — личность (промпт, память), ``actor_id`` — конкретный
+    экземпляр GameObject. Одна личность может быть заспавнена несколько раз,
+    поэтому смешивать их нельзя.
+    """
+
+    actor_id: str
+    character_id: str
+    display_name: str = ""
+    world_id: str = ""
+    room_id: str = ""
+    distance_to_player: float = 0.0
+    can_hear_player: bool = True
+    can_hear_speaker: bool = True
+    can_speak: bool = True
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class DialogueTurnContext:
+    """Ход конкретного разговора: кто говорит, кто отвечает, кто рядом."""
+
+    conversation_id: str = ""
+    epoch: int = 0
+    turn_index: int = 0
+
+    speaker_actor_id: str = ""
+    responder_actor_id: str = ""
+    auto_dialogue_enabled: bool = True
+    auto_turns_since_player: int = 0
+    max_auto_turns: int = 0
+    spoken_actor_ids: List[str] = field(default_factory=list)
+
+    world_id: str = ""
+    room_id: str = ""
+
+    participants: List[DialogueParticipant] = field(default_factory=list)
+
+    # Client values are diagnostic mirrors of the Unity-owned turn state.
+    client_auto_dialogue_enabled: Optional[bool] = None
+    client_auto_turn_limit: Optional[int] = None
+    client_settings_revision: Optional[int] = None
+    client_gm_enabled: Optional[bool] = None
+    client_gm_repeat: Optional[int] = None
+
+
+class DialogueRuntimeSource(str, Enum):
+    """Origin of the dialogue snapshot shown by the Python UI."""
+
+    NONE = "none"
+    UNITY = "unity"
+
+
+class PlayerMessageSource(str, Enum):
+    """Transport from which the Player authored the current turn."""
+
+    NONE = "none"
+    APPLICATION = "application"
+    GAME = "game"
+
+
+def parse_player_message_source(raw: object) -> PlayerMessageSource:
+    if isinstance(raw, PlayerMessageSource):
+        return raw
+    value = str(raw or "").strip().lower()
+    aliases = {
+        "": PlayerMessageSource.NONE,
+        "none": PlayerMessageSource.NONE,
+        "python": PlayerMessageSource.APPLICATION,
+        "python_app": PlayerMessageSource.APPLICATION,
+        "app": PlayerMessageSource.APPLICATION,
+        "application": PlayerMessageSource.APPLICATION,
+        "unity": PlayerMessageSource.GAME,
+        "game": PlayerMessageSource.GAME,
+    }
+    return aliases.get(value, PlayerMessageSource.NONE)
+
+
+@dataclass(frozen=True, slots=True)
+class DialogueParticipantView:
+    """UI-safe participant projection; never used to authorize a route."""
+
+    actor_id: str
+    character_id: str
+    display_name: str = ""
+    is_active: bool = True
+    can_speak: bool = True
+    can_hear_speaker: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class DialogueRuntimeSnapshot:
+    """Ephemeral view state for the active Unity or Sandbox dialogue."""
+
+    source: DialogueRuntimeSource = DialogueRuntimeSource.NONE
+    conversation_id: str = ""
+    epoch: int = 0
+    turn_index: int = 0
+    auto_dialogue_enabled: bool = False
+    auto_turns_used: int = 0
+    auto_turns_max: int = 0
+    speaker_actor_id: str = ""
+    responder_actor_id: str = ""
+    participants: tuple[DialogueParticipantView, ...] = ()
+    game_master_enabled: bool = False
+
+    @property
+    def is_active(self) -> bool:
+        return bool(self.conversation_id and self.source is not DialogueRuntimeSource.NONE)
+
+    @property
+    def auto_turns_remaining(self) -> int:
+        return max(0, int(self.auto_turns_max) - int(self.auto_turns_used))
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_dialogue_turn_context(raw: object) -> Optional[DialogueTurnContext]:
+    """Normalize a raw Unity conversation snapshot into one typed context."""
+    if raw is None:
+        return None
+    if isinstance(raw, DialogueTurnContext):
+        return raw
+    if not isinstance(raw, dict):
+        return None
+
+    def _int(name: str) -> int:
+        try:
+            return int(raw.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    participants: List[DialogueParticipant] = []
+    for item in raw.get("participants", []) or []:
+        if isinstance(item, DialogueParticipant):
+            participant = item
+        elif isinstance(item, dict):
+            try:
+                participant = DialogueParticipant(
+                    actor_id=str(item.get("actor_id") or "").strip(),
+                    character_id=str(item.get("character_id") or "").strip(),
+                    display_name=str(item.get("display_name") or ""),
+                    world_id=str(item.get("world_id") or ""),
+                    room_id=str(item.get("room_id") or ""),
+                    distance_to_player=float(item.get("distance_to_player") or 0.0),
+                    can_hear_player=_coerce_bool(item.get("can_hear_player"), True),
+                    can_hear_speaker=_coerce_bool(item.get("can_hear_speaker"), True),
+                    can_speak=_coerce_bool(item.get("can_speak"), True),
+                    is_active=_coerce_bool(item.get("is_active"), True),
+                )
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        if participant.actor_id:
+            participants.append(participant)
+
+    spoken = [str(actor_id).strip() for actor_id in (raw.get("spoken_actor_ids", []) or []) if str(actor_id).strip()]
+    return DialogueTurnContext(
+        conversation_id=str(raw.get("conversation_id") or "").strip(),
+        epoch=_int("epoch"),
+        turn_index=_int("turn_index"),
+        speaker_actor_id=str(raw.get("speaker_actor_id") or "").strip(),
+        responder_actor_id=str(raw.get("responder_actor_id") or "").strip(),
+        auto_dialogue_enabled=_coerce_bool(raw.get("auto_dialogue_enabled"), True),
+        auto_turns_since_player=_int("auto_turns_since_player"),
+        max_auto_turns=_int("max_auto_turns"),
+        spoken_actor_ids=spoken,
+        world_id=str(raw.get("world_id") or "").strip(),
+        room_id=str(raw.get("room_id") or "").strip(),
+        participants=participants,
+        client_auto_dialogue_enabled=(
+            _coerce_bool(raw.get("client_auto_dialogue_enabled"))
+            if raw.get("client_auto_dialogue_enabled") is not None
+            else None
+        ),
+        client_auto_turn_limit=(
+            _int("client_auto_turn_limit")
+            if raw.get("client_auto_turn_limit") is not None
+            else None
+        ),
+        client_settings_revision=(
+            _int("client_settings_revision")
+            if raw.get("client_settings_revision") is not None
+            else None
+        ),
+        client_gm_enabled=(
+            _coerce_bool(raw.get("client_gm_enabled"))
+            if raw.get("client_gm_enabled") is not None
+            else None
+        ),
+        client_gm_repeat=(
+            _int("client_gm_repeat")
+            if raw.get("client_gm_repeat") is not None
+            else None
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Промпт
 # ---------------------------------------------------------------------------
 
@@ -460,6 +700,11 @@ class PromptBuildRequest:
     sender: str = "Player"
     participants: List[str] = field(default_factory=list)
     capabilities: Dict[str, Any] = field(default_factory=dict)
+    dialogue: Optional[DialogueTurnContext] = None
+    player_message_source: PlayerMessageSource = PlayerMessageSource.NONE
+    previous_player_message_source: PlayerMessageSource = PlayerMessageSource.NONE
+    gm_instruction_override: Optional[str] = None
+    core_memory_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -501,6 +746,12 @@ class ChatGenerationRequest:
     policy: Optional[RequestPolicy] = None
     disable_history_compression: bool = False
     game_state: Dict[str, Any] = field(default_factory=dict)
+    dialogue: Optional[DialogueTurnContext] = None
+    player_message_source: PlayerMessageSource = PlayerMessageSource.NONE
+    previous_player_message_source: PlayerMessageSource = PlayerMessageSource.NONE
+    gm_instruction_override: Optional[str] = None
+    trace_id: Optional[str] = None
+    cancellation: Optional[CancellationToken] = None
 
 
 @dataclass(frozen=True)
@@ -508,14 +759,18 @@ class ChatGenerationResult:
     text: str
     character_id: str
     voice_profile: Optional[Dict[str, Any]] = None
-    target: str = "Player"
-    targets: List[str] = field(default_factory=list)
     think: Optional[str] = None
     structured: Optional[Dict[str, Any]] = None
     message_id: str = ""
     sample_id: str = ""
+    # Immutable diagnostic snapshot of the exact request behind this reply.
+    # Unlike a finetune sample it exists even when collection is disabled.
+    context_snapshot_id: str = ""
     error: str = ""
     error_details: Optional[Dict[str, Any]] = None
+    # Repaired structured output remains displayable but cannot authorize routing.
+    structured_parse_level: str = ""
+    control_plane_trusted: bool = False
 
 
 @dataclass
@@ -642,6 +897,11 @@ class ModelStateService(ABC):
     def schedule_g4f_update(self, version: str = "latest") -> bool: ...
 
 
+class GenerationActivityService(ABC):
+    @abstractmethod
+    def active_generation_count(self) -> int: ...
+
+
 class CaptureService(ABC):
     @abstractmethod
     def capture_screen(self, limit: int = 1) -> List[Any]: ...
@@ -669,7 +929,9 @@ class LocalVoiceService(ABC):
     def is_installed(self, model_id: str) -> bool: ...
 
     @abstractmethod
-    def check_initialized(self, model_id: str, *, strict: bool = False) -> bool: ...
+    def check_initialized(self, model_id: str, *, probe_worker: bool = False) -> bool:
+        """Return cached state unless an explicit worker probe is requested."""
+        ...
 
     @abstractmethod
     def select_model(self, model_id: str) -> bool: ...
@@ -699,6 +961,22 @@ class VoiceModelService(ABC):
 
     @abstractmethod
     def dependencies_status(self) -> Dict[str, Any]: ...
+
+    @abstractmethod
+    def compile_status(self) -> Dict[str, Any]: ...
+
+    @abstractmethod
+    def enable_long_paths(self) -> bool: ...
+
+    @abstractmethod
+    def start_compile(
+        self,
+        model_id: str,
+        *,
+        clear_only: bool = False,
+        with_ui: bool = True,
+        timeout_sec: float | None = None,
+    ) -> bool: ...
 
 
 class SpeechService(ABC):

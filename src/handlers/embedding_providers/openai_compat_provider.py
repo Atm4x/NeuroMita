@@ -1,14 +1,20 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import time
 from typing import List, Optional
 
 import numpy as np
 
+from core.networking import ManagedHttpClient, shared_http_client_registry
 from .base import BaseEmbeddingProvider, EmbeddingRequest
 from main_logger import logger
 
 _RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+_HTTP_CLIENT = shared_http_client_registry().acquire(
+    "rag-openai-compatible",
+    client_options={"follow_redirects": True},
+)
 
 
 def _l2_normalize(vec: np.ndarray) -> np.ndarray:
@@ -23,12 +29,13 @@ class OpenAICompatibleEmbeddingProvider(BaseEmbeddingProvider):
     """
     name = "openai_compat"
 
+    def __init__(self, http_client: ManagedHttpClient | None = None) -> None:
+        self._http_client = http_client or _HTTP_CLIENT
+
     def is_applicable(self, req: EmbeddingRequest) -> bool:
         return bool(req.api_url)
 
     def embed(self, req: EmbeddingRequest) -> List[Optional[np.ndarray]]:
-        import requests as _req
-
         all_keys = [req.api_key or ""] + [k for k in (req.reserve_keys or []) if k]
 
         url = req.api_url.rstrip("/")
@@ -70,7 +77,7 @@ class OpenAICompatibleEmbeddingProvider(BaseEmbeddingProvider):
                 headers["Authorization"] = f"Bearer {key}"
 
             try:
-                resp = _req.post(url, json=payload, headers=headers, timeout=timeout_sec)
+                resp = self._http_client.post(url, json=payload, headers=headers, timeout=timeout_sec)
 
                 if resp.status_code in _RETRY_STATUS and attempt < max_attempts - 1:
                     logger.warning(
@@ -84,7 +91,7 @@ class OpenAICompatibleEmbeddingProvider(BaseEmbeddingProvider):
                     time.sleep(delay)
                     continue
 
-                resp.raise_for_status()
+                self._http_client.raise_for_status(resp)
                 data = resp.json()
                 items = data.get("data") or []
                 # sort by index to preserve order
@@ -102,7 +109,7 @@ class OpenAICompatibleEmbeddingProvider(BaseEmbeddingProvider):
             except Exception as e:
                 last_exc = e
                 logger.warning(
-                    f"[EmbedAPI][openai_compat] attempt {attempt+1} failed: {e}"
+                    f"[EmbedAPI][openai_compat] attempt {attempt+1} failed: {format_exception(e)}"
                 )
                 if attempt < max_attempts - 1:
                     time.sleep(backoff_sec * (2 ** attempt))

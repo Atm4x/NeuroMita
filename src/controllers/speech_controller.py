@@ -1,3 +1,4 @@
+from core.error_utils import format_exception
 import os
 import time
 import re
@@ -10,6 +11,7 @@ import sounddevice as sd
 from handlers.asr_handler import SpeechRecognition
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
+from core.performance_trace import perf_mark, perf_mark_once, performance_traces
 from core.services import services, use
 from core.task_supervisor import task_supervisor
 from services.contracts import (
@@ -346,7 +348,7 @@ class SpeechController(SpeechService):
                 try:
                     self._reconcile_once()
                 except Exception as e:
-                    logger.error(f"ASR reconcile failed: {e}", exc_info=True)
+                    logger.error(f"ASR reconcile failed: {format_exception(e)}", exc_info=True)
 
                 with self._state_lock:
                     self._applied_generation = generation
@@ -396,7 +398,7 @@ class SpeechController(SpeechService):
             SpeechRecognition.speech_recognition_stop()
             time.sleep(0.2)
         except Exception as e:
-            logger.error(f"Остановка распознавания не удалась: {e}", exc_info=True)
+            logger.error(f"Остановка распознавания не удалась: {format_exception(e)}", exc_info=True)
         self.mic_recognition_active = False
         self.asr_is_ready = False
         self._running_engine = None
@@ -620,20 +622,27 @@ class SpeechController(SpeechService):
         return self._speaking_window.is_active()
 
     def _on_speech_text_recognized(self, event: Event):
-        text = (event.data or {}).get('text', '').strip()
+        data = event.data or {}
+        text = data.get("text", "").strip()
+        trace_id = str(data.get("trace_id") or "").strip() or None
+        perf_mark_once(trace_id, "asr.text_ready")
         if not text or not self.settings:
+            performance_traces().finish(trace_id, "ignored", error_stage="asr.empty") if trace_id else None
             return
         if not bool(self.settings.get("MIC_ACTIVE")):
+            performance_traces().finish(trace_id, "ignored", error_stage="asr.inactive") if trace_id else None
             return
 
         # Не засчитываем то, что говорит сама Мита (её голос ловит микрофон),
         # пока активно окно её речи. Распознавание при этом не выключается.
         if bool(self.settings.get("MIC_MUTE_WHILE_SPEAKING", True)) and self._is_mita_speaking():
+            performance_traces().finish(trace_id, "ignored", error_stage="asr.mita_speaking") if trace_id else None
             logger.debug(f"ASR заглушён (Мита говорит): игнор '{text}'")
             return
 
         now = time.time()
         if self._is_asr_duplicate(text, now):
+            performance_traces().finish(trace_id, "ignored", error_stage="asr.duplicate") if trace_id else None
             return
         self._last_text = text
         self._last_text_norm = self._normalize_asr_text(text)
@@ -658,14 +667,17 @@ class SpeechController(SpeechService):
                 "engine": str(self._asr_settings.get("engine", "") or ""),
                 "ts": time.time(),
                 "final": True,
+                # Эти поля остаются только внутри Python для возврата реплики в
+                # desktop-чат, если выбранная игровая сессия успела отключиться.
                 "autosend": autosend,
                 "delay_sec": delay_sec,
-                "merge_input": bool(self.settings.get("MIC_INSTANT_MERGE_CHAT_INPUT", True)),
             })
+            perf_mark(trace_id, "asr.sent_to_game")
+            performance_traces().finish(trace_id, "sent_to_game") if trace_id else None
             return
 
         logger.info(f"Распознано: {text}")
-        self._route_to_desktop(text, autosend, delay_sec)
+        self._route_to_desktop(text, autosend, delay_sec, trace_id=trace_id)
 
     _MAX_TURNS_IN_GAME = 64
 
@@ -700,16 +712,18 @@ class SpeechController(SpeechService):
             text,
             bool(data.get("autosend", False)),
             float(data.get("delay_sec", 0.0) or 0.0),
+            trace_id=str(data.get("trace_id") or "").strip() or None,
         )
 
-    def _route_to_desktop(self, text: str, autosend: bool, delay_sec: float):
+    def _route_to_desktop(self, text: str, autosend: bool, delay_sec: float, trace_id: str | None = None):
         if autosend and delay_sec <= 0:
             audio = services().get_optional(AudioStateService)
             if not (audio and audio.is_waiting_answer()):
-                self._send_instant(text)
+                self._send_instant(text, trace_id=trace_id)
                 return
             # Ответ ещё генерируется: не теряем сказанное, а кладём в поле ввода.
 
+        performance_traces().finish(trace_id, "routed_to_input") if trace_id else None
         self.events_bus.emit(Events.GUI.INSERT_TEXT_TO_INPUT, {
             "text": text,
             "autosend_after": delay_sec if autosend else 0.0,
@@ -742,11 +756,11 @@ class SpeechController(SpeechService):
             return ""
         return link.player_turn_owner()
 
-    def _send_instant(self, text):
+    def _send_instant(self, text, trace_id: str | None = None):
         # Через GUI-отправку, а не напрямую SEND_MESSAGE: так подхватываются
         # авто-захват экрана, прикреплённые и кадры камеры (иначе ASR-отправка
         # игнорировала изображения). GUI сам рисует сообщение пользователя.
-        self.events_bus.emit(Events.GUI.SEND_TEXT_MESSAGE, {'text': text})
+        self.events_bus.emit(Events.GUI.SEND_TEXT_MESSAGE, {'text': text, 'trace_id': trace_id})
 
     def _on_get_mic_status(self, event: Event):
         data = event.data or {}
@@ -789,7 +803,7 @@ class SpeechController(SpeechService):
                 self.settings.set("MIC_ACTIVE", bool(active))
                 self.settings.save_settings()
         except Exception as e:
-            logger.error(f"Не удалось записать MIC_ACTIVE={active}: {e}", exc_info=True)
+            logger.error(f"Не удалось записать MIC_ACTIVE={active}: {format_exception(e)}", exc_info=True)
 
     def _on_start_speech_recognition(self, event: Event):
         dev_id = (event.data or {}).get('device_id')
@@ -829,7 +843,7 @@ class SpeechController(SpeechService):
                         result.append(f"{name} ({i})")
                 return result or ["Микрофоны не найдены"]
             except Exception as e:
-                logger.error(f"Ошибка получения списка микрофонов: {e}")
+                logger.error(f"Ошибка получения списка микрофонов: {format_exception(e)}")
                 return ["Ошибка загрузки"]
 
         if not cb:
@@ -887,7 +901,7 @@ class SpeechController(SpeechService):
             try:
                 result = self._compute_asr_models_glossary(refresh=refresh)
             except Exception as exc:
-                logger.error(f"GET_ASR_MODELS_GLOSSARY error: {exc}", exc_info=True)
+                logger.error(f"GET_ASR_MODELS_GLOSSARY error: {format_exception(exc)}", exc_info=True)
                 result = []
                 error = exc
 

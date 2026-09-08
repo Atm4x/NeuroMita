@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.error_utils import format_exception
 
 import copy
 import hashlib
@@ -134,6 +135,16 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
                     str(entry.metadata_ru.get("description") or ""),
                     str(entry.metadata_en.get("description") or ""),
                 )
+                ru_tags = list(entry.metadata_ru.get("tags") or ())
+                en_tags = list(entry.metadata_en.get("tags") or ())
+                result["tags"] = [
+                    translate_for_language(
+                        language,
+                        str(ru_tag or ""),
+                        str(en_tags[index] if index < len(en_tags) else ru_tag),
+                    )
+                    for index, ru_tag in enumerate(ru_tags)
+                ]
             except Exception:
                 pass
         return result
@@ -145,8 +156,8 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
         try:
             return dict(hardware.snapshot(refresh=refresh) or {})
         except Exception as exc:
-            logger.warning(f"Hardware inventory failed during catalog evaluation: {exc}")
-            return {"vendor": "CPU", "platform": "", "error": str(exc)}
+            logger.warning(f"Hardware inventory failed during catalog evaluation: {format_exception(exc)}")
+            return {"vendor": "CPU", "platform": "", "error": format_exception(exc)}
 
     def hardware_snapshot(self, *, refresh: bool = False) -> dict[str, Any]:
         return copy.deepcopy(self._hardware_snapshot(refresh=refresh))
@@ -460,6 +471,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             "cancel_event",
             "pip_installer",
             "callbacks",
+            "initialize_mode",
         }
         for key, value in dict(execution_ctx or {}).items():
             if key in trusted_execution_keys:
@@ -530,7 +542,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             return list(component.settings_schema() or [])
         except Exception as exc:
             logger.error(
-                f"Installable settings schema failed for '{component_id}': {exc}",
+                f"Installable settings schema failed for '{component_id}': {format_exception(exc)}",
                 exc_info=True,
             )
             return []
@@ -543,7 +555,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             return dict(component.load_settings() or {})
         except Exception as exc:
             logger.error(
-                f"Installable settings load failed for '{component_id}': {exc}",
+                f"Installable settings load failed for '{component_id}': {format_exception(exc)}",
                 exc_info=True,
             )
             return {}
@@ -570,10 +582,10 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             return {"ok": True, "errors": {}}
         except Exception as exc:
             logger.error(
-                f"Installable settings save failed for '{component_id}': {exc}",
+                f"Installable settings save failed for '{component_id}': {format_exception(exc)}",
                 exc_info=True,
             )
-            return {"ok": False, "errors": {"_": str(exc)}}
+            return {"ok": False, "errors": {"_": format_exception(exc)}}
 
     def _refresh_statuses(
         self,
@@ -731,7 +743,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
         try:
             return dict(future.result())
         except BaseException as exc:
-            return self._failed_status(entry, str(exc))
+            return self._failed_status(entry, format_exception(exc))
 
     def _finalize_probe(
         self,
@@ -781,7 +793,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             )
         except Exception as exc:
             logger.warning(
-                f"Installable status notification failed for '{entry.id}': {exc}"
+                f"Installable status notification failed for '{entry.id}': {format_exception(exc)}"
             )
 
     def _component_context(
@@ -848,10 +860,10 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             "code": code,
             "installed": False,
             "ready": False,
-            "message": f"Failed to inspect component: {error}",
+            "message": f"Failed to inspect component: {format_exception(error)}",
             "backend": entry.declared_backend,
             "backend_ok": False,
-            "details": {"error": str(error)},
+            "details": {"error": format_exception(error)},
         }
 
     @staticmethod
@@ -892,4 +904,4 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             if callable(recover):
                 recover()
         except Exception as exc:
-            logger.warning(f"Runtime environment registry preparation failed: {exc}")
+            logger.warning(f"Runtime environment registry preparation failed: {format_exception(exc)}")

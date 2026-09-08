@@ -1,7 +1,8 @@
+from core.error_utils import format_exception
 # src/ui/widgets/guide_widget.py
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QRadioButton, QButtonGroup, QComboBox, QSizePolicy, QScrollArea, QProgressBar
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QRadioButton, QButtonGroup, QComboBox, QSizePolicy, QScrollArea, QMenu
+from PyQt6.QtGui import QPixmap, QAction, QPainter, QPen, QColor
 import qtawesome as qta
 from abc import ABC, abstractmethod
 from localization import available_languages, language_display_name, translate_for_language
@@ -51,8 +52,87 @@ class IGuidePage(ABC):
         return None
 
 
+class GuideImageLabel(QLabel):
+    """Pixmap label that can draw a lightweight focus rectangle over a guide target."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._focus_rect = None
+
+    def set_focus_rect(self, normalized_rect):
+        self._focus_rect = normalized_rect
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._focus_rect or self.pixmap() is None or self.pixmap().isNull():
+            return
+        left, top, width, height = self._focus_rect
+        rect = QRectF(
+            self.width() * left,
+            self.height() * top,
+            self.width() * width,
+            self.height() * height,
+        )
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(rect, QColor(222, 76, 145, 42))
+        painter.setPen(QPen(QColor(238, 91, 157, 230), 2.0))
+        painter.drawRoundedRect(rect, 6.0, 6.0)
+
+
 class GuideWidget(QWidget):
     closed = pyqtSignal()
+
+    _SECTION_NAMES = {
+        "start": ("Начало", "Getting started"),
+        "voice": ("Голос и ввод", "Voice & input"),
+        "memory": ("Память", "Memory"),
+        "vision": ("Экран и камера", "Screen & camera"),
+        "tools": ("Модели и песочница", "Models & sandbox"),
+        "finish": ("Готово", "Finish"),
+    }
+
+    # Normalized rectangles are relative to the cropped image shown on each page.
+    # They intentionally cover the control itself rather than the red number label.
+    _STEP_TARGETS = {
+        "PresetGuidePage": {
+            1: (0.88, 0.20, 0.10, 0.12), 2: (0.18, 0.22, 0.43, 0.10),
+            3: (0.20, 0.67, 0.48, 0.09), 4: (0.03, 0.63, 0.18, 0.10),
+            5: (0.05, 0.82, 0.82, 0.07), 6: (0.05, 0.89, 0.82, 0.07),
+        },
+        "VoiceoverGuidePage": {
+            1: (0.91, 0.31, 0.08, 0.14), 2: (0.13, 0.43, 0.83, 0.10),
+            3: (0.13, 0.78, 0.83, 0.10), 4: (0.90, 0.62, 0.09, 0.12),
+        },
+        "MemoryRagGuidePage": {
+            1: (0.03, 0.13, 0.24, 0.10), 2: (0.05, 0.22, 0.88, 0.10),
+            3: (0.05, 0.31, 0.30, 0.10), 4: (0.03, 0.42, 0.26, 0.10),
+            5: (0.89, 0.52, 0.08, 0.10), 6: (0.89, 0.62, 0.08, 0.10),
+            7: (0.89, 0.72, 0.08, 0.10),
+        },
+        "MemoryVectorGuidePage": {
+            8: (0.03, 0.03, 0.28, 0.09), 9: (0.89, 0.08, 0.08, 0.09),
+            10: (0.07, 0.14, 0.79, 0.08), 11: (0.06, 0.39, 0.86, 0.08),
+            12: (0.08, 0.78, 0.18, 0.07), 13: (0.04, 0.77, 0.12, 0.08),
+            14: (0.52, 0.86, 0.43, 0.07), 15: (0.05, 0.86, 0.45, 0.07),
+        },
+        "MemoryGraphGuidePage": {
+            16: (0.03, 0.29, 0.32, 0.16), 17: (0.88, 0.43, 0.08, 0.15),
+            18: (0.88, 0.62, 0.08, 0.15),
+        },
+        "ScreenCaptureGuidePage": {
+            1: (0.04, 0.29, 0.39, 0.12), 2: (0.90, 0.40, 0.08, 0.15),
+        },
+        "CameraGuidePage": {
+            3: (0.04, 0.50, 0.39, 0.12), 4: (0.90, 0.63, 0.08, 0.12),
+            9: (0.17, 0.72, 0.77, 0.10),
+        },
+        "CameraDependenciesGuidePage": {
+            5: (0.88, 0.26, 0.08, 0.10), 6: (0.39, 0.08, 0.20, 0.09),
+            7: (0.02, 0.73, 0.19, 0.09), 8: (0.82, 0.64, 0.15, 0.09),
+        },
+    }
 
     def __init__(self, settings_view_model, parent=None, open_wiki=None):
         super().__init__(parent)
@@ -143,16 +223,70 @@ class GuideWidget(QWidget):
             #GuideHelpButton:hover {
                 background-color: {chip_hover};
             }
-            #GuideProgress {
-                background-color: {chip_bg};
+            #GuideProgressTrack,
+            #GuideProgressSectionTrack {
+                background-color: transparent;
                 border: none;
-                border-radius: 3px;
-                min-height: 5px;
-                max-height: 5px;
             }
-            #GuideProgress::chunk {
+            #GuideSectionTab {
+                background-color: {chip_bg};
+                color: {muted_text};
+                border: 1px solid {outline};
+                border-radius: 8px;
+                min-height: 24px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 600;
+                text-align: center;
+            }
+            #GuideSectionTab:hover {
+                border: 1px solid {accent_alt};
+                background-color: {chip_hover};
+                color: {text};
+            }
+            #GuideSectionTab[progressState="done"] {
+                background-color: rgba(171, 80, 133, 0.22);
+                border: 1px solid {accent_border};
+                color: {text};
+            }
+            #GuideSectionTab[progressState="current"] {
+                background-color: rgba(214, 90, 149, 0.24);
+                border: 1px solid {accent_alt};
+                color: {text};
+            }
+            #GuideProgressSegment {
+                background-color: {chip_bg};
+                border: 1px solid {outline};
+                border-radius: 4px;
+                min-height: 8px;
+                max-height: 8px;
+                padding: 0;
+            }
+            #GuideProgressSegment:hover {
+                border: 1px solid {accent_alt};
+                background-color: {chip_hover};
+            }
+            #GuideProgressSegment[progressState="done"] {
+                background-color: {accent_pressed};
+                border: 1px solid {accent_border};
+            }
+            #GuideProgressSegment[progressState="current"] {
                 background-color: {accent};
-                border-radius: 3px;
+                border: 1px solid {accent_alt};
+                min-height: 10px;
+                max-height: 10px;
+            }
+            #GuideContentsButton {
+                background-color: {chip_bg};
+                color: {text};
+                border: 1px solid {outline};
+                border-radius: 8px;
+                padding: 5px 9px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            #GuideContentsButton:hover {
+                background-color: {chip_hover};
             }
             #NavigationButton {
                 background-color: {accent};
@@ -369,6 +503,11 @@ class GuideWidget(QWidget):
         self.lang_selector.blockSignals(False)
         self.lang_selector.currentIndexChanged.connect(self._on_language_changed)
         meta_layout.addWidget(self.lang_selector)
+        self.help_button = QPushButton("")
+        self.help_button.setObjectName("GuideHelpButton")
+        self.help_button.clicked.connect(self._open_help)
+        self.help_button.setVisible(False)
+        meta_layout.addWidget(self.help_button)
         container_layout.addWidget(meta_row)
 
         content_layout = QHBoxLayout()
@@ -404,6 +543,16 @@ class GuideWidget(QWidget):
         self.zoom_fit_button.setMinimumHeight(28)
         self.zoom_fit_button.clicked.connect(self._fit_image)
         zoom_layout.addWidget(self.zoom_fit_button)
+        self.zoom_width_button = QPushButton("")
+        self.zoom_width_button.setObjectName("ImageToolbarButton")
+        self.zoom_width_button.setMinimumHeight(28)
+        self.zoom_width_button.clicked.connect(self._fit_image_width)
+        zoom_layout.addWidget(self.zoom_width_button)
+        self.zoom_actual_button = QPushButton("1:1")
+        self.zoom_actual_button.setObjectName("ImageToolbarButton")
+        self.zoom_actual_button.setMinimumHeight(28)
+        self.zoom_actual_button.clicked.connect(self._show_image_actual_size)
+        zoom_layout.addWidget(self.zoom_actual_button)
         image_layout.addLayout(zoom_layout)
 
         self.image_scroll = QScrollArea()
@@ -413,7 +562,7 @@ class GuideWidget(QWidget):
         self.image_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.image_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.image_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.image_label = QLabel()
+        self.image_label = GuideImageLabel()
         self.image_label.setObjectName("ImageLabel")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.image_label.setMinimumSize(0, 0)
@@ -431,26 +580,58 @@ class GuideWidget(QWidget):
         self.description_label.setWordWrap(True)
         self.description_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.description_label.setTextFormat(Qt.TextFormat.RichText)
+        self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.description_label.setOpenExternalLinks(False)
+        self.description_label.linkHovered.connect(self._on_step_link_hovered)
+        self.description_label.linkActivated.connect(self._on_step_link_activated)
         self.description_label.setMinimumSize(0, 0)
-        self.description_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        description_layout.addWidget(self.description_label, 1)
-        help_layout = QHBoxLayout()
-        help_layout.setContentsMargins(0, 0, 0, 0)
-        help_layout.addStretch()
-        self.help_button = QPushButton("")
-        self.help_button.setObjectName("GuideHelpButton")
-        self.help_button.clicked.connect(self._open_help)
-        self.help_button.setVisible(False)
-        help_layout.addWidget(self.help_button)
-        description_layout.addLayout(help_layout)
+        self.description_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.description_scroll = QScrollArea()
+        self.description_scroll.setObjectName("DescriptionScroll")
+        self.description_scroll.setWidgetResizable(True)
+        self.description_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.description_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.description_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.description_scroll.setWidget(self.description_label)
+        description_layout.addWidget(self.description_scroll, 1)
         content_layout.addWidget(self.description_frame, 3)
         container_layout.addLayout(content_layout, 1)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setObjectName("GuideProgress")
-        self.progress_bar.setRange(0, 1000)
-        self.progress_bar.setTextVisible(False)
-        container_layout.addWidget(self.progress_bar)
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(8)
+        self.contents_button = QPushButton("")
+        self.contents_button.setObjectName("GuideContentsButton")
+        self.contents_button.clicked.connect(self._show_contents_menu)
+        progress_row.addWidget(self.contents_button, 0)
+
+        self.progress_track = QFrame()
+        self.progress_track.setObjectName("GuideProgressTrack")
+        self.progress_tracks_layout = QVBoxLayout(self.progress_track)
+        self.progress_tracks_layout.setContentsMargins(0, 0, 0, 0)
+        self.progress_tracks_layout.setSpacing(5)
+
+        self.progress_section_track = QFrame()
+        self.progress_section_track.setObjectName("GuideProgressSectionTrack")
+        self.progress_section_layout = QHBoxLayout(self.progress_section_track)
+        self.progress_section_layout.setContentsMargins(0, 0, 0, 0)
+        self.progress_section_layout.setSpacing(6)
+        self.progress_tracks_layout.addWidget(self.progress_section_track)
+
+        self.progress_segment_track = QFrame()
+        self.progress_segment_track.setObjectName("GuideProgressTrack")
+        self.progress_layout = QHBoxLayout(self.progress_segment_track)
+        self.progress_layout.setContentsMargins(0, 1, 0, 1)
+        self.progress_layout.setSpacing(3)
+        self.progress_tracks_layout.addWidget(self.progress_segment_track)
+
+        progress_row.addWidget(self.progress_track, 1)
+        container_layout.addLayout(progress_row)
+
+        self._progress_buttons = []
+        self._progress_sections = []
+        self._progress_section_buttons = []
+        self._progress_section_ranges = []
 
         nav_layout = QHBoxLayout()
         nav_layout.setSpacing(15)
@@ -486,6 +667,7 @@ class GuideWidget(QWidget):
         self._update_close_button_text()
         self._update_level_texts()
         self._update_auxiliary_texts()
+        self._rebuild_progress_steps()
         self.show_page(self.current_page_index)
     # Подписи и пояснения уровней (локализуются под выбранный язык).
     _LEVEL_LABELS = {
@@ -534,12 +716,176 @@ class GuideWidget(QWidget):
                     "Fit the full image into the viewport",
                 )
             )
+        if hasattr(self, "zoom_width_button"):
+            self.zoom_width_button.setText(
+                translate_for_language(self.current_language, "\u041f\u043e \u0448\u0438\u0440\u0438\u043d\u0435", "Width")
+            )
+            self.zoom_width_button.setToolTip(
+                translate_for_language(
+                    self.current_language,
+                    "\u0423\u0432\u0435\u043b\u0438\u0447\u0438\u0442\u044c \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u0434\u043e \u0448\u0438\u0440\u0438\u043d\u044b \u043e\u0431\u043b\u0430\u0441\u0442\u0438 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0430",
+                    "Fit the image to viewport width",
+                )
+            )
+        if hasattr(self, "zoom_actual_button"):
+            self.zoom_actual_button.setToolTip(
+                translate_for_language(
+                    self.current_language,
+                    "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u0432 \u0438\u0441\u0445\u043e\u0434\u043d\u043e\u043c \u0440\u0430\u0437\u043c\u0435\u0440\u0435",
+                    "Show the image at its original pixel size",
+                )
+            )
         if hasattr(self, "zoom_out_button"):
             self.zoom_out_button.setToolTip(translate_for_language(self.current_language, "\u0423\u043c\u0435\u043d\u044c\u0448\u0438\u0442\u044c", "Zoom out"))
         if hasattr(self, "zoom_in_button"):
             self.zoom_in_button.setToolTip(translate_for_language(self.current_language, "\u0423\u0432\u0435\u043b\u0438\u0447\u0438\u0442\u044c", "Zoom in"))
+        if hasattr(self, "contents_button"):
+            self.contents_button.setText(
+                translate_for_language(self.current_language, "\u0420\u0430\u0437\u0434\u0435\u043b\u044b", "Contents")
+            )
+            self.contents_button.setToolTip(
+                translate_for_language(
+                    self.current_language,
+                    "\u041f\u0435\u0440\u0435\u0439\u0442\u0438 \u043a \u043b\u044e\u0431\u043e\u043c\u0443 \u0448\u0430\u0433\u0443 \u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u0430",
+                    "Jump to any guide step",
+                )
+            )
         if hasattr(self, "help_button"):
             self.help_button.setText(translate_for_language(self.current_language, "\u041f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435 \u0432 Wiki \u2192", "Read more in Wiki \u2192"))
+
+    @staticmethod
+    def _page_section_key(page):
+        name = type(page).__name__
+        if name in ("WelcomeGuidePage", "PresetGuidePage"):
+            return "start"
+        if name in ("VoiceoverGuidePage", "MicrophoneGuidePage"):
+            return "voice"
+        if name.startswith("Memory"):
+            return "memory"
+        if name.startswith("Screen") or name.startswith("Camera"):
+            return "vision"
+        if name in ("ModelsGuidePage", "SandboxGuidePage"):
+            return "tools"
+        return "finish"
+
+    def _page_title(self, page):
+        return translate_for_language(
+            self.current_language,
+            page.get_title_ru(),
+            page.get_title_en(),
+        )
+
+    def _section_title(self, key):
+        ru, en = self._SECTION_NAMES.get(key, (key, key))
+        return translate_for_language(self.current_language, ru, en)
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _rebuild_progress_steps(self):
+        if not hasattr(self, "progress_layout"):
+            return
+        self._clear_layout(self.progress_layout)
+        if hasattr(self, "progress_section_layout"):
+            self._clear_layout(self.progress_section_layout)
+        self._progress_buttons = []
+        self._progress_sections = []
+        self._progress_section_buttons = []
+        self._progress_section_ranges = []
+        page_count = len(self._filtered_pages)
+        section_ranges = []
+        start_index = 0
+        while start_index < page_count:
+            section = self._page_section_key(self._filtered_pages[start_index])
+            end_index = start_index
+            while end_index + 1 < page_count and self._page_section_key(self._filtered_pages[end_index + 1]) == section:
+                end_index += 1
+            section_ranges.append((section, start_index, end_index))
+            start_index = end_index + 1
+
+        for section, first_index, last_index in section_ranges:
+            section_button = QPushButton(self._section_title(section))
+            section_button.setObjectName("GuideSectionTab")
+            section_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            section_button.setProperty("progressState", "upcoming")
+            section_button.clicked.connect(lambda checked=False, i=first_index: self.show_page(i))
+            section_button.setToolTip(
+                f"{self._section_title(section)} · {first_index + 1}-{last_index + 1}/{page_count}\n" +
+                translate_for_language(
+                    self.current_language,
+                    "Нажмите, чтобы перейти к разделу",
+                    "Click to open this section",
+                )
+            )
+            if hasattr(self, "progress_section_layout"):
+                self.progress_section_layout.addWidget(section_button, max(1, last_index - first_index + 1))
+            self._progress_section_buttons.append(section_button)
+            self._progress_section_ranges.append((section, first_index, last_index, section_button))
+
+        previous_section = None
+        for index, page in enumerate(self._filtered_pages):
+            section = self._page_section_key(page)
+            if previous_section is not None and section != previous_section:
+                self.progress_layout.addSpacing(3)
+            button = QPushButton("")
+            button.setObjectName("GuideProgressSegment")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            button.setProperty("progressState", "upcoming")
+            button.clicked.connect(lambda checked=False, i=index: self.show_page(i))
+            title = self._page_title(page)
+            button.setToolTip(
+                f"{self._section_title(section)} · {index + 1}/{page_count}\n{title}\n" +
+                translate_for_language(self.current_language, "Нажмите, чтобы перейти", "Click to open")
+            )
+            self.progress_layout.addWidget(button, 1)
+            self._progress_buttons.append(button)
+            self._progress_sections.append(section)
+            previous_section = section
+        self._update_progress_state(self.current_page_index)
+
+    def _update_progress_state(self, current_index):
+        for index, button in enumerate(getattr(self, "_progress_buttons", [])):
+            state = "done" if index < current_index else "current" if index == current_index else "upcoming"
+            if button.property("progressState") != state:
+                button.setProperty("progressState", state)
+                button.style().unpolish(button)
+                button.style().polish(button)
+                button.update()
+
+        for section, first_index, last_index, button in getattr(self, "_progress_section_ranges", []):
+            if current_index > last_index:
+                state = "done"
+            elif first_index <= current_index <= last_index:
+                state = "current"
+            else:
+                state = "upcoming"
+            if button.property("progressState") != state:
+                button.setProperty("progressState", state)
+                button.style().unpolish(button)
+                button.style().polish(button)
+                button.update()
+
+    def _show_contents_menu(self):
+        if not self._filtered_pages:
+            return
+        menu = QMenu(self)
+        last_section = None
+        for index, page in enumerate(self._filtered_pages):
+            section = self._page_section_key(page)
+            if section != last_section:
+                menu.addSection(self._section_title(section))
+                last_section = section
+            action = QAction(f"{index + 1}. {self._page_title(page)}", menu)
+            action.setCheckable(True)
+            action.setChecked(index == self.current_page_index)
+            action.triggered.connect(lambda checked=False, i=index: self.show_page(i))
+            menu.addAction(action)
+        menu.exec(self.contents_button.mapToGlobal(self.contents_button.rect().bottomLeft()))
 
     def _on_level_changed(self, btn):
         level = btn.property("level_key")
@@ -553,6 +899,7 @@ class GuideWidget(QWidget):
         self._guide_level = level
         self._update_filtered_pages()
         self._update_level_texts()
+        self._rebuild_progress_steps()
 
         if self._filtered_pages:
             if current_page in self._filtered_pages:
@@ -573,7 +920,7 @@ class GuideWidget(QWidget):
         try:
             set_setting(self, "GUIDE_LEVEL", level)
         except Exception as e:
-            logger.warning(f"[GuideWidget] Не удалось сохранить GUIDE_LEVEL: {e}")
+            logger.warning(f"[GuideWidget] Не удалось сохранить GUIDE_LEVEL: {format_exception(e)}")
 
     def _update_filtered_pages(self):
         cur_rank = _LEVEL_RANK.get(self._guide_level, 0)
@@ -599,6 +946,7 @@ class GuideWidget(QWidget):
             FinalGuidePage(),
         ]
         self._update_filtered_pages()
+        self._rebuild_progress_steps()
     def _load_image(self, filename):
         if not filename:
             return None
@@ -612,25 +960,51 @@ class GuideWidget(QWidget):
 
     @staticmethod
     def _format_description(text: str) -> str:
-        """Render compact rich text without Qt's oversized default list indents."""
+        """Render compact text; numbered screenshot references become interactive steps."""
         blocks = []
+        marker_re = re.compile(r"<b>\s*(\d+)\s*(?:[-\u2013\u2014]\s*)?([^<]*?)</b>")
+
+        def render_markers(value):
+            def repl(match):
+                number = int(match.group(1))
+                label = match.group(2).strip()
+                number_html = (
+                    f'<a href="guide-step:{number}" '
+                    'style="text-decoration:none; color:#ec6ea7;">'
+                    f'<b>{number}.</b></a>'
+                )
+                if label:
+                    return f'{number_html} <b>{label}</b>'
+                return number_html
+            return marker_re.sub(repl, value)
+
         for raw_line in str(text or "").splitlines():
             stripped = raw_line.strip()
             if not stripped:
                 continue
 
             bullet = re.match(r"^(?:[\u2022-]|\u2014)\s+(.*)$", stripped)
-            if bullet:
+            content = bullet.group(1) if bullet else stripped
+            has_step = marker_re.search(content) is not None
+            content = render_markers(content)
+
+            # Numbered references are the primary visual marker; do not add a second
+            # bullet in front of them. Ordinary bullets keep the compact bullet table.
+            if bullet and not has_step:
                 blocks.append(
                     '<table cellspacing="0" cellpadding="0" width="100%" style="margin:0 0 4px 0;">'
                     '<tr><td width="14" valign="top">&#8226;</td>'
-                    f'<td valign="top">{bullet.group(1)}</td></tr></table>'
+                    f'<td valign="top">{content}</td></tr></table>'
                 )
                 continue
 
-            is_heading = stripped.startswith("<b>") and stripped.endswith("</b>")
+            if has_step:
+                blocks.append(f'<p style="margin:0 0 7px 0; line-height:1.35;">{content}</p>')
+                continue
+
+            is_heading = content.startswith("<b>") and content.endswith("</b>")
             margin = "7px 0 3px 0" if is_heading else "0 0 5px 0"
-            blocks.append(f'<p style="margin:{margin};">{stripped}</p>')
+            blocks.append(f'<p style="margin:{margin};">{content}</p>')
 
         return "".join(blocks)
 
@@ -651,20 +1025,23 @@ class GuideWidget(QWidget):
             return pixmap
         return pixmap.copy(x, y, width, height)
 
-    def _rescale_current_image(self):
+    def _fitted_image(self):
         pixmap = self._current_pixmap
         if pixmap is None or pixmap.isNull() or not hasattr(self, "image_scroll"):
-            return
-
+            return None
         viewport = self.image_scroll.viewport()
-        max_width = max(100, viewport.width() - 4)
-        max_height = max(100, viewport.height() - 4)
-        fitted = pixmap.scaled(
-            max_width,
-            max_height,
+        return pixmap.scaled(
+            max(100, viewport.width() - 4),
+            max(100, viewport.height() - 4),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+    def _rescale_current_image(self):
+        pixmap = self._current_pixmap
+        fitted = self._fitted_image()
+        if pixmap is None or pixmap.isNull() or fitted is None:
+            return
         target_width = max(1, round(fitted.width() * self._image_zoom))
         target_height = max(1, round(fitted.height() * self._image_zoom))
         scaled = pixmap.scaled(
@@ -676,10 +1053,10 @@ class GuideWidget(QWidget):
         self.image_label.setText("")
         self.image_label.setPixmap(scaled)
         self.image_label.setFixedSize(scaled.size())
-        self._update_zoom_controls()
+        self._update_zoom_controls(scaled)
 
     def _change_image_zoom(self, delta: float):
-        self._image_zoom = max(1.0, min(3.0, self._image_zoom + delta))
+        self._image_zoom = max(1.0, min(6.0, self._image_zoom + delta))
         self._rescale_current_image()
 
     def _fit_image(self):
@@ -689,13 +1066,79 @@ class GuideWidget(QWidget):
             self.image_scroll.horizontalScrollBar().setValue(0)
             self.image_scroll.verticalScrollBar().setValue(0)
 
-    def _update_zoom_controls(self):
+    def _fit_image_width(self):
+        fitted = self._fitted_image()
+        if fitted is None or fitted.width() <= 0:
+            return
+        viewport_width = max(1, self.image_scroll.viewport().width() - 4)
+        self._image_zoom = max(1.0, min(6.0, viewport_width / fitted.width()))
+        self._rescale_current_image()
+
+    def _show_image_actual_size(self):
+        pixmap = self._current_pixmap
+        fitted = self._fitted_image()
+        if pixmap is None or pixmap.isNull() or fitted is None or fitted.width() <= 0:
+            return
+        self._image_zoom = max(1.0, min(6.0, pixmap.width() / fitted.width()))
+        self._rescale_current_image()
+
+    def _update_zoom_controls(self, scaled=None):
+        pixmap = self._current_pixmap
         if hasattr(self, "zoom_label"):
-            self.zoom_label.setText(f"{round(self._image_zoom * 100):d}%")
+            if pixmap is not None and not pixmap.isNull() and scaled is not None:
+                actual_percent = round((scaled.width() / max(1, pixmap.width())) * 100)
+                self.zoom_label.setText(f"{actual_percent}%")
+            else:
+                self.zoom_label.setText("—")
         if hasattr(self, "zoom_out_button"):
             self.zoom_out_button.setEnabled(self._image_zoom > 1.0)
         if hasattr(self, "zoom_in_button"):
-            self.zoom_in_button.setEnabled(self._image_zoom < 3.0)
+            self.zoom_in_button.setEnabled(self._image_zoom < 6.0)
+
+    @staticmethod
+    def _step_number_from_link(link):
+        match = re.fullmatch(r"guide-step:(\d+)", str(link or ""))
+        return int(match.group(1)) if match else None
+
+    def _current_step_target(self, step_number):
+        if not (0 <= self.current_page_index < len(self._filtered_pages)):
+            return None
+        page = self._filtered_pages[self.current_page_index]
+        return self._STEP_TARGETS.get(type(page).__name__, {}).get(step_number)
+
+    def _set_image_step_focus(self, step_number):
+        target = self._current_step_target(step_number) if step_number is not None else None
+        if hasattr(self, "image_label") and isinstance(self.image_label, GuideImageLabel):
+            self.image_label.set_focus_rect(target)
+        return target
+
+    def _on_step_link_hovered(self, link):
+        number = self._step_number_from_link(link)
+        if number is not None:
+            self._set_image_step_focus(number)
+            return
+        self._set_image_step_focus(getattr(self, "_pinned_step_number", None))
+
+    def _on_step_link_activated(self, link):
+        number = self._step_number_from_link(link)
+        target = self._set_image_step_focus(number)
+        if number is None or target is None:
+            return
+        self._pinned_step_number = number
+        self._image_zoom = max(self._image_zoom, 1.35)
+        self._rescale_current_image()
+        QTimer.singleShot(0, lambda rect=target: self._scroll_to_image_rect(rect))
+
+    def _scroll_to_image_rect(self, rect):
+        if not rect or not hasattr(self, "image_scroll"):
+            return
+        left, top, width, height = rect
+        target_x = round(self.image_label.width() * (left + width / 2.0))
+        target_y = round(self.image_label.height() * (top + height / 2.0))
+        hbar = self.image_scroll.horizontalScrollBar()
+        vbar = self.image_scroll.verticalScrollBar()
+        hbar.setValue(max(hbar.minimum(), min(hbar.maximum(), target_x - self.image_scroll.viewport().width() // 2)))
+        vbar.setValue(max(vbar.minimum(), min(vbar.maximum(), target_y - self.image_scroll.viewport().height() // 2)))
 
     def _open_help(self):
         if self._current_wiki_target and callable(self._open_wiki_callback):
@@ -719,6 +1162,8 @@ class GuideWidget(QWidget):
                 page.get_description_en(),
             )
             self.description_label.setText(self._format_description(description))
+            self._pinned_step_number = None
+            self._set_image_step_focus(None)
 
             image_filename = page.get_image_filename(self.current_language)
             pixmap = self._load_image(image_filename)
@@ -734,7 +1179,7 @@ class GuideWidget(QWidget):
 
             page_count = len(self._filtered_pages)
             self.page_indicator.setText(f"{index + 1} / {page_count}")
-            self.progress_bar.setValue(round(((index + 1) / max(1, page_count)) * 1000))
+            self._update_progress_state(index)
             self.prev_button.setEnabled(index > 0)
             self.next_button.setVisible(index < page_count - 1)
 
@@ -1373,7 +1818,7 @@ class FinalGuidePage(IGuidePage):
         return """В NeuroMita вы можете общаться с разными Митами, каждая со своим характером и историей.
 Миты уже готовы вас принять.
 
-<b>🎮 Игра:</b>
+<b>Игра:</b>
 Скачайте игру NeuroMita (Unity-версия) и погрузитесь в мир Мит. Поставьте <b>1 - галочку</b> для скачивания Unity. Кнопка «Скачать Unity» загрузит последнюю версию игры.
 Если игра уже установлена, просто нажмите «Играть» и начинайте приключение.
 
@@ -1391,7 +1836,7 @@ class FinalGuidePage(IGuidePage):
         return """In NeuroMita you can chat with different Mitas, each with their own personality and story.
 The Mitas are ready to welcome you.
 
-<b>🎮 Game:</b>
+<b>Game:</b>
 Download the NeuroMita game (Unity version) and dive into the world of Mitas. Check <b>1 - the checkbox</b> to download Unity. The “Download Unity” button will fetch the latest game version.
 If the game is already installed, just click “Play” and begin your adventure.
 

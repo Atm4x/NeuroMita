@@ -16,6 +16,7 @@ if str(PROJECT_SRC) not in sys.path:
 from handlers.voice_models.install_plan_helpers import installer_python_version
 from managers.database_manager import DatabaseManager
 from managers.history_manager import HistoryManager
+from startup import runtime_bootstrap
 from utils.prompt_downloader import PromptDownloader
 
 
@@ -36,6 +37,23 @@ class _Response:
     def iter_content(self, chunk_size: int):
         for index in range(0, len(self.payload), chunk_size):
             yield self.payload[index : index + chunk_size]
+
+    def iter_bytes(self, chunk_size: int):
+        yield from self.iter_content(chunk_size)
+
+
+class _HttpClient:
+    def __init__(self, response: _Response) -> None:
+        self.response = response
+        self.calls = []
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return self.response
+
+    @staticmethod
+    def raise_for_status(response) -> None:
+        response.raise_for_status()
 
 
 def _prompt_zip(content: str = "new") -> bytes:
@@ -59,22 +77,16 @@ def test_prompt_update_is_streamed_and_keeps_backup(tmp_path: Path) -> None:
     prompts = tmp_path / "Prompts"
     prompts.mkdir()
     (prompts / "old.txt").write_text("old", encoding="utf-8")
-    downloader = PromptDownloader()
+    http_client = _HttpClient(_Response(_prompt_zip()))
+    downloader = PromptDownloader(http_client=http_client)
     downloader.base_path = prompts
     downloader.backup_path = tmp_path / "Prompts_backup"
 
-    captured = {}
+    assert downloader.download_and_replace_prompts() is True
 
-    def fake_get(_url, **kwargs):
-        captured.update(kwargs)
-        return _Response(_prompt_zip())
-
-    with patch("utils.prompt_downloader.requests.get", side_effect=fake_get):
-        assert downloader.download_and_replace_prompts() is True
-
-    assert captured["stream"] is True
-    assert captured["timeout"][0] > 0
-    assert captured["timeout"][1] > 0
+    _method, _url, captured = http_client.calls[0]
+    assert captured["timeout"].connect > 0
+    assert captured["timeout"].read > 0
     assert (prompts / "System" / "prompt.txt").read_text(encoding="utf-8") == "new"
     assert (downloader.backup_path / "old.txt").read_text(encoding="utf-8") == "old"
 
@@ -83,7 +95,7 @@ def test_prompt_update_restores_original_directory_on_swap_failure(tmp_path: Pat
     prompts = tmp_path / "Prompts"
     prompts.mkdir()
     (prompts / "old.txt").write_text("old", encoding="utf-8")
-    downloader = PromptDownloader()
+    downloader = PromptDownloader(http_client=_HttpClient(_Response(_prompt_zip())))
     downloader.base_path = prompts
     downloader.backup_path = tmp_path / "Prompts_backup"
 
@@ -96,9 +108,7 @@ def test_prompt_update_restores_original_directory_on_swap_failure(tmp_path: Pat
             raise OSError("swap failed")
         return real_replace(source, target)
 
-    with patch("utils.prompt_downloader.requests.get", return_value=_Response(_prompt_zip())), patch(
-        "utils.prompt_downloader.os.replace", side_effect=flaky_replace
-    ):
+    with patch("utils.prompt_downloader.os.replace", side_effect=flaky_replace):
         assert downloader.download_and_replace_prompts() is False
 
     assert (prompts / "old.txt").read_text(encoding="utf-8") == "old"
@@ -158,3 +168,32 @@ def test_task_supervisor_submit_has_no_import_order_dependency() -> None:
         assert future.result(timeout=2.0) == 42
     finally:
         supervisor.shutdown()
+
+
+def test_native_faulthandler_is_not_installed_by_default_on_windows(tmp_path: Path) -> None:
+    with patch.object(runtime_bootstrap.sys, "platform", "win32"), patch.dict(
+        os.environ,
+        {},
+        clear=False,
+    ), patch.object(runtime_bootstrap.faulthandler, "enable") as enable:
+        os.environ.pop("NEUROMITA_ENABLE_NATIVE_FAULTHANDLER", None)
+        handle = runtime_bootstrap._configure_crash_logging(str(tmp_path))
+
+    assert handle is None
+    enable.assert_not_called()
+    assert not (tmp_path / "NeuroMitaCrash.log").exists()
+
+
+def test_native_faulthandler_can_be_enabled_explicitly_on_windows(tmp_path: Path) -> None:
+    with patch.object(runtime_bootstrap.sys, "platform", "win32"), patch.dict(
+        os.environ,
+        {"NEUROMITA_ENABLE_NATIVE_FAULTHANDLER": "1"},
+    ), patch.object(runtime_bootstrap.faulthandler, "enable") as enable:
+        handle = runtime_bootstrap._configure_crash_logging(str(tmp_path))
+
+    try:
+        assert handle is not None
+        enable.assert_called_once_with(file=handle, all_threads=True)
+    finally:
+        if handle is not None:
+            handle.close()

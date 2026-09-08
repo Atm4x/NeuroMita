@@ -1,6 +1,8 @@
+from core.error_utils import format_exception
 # File: src/ui/settings/character_settings/logic.py
 
 import os
+import weakref
 
 from PyQt6.QtWidgets import QMessageBox, QDialog
 from PyQt6.QtCore import QUrl, Qt, QTimer
@@ -46,6 +48,27 @@ def _wire_index_changed(worker) -> None:
             signal.connect(lambda *_: _emit_index_changed())
 
 
+# Индексная база RAG. Имя иерархическое: операция над всеми персонажами
+# занимает корень и потому конфликтует с любой операцией над одним из них.
+RAG_INDEX_RESOURCE = "rag-index"
+
+
+def _character_index_resource(character_id: str) -> str:
+    return f"{RAG_INDEX_RESOURCE}:{str(character_id or '').strip()}"
+
+
+def _notify_index_busy(gui) -> None:
+    """Супервизор отказал: индексную базу уже переписывает другая задача."""
+    QMessageBox.information(
+        gui,
+        _("Индексация уже идёт", "Indexing in progress"),
+        _(
+            "Индекс RAG сейчас перестраивается другой задачей. Дождитесь её окончания.",
+            "The RAG index is being rebuilt by another task. Please wait for it to finish.",
+        ),
+    )
+
+
 def _create_reindex_worker(character_id: str, *, full: bool = False) -> TaskWorker:
     """Factory for single-character reindex workers."""
     character_id = str(character_id or "").strip()
@@ -56,7 +79,11 @@ def _create_reindex_worker(character_id: str, *, full: bool = False) -> TaskWork
         method = rag.index_all if full else rag.index_all_missing
         return method(progress_callback=progress_callback)
 
-    return TaskWorker(_do_reindex, use_progress=True)
+    return TaskWorker(
+        _do_reindex,
+        use_progress=True,
+        exclusive_resources={_character_index_resource(character_id)},
+    )
 
 
 class ReindexAllCharactersWorker(TaskWorker):
@@ -66,6 +93,7 @@ class ReindexAllCharactersWorker(TaskWorker):
     """
 
     def __init__(self, character_ids: list[str]):
+        self._progress_dialog_ref = None
         character_ids = [str(c or "").strip() for c in (character_ids or []) if str(c or "").strip()]
         worker_ref = self  # capture for status emissions
 
@@ -139,7 +167,18 @@ class ReindexAllCharactersWorker(TaskWorker):
                 progress_callback(done_base, max(grand_total, 1))
             return created_total
 
-        super().__init__(_do_all, use_progress=True, task_key="reindex_all")
+        super().__init__(
+            _do_all,
+            use_progress=True,
+            task_key="reindex_all",
+            exclusive_resources={RAG_INDEX_RESOURCE},
+        )
+
+    def attach_progress_dialog(self, dialog) -> None:
+        self._progress_dialog_ref = weakref.ref(dialog) if dialog is not None else None
+
+    def progress_dialog(self):
+        return self._progress_dialog_ref() if self._progress_dialog_ref is not None else None
 
 
 class FullReindexAllCharactersWorker(TaskWorker):
@@ -190,7 +229,12 @@ class FullReindexAllCharactersWorker(TaskWorker):
             progress_callback(global_done, max(global_total, 1))
             return processed_total
 
-        super().__init__(_do_all_full, use_progress=True, task_key="full_reindex_all")
+        super().__init__(
+            _do_all_full,
+            use_progress=True,
+            task_key="full_reindex_all",
+            exclusive_resources={RAG_INDEX_RESOURCE},
+        )
 
 
 class DedupeHistoryWorker(TaskWorker):
@@ -518,6 +562,8 @@ def wire_character_settings_logic(self, *, settings_data):
     if hasattr(self, 'btn_maint_files_db'):
         self.btn_maint_files_db.clicked.connect(
             lambda: migrate_to_db(self) if _scope() == "current" else migrate_to_db_all(self))
+    if hasattr(self, 'btn_maint_legacy_recovery'):
+        self.btn_maint_legacy_recovery.clicked.connect(lambda: restore_legacy_memory(self))
     if hasattr(self, 'btn_maint_tags'):
         self.btn_maint_tags.clicked.connect(
             lambda: migrate_db_to_structured(self, "current" if _scope() == "current" else None))
@@ -538,6 +584,14 @@ def wire_character_settings_logic(self, *, settings_data):
     # --- Опасная зона (все персонажи) — вне секций (#17) ---
     if hasattr(self, 'btn_all_files_db'):
         self.btn_all_files_db.clicked.connect(lambda: migrate_to_db_all(self))
+    if hasattr(self, 'btn_all_tags'):
+        self.btn_all_tags.clicked.connect(lambda: migrate_db_to_structured(self, None))
+    if hasattr(self, 'btn_all_history_view'):
+        self.btn_all_history_view.clicked.connect(lambda: open_db_viewer_global(self))
+    if hasattr(self, 'btn_all_history_export'):
+        self.btn_all_history_export.clicked.connect(lambda: export_db_for_all(self))
+    if hasattr(self, 'btn_all_history_import'):
+        self.btn_all_history_import.clicked.connect(lambda: import_db_for_all(self))
     if hasattr(self, 'btn_all_dedupe'):
         self.btn_all_dedupe.clicked.connect(lambda: run_history_dedup_all(self))
     if hasattr(self, 'btn_all_index_new'):
@@ -906,7 +960,7 @@ def purge_deleted_data(gui):
             if r.get("backed_up"):
                 backups.append(r["backed_up"])
         except Exception as e:
-            errors.append(f"{char_id} memories: {e}")
+            errors.append(f"{char_id} memories: {format_exception(e)}")
 
         try:
             hm = character_resources.history_for(char_id)
@@ -915,13 +969,13 @@ def purge_deleted_data(gui):
             if r.get("backed_up"):
                 backups.append(r["backed_up"])
         except Exception as e:
-            errors.append(f"{char_id} history: {e}")
+            errors.append(f"{char_id} history: {format_exception(e)}")
 
     # VACUUM compacts the SQLite file and actually releases disk space
     try:
         db.vacuum()
     except Exception as e:
-        errors.append(f"VACUUM: {e}")
+        errors.append(f"VACUUM: {format_exception(e)}")
 
     db_size_after = os.path.getsize(db.db_path) if os.path.exists(db.db_path) else 0
     freed_mb = (db_size_before - db_size_after) / (1024 * 1024)
@@ -1070,6 +1124,207 @@ def migrate_to_db_all(gui):
         return
 
     _start_migration_worker(gui, character_id=None)
+
+
+def restore_legacy_memory(gui):
+    """Select and restore one pre-SQLite character backup with a preview first."""
+    character_id = _selected_character_id(gui)
+    if not character_id:
+        QMessageBox.information(gui, _("Информация", "Information"),
+                                _("Персонаж не выбран.", "No character selected."))
+        return
+
+    chooser = QMessageBox(gui)
+    chooser.setWindowTitle(_("Восстановление старой памяти", "Restore old memory"))
+    chooser.setText(_(
+        "Выберите, как открыть старое сохранение. Данные пока не будут изменены.",
+        "Choose how to open the old backup. No data will be changed yet.",
+    ))
+    file_button = chooser.addButton(
+        _("ZIP или один JSON-файл…", "ZIP or one JSON file…"),
+        QMessageBox.ButtonRole.ActionRole,
+    )
+    folder_button = chooser.addButton(
+        _("Папка…", "Folder…"),
+        QMessageBox.ButtonRole.ActionRole,
+    )
+    files_button = chooser.addButton(
+        _("Список JSON-файлов…", "JSON file list…"),
+        QMessageBox.ButtonRole.ActionRole,
+    )
+    chooser.addButton(QMessageBox.StandardButton.Cancel)
+    chooser.exec()
+
+    paths: list[str] = []
+    clicked = chooser.clickedButton()
+    if clicked is file_button:
+        path, _filter = QFileDialog.getOpenFileName(
+            gui,
+            _("Выберите архив или JSON", "Select backup archive or JSON"),
+            os.getcwd(),
+            "Backup (*.zip *.json);;ZIP (*.zip);;JSON (*.json)",
+        )
+        paths = [path] if path else []
+    elif clicked is folder_button:
+        path = QFileDialog.getExistingDirectory(
+            gui,
+            _("Выберите папку со старым сохранением", "Select folder with old backup"),
+            os.getcwd(),
+        )
+        paths = [path] if path else []
+    elif clicked is files_button:
+        paths, _filter = QFileDialog.getOpenFileNames(
+            gui,
+            _("Выберите JSON-файлы старого сохранения", "Select old backup JSON files"),
+            os.getcwd(),
+            "JSON (*.json)",
+        )
+    if not paths:
+        return
+
+    from utils.legacy_memory_recovery import LegacyBackupError, inspect_legacy_backup
+
+    try:
+        preview = inspect_legacy_backup(paths)
+    except LegacyBackupError as exc:
+        QMessageBox.warning(gui, _("Не удалось прочитать сохранение", "Could not read backup"), str(exc))
+        return
+
+    source_id = ", ".join(dict.fromkeys(preview.source_character_ids)) or _("неизвестный", "unknown")
+    details = _(
+        "Источник: {source}\nЦелевой персонаж: {target}\n\n"
+        "Сообщений истории: {history}\nВоспоминаний: {memories} → восстановится: {recovered}\nПеременных: {variables}\n"
+        "Старых системных частей: {fixed}\n\n"
+        "Перед записью будет создана резервная копия базы. Старые системные промпты сохранятся "
+        "в архиве импорта, но не будут добавлены в активный контекст.",
+        "Source: {source}\nTarget character: {target}\n\n"
+        "History messages: {history}\nMemories: {memories} → recovered: {recovered}\nVariables: {variables}\n"
+        "Legacy fixed parts: {fixed}\n\n"
+        "A database backup will be created before writing. Old system prompts will be retained "
+        "in the import archive but will not be added to active context.",
+    ).format(
+        source=source_id,
+        target=character_id,
+        history=preview.history_count,
+        memories=preview.memory_count,
+        recovered=preview.recovered_memory_count,
+        variables=preview.variable_count,
+        fixed=preview.fixed_parts_count,
+    )
+    if preview.warnings:
+        details += "\n\n" + _("Предупреждения:", "Warnings:") + "\n• " + "\n• ".join(preview.warnings)
+    reply = QMessageBox.question(
+        gui,
+        _("Предпросмотр восстановления", "Restore preview"),
+        details,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+    )
+    if reply != QMessageBox.StandardButton.Yes:
+        return
+    _start_legacy_memory_recovery_worker(gui, preview, character_id)
+
+
+def _start_legacy_memory_recovery_worker(gui, preview, character_id: str, *, allow_reimport: bool = False) -> None:
+    from utils.legacy_memory_recovery import import_legacy_backup
+
+    cancelled = False
+    worker = TaskWorker(
+        import_legacy_backup,
+        kwargs={
+            "preview": preview,
+            "target_character_id": character_id,
+            "allow_reimport": allow_reimport,
+        },
+        use_progress=True,
+        task_key=f"legacy-memory-import:{character_id}",
+        exclusive_resources={f"legacy-memory-import:{character_id}"},
+    )
+    progress = QProgressDialog(
+        _("Восстановление старой памяти…", "Restoring old memory…"),
+        _("Отмена", "Cancel"),
+        0,
+        0,
+        gui,
+    )
+    progress.setWindowModality(Qt.WindowModality.WindowModal)
+    progress.setMinimumDuration(0)
+    progress.setAutoClose(False)
+    progress.setAutoReset(False)
+
+    def on_progress(current, total):
+        try:
+            total = int(total or 0)
+            current = int(current or 0)
+            if total > 0:
+                progress.setRange(0, total)
+                progress.setValue(min(current, total))
+        except Exception:
+            pass
+
+    def on_finished(result):
+        if cancelled:
+            return
+        progress.close()
+        status = str((result or {}).get("status") or "")
+        if status == "already_imported":
+            repeat = QMessageBox.question(
+                gui,
+                _("Возможно, уже восстановлено", "Possibly already restored"),
+                _("Похоже, этот архив уже восстанавливали. Повторить восстановление?",
+                  "It looks like this backup may already have been restored. Restore it again?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if repeat == QMessageBox.StandardButton.Yes:
+                _start_legacy_memory_recovery_worker(gui, preview, character_id, allow_reimport=True)
+            return
+        result = result or {}
+        message = _(
+            "История: {history}\nПамять: {memories}\nПеременные: {variables}\nОбработано команд памяти: {commands}",
+            "History: {history}\nMemories: {memories}\nVariables: {variables}\nMemory commands processed: {commands}",
+        ).format(
+            history=result.get("history_inserted", 0),
+            memories=result.get("memories_inserted", 0),
+            variables=result.get("variables_written", 0),
+            commands=result.get("memory_commands_seen", 0),
+        )
+        backup_path = result.get("backup_path")
+        if backup_path:
+            message += "\n\n" + _("Резервная копия БД: {path}", "Database backup: {path}").format(path=backup_path)
+        QMessageBox.information(gui, _("Восстановление завершено", "Restore complete"), message)
+        try:
+            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            get_event_bus().emit(Events.RAG.INDEX_CHANGED)
+        except Exception:
+            pass
+        if hasattr(gui, "update_debug_info"):
+            gui.update_debug_info()
+
+    def on_error(message: str):
+        if not cancelled:
+            progress.close()
+            QMessageBox.critical(gui, _("Ошибка восстановления", "Restore error"), message)
+
+    def on_cancel():
+        nonlocal cancelled
+        cancelled = True
+        worker.requestInterruption()
+        progress.close()
+
+    worker.progress_signal.connect(on_progress)
+    worker.finished_signal.connect(on_finished)
+    worker.error_signal.connect(on_error)
+    worker.cancelled_signal.connect(on_cancel)
+    progress.canceled.connect(on_cancel)
+    progress.show()
+    if not worker.start():
+        progress.close()
+        QMessageBox.information(
+            gui,
+            _("Восстановление уже идёт", "Restore already running"),
+            _("Дождитесь завершения текущего восстановления этого персонажа.",
+              "Wait for the current restore for this character to finish."),
+        )
 
 
 def _start_migration_worker(gui, character_id: str | None):
@@ -1262,7 +1517,7 @@ def migrate_db_to_structured(gui, character_id: str | None = "current"):
 
     def on_error(err):
         progress.close()
-        QMessageBox.critical(gui, _("Ошибка", "Error"), str(err))
+        QMessageBox.critical(gui, _("Ошибка", "Error"), format_exception(err))
 
     def on_cancel():
         try:
@@ -1462,7 +1717,7 @@ def run_reindexing(gui):
             return
 
     except Exception as e:
-        logger.warning(f"Skipping pre-check due to error: {e}")
+        logger.warning(f"Skipping pre-check due to error: {format_exception(e)}")
 
     # Запуск воркера
     worker = _create_reindex_worker(character_id, full=False)
@@ -1518,7 +1773,9 @@ def run_reindexing(gui):
     progress.canceled.connect(on_cancel)
 
     progress.show()
-    worker.start()
+    if not worker.start():
+        progress.close()
+        _notify_index_busy(gui)
 
 
 def _get_all_character_ids() -> list[str]:
@@ -1548,34 +1805,26 @@ def _get_all_character_ids() -> list[str]:
 
 
 def _reindexing_all_busy(gui, *, own_key: str) -> bool:
-    """Идёт ли уже переиндексация всех персонажей.
+    """Уже запущена своя же переиндексация всех персонажей.
 
-    Обе операции («индекс нового» и полная) переписывают одну и ту же базу, так
-    что параллельно они не запускаются, каким бы ключом ни звались. Своя задача
-    вместо отказа возвращает окно прогресса — это же даёт «показать снова»
-    после кнопки «Скрыть».
+    Здесь не защита от дублей — она в register() по ресурсу `rag-index`, — а
+    поведение кнопки: вместо вопроса «начать?» и последующего отказа своя
+    задача возвращает окно прогресса, спрятанное кнопкой «Скрыть».
     """
-    supervisor = gui_task_supervisor()
-    if supervisor.running(own_key) is not None:
-        dlg = getattr(gui, "_reindex_all_dialog", None)
-        if dlg is not None:
-            dlg.show()
-            dlg.raise_()
-            dlg.activateWindow()
-        return True
+    if gui_task_supervisor().running(own_key) is None:
+        return False
+    dlg = active_reindex_all_dialog()
+    if dlg is not None:
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+    return True
 
-    other_key = "full_reindex_all" if own_key == "reindex_all" else "reindex_all"
-    if supervisor.running(other_key) is not None:
-        QMessageBox.information(
-            gui,
-            _("Идёт переиндексация", "Reindexing in progress"),
-            _(
-                "Переиндексация всех персонажей уже выполняется. Дождитесь её окончания.",
-                "Reindexing of all characters is already running. Please wait for it to finish.",
-            ),
-        )
-        return True
-    return False
+
+def active_reindex_all_dialog():
+    worker = gui_task_supervisor().running("reindex_all")
+    getter = getattr(worker, "progress_dialog", None)
+    return getter() if callable(getter) else None
 
 
 def run_reindexing_all(gui):
@@ -1616,7 +1865,8 @@ def run_reindexing_all(gui):
             "The \"Index new (all)\" button reopens it.",
         ),
     )
-    gui._reindex_all_dialog = progress
+    progress.setObjectName("ReindexAllCharactersDialog")
+    worker.attach_progress_dialog(progress)
 
     def on_progress(curr, total):
         try:
@@ -1631,7 +1881,8 @@ def run_reindexing_all(gui):
             pass
 
     def _cleanup():
-        gui._reindex_all_dialog = None
+        worker.attach_progress_dialog(None)
+        progress.deleteLater()
 
     def on_finished(count):
         if cancelled:
@@ -1686,6 +1937,7 @@ def run_reindexing_all(gui):
     if not worker.start():
         _cleanup()
         progress.finish()
+        _notify_index_busy(gui)
 
 
 def run_full_reindexing(gui):
@@ -1733,7 +1985,7 @@ def run_full_reindexing(gui):
             pass
         total_count = int(h_c or 0) + int(m_c or 0)
     except Exception as e:
-        logger.warning(f"Skipping count check (full reindex): {e}")
+        logger.warning(f"Skipping count check (full reindex): {format_exception(e)}")
         total_count = 0  # unknown; proceed
 
     # Запуск воркера
@@ -1803,7 +2055,9 @@ def run_full_reindexing(gui):
     progress.canceled.connect(on_cancel)
 
     progress.show()
-    worker.start()
+    if not worker.start():
+        progress.close()
+        _notify_index_busy(gui)
 
 
 def run_full_reindexing_all(gui):
@@ -1903,6 +2157,7 @@ def run_full_reindexing_all(gui):
     progress.show()
     if not worker.start():
         progress.close()
+        _notify_index_busy(gui)
 
 
 def export_db_for_character(gui):
