@@ -62,6 +62,18 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         builder_ref="ui.settings.api_settings:setup_api_controls",
     ),
     SettingsSectionSpec(
+        key="mcp",
+        icon_name="fa6s.network-wired",
+        nav_label=("MCP", "MCP"),
+        title=("MCP-серверы", "MCP servers"),
+        subtitle=(
+            "Подключение внешних инструментов по stdio или Streamable HTTP.",
+            "Connect external tools through stdio or Streamable HTTP.",
+        ),
+        min_mode="basic",
+        builder_ref="ui.settings.mcp_settings:setup_mcp_settings_controls",
+    ),
+    SettingsSectionSpec(
         key="characters",
         icon_name="fa6s.user",
         nav_label=("Персонажи", "Characters"),

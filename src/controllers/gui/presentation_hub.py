@@ -120,6 +120,11 @@ class _SettingsSectionsController:
 
             setup_api_controls(gui, parent, wire_api=self.wire_api)
             return
+        if key == "mcp":
+            from ui.settings.mcp_settings import setup_mcp_settings_controls
+
+            setup_mcp_settings_controls(gui, parent)
+            return
         if key == "characters":
             from ui.settings.character_settings import setup_mita_controls
 

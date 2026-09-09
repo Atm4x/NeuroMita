@@ -247,6 +247,7 @@ class GuiStandardContourSmokeTests(unittest.TestCase):
                         "general",
                         "language",
                         "api",
+                        "mcp",
                         "characters",
                         "voice",
                         "microphone",
