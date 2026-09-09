@@ -9,6 +9,8 @@ from typing import Awaitable, Callable
 
 import numpy as np
 
+from handlers.asr_audio_devices import refresh_portaudio_catalog
+
 
 class AudioCaptureError(RuntimeError):
     """Raised when the selected input device cannot be opened or read."""
@@ -133,6 +135,9 @@ class AudioCaptureService:
         except Exception as exc:
             raise AudioCaptureError(f"Не удалось загрузить sounddevice: {format_exception(exc)}") from exc
 
+        # ASR worker может жить дольше подключённого микрофона. Обновляем его
+        # собственный PortAudio-каталог перед открытием выбранного GUI индекса.
+        refresh_portaudio_catalog(sd)
         device_name, host_api_name = _device_description(sd, microphone_index)
 
         # Округляем, а не отсекаем: при chunk=512/16 кГц (32 мс на чанк) усечение

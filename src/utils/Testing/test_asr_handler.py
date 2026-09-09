@@ -295,9 +295,12 @@ class SpeechRecognitionStartTests(unittest.TestCase):
                 on_ready=lambda: sequence.append("ready"),
             )
 
-        with patch.dict(sys.modules, {"sounddevice": sounddevice}):
+        with patch.dict(sys.modules, {"sounddevice": sounddevice}), patch(
+            "handlers.asr_audio_capture.refresh_portaudio_catalog"
+        ) as refresh_catalog:
             asyncio.run(run_capture())
 
+        refresh_catalog.assert_called_once_with(sounddevice)
         self.assertEqual(["open", "read", "ready", "close"], sequence)
 
     def _capture_segments(self, script, **config_kwargs):

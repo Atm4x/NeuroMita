@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any
 
 
 ASR_CAPTURE_SAMPLE_RATE = 16000
+_PORTAUDIO_CATALOG_LOCK = RLock()
 
 _WINDOWS_DEFAULT_INPUT_ALIASES = frozenset(
     {
@@ -67,10 +69,39 @@ def _supports_asr_capture(sounddevice, index: int, sample_rate: int) -> bool:
         return False
 
 
+def refresh_portaudio_catalog(sounddevice) -> None:
+    """Force PortAudio to rescan hot-plugged devices when supported.
+
+    python-sounddevice has no public refresh call.  Its device catalog belongs
+    to the PortAudio lifetime, so a new ``query_devices()`` alone can keep the
+    snapshot taken when the process started.  The private lifecycle functions
+    are stable in the pinned sounddevice 0.5.1 used by the application.
+    """
+
+    with _PORTAUDIO_CATALOG_LOCK:
+        terminate = getattr(sounddevice, "_terminate", None)
+        initialize = getattr(sounddevice, "_initialize", None)
+        if not callable(terminate) or not callable(initialize):
+            return
+
+        initialized_count = max(1, int(getattr(sounddevice, "_initialized", 1) or 1))
+        terminated_count = 0
+        try:
+            for _ in range(initialized_count):
+                terminate()
+                terminated_count += 1
+        finally:
+            # Restore the previous initialization reference count even when one
+            # of the PortAudio termination calls reports an error.
+            for _ in range(terminated_count):
+                initialize()
+
+
 def list_asr_input_devices(
     sounddevice,
     *,
     sample_rate: int = ASR_CAPTURE_SAMPLE_RATE,
+    refresh: bool = False,
 ) -> list[ASRInputDevice]:
     """Return one compatible PortAudio endpoint for each input-device name.
 
@@ -80,11 +111,24 @@ def list_asr_input_devices(
     representations, keep the best one that can actually open the ASR format.
     """
 
+    with _PORTAUDIO_CATALOG_LOCK:
+        if refresh:
+            refresh_portaudio_catalog(sounddevice)
+        return _list_asr_input_devices(sounddevice, sample_rate=sample_rate)
+
+
+def _list_asr_input_devices(
+    sounddevice,
+    *,
+    sample_rate: int,
+) -> list[ASRInputDevice]:
+    raw_devices = list(sounddevice.query_devices())
+
     selected: dict[tuple[str, int], ASRInputDevice] = {}
     order: list[tuple[str, int]] = []
     occurrences: dict[tuple[str, str], int] = {}
 
-    for index, device in enumerate(sounddevice.query_devices()):
+    for index, device in enumerate(raw_devices):
         try:
             if int(device.get("max_input_channels", 0) or 0) <= 0:
                 continue
@@ -140,10 +184,15 @@ def resolve_asr_input_device(
     requested_index: int | None,
     requested_name: str | None,
     sample_rate: int = ASR_CAPTURE_SAMPLE_RATE,
+    refresh: bool = False,
 ) -> ASRInputDevice | None:
     """Resolve persisted selection to a currently compatible PortAudio index."""
 
-    devices = list_asr_input_devices(sounddevice, sample_rate=sample_rate)
+    devices = list_asr_input_devices(
+        sounddevice,
+        sample_rate=sample_rate,
+        refresh=refresh,
+    )
     if not devices:
         return None
 

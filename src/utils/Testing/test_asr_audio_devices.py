@@ -28,6 +28,29 @@ class _FakeSoundDevice:
             raise RuntimeError("Invalid sample rate")
 
 
+class _HotPlugSoundDevice(_FakeSoundDevice):
+    def __init__(self, old_devices, new_devices, host_apis, *, supported):
+        super().__init__(old_devices, host_apis, supported=supported)
+        self._old_devices = old_devices
+        self._new_devices = new_devices
+        self._refreshed = False
+        self._initialized = 1
+        self.terminate_calls = 0
+        self.initialize_calls = 0
+
+    def query_devices(self):
+        return self._new_devices if self._refreshed else self._old_devices
+
+    def _terminate(self):
+        self.terminate_calls += 1
+        self._initialized -= 1
+
+    def _initialize(self):
+        self.initialize_calls += 1
+        self._initialized += 1
+        self._refreshed = True
+
+
 def _device(name, hostapi, *, inputs=1, sample_rate=48000):
     return {
         "name": name,
@@ -76,6 +99,26 @@ def test_windows_default_aliases_are_not_shown_as_extra_microphones():
     devices = list_asr_input_devices(sounddevice)
 
     assert [device.option_text for device in devices] == ["FIFINE Microphone (3)"]
+
+
+def test_refresh_rescans_portaudio_after_microphone_hot_plug():
+    sounddevice = _HotPlugSoundDevice(
+        [_device("Desk microphone", 0)],
+        [_device("Desk microphone", 0), _device("Webcam microphone", 0)],
+        [{"name": "MME"}],
+        supported={(0, 16000), (1, 16000)},
+    )
+
+    before = list_asr_input_devices(sounddevice)
+    after = list_asr_input_devices(sounddevice, refresh=True)
+
+    assert [device.name for device in before] == ["Desk microphone"]
+    assert [device.name for device in after] == [
+        "Desk microphone",
+        "Webcam microphone",
+    ]
+    assert sounddevice.terminate_calls == 1
+    assert sounddevice.initialize_calls == 1
 
 
 def test_wdm_ks_is_never_offered_even_when_format_probe_succeeds():

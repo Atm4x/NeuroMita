@@ -462,6 +462,7 @@ class SpeechController(SpeechService):
             requested_index=self.device_id,
             requested_name=self.selected_microphone,
             sample_rate=ASR_CAPTURE_SAMPLE_RATE,
+            refresh=True,
         )
         if microphone is None:
             logger.error(
@@ -890,6 +891,7 @@ class SpeechController(SpeechService):
                 devices = list_asr_input_devices(
                     sd,
                     sample_rate=ASR_CAPTURE_SAMPLE_RATE,
+                    refresh=True,
                 )
                 result = [device.option_text for device in devices]
                 return result or ["Микрофоны не найдены"]
