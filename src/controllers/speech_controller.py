@@ -9,6 +9,11 @@ from difflib import SequenceMatcher
 import sounddevice as sd
 
 from handlers.asr_handler import SpeechRecognition
+from handlers.asr_audio_devices import (
+    ASR_CAPTURE_SAMPLE_RATE,
+    list_asr_input_devices,
+    resolve_asr_input_device,
+)
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from core.performance_trace import perf_mark, perf_mark_once, performance_traces
@@ -433,8 +438,55 @@ class SpeechController(SpeechService):
             self._handle_start_failure()
             return
 
+        # Старые версии сохраняли произвольную частоту (например 14000 Гц),
+        # хотя общий Silero VAD/ASR тракт рассчитан на 16 кГц. Нормализуем и
+        # настройку, и runtime, чтобы обновление лечило уже сохранённый профиль.
+        settings_changed = False
+        SpeechRecognition.VOSK_SAMPLE_RATE = ASR_CAPTURE_SAMPLE_RATE
+        try:
+            if int(self.settings.get("VOSK_SAMPLE_RATE", ASR_CAPTURE_SAMPLE_RATE)) != ASR_CAPTURE_SAMPLE_RATE:
+                self.settings.set("VOSK_SAMPLE_RATE", ASR_CAPTURE_SAMPLE_RATE)
+                settings_changed = True
+                logger.warning(
+                    f"Частота ASR приведена к поддерживаемым {ASR_CAPTURE_SAMPLE_RATE} Гц."
+                )
+        except (TypeError, ValueError):
+            self.settings.set("VOSK_SAMPLE_RATE", ASR_CAPTURE_SAMPLE_RATE)
+            settings_changed = True
+
+        # PortAudio-индексы меняются между сеансами, а один физический микрофон
+        # раньше мог быть сохранён как несовместимый WDM-KS endpoint. Ищем его
+        # заново по имени и выбираем представление, проверенное на 16 кГц.
+        microphone = resolve_asr_input_device(
+            sd,
+            requested_index=self.device_id,
+            requested_name=self.selected_microphone,
+            sample_rate=ASR_CAPTURE_SAMPLE_RATE,
+        )
+        if microphone is None:
+            logger.error(
+                "Не найден микрофон, совместимый с ASR (mono float32, 16000 Гц, blocking capture)."
+            )
+            self._handle_start_failure()
+            return
+
+        if self.device_id != microphone.index or self.selected_microphone != microphone.name:
+            logger.info(
+                f"Микрофон ASR переназначен: {self.selected_microphone or '<не выбран>'} "
+                f"({self.device_id}) -> {microphone.name} ({microphone.index}, {microphone.host_api or 'PortAudio'})"
+            )
+            self.device_id = microphone.index
+            self.selected_microphone = microphone.name
+            self.settings.set("NM_MICROPHONE_ID", microphone.index)
+            self.settings.set("NM_MICROPHONE_NAME", microphone.name)
+            self.settings.set("MIC_DEVICE", microphone.option_text)
+            settings_changed = True
+
+        if settings_changed:
+            self.settings.save_settings()
+
         self.asr_is_ready = False
-        started = bool(SpeechRecognition.speech_recognition_start(self.device_id or 0, loop_service.loop()))
+        started = bool(SpeechRecognition.speech_recognition_start(microphone.index, loop_service.loop()))
         self.mic_recognition_active = started
         if not started:
             self._handle_start_failure()
@@ -835,12 +887,11 @@ class SpeechController(SpeechService):
 
         def compute():
             try:
-                devices = sd.query_devices()
-                result = []
-                for i, d in enumerate(devices):
-                    if d.get('max_input_channels', 0) > 0:
-                        name = d.get('name', f"Device {i}")
-                        result.append(f"{name} ({i})")
+                devices = list_asr_input_devices(
+                    sd,
+                    sample_rate=ASR_CAPTURE_SAMPLE_RATE,
+                )
+                result = [device.option_text for device in devices]
                 return result or ["Микрофоны не найдены"]
             except Exception as e:
                 logger.error(f"Ошибка получения списка микрофонов: {format_exception(e)}")

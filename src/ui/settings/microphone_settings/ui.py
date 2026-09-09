@@ -194,8 +194,16 @@ def build_microphone_settings_ui(self, parent_layout):
         sb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return sb
 
-    self.vad_sample_rate_spinbox = _spinbox(8000, 48000, 16000, 1000)
-    tr_set(self.vad_sample_rate_spinbox, "Частота дискретизации (Гц)", "Sample rate (Hz)", "setToolTip")
+    # Общий live-ASR тракт (захват, Silero VAD и распознаватели) работает в
+    # 16 кГц. Произвольные значения вроде 14000 либо не открываются драйвером,
+    # либо роняют VAD уже после успешного открытия микрофона.
+    self.vad_sample_rate_spinbox = _spinbox(16000, 16000, 16000, 1000)
+    tr_set(
+        self.vad_sample_rate_spinbox,
+        "Live ASR использует фиксированную частоту 16000 Гц",
+        "Live ASR uses a fixed 16000 Hz sample rate",
+        "setToolTip",
+    )
     root_lay.addWidget(make_row(_("Sample rate", "Sample rate"), self.vad_sample_rate_spinbox, label_w))
 
     self.vad_chunk_size_spinbox = _spinbox(128, 4096, 512, 128)

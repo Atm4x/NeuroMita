@@ -363,12 +363,41 @@ class MicrophoneSettingsController(BaseController):
                     except Exception:
                         current_full = mic_list[0] if mic_list else ""
 
+                    selected_index = -1
                     for i in range(v.mic_combobox.count()):
                         if v.mic_combobox.itemData(i, Qt.ItemDataRole.UserRole) == current_full:
-                            v.mic_combobox.setCurrentIndex(i)
+                            selected_index = i
                             break
 
-                    v.mic_combobox.setToolTip(str(current_full or ""))
+                    # После обновления старый PortAudio-индекс может исчезнуть
+                    # или указывать на WDM-KS. Сохраняем выбор физического
+                    # микрофона по имени и показываем его новый совместимый ID.
+                    if selected_index < 0:
+                        try:
+                            current_name = str(v.settings.get("NM_MICROPHONE_NAME", "") or "")
+                        except Exception:
+                            current_name = ""
+                        for i in range(v.mic_combobox.count()):
+                            option = str(
+                                v.mic_combobox.itemData(i, Qt.ItemDataRole.UserRole) or ""
+                            )
+                            option_name = option.rsplit(" (", 1)[0]
+                            if current_name and option_name.casefold() == current_name.casefold():
+                                selected_index = i
+                                break
+
+                    if selected_index < 0 and v.mic_combobox.count():
+                        selected_index = 0
+                    if selected_index >= 0:
+                        v.mic_combobox.setCurrentIndex(selected_index)
+                        current_full = str(
+                            v.mic_combobox.itemData(
+                                selected_index, Qt.ItemDataRole.UserRole
+                            )
+                            or ""
+                        )
+
+                    v.mic_combobox.setToolTip(current_full)
                     v.mic_combobox.setEnabled(True)
                 finally:
                     v.mic_combobox.blockSignals(False)

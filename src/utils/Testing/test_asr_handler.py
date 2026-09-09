@@ -230,6 +230,33 @@ class SpeechRecognitionStartTests(unittest.TestCase):
 
         asyncio.run(run_start_and_stop())
 
+    def test_managed_asr_normalizes_unsupported_capture_sample_rate(self):
+        service = ASRService(emit_event=lambda *_args: None)
+
+        async def run_start():
+            with patch.object(
+                service,
+                "_stop_live_internal",
+                new=AsyncMock(),
+            ), patch.object(
+                service,
+                "_start_live_internal",
+                new=AsyncMock(return_value=True),
+            ) as start:
+                started = await service.handle(
+                    "start_live",
+                    {
+                        "engine_id": "gigaam",
+                        "microphone_index": 26,
+                        "vad": {"sample_rate": 14000},
+                    },
+                )
+
+            self.assertTrue(started)
+            self.assertEqual(start.await_args.kwargs["sample_rate"], 16000)
+
+        asyncio.run(run_start())
+
     def test_audio_capture_reports_ready_after_first_successful_read(self):
         sequence = []
         sounddevice = types.ModuleType("sounddevice")

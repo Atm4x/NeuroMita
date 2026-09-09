@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from handlers.asr_audio_capture import AudioCaptureConfig, AudioCaptureService
+from handlers.asr_audio_devices import ASR_CAPTURE_SAMPLE_RATE
 
 
 class ASRService:
@@ -58,7 +59,12 @@ class ASRService:
             engine_settings = payload.get("engine_settings") if isinstance(payload.get("engine_settings"), dict) else {}
 
             vad_cfg = payload.get("vad") if isinstance(payload.get("vad"), dict) else {}
-            sample_rate = int(vad_cfg.get("sample_rate", 16000) or 16000)
+            requested_sample_rate = int(vad_cfg.get("sample_rate", ASR_CAPTURE_SAMPLE_RATE) or ASR_CAPTURE_SAMPLE_RATE)
+            sample_rate = ASR_CAPTURE_SAMPLE_RATE
+            if requested_sample_rate != sample_rate and self._logger is not None:
+                self._logger.warning(
+                    f"Unsupported ASR sample rate {requested_sample_rate}; using {sample_rate} Hz"
+                )
             chunk_size = int(vad_cfg.get("chunk_size", 512) or 512)
             vad_threshold = float(vad_cfg.get("vad_threshold", 0.5) or 0.5)
             silence_timeout = float(vad_cfg.get("silence_timeout", 0.6) or 0.6)
