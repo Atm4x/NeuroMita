@@ -938,7 +938,11 @@ class AIHubDialog(QDialog):
             item = self._scroll_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                # Keep the widget owned by the dialog until Qt processes the
+                # deferred delete.  Detaching a visible child turns it into a
+                # temporary top-level window on Windows, which can produce a
+                # row of stray ``python`` taskbar entries during refreshes.
+                w.hide()
                 w.deleteLater()
 
     def _show_scroll_loading(self) -> None:
@@ -1474,7 +1478,10 @@ class AIHubDialog(QDialog):
             item = self._queue_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                # Queue progress can refresh several times per second.  Do not
+                # promote retired rows to top-level windows while deleteLater
+                # is pending (see _clear_scroll for the Windows consequence).
+                w.hide()
                 w.deleteLater()
 
     @staticmethod
@@ -1538,7 +1545,7 @@ class AIHubDialog(QDialog):
             item = lay.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                w.hide()
                 w.deleteLater()
 
         running = self._queue_state.get("running")
