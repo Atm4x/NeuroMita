@@ -84,6 +84,26 @@ def test_duplicate_windows_endpoints_collapse_to_one_compatible_device():
     ]
 
 
+def test_native_rate_wasapi_is_preferred_for_capture():
+    sounddevice = _FakeSoundDevice(
+        [
+            _device("USB Microphone", 0, sample_rate=44100),
+            _device("USB Microphone", 1, sample_rate=48000),
+        ],
+        [
+            {"name": "Windows DirectSound"},
+            {"name": "Windows WASAPI"},
+        ],
+        supported={(0, 16000), (1, 48000)},
+    )
+
+    devices = list_asr_input_devices(sounddevice)
+
+    assert [(device.index, device.host_api, device.default_sample_rate) for device in devices] == [
+        (1, "Windows WASAPI", 48000.0)
+    ]
+
+
 def test_windows_default_aliases_are_not_shown_as_extra_microphones():
     sounddevice = _FakeSoundDevice(
         [

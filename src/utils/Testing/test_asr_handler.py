@@ -303,6 +303,91 @@ class SpeechRecognitionStartTests(unittest.TestCase):
         refresh_catalog.assert_called_once_with(sounddevice)
         self.assertEqual(["open", "read", "ready", "close"], sequence)
 
+    def test_audio_capture_emulates_native_48khz_microphone_for_16khz_asr(self):
+        sounddevice = types.ModuleType("sounddevice")
+        state = {"reads": 0}
+        opened_with = {}
+        test_case = self
+
+        def query_devices(index=None):
+            device = {
+                "name": "Native-rate microphone",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "default_samplerate": 48000.0,
+            }
+            return device if index is not None else [device]
+
+        sounddevice.query_devices = query_devices
+        sounddevice.query_hostapis = lambda _index: {"name": "Windows WASAPI"}
+
+        def check_input_settings(*, device, channels, dtype, samplerate):
+            test_case.assertEqual(0, device)
+            test_case.assertEqual(1, channels)
+            test_case.assertEqual("float32", dtype)
+            if samplerate != 48000:
+                raise RuntimeError("Invalid sample rate")
+
+        sounddevice.check_input_settings = check_input_settings
+
+        class InputStream:
+            def __init__(self, **kwargs):
+                opened_with.update(kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, chunk_size):
+                test_case.assertEqual(1536, chunk_size)
+                state["reads"] += 1
+                # The fake VAD below treats positive chunks as speech.  This
+                # emulates a native 48 kHz endpoint without real audio hardware.
+                value = 0.8 if state["reads"] <= 12 else 0.0
+                return np.full((chunk_size, 1), value, dtype=np.float32), False
+
+        sounddevice.InputStream = InputStream
+        segments = []
+        vad_shapes = []
+
+        async def run_capture():
+            await AudioCaptureService(_SilentLogger()).run(
+                microphone_index=0,
+                config=AudioCaptureConfig(
+                    sample_rate=16000,
+                    chunk_size=512,
+                    silence_timeout=0.064,
+                    min_speech_duration=0.0,
+                ),
+                is_active=lambda: state["reads"] < 15,
+                speech_probability=lambda audio, rate: (
+                    vad_shapes.append((len(audio), rate)) or float(audio[0])
+                ),
+                on_segment=lambda audio, rate: self._collect_segment(
+                    segments,
+                    audio,
+                    rate,
+                ),
+            )
+
+        with patch.dict(sys.modules, {"sounddevice": sounddevice}), patch(
+            "handlers.asr_audio_capture.refresh_portaudio_catalog"
+        ):
+            asyncio.run(run_capture())
+
+        self.assertEqual(48000, opened_with["samplerate"])
+        self.assertEqual(1536, opened_with["blocksize"])
+        self.assertTrue(vad_shapes)
+        self.assertTrue(all(shape == (512, 16000) for shape in vad_shapes))
+        self.assertEqual(1, len(segments))
+        self.assertEqual(16000, segments[0][1])
+
+    @staticmethod
+    async def _collect_segment(segments, audio, rate):
+        segments.append((audio, rate))
+
     def _capture_segments(self, script, **config_kwargs):
         """Прогоняет синтетический поток через захват и возвращает сегменты.
 

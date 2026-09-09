@@ -53,20 +53,40 @@ def _host_api_name(sounddevice, device: Any) -> str:
         return ""
 
 
-def _supports_asr_capture(sounddevice, index: int, sample_rate: int) -> bool:
+def _supports_asr_capture(
+    sounddevice,
+    index: int,
+    sample_rate: int,
+    default_sample_rate: float | None = None,
+) -> bool:
     checker = getattr(sounddevice, "check_input_settings", None)
     if not callable(checker):
         return True
+
+    # WASAPI endpoints commonly accept only their Windows mix format (usually
+    # 48 kHz).  AudioCaptureService resamples that stream to the 16 kHz ASR
+    # format, so such an endpoint is compatible even when PortAudio rejects a
+    # direct 16 kHz open.
+    candidate_rates = [int(sample_rate)]
     try:
-        checker(
-            device=int(index),
-            channels=1,
-            dtype="float32",
-            samplerate=int(sample_rate),
-        )
-        return True
-    except Exception:
-        return False
+        native_rate = int(round(float(default_sample_rate)))
+    except (TypeError, ValueError):
+        native_rate = 0
+    if native_rate > 0 and native_rate not in candidate_rates:
+        candidate_rates.append(native_rate)
+
+    for candidate_rate in candidate_rates:
+        try:
+            checker(
+                device=int(index),
+                channels=1,
+                dtype="float32",
+                samplerate=candidate_rate,
+            )
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def refresh_portaudio_catalog(sounddevice) -> None:
@@ -152,15 +172,20 @@ def _list_asr_input_devices(
         if key in _WINDOWS_DEFAULT_INPUT_ALIASES:
             continue
 
-        if "wdm-ks" in host_api.casefold():
-            continue
-        if not _supports_asr_capture(sounddevice, index, sample_rate):
-            continue
-
         try:
             default_rate = float(device.get("default_samplerate"))
         except (TypeError, ValueError):
             default_rate = None
+
+        if "wdm-ks" in host_api.casefold():
+            continue
+        if not _supports_asr_capture(
+            sounddevice,
+            index,
+            sample_rate,
+            default_rate,
+        ):
+            continue
 
         candidate = ASRInputDevice(
             index=int(index),
