@@ -753,10 +753,13 @@ class VoiceoverGuiController(BaseController):
         if chip is None and btn is None:
             return
 
-        use_voice = self._effective_use_voice()
         method = self._effective_method()
 
-        if not use_voice or method != "Local":
+        # Lifecycle controls of the selected local model must remain available
+        # even when USE_VOICEOVER is currently disabled. Only the selected
+        # voiceover method determines whether this Local-specific status/action
+        # belongs on screen.
+        if method != "Local":
             if chip is not None:
                 chip.setVisible(False)
             if btn is not None:
@@ -1004,11 +1007,11 @@ class VoiceoverGuiController(BaseController):
         if chip is None and btn is None:
             return
 
-        use_voice = self._effective_use_voice()
         method = self._effective_method()
 
-        # Локальная озвучка неактуальна — прячем и чип, и кнопку.
-        if not use_voice or method != "Local":
+        # Инициализация/переинициализация — lifecycle локальной модели и не
+        # должна исчезать только потому, что USE_VOICEOVER временно выключен.
+        if method != "Local":
             if chip is not None:
                 chip.setVisible(False)
             if btn is not None:

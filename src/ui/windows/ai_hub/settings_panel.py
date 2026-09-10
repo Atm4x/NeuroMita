@@ -376,6 +376,80 @@ class SettingsPanel(QWidget):
         self._btn_save.setEnabled(enabled)
         self._btn_reset.setEnabled(enabled)
 
+    def _hardware_snapshot(self) -> dict[str, Any]:
+        catalog = getattr(self._view_model, "_catalog", None)
+        getter = getattr(catalog, "hardware_snapshot", None)
+        if not callable(getter):
+            return {}
+        try:
+            snapshot = getter()
+        except Exception:
+            return {}
+        return dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+
+    def _cuda_display_labels(self) -> dict[str, str]:
+        snapshot = self._hardware_snapshot()
+        cuda = dict(snapshot.get("cuda") or {})
+        devices = [
+            dict(item)
+            for item in (cuda.get("devices") or [])
+            if isinstance(item, dict) and item.get("ordinal") is not None
+        ]
+        labels: dict[str, str] = {}
+        for index, item in enumerate(devices):
+            try:
+                ordinal = int(item.get("ordinal", index))
+            except (TypeError, ValueError):
+                continue
+            raw = f"cuda:{ordinal}"
+            name = str(item.get("name") or "").strip()
+            labels[raw] = f"{raw} ({name})" if name else raw
+        if len(devices) == 1:
+            item = devices[0]
+            try:
+                ordinal = int(item.get("ordinal", 0))
+            except (TypeError, ValueError):
+                ordinal = 0
+            raw = f"cuda:{ordinal}"
+            labels["cuda"] = labels.get(raw, raw)
+        return labels
+
+    def _decorate_schema_for_display(self, schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cuda_labels = self._cuda_display_labels()
+        if not cuda_labels:
+            return list(schema or [])
+
+        decorated: list[dict[str, Any]] = []
+        for entry in list(schema or []):
+            if not isinstance(entry, dict):
+                decorated.append(entry)
+                continue
+            type_ = self._form._normalize_type(entry.get("type"))
+            if type_ != "combobox":
+                decorated.append(entry)
+                continue
+            options = self._form._normalize_options(entry)
+            values = [str(v) for v in (options.get("values") or []) if str(v).strip()]
+            if not any(value == "cuda" or value.startswith("cuda:") for value in values):
+                decorated.append(entry)
+                continue
+            labels = dict(options.get("display_labels") or {})
+            changed = False
+            for value in values:
+                mapped = cuda_labels.get(value)
+                if mapped and labels.get(value) != mapped:
+                    labels[value] = mapped
+                    changed = True
+            if not changed:
+                decorated.append(entry)
+                continue
+            cloned = dict(entry)
+            cloned_options = dict(options)
+            cloned_options["display_labels"] = labels
+            cloned["options"] = cloned_options
+            decorated.append(cloned)
+        return decorated
+
     def render(self, state: AIHubSettingsState) -> None:
         self._rendering = True
         try:
@@ -392,7 +466,7 @@ class SettingsPanel(QWidget):
 
             if state.form_revision != self._form_revision:
                 self._form_revision = state.form_revision
-                schema = list(mutable_payload(state.schema) or [])
+                schema = self._decorate_schema_for_display(list(mutable_payload(state.schema) or []))
                 values = dict(mutable_payload(state.values) or {})
                 self._form.clear_field_errors()
                 if schema:

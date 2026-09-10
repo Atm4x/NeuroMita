@@ -925,11 +925,41 @@ class AIHubDialog(QDialog):
         rows = [row for row in self._rows if row_category(row) == category]
         return bool(rows) and all(isinstance(row.get("status"), dict) for row in rows)
 
+    def _confirm_close_with_unsaved_settings(self) -> bool:
+        panel = getattr(self, "_settings_panel", None)
+        if panel is None or not panel.has_unsaved_changes():
+            return True
+        answer = QMessageBox.warning(
+            self,
+            _("Несохранённые изменения", "Unsaved changes"),
+            _(
+                "Изменения настроек не сохранены. Если продолжить, они будут потеряны.",
+                "Settings changes have not been saved. If you continue, they will be lost.",
+            ),
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Discard:
+            return False
+        panel.discard_unsaved_changes()
+        return True
+
+    def confirm_hide_on_close(self) -> bool:
+        """Called by WindowManager before hide-on-close consumes native Close.
+
+        The system title-bar X is intercepted by WindowManager's event filter,
+        so closeEvent() is not reached for singleton hide-on-close dialogs.
+        Keep the unsaved-settings modal at that boundary as well.
+        """
+        if self._allow_close_without_unsaved_prompt:
+            return True
+        return self._confirm_close_with_unsaved_settings()
+
     def reject(self) -> None:
         if self._allow_close_without_unsaved_prompt:
             super().reject()
             return
-        if not self._settings_navigation_allowed(discard=True):
+        if not self._confirm_close_with_unsaved_settings():
             return
         self._allow_close_without_unsaved_prompt = True
         try:
@@ -938,7 +968,7 @@ class AIHubDialog(QDialog):
             self._allow_close_without_unsaved_prompt = False
 
     def closeEvent(self, event) -> None:
-        if self._allow_close_without_unsaved_prompt or self._settings_navigation_allowed(discard=True):
+        if self._allow_close_without_unsaved_prompt or self._confirm_close_with_unsaved_settings():
             super().closeEvent(event)
             return
         event.ignore()
