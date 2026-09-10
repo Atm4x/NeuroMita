@@ -48,6 +48,66 @@ class LocalVoiceControllerLifecycleTests(unittest.TestCase):
         self.assertTrue(controller._initialized_cache["high_clf5"])
 
 
+class _EventBusStub:
+    def __init__(self) -> None:
+        self.emitted = []
+
+    def emit(self, name, data=None):
+        self.emitted.append((name, data))
+
+
+class LocalVoiceControllerReinitializeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reinitialize_restarts_tts_before_model_init(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller.event_bus = _EventBusStub()
+        controller._model_configs_cache = [object()]
+        controller._initialized_cache = {"high": True, "other": True}
+        controller._triton_status_cache = {"cached": True}
+        order = []
+
+        class Engine:
+            def restart_service(self, service, timeout=0):
+                order.append(("restart", service, timeout))
+                return True
+
+        controller._get_engine = lambda: Engine()
+
+        async def ensure(model_id, *, initialize=False):
+            order.append(("init", model_id, initialize))
+
+        controller._ensure_model_environment = ensure
+
+        await controller._async_reinit_model("high")
+
+        self.assertEqual(order, [("restart", "tts", 20.0), ("init", "high", True)])
+        self.assertIsNone(controller._model_configs_cache)
+        self.assertEqual(controller._triton_status_cache, None)
+        self.assertEqual(controller._initialized_cache, {"high": True})
+        self.assertIn((Events.Audio.FINISH_MODEL_LOADING, {"model_id": "high"}), controller.event_bus.emitted)
+
+    async def test_reinitialize_stops_if_tts_restart_fails(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller.event_bus = _EventBusStub()
+        controller._model_configs_cache = None
+        controller._initialized_cache = {"high": True}
+        controller._triton_status_cache = None
+        controller._get_engine = lambda: SimpleNamespace(
+            restart_service=lambda *_args, **_kwargs: False
+        )
+        init_calls = []
+
+        async def ensure(*_args, **_kwargs):
+            init_calls.append(True)
+
+        controller._ensure_model_environment = ensure
+
+        await controller._async_reinit_model("high")
+
+        self.assertEqual(init_calls, [])
+        self.assertFalse(controller._initialized_cache["high"])
+        self.assertTrue(any(name == Events.Audio.CANCEL_MODEL_LOADING for name, _ in controller.event_bus.emitted))
+
+
 class LocalVoiceControllerSynthesisTests(unittest.IsolatedAsyncioTestCase):
     async def test_engine_timeout_has_actionable_message(self):
         controller = LocalVoiceController.__new__(LocalVoiceController)

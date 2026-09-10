@@ -937,6 +937,11 @@ class LocalVoiceService(ABC):
     def initialize_model(self, model_id: str) -> Any: ...
 
     @abstractmethod
+    def reinitialize_model(self, model_id: str) -> Any:
+        """Restart the owning TTS runtime if needed, then initialize with current settings."""
+        ...
+
+    @abstractmethod
     def triton_status(self, *, refresh: bool = False) -> Dict[str, Any]: ...
 
     @abstractmethod

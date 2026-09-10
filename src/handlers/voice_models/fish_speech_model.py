@@ -273,6 +273,9 @@ class FishSpeechInstallSpec:
                     "--reference-audio",
                     ref_wav,
                 ]
+                compile_device = str(ctx.get("device") or "cuda:0").strip()
+                if compile_device:
+                    init_cmd.extend(["--device", compile_device])
                 creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 child_env = cls._runtime_subprocess_env(python_paths)
                 proc = subprocess.Popen(
@@ -505,8 +508,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "False"},
@@ -546,8 +548,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},
@@ -588,8 +589,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "fsprvc_fsp_device", "label": _("[FSP] Устройство", "[FSP] Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство для части Fish Speech+.", "Device for Fish Speech+ part.")},
                 {"key": "fsprvc_fsp_half", "label": _("[FSP] Half-precision", "[FSP] Half-precision"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},

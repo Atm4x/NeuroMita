@@ -13,6 +13,7 @@ from core.events import Event
 from core.installables.compatibility import evaluate_installable_compatibility
 from handlers.voice_models.edge_tts_rvc_model import EdgeTTSRVCOnnxModel
 from handlers.voice_models.f5_tts_model import F5TTSModel
+from handlers.voice_models.fish_speech_model import FishSpeechModel
 
 
 _F5_FIXTURE = [
@@ -334,6 +335,122 @@ class VoiceModelControllerTests(unittest.TestCase):
 
         self.assertEqual(saved["silero_rvc_cuda"]["silero_rvc_is_half"], "False")
         self.assertEqual(result["changed"], 1)
+
+    def test_multi_gpu_cuda_choices_include_names_and_keep_raw_ids(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce GTX 1660 Ti"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 75
+        controller.detected_cuda_devices = ["cuda:0", "cuda:1"]
+        controller.detected_cuda_device_records = [
+            {"ordinal": 0, "name": "NVIDIA GeForce GTX 1660 Ti", "compute_major": 7, "compute_minor": 5},
+            {"ordinal": 1, "name": "NVIDIA GeForce RTX 5080", "compute_major": 12, "compute_minor": 0},
+        ]
+
+        adapted = controller.finalize_model_settings(
+            _F5_FIXTURE, "NVIDIA", controller.detected_cuda_devices
+        )
+        model = next(item for item in adapted if item["id"] == "high+low")
+        settings = {item["key"]: item for item in model["settings"]}
+        device_options = settings["f5rvc_rvc_device"]["options"]
+        half = settings["f5rvc_is_half"]
+
+        self.assertEqual(device_options["values"], ["cuda:0", "cuda:1", "dml", "cpu"])
+        self.assertEqual(
+            device_options["display_labels"],
+            {
+                "cuda:0": "cuda:0 (NVIDIA GeForce GTX 1660 Ti)",
+                "cuda:1": "cuda:1 (NVIDIA GeForce RTX 5080)",
+            },
+        )
+        # Default device is cuda:0 (1660 Ti), therefore half defaults off, but
+        # the field remains editable because cuda:1 supports the FP16 policy.
+        self.assertEqual(half["options"]["default"], "False")
+        self.assertFalse(bool(half.get("locked")))
+
+    def test_fish_device_choices_expand_to_all_detected_cuda_devices(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce RTX 4060"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 89
+        controller.detected_cuda_devices = ["cuda:0", "cuda:1"]
+        controller.detected_cuda_device_records = [
+            {"ordinal": 0, "name": "NVIDIA GeForce RTX 4060", "compute_major": 8, "compute_minor": 9},
+            {"ordinal": 1, "name": "NVIDIA GeForce RTX 5080", "compute_major": 12, "compute_minor": 0},
+        ]
+
+        adapted = controller.finalize_model_settings(
+            FishSpeechModel.MODEL_CONFIGS,
+            "NVIDIA",
+            controller.detected_cuda_devices,
+        )
+
+        medium_plus = next(item for item in adapted if item["id"] == "medium+")
+        device = next(item for item in medium_plus["settings"] if item["key"] == "device")
+        self.assertEqual(device["options"]["values"], ["cuda:0", "cuda:1"])
+        self.assertEqual(
+            device["options"]["display_labels"]["cuda:1"],
+            "cuda:1 (NVIDIA GeForce RTX 5080)",
+        )
+        self.assertFalse(bool(device.get("locked")))
+
+    def test_half_sanitization_uses_selected_cuda_device_on_multi_gpu(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce GTX 1660 Ti"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 75
+        controller.detected_cuda_devices = ["cuda:0", "cuda:1"]
+        controller.detected_cuda_device_records = [
+            {"ordinal": 0, "name": "NVIDIA GeForce GTX 1660 Ti", "compute_major": 7, "compute_minor": 5},
+            {"ordinal": 1, "name": "NVIDIA GeForce RTX 5080", "compute_major": 12, "compute_minor": 0},
+        ]
+
+        with TemporaryDirectory() as temp_dir:
+            controller.settings_values_file = str(Path(temp_dir) / "voice_model_settings.json")
+            with patch.object(controller, "load_settings"):
+                controller.save_settings_values({
+                    "silero_rvc_cuda": {
+                        "silero_rvc_device": "cuda:0",
+                        "silero_rvc_is_half": "True",
+                    },
+                    "edge_tts_rvc_cuda": {
+                        "device": "cuda:1",
+                        "is_half": "True",
+                    },
+                })
+            saved = json.loads(Path(controller.settings_values_file).read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["silero_rvc_cuda"]["silero_rvc_is_half"], "False")
+        self.assertEqual(saved["edge_tts_rvc_cuda"]["is_half"], "True")
+
+    def test_fish_compile_uses_selected_cuda_device(self):
+        controller = VoiceModelController.__new__(VoiceModelController)
+        controller._lock = threading.RLock()
+        controller.local_voice_models = [
+            {
+                "id": "medium+",
+                "settings": [
+                    {
+                        "key": "device",
+                        "options": {"default": "cuda:1"},
+                    }
+                ],
+            }
+        ]
+        controller.event_bus = SimpleNamespace(emit=lambda *_args, **_kwargs: None)
+        seen = {}
+
+        class _Operations:
+            @staticmethod
+            def initialize(payload):
+                seen.update(payload)
+                return SimpleNamespace(accepted=True, error="")
+
+        registry = SimpleNamespace(get_optional=lambda _contract: _Operations())
+        with patch("controllers.voice_model_controller.services", return_value=registry):
+            self.assertTrue(controller.start_compile("medium+", with_ui=False))
+
+        self.assertEqual(seen["device"], "cuda:1")
 
     def test_onnx_voice_model_is_supported_but_warned_on_nvidia(self):
         controller = self._make_controller_stub()

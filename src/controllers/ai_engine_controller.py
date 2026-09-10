@@ -1918,32 +1918,58 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
             return False
         return w.wait_ready(s, timeout=float(timeout or 0.0))
 
+    def _wait_for_worker_replacement(self, service: str, old_worker: _Worker, timeout: float) -> bool:
+        deadline = time.monotonic() + max(1.0, float(timeout or 0.0))
+        while not self._shutting_down.is_set() and time.monotonic() < deadline:
+            with self._lock:
+                current = self._worker_for_service(service)
+            if current is not None and current is not old_worker:
+                remaining = max(0.0, deadline - time.monotonic())
+                return current.wait_ready(service, timeout=remaining)
+            self._shutting_down.wait(0.05)
+        return False
+
     def restart_service(self, service: str, timeout: float = 5.0) -> bool:
         s = str(service or "").strip().lower()
         with self._lock:
             w = self._worker_for_service(s)
-            if not w:
-                return False
+            mode = self.mode
+        if not w:
+            return False
 
-            if self.mode == "shared":
-                return bool(w.restart_service(s, timeout=timeout))
+        if mode == "shared":
+            if w.restart_service(s, timeout=timeout):
+                return True
+            proc = getattr(w, "proc", None)
+            if proc is not None and not proc.is_alive():
+                # A fatal CUDA error may terminate the worker while processing the
+                # restart. The crash supervisor owns process recovery; wait for its
+                # replacement instead of racing it with another worker spawn.
+                return self._wait_for_worker_replacement(s, w, timeout=max(20.0, float(timeout or 0.0)))
+            return False
 
-            nw = _Worker(
-                self._ctx,
-                s,
-                (s,),
-                python_paths=w.python_paths,
-                probe_modules=w.probe_modules,
-            )
-            nw.start()
-            if not nw.wait_ready(s, timeout=max(1.0, float(timeout or 0.0))):
+        nw = _Worker(
+            self._ctx,
+            s,
+            (s,),
+            python_paths=w.python_paths,
+            probe_modules=w.probe_modules,
+        )
+        nw.start()
+        if not nw.wait_ready(s, timeout=max(1.0, float(timeout or 0.0))):
+            nw.stop(timeout=1.0)
+            return False
+        nw.on_crash = self._on_worker_crash
+        with self._lock:
+            # Another recovery/switch may have replaced this worker while the
+            # candidate was booting. Do not overwrite a newer owner.
+            if self._worker_for_service(s) is not w:
                 nw.stop(timeout=1.0)
                 return False
-            nw.on_crash = self._on_worker_crash
             self._workers[s] = nw
             self._service_to_worker[s] = s
-            w.stop(timeout=timeout)
-            return True
+        w.stop(timeout=timeout)
+        return True
 
     def restart_worker_for_service(self, service: str, timeout: float = 8.0) -> bool:
         s = str(service or "").strip().lower()

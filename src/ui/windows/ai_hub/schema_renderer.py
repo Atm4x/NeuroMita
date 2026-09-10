@@ -6,7 +6,8 @@ Schema entries are plain dicts with keys:
     type          — "entry" | "combobox" | "checkbutton" | "spinbox" | ...
     options       — type-specific config:
         entry:        {"default": str}
-        combobox:     {"values": list[str], "default": str}
+        combobox:     {"values": list[str], "default": str,
+                       "display_labels": {raw_value: display_text}}
         checkbutton:  {"default": bool}
         spinbox:      {"default": int, "min": int, "max": int, "step": int}
     help          — tooltip / inline help (optional)
@@ -266,9 +267,13 @@ class SchemaForm(QWidget):
         if type_ == "combobox":
             w = QComboBox()
             values = [str(v) for v in (opts.get("values") or []) if str(v).strip()]
-            w.addItems(values)
+            labels = opts.get("display_labels") if isinstance(opts.get("display_labels"), dict) else {}
+            for value in values:
+                w.addItem(str(labels.get(value, value)), value)
             default_str = str(default or (values[0] if values else ""))
-            idx = w.findText(default_str)
+            idx = w.findData(default_str)
+            if idx < 0:
+                idx = w.findText(default_str)
             if idx >= 0:
                 w.setCurrentIndex(idx)
             self._defaults[key] = default_str
@@ -309,7 +314,8 @@ class SchemaForm(QWidget):
         if type_ == "checkbutton" and isinstance(widget, QCheckBox):
             return "True" if widget.isChecked() else "False"
         if type_ == "combobox" and isinstance(widget, QComboBox):
-            return widget.currentText()
+            data = widget.currentData()
+            return str(data) if data is not None else widget.currentText()
         if type_ == "spinbox" and isinstance(widget, QSpinBox):
             return str(widget.value())
         if isinstance(widget, QLineEdit):
@@ -327,7 +333,9 @@ class SchemaForm(QWidget):
                 return
             if type_ == "combobox" and isinstance(widget, QComboBox):
                 widget.blockSignals(True)
-                idx = widget.findText(str(value))
+                idx = widget.findData(str(value))
+                if idx < 0:
+                    idx = widget.findText(str(value))
                 if idx >= 0:
                     widget.setCurrentIndex(idx)
                 widget.blockSignals(False)

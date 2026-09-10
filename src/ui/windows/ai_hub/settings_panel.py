@@ -30,6 +30,7 @@ from ui.windows.ai_hub.settings_presentation import (
     ApplyAIHubSettingsRows,
     CompileAIHubModel,
     DeleteAIHubModelCompilation,
+    DiscardAIHubSettingsChanges,
     OpenAIHubCompilationDocumentation,
     ResetAIHubSettings,
     SaveAIHubSettings,
@@ -216,6 +217,57 @@ class SettingsPanel(QWidget):
                 self._list.setCurrentItem(item)
                 return
 
+    def selected_component_id(self) -> str:
+        return str(self._view_model.state.selected_component_id or "").strip()
+
+    def has_unsaved_changes(self) -> bool:
+        """Return true even if the view-model dirty signal has not propagated yet."""
+        try:
+            form_dirty = bool(self._form.is_dirty())
+        except Exception:
+            form_dirty = False
+        return bool(self._view_model.state.dirty or form_dirty)
+
+    def confirm_discard_unsaved_changes(self) -> bool:
+        """Ask before a navigation action would discard edited values."""
+        if not self.has_unsaved_changes():
+            return True
+        answer = QMessageBox.warning(
+            self,
+            _("Несохранённые изменения", "Unsaved changes"),
+            _(
+                "Изменения настроек не сохранены. Если продолжить, они будут потеряны.",
+                "Settings changes have not been saved. If you continue, they will be lost.",
+            ),
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Discard
+
+    def discard_unsaved_changes(self) -> None:
+        """Restore the last persisted values locally and mark the VM clean."""
+        if not self.has_unsaved_changes():
+            return
+        self._rendering = True
+        try:
+            self._form.set_values(dict(mutable_payload(self._view_model.state.values) or {}))
+            self._form.clear_field_errors()
+        finally:
+            self._rendering = False
+        self._view_model.dispatch(DiscardAIHubSettingsChanges())
+
+    def _restore_selected_list_item(self) -> None:
+        selected_id = str(self._view_model.state.selected_component_id or "").strip()
+        self._list.blockSignals(True)
+        try:
+            for i in range(self._list.count()):
+                item = self._list.item(i)
+                if item is not None and str(item.data(Qt.ItemDataRole.UserRole) or "") == selected_id:
+                    self._list.setCurrentItem(item)
+                    return
+        finally:
+            self._list.blockSignals(False)
+
     def retranslate(self) -> None:
         """Refresh shell labels without disturbing the edited form values."""
         self._header.setText(_("Установленные модели", "Installed models"))
@@ -283,6 +335,9 @@ class SettingsPanel(QWidget):
             return
 
         if component_id != self._view_model.state.selected_component_id:
+            if not self.confirm_discard_unsaved_changes():
+                self._restore_selected_list_item()
+                return
             self._view_model.dispatch(SelectAIHubSettingsComponent(component_id))
 
     # ---------------------------------------------------------- actions
