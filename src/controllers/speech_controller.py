@@ -71,6 +71,9 @@ class SpeechController(SpeechService):
         # Явный перезапуск (сменили микрофон): движок тот же, но живой цикл надо
         # поднять заново.
         self._restart_requested = False
+        # Ручной recovery перезапускает также recognizer/VAD, а не только
+        # переоткрывает физический вход.
+        self._full_restart_requested = False
         # Движок, загруженный в SpeechRecognition, и движок живого цикла
         # (None — распознавание не запущено).
         self._configured_engine: str | None = None
@@ -367,7 +370,9 @@ class SpeechController(SpeechService):
         desired_engine = self._desired_engine()
         with self._state_lock:
             force_restart = self._restart_requested
+            full_restart = self._full_restart_requested
             self._restart_requested = False
+            self._full_restart_requested = False
 
         # Смена физического входа не требует выгружать Whisper/Silero. Сначала
         # просим managed worker переоткрыть только PortAudio stream; полный
@@ -377,6 +382,7 @@ class SpeechController(SpeechService):
             self._running_engine is not None
             and desired_active
             and force_restart
+            and not full_restart
             and self._running_engine == desired_engine
         ):
             switched = SpeechRecognition.speech_recognition_switch_microphone(
@@ -899,11 +905,15 @@ class SpeechController(SpeechService):
         self._request_reconcile("explicit stop")
 
     def _on_restart_speech_recognition(self, event: Event):
-        dev_id = (event.data or {}).get('device_id')
+        data = event.data or {}
+        dev_id = data.get('device_id')
         if dev_id is not None:
             self.device_id = dev_id
         with self._state_lock:
             self._restart_requested = True
+            self._full_restart_requested = (
+                self._full_restart_requested or bool(data.get("full_restart", False))
+            )
         self._request_reconcile("explicit restart")
 
     def _on_get_microphone_list(self, event: Event):

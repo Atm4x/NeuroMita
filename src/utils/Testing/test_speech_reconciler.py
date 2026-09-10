@@ -114,6 +114,7 @@ class _SpeechReconcilerCase(unittest.TestCase):
         controller._running_engine = None
         controller._shutting_down = False
         controller._restart_requested = False
+        controller._full_restart_requested = False
         controller._task_seq = count(1)
 
         # Заглушка ровно на «запустить движок»: проверяем логику согласования,
@@ -248,6 +249,18 @@ class SpeechReconcilerTests(_SpeechReconcilerCase):
             recognition.events,
             ["start", "switch:4", "stop", "start"],
         )
+        self.assertTrue(recognition.running)
+
+    def test_manual_full_restart_does_not_use_capture_only_switch(self):
+        controller, recognition, _ = self._make()
+        controller._reconcile_once()
+
+        controller._on_restart_speech_recognition(
+            Event("restart", {"full_restart": True})
+        )
+
+        self.assertTrue(self._wait_settled(controller))
+        self.assertEqual(recognition.events, ["start", "stop", "start"])
         self.assertTrue(recognition.running)
 
     def test_explicit_stop_turns_the_setting_off(self):

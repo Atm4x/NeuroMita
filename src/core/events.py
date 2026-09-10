@@ -674,6 +674,7 @@ class Events:
         REFRESH_MICROPHONE_LIST = "refresh_microphone_list"
         SET_GIGAAM_OPTIONS = "set_gigaam_options"
         RESTART_SPEECH_RECOGNITION = "restart_speech_recognition"
+        REFRESH_ASR_STATUS = "refresh_asr_status"
 
         INSTALL_ASR_MODEL = "install_asr_model"
         CHECK_ASR_MODEL_INSTALLED = "check_asr_model_installed" 

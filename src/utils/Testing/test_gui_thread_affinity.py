@@ -281,6 +281,7 @@ class GuiThreadAffinityTests(unittest.TestCase):
                 self.mic_refresh_button = QPushButton(self)
                 self.recognizer_combobox = QComboBox(self)
                 self.asr_refresh_button = QPushButton(self)
+                self.asr_restart_button = QPushButton(self)
                 self.mic_active_checkbox = QCheckBox(self)
                 self.mic_instant_checkbox = QCheckBox(self)
                 self.mic_instant_delay_checkbox = QCheckBox(self)

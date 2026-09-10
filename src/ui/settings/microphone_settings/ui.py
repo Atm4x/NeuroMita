@@ -169,8 +169,28 @@ def build_microphone_settings_ui(self, parent_layout):
     root_lay.addWidget(make_row(_("Не слышать Миту", "Ignore Mita's voice"), self.mic_mute_while_speaking_checkbox, label_w))
 
     # 5) Статус (как раньше) — под кнопками
+    status_field = SettingsBodyWidget()
+    status_h = QHBoxLayout(status_field)
+    status_h.setContentsMargins(0, 0, 0, 0)
+    status_h.setSpacing(6)
+
     self.asr_init_status = QLabel("—")
-    root_lay.addWidget(make_row(_("Статус", "Status"), self.asr_init_status, label_w))
+    status_h.addWidget(self.asr_init_status, 1)
+
+    self.asr_restart_button = QPushButton()
+    self.asr_restart_button.setObjectName("SecondaryButton")
+    self.asr_restart_button.setIcon(qta.icon("fa6s.power-off", color="#ffffff"))
+    self.asr_restart_button.setFixedSize(28, 26)
+    self.asr_restart_button.setEnabled(bool(self.settings.get("MIC_ACTIVE", False)))
+    tr_set(
+        self.asr_restart_button,
+        "Полностью перезапустить распознавание речи",
+        "Fully restart speech recognition",
+        "setToolTip",
+    )
+    status_h.addWidget(self.asr_restart_button, 0)
+
+    root_lay.addWidget(make_row(_("Статус", "Status"), status_field, label_w))
 
     # 6) VAD параметры
     create_section_header(root_lay, _("Параметры распознавания", "Recognition Parameters"))
