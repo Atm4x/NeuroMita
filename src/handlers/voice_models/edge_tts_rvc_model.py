@@ -35,6 +35,7 @@ from handlers.voice_models.rvc_runtime_assets import (
 )
 from main_logger import logger
 from utils import getTranslationVariant as _, get_character_voice_paths
+from utils.gpu_utils import get_rvc_half_precision_decision
 
 
 EDGE_TTS_RVC_CUDA_ID = "edge_tts_rvc_cuda"
@@ -831,6 +832,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
         filter_radius: int,
         rms_mix_rate: float,
         is_half: bool,
+        device: Optional[str] = None,
         f0method: Optional[str],
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -841,7 +843,20 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             "rms_mix_rate": rms_mix_rate,
         }
         if self.SUPPORTS_HALF:
-            params["is_half"] = bool(is_half)
+            requested_half = bool(is_half)
+            decision = get_rvc_half_precision_decision(
+                str(device or self.RVC_DEFAULT_DEVICE)
+            )
+            effective_half = requested_half and bool(decision.allowed)
+            if requested_half and not effective_half:
+                logger.warning(
+                    "RVC FP16 request blocked by hardware policy: "
+                    f"device={device or self.RVC_DEFAULT_DEVICE}, "
+                    f"gpu='{decision.gpu_name or 'unknown'}', "
+                    f"sm={decision.compute_capability or 'unknown'}, "
+                    f"reason={decision.reason}"
+                )
+            params["is_half"] = effective_half
         if self.SUPPORTS_RUNTIME_F0 and f0method:
             params["f0method"] = self._normalize_f0_method(f0method)
         return params
@@ -912,7 +927,8 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
         protect: float = 0.33,
         filter_radius: int = 3,
         rms_mix_rate: float = 0.5,
-        is_half: bool = True,
+        is_half: bool = False,
+        device: Optional[str] = None,
         f0method: Optional[str] = None,
         use_index_file: bool = True,
         volume: str = "1.0",
@@ -934,6 +950,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 filter_radius=filter_radius,
                 rms_mix_rate=rms_mix_rate,
                 is_half=is_half,
+                device=device,
                 f0method=f0method,
             )
             output_file_rvc = self.current_tts_rvc.voiceover_file(input_path=filepath, **inference_params)
@@ -968,6 +985,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             use_index_file = settings.get("use_index_file", True)
             self._prepare_rvc_target(character, use_index_file)
 
+            device = str(settings.get("device", self.RVC_DEFAULT_DEVICE) or self.RVC_DEFAULT_DEVICE)
             inference_params = self._rvc_params(
                 pitch=pitch,
                 index_rate=float(settings.get("index_rate", 0.75)),
@@ -975,11 +993,11 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 filter_radius=int(settings.get("filter_radius", 3)),
                 rms_mix_rate=float(settings.get("rms_mix_rate", 0.5)),
                 is_half=str(settings.get("is_half", "True")).lower() == "true",
+                device=device,
                 f0method=settings.get("f0method", None),
             )
 
             operation_started = time.monotonic()
-            device = str(settings.get("device", self.RVC_DEFAULT_DEVICE) or self.RVC_DEFAULT_DEVICE)
             f0_method = str(inference_params.get("f0method") or self.RVC_DEFAULT_F0_METHOD)
             logger.info(
                 f"Edge-TTS + RVC synthesis started: device={device}, "
@@ -1063,6 +1081,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 filter_radius=int(settings.get("silero_rvc_filter_radius", 3)),
                 rms_mix_rate=float(settings.get("silero_rvc_rms_mix_rate", 0.5)),
                 is_half=str(settings.get("silero_rvc_is_half", "True")).lower() == "true",
+                device=str(settings.get("silero_rvc_device", self.RVC_DEFAULT_DEVICE) or self.RVC_DEFAULT_DEVICE),
                 f0method=settings.get("silero_rvc_f0method", None),
                 use_index_file=settings.get("silero_rvc_use_index_file", True),
                 volume=str(settings.get("volume", "1.0")),

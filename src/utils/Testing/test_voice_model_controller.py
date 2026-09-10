@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import threading
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -166,6 +169,8 @@ class VoiceModelControllerTests(unittest.TestCase):
     def _make_controller_stub(self) -> VoiceModelController:
         controller = VoiceModelController.__new__(VoiceModelController)
         controller.gpu_name = "Intel Arc"
+        controller.detected_gpu_vendor = "INTEL"
+        controller.detected_compute_capability = None
         controller._installable_catalog = _CatalogStub([])
         return controller
 
@@ -203,6 +208,8 @@ class VoiceModelControllerTests(unittest.TestCase):
     def test_all_real_f5_variants_expose_nonempty_device_choices(self):
         controller = self._make_controller_stub()
         controller.gpu_name = "NVIDIA GeForce RTX 4060"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 89
 
         adapted = controller.finalize_model_settings(
             F5TTSModel.MODEL_CONFIGS,
@@ -243,6 +250,8 @@ class VoiceModelControllerTests(unittest.TestCase):
     def test_f5_keeps_generic_cuda_choice_before_device_enumeration(self):
         controller = self._make_controller_stub()
         controller.gpu_name = "NVIDIA GeForce RTX 4060"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 89
 
         adapted = controller.finalize_model_settings(
             F5TTSModel.MODEL_CONFIGS,
@@ -261,6 +270,8 @@ class VoiceModelControllerTests(unittest.TestCase):
     def test_onnx_device_uses_directml_on_nvidia_without_offering_cuda(self):
         controller = self._make_controller_stub()
         controller.gpu_name = "NVIDIA GeForce RTX 4060"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 89
 
         adapted = controller.finalize_model_settings(
             _ONNX_FIXTURE,
@@ -271,6 +282,58 @@ class VoiceModelControllerTests(unittest.TestCase):
         device = adapted[0]["settings"][0]["options"]
         self.assertEqual(device["values"], ["dml", "cpu"])
         self.assertEqual(device["default"], "dml")
+
+    def test_gtx_1660_ti_forces_and_locks_rvc_half_precision_off(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce GTX 1660 Ti"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 75
+
+        adapted = controller.finalize_model_settings(
+            _F5_FIXTURE,
+            "NVIDIA",
+            ["cuda:0"],
+        )
+
+        model = next(item for item in adapted if item["id"] == "high+low")
+        half = next(item for item in model["settings"] if item["key"] == "f5rvc_is_half")
+        self.assertEqual(half["options"]["default"], "False")
+        self.assertTrue(half["locked"])
+
+    def test_rtx_2060_keeps_rvc_half_precision_available_on_sm75(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce RTX 2060"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 75
+
+        adapted = controller.finalize_model_settings(
+            _F5_FIXTURE,
+            "NVIDIA",
+            ["cuda:0"],
+        )
+
+        model = next(item for item in adapted if item["id"] == "high+low")
+        half = next(item for item in model["settings"] if item["key"] == "f5rvc_is_half")
+        self.assertEqual(half["options"]["default"], "True")
+        self.assertFalse(bool(half.get("locked")))
+
+    def test_gtx_1660_ti_sanitizes_persisted_half_true_to_false(self):
+        controller = self._make_controller_stub()
+        controller.gpu_name = "NVIDIA GeForce GTX 1660 Ti"
+        controller.detected_gpu_vendor = "NVIDIA"
+        controller.detected_compute_capability = 75
+
+        with TemporaryDirectory() as temp_dir:
+            controller.settings_values_file = str(Path(temp_dir) / "voice_model_settings.json")
+            with patch.object(controller, "load_settings"):
+                result = controller.save_settings_values(
+                    {"silero_rvc_cuda": {"silero_rvc_is_half": "True"}}
+                )
+
+            saved = json.loads(Path(controller.settings_values_file).read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["silero_rvc_cuda"]["silero_rvc_is_half"], "False")
+        self.assertEqual(result["changed"], 1)
 
     def test_onnx_voice_model_is_supported_but_warned_on_nvidia(self):
         controller = self._make_controller_stub()

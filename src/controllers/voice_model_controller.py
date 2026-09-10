@@ -13,6 +13,8 @@ from managers.settings_manager import SettingsManager
 from utils import getTranslationVariant as _
 
 from core.events import get_event_bus, Events, Event
+from core.cuda_precision_policy import evaluate_rvc_half_precision
+from core.installables.compatibility import hardware_compute_capability
 from core.install_types import DEFAULT_INSTALL_TIMEOUT_SEC
 from core.task_supervisor import task_supervisor
 from core.services import services
@@ -22,6 +24,17 @@ from services.contracts import (
     LocalVoiceService,
     RuntimeFeatureService,
     VoiceModelService,
+)
+
+_HALF_PRECISION_SETTING_KEYS = frozenset(
+    {
+        "is_half",
+        "silero_rvc_is_half",
+        "fsprvc_is_half",
+        "f5rvc_is_half",
+        "half",
+        "fsprvc_fsp_half",
+    }
 )
 
 class VoiceModelController(VoiceModelService):
@@ -53,6 +66,7 @@ class VoiceModelController(VoiceModelService):
         self.detected_gpu_vendor = "CPU"
         self.detected_cuda_devices = []
         self.gpu_name = None
+        self.detected_compute_capability: int | None = None
         self._installable_catalog = services().get_optional(InstallableCatalogService)
         self._refresh_gpu_runtime_info()
 
@@ -151,6 +165,7 @@ class VoiceModelController(VoiceModelService):
             if isinstance(device, dict) and device.get("ordinal") is not None
         ]
         self.gpu_name = str(primary.get("name") or "").strip() or None
+        self.detected_compute_capability = hardware_compute_capability(snapshot)
 
         new_vendor = str(self.detected_gpu_vendor or "CPU").upper()
         new_name = str(self.gpu_name or "").strip()
@@ -456,7 +471,7 @@ class VoiceModelController(VoiceModelService):
                 if isinstance(model_saved_values, dict):
                     for setting in model_data.get("settings", []):
                         setting_key = setting.get("key")
-                        if setting_key in model_saved_values:
+                        if setting_key in model_saved_values and not bool(setting.get("locked")):
                             setting.setdefault("options", {})["default"] = model_saved_values[setting_key]
 
             if not isinstance(model_data.get("gpu_vendor"), (list, tuple)):
@@ -507,6 +522,9 @@ class VoiceModelController(VoiceModelService):
                 if not k:
                     continue
 
+                if k in _HALF_PRECISION_SETTING_KEYS and not self._rvc_half_precision_allowed():
+                    v = "False"
+
                 old_v = prev.get(k, None)
                 if norm(old_v) != norm(v):
                     prev[k] = v
@@ -545,6 +563,16 @@ class VoiceModelController(VoiceModelService):
         if value in {"NVIDIA", "AMD", "INTEL", "CPU"}:
             return value
         return "CPU"
+
+    def _rvc_half_precision_allowed(self, *, vendor: Any | None = None) -> bool:
+        decision = evaluate_rvc_half_precision(
+            vendor=self._normalize_gpu_vendor(
+                self.detected_gpu_vendor if vendor is None else vendor
+            ),
+            compute_capability=getattr(self, "detected_compute_capability", None),
+            gpu_name=str(getattr(self, "gpu_name", "") or ""),
+        )
+        return bool(decision.allowed)
 
     def _normalize_gpu_vendor_list(self, vendors: Any) -> list[str]:
         if not isinstance(vendors, (list, tuple, set)):
@@ -908,21 +936,7 @@ class VoiceModelController(VoiceModelService):
         final_models = _copy.deepcopy(models_list)
 
         detected_vendor = self._normalize_gpu_vendor(detected_vendor)
-        gpu_name_upper = self.gpu_name.upper() if self.gpu_name else ""
-        force_fp32 = False
-
-        if detected_vendor == "NVIDIA" and gpu_name_upper:
-            if (
-                ("16" in gpu_name_upper and "V100" not in gpu_name_upper)
-                or "P40" in gpu_name_upper
-                or "P10" in gpu_name_upper
-                or "1060" in gpu_name_upper
-                or "1070" in gpu_name_upper
-                or "1080" in gpu_name_upper
-            ):
-                force_fp32 = True
-        elif detected_vendor in {"AMD", "INTEL"}:
-            force_fp32 = True
+        force_fp32 = not self._rvc_half_precision_allowed(vendor=detected_vendor)
 
         for model in final_models:
             compat = self._build_model_compatibility(model)
@@ -949,7 +963,7 @@ class VoiceModelController(VoiceModelService):
                 setting_key = setting.get("key")
                 widget_type = setting.get("type")
                 is_device_setting = "device" in str(setting_key).lower()
-                is_half_setting = setting_key in ["is_half", "silero_rvc_is_half", "fsprvc_is_half", "half", "fsprvc_fsp_half"]
+                is_half_setting = setting_key in _HALF_PRECISION_SETTING_KEYS
 
                 final_values_list = None
                 suffix_candidates: list[str]

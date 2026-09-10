@@ -881,6 +881,7 @@ class FishSpeechModel(IVoiceModel):
                     filter_radius=int(settings.get("fsprvc_filter_radius", 3)),
                     rms_mix_rate=float(settings.get("fsprvc_rvc_rms_mix_rate", 0.5)),
                     is_half=settings.get("fsprvc_is_half", "True").lower() == "true",
+                    device=str(settings.get("fsprvc_rvc_device", "cuda:0") or "cuda:0"),
                     f0method=settings.get("fsprvc_f0method", None),
                     use_index_file=settings.get("fsprvc_use_index_file", True),
                     volume=vol,

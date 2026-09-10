@@ -22,6 +22,7 @@ from core.daemon_executor import DaemonExecutor
 from core.services import services
 from core.runtime_environments import runtime_environments
 from core.task_supervisor import task_supervisor
+from handlers.ai_engine.runtime_failure_policy import CUDA_CONTEXT_POISONED_EXIT_CODE
 from main_logger import AIWorkerFileLogger, logger
 
 
@@ -651,8 +652,11 @@ class _Worker:
             return
 
         exit_code = getattr(proc, "exitcode", None)
+        cuda_poisoned = exit_code == CUDA_CONTEXT_POISONED_EXIT_CODE
         error = RuntimeError(
-            f"AI worker '{self.worker_name}' terminated unexpectedly (exitcode={exit_code})"
+            f"AI worker '{self.worker_name}' terminated "
+            f"{'after a fatal CUDA context failure' if cuda_poisoned else 'unexpectedly'} "
+            f"(exitcode={exit_code})"
         )
         self.ready.clear()
         for event in self.ready_by_service.values():
@@ -664,8 +668,12 @@ class _Worker:
                 Events.AI.ENGINE_EVENT,
                 {
                     "service": self.primary_service,
-                    "event": "worker_crashed",
-                    "data": {"worker": self.worker_name, "exitcode": exit_code},
+                    "event": "worker_runtime_poisoned" if cuda_poisoned else "worker_crashed",
+                    "data": {
+                        "worker": self.worker_name,
+                        "exitcode": exit_code,
+                        "reason": "cuda_context_poisoned" if cuda_poisoned else "unexpected_exit",
+                    },
                 },
             )
         except Exception:
