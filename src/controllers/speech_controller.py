@@ -369,8 +369,32 @@ class SpeechController(SpeechService):
             force_restart = self._restart_requested
             self._restart_requested = False
 
-        # Живой цикл держит старый распознаватель: выключение, смена движка и
-        # явный перезапуск (сменили микрофон) начинаются с остановки.
+        # Смена физического входа не требует выгружать Whisper/Silero. Сначала
+        # просим managed worker переоткрыть только PortAudio stream; полный
+        # stop/start остаётся страховочным путём для старого/local runtime или
+        # ошибки открытия нового устройства.
+        if (
+            self._running_engine is not None
+            and desired_active
+            and force_restart
+            and self._running_engine == desired_engine
+        ):
+            switched = SpeechRecognition.speech_recognition_switch_microphone(
+                self.device_id
+            )
+            desired_active = self._desired_mic_active()
+            if switched and desired_active:
+                self.mic_recognition_active = True
+                self.asr_is_ready = True
+                return
+            if not switched:
+                logger.warning(
+                    "Не удалось переключить только поток микрофона; "
+                    "выполняется полный перезапуск ASR."
+                )
+
+        # Выключение, смена движка и неудачный быстрый switch требуют полной
+        # остановки распознавателя.
         if self._running_engine is not None and (
             not desired_active or force_restart or self._running_engine != desired_engine
         ):

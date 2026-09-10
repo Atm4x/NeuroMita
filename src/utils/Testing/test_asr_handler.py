@@ -43,6 +43,7 @@ class _FakeEngine:
         self._activation_result = activation_result
         self.calls: list[tuple[str, str, dict]] = []
         self.activations: list[tuple[str, str, str | None, str | None]] = []
+        self.validation_updates: list[tuple[str, str, dict]] = []
 
     def activate_environment(
         self,
@@ -63,6 +64,10 @@ class _FakeEngine:
     def call(self, service, method, payload):
         self.calls.append((service, method, payload))
         return _FakeFuture(self._result_value)
+
+    def update_runtime_validation_payload(self, service, item_id, payload):
+        self.validation_updates.append((service, item_id, payload))
+        return True
 
 
 class _FakeEventBus:
@@ -534,6 +539,28 @@ class SpeechRecognitionStartTests(unittest.TestCase):
         )
         self.assertEqual(fake_engine.calls, [])
 
+    def test_microphone_switch_uses_capture_only_worker_call(self):
+        SpeechRecognition._recognizer_type = "whisper"
+        SpeechRecognition._is_running = True
+        SpeechRecognition.active = True
+        fake_engine = _FakeEngine(True)
+
+        with patch.object(SpeechRecognition, "_get_ai_engine", return_value=fake_engine):
+            switched = SpeechRecognition.speech_recognition_switch_microphone(18)
+
+        self.assertTrue(switched)
+        self.assertEqual(SpeechRecognition.microphone_index, 18)
+        self.assertEqual(
+            fake_engine.calls,
+            [("asr", "switch_input", {"microphone_index": 18})],
+        )
+        self.assertEqual(fake_engine.activations, [])
+        self.assertEqual(len(fake_engine.validation_updates), 1)
+        service, item_id, replay_payload = fake_engine.validation_updates[0]
+        self.assertEqual((service, item_id), ("asr", "whisper"))
+        self.assertEqual(replay_payload["microphone_index"], 18)
+        self.assertEqual(replay_payload["engine_id"], "whisper")
+
 
 class AsrEngineStatusReasonTests(unittest.TestCase):
     """running=false должен отличать штатный съём цикла от аварии."""
@@ -578,6 +605,77 @@ class AsrEngineStatusReasonTests(unittest.TestCase):
 
         self.assertIn(("status", {"running": False, "reason": "restart"}), events)
         self.assertIn(("status", {"running": True}), events)
+
+    def test_switch_input_keeps_recognizer_and_vad_loaded(self):
+        events = []
+        service = self._service(events)
+
+        class CountingRecognizer(_FakeRecognizer):
+            def __init__(self):
+                self.init_calls = 0
+                self.cleanup_calls = 0
+
+            async def init(self):
+                self.init_calls += 1
+                return True
+
+            def cleanup(self):
+                self.cleanup_calls += 1
+
+        recognizer = CountingRecognizer()
+        vad_model = object()
+        opened_devices = []
+
+        class RecordingCapture(_ReadyAudioCapture):
+            async def run(self, **kwargs):
+                opened_devices.append(kwargs["microphone_index"])
+                await super().run(**kwargs)
+
+        def get_recognizer(_engine_id):
+            service._recognizer = recognizer
+            return recognizer
+
+        async def get_vad_model():
+            service._vad_model = vad_model
+            return vad_model
+
+        async def scenario():
+            with patch.object(
+                service,
+                "_get_recognizer",
+                side_effect=get_recognizer,
+            ), patch.object(
+                service,
+                "_get_vad_model",
+                new=AsyncMock(side_effect=get_vad_model),
+            ) as get_vad, patch(
+                "handlers.ai_engine.services.asr_service.AudioCaptureService",
+                RecordingCapture,
+            ):
+                await service.handle("start_live", self._start_payload())
+                events.clear()
+                switched = await service.handle(
+                    "switch_input",
+                    {"microphone_index": 7},
+                )
+
+                self.assertTrue(switched)
+                self.assertEqual(1, recognizer.init_calls)
+                self.assertEqual(0, recognizer.cleanup_calls)
+                self.assertEqual(1, get_vad.await_count)
+                self.assertIs(service._recognizer, recognizer)
+                self.assertIs(service._vad_model, vad_model)
+                self.assertEqual([0, 7], opened_devices)
+                self.assertNotIn(
+                    ("status", {"running": False, "reason": "switch_input"}),
+                    events,
+                )
+                self.assertIn(("status", {"running": True}), events)
+
+                await service._stop_live_internal()
+                self.assertEqual(1, recognizer.cleanup_calls)
+
+        asyncio.run(scenario())
 
     def test_capture_dying_on_its_own_is_reported_as_failure(self):
         events = []

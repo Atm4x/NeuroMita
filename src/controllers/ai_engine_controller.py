@@ -2027,6 +2027,39 @@ class AIEngineController(AIEngineService, AIEngineAdministrationService):
             and worker.wait_ready(service_name, timeout=0.0)
         )
 
+    def update_runtime_validation_payload(
+        self,
+        service: str,
+        item_id: str,
+        payload: dict[str, Any],
+        *,
+        runtime_slot: str | None = None,
+    ) -> bool:
+        """Update replay state without executing the validation again.
+
+        Capture-only operations such as changing an ASR microphone must keep
+        the original ``start_live`` validation current for a future worker
+        rebuild, but must not run it now because that would reload the model.
+        """
+
+        service_name = str(service or "").strip().lower()
+        model_id = str(item_id or "").strip()
+        if not service_name or not model_id:
+            return False
+
+        slot = self._runtime_slot_for(service_name, model_id, runtime_slot)
+        with self._runtime_switch_lock:
+            current = self._runtime_validations.get(slot)
+            if current is None or current[0] != service_name:
+                return False
+            self._runtime_validations[slot] = (
+                current[0],
+                current[1],
+                dict(payload or {}),
+                current[3],
+            )
+        return True
+
     def activate_environment(
         self,
         service: str,
