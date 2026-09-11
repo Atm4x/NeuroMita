@@ -10,7 +10,6 @@ import re
 import tempfile
 import threading
 import time
-import traceback
 from typing import Any, Dict, List, Optional
 from xml.sax.saxutils import escape
 
@@ -957,9 +956,8 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
             if not output_file_rvc or not os.path.exists(output_file_rvc) or os.path.getsize(output_file_rvc) == 0:
                 return None
             return self._convert_to_stereo(output_file_rvc, volume)
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"RVC file conversion failed: {format_exception(error)}")
+        except Exception:
+            logger.exception("RVC file conversion failed")
             return None
 
     async def _voiceover_edge_tts_rvc(
@@ -1026,18 +1024,15 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 return None
             final_output_path = self._convert_to_stereo(output_file_rvc, str(settings.get("volume", "1.0")))
             return self._maybe_move_to_output(final_output_path, output_file)
-        except TimeoutError as error:
-            traceback.print_exc()
-            logger.error(
+        except TimeoutError:
+            logger.exception(
                 "Edge-TTS + RVC exceeded the vendor 300-second operation timeout. "
                 "The runtime was initialized successfully; the timeout occurred during synthesis/RVC. "
-                "For DirectML, try the PM F0 method if RMVPE remains too slow. "
-                f"Details: {format_exception(error)}"
+                "For DirectML, try the PM F0 method if RMVPE remains too slow."
             )
             return None
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"Edge-TTS + RVC voiceover failed: {format_exception(error)}")
+        except Exception:
+            logger.exception("Edge-TTS + RVC voiceover failed")
             return None
 
     async def _voiceover_silero_rvc(self, text, character=None, output_file: Optional[str] = None):
@@ -1087,9 +1082,8 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 volume=str(settings.get("volume", "1.0")),
             )
             return self._maybe_move_to_output(final_output_path, output_file)
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"Silero + RVC voiceover failed: {format_exception(error)}")
+        except Exception:
+            logger.exception("Silero + RVC voiceover failed")
             return None
         finally:
             if temp_wav and os.path.exists(temp_wav):

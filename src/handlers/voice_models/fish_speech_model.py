@@ -909,9 +909,8 @@ class FishSpeechModel(IVoiceModel):
 
             return final_output_path
 
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"Ошибка при создании озвучки с Fish Speech ({self.model_id}): {format_exception(error)}")
+        except Exception:
+            logger.exception("Ошибка при создании озвучки с Fish Speech (%s)", self.model_id)
             return None
 
     def _mode(self) -> str:
