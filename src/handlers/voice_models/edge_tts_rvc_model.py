@@ -51,6 +51,9 @@ SILERO_RVC_ONNX_ID = "silero_rvc_onnx"
 _RVC_F0_METHODS = ("pm", "dio", "crepe", "rmvpe", "harvest", "fcpe")
 _RVC_F0_DEFAULT = "rmvpe"
 _EDGE_TTS_COMPATIBILITY_SPEC = "edge-tts>=6.1.9,<8.0.0"
+_EDGE_TTS_RATE_DEFAULT = 0
+_EDGE_TTS_RATE_MIN = -50
+_EDGE_TTS_RATE_MAX = 100
 _RVC_F0_HELP_RU = (
     "Алгоритм извлечения F0 (высоты тона): rmvpe/crepe — точнее, "
     "pm/harvest/dio — быстрее, fcpe — компромисс."
@@ -79,6 +82,14 @@ def _setting_check(key: str, label_ru: str, label_en: str, default: bool, help_r
         "options": {"default": bool(default)},
         "help": _(help_ru, help_en),
     }
+
+
+def _coerce_edge_tts_rate(value: Any) -> int:
+    try:
+        rate = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        rate = _EDGE_TTS_RATE_DEFAULT
+    return max(_EDGE_TTS_RATE_MIN, min(_EDGE_TTS_RATE_MAX, rate))
 
 
 def _setting_combo(
@@ -137,7 +148,22 @@ def _cuda_edge_settings() -> list[dict[str, Any]]:
         _setting_check("use_index_file", "Исп. .index файл (RVC)", "Use .index file (RVC)", True, "Использовать .index для лучшего совпадения тембра.", "Use .index to better match voice timbre."),
         _setting_entry("index_rate", "Соотношение индекса RVC", "RVC Index Rate", "0.75", "Степень влияния .index (0..1).", "How much .index affects result (0..1)."),
         _setting_entry("protect", "Защита согласных (RVC)", "Consonant Protection (RVC)", "0.33", "Защищает глухие согласные от искажения тоном.", "Protect voiceless consonants from pitch distortion."),
-        _setting_entry("tts_rate", "Скорость TTS (%)", "TTS Speed (%)", "0", "Скорость базового Edge-TTS в процентах.", "Base Edge-TTS speed in percent."),
+        {
+            "key": "tts_rate",
+            "label": _("Скорость TTS (%)", "TTS Speed (%)"),
+            "type": "number_stepper",
+            "options": {
+                "default": _EDGE_TTS_RATE_DEFAULT,
+                "min": _EDGE_TTS_RATE_MIN,
+                "max": _EDGE_TTS_RATE_MAX,
+                "step": 1,
+                "suffix": " %",
+            },
+            "help": _(
+                "Изменение скорости Edge-TTS в процентах (-50..100). 0 — обычная скорость.",
+                "Edge-TTS speed adjustment in percent (-50..100). 0 is the normal speed.",
+            ),
+        },
         _setting_entry("filter_radius", "Радиус фильтра F0 (RVC)", "F0 Filter Radius (RVC)", "3", "Сглаживание кривой F0.", "Smooth F0 curve."),
         _setting_entry("rms_mix_rate", "Смешивание RMS (RVC)", "RMS Mixing (RVC)", "0.5", "Смешивание громкости исходника и RVC.", "Mix source loudness and RVC result."),
         _setting_entry("volume", "Громкость (volume)", "Volume", "1.0", "Итоговая громкость.", "Final loudness."),
@@ -185,7 +211,22 @@ def _onnx_edge_settings() -> list[dict[str, Any]]:
         _setting_check("use_index_file", "Исп. .index файл (RVC)", "Use .index file (RVC)", True, "Использовать .index для лучшего совпадения тембра.", "Use .index to better match voice timbre."),
         _setting_entry("index_rate", "Соотношение индекса RVC", "RVC Index Rate", "0.75", "Степень влияния .index (0..1).", "How much .index affects result (0..1)."),
         _setting_entry("protect", "Защита согласных (RVC)", "Consonant Protection (RVC)", "0.33", "Защита глухих согласных (0..0.5).", "Protect voiceless consonants (0..0.5)."),
-        _setting_entry("tts_rate", "Скорость TTS (%)", "TTS Speed (%)", "0", "Скорость базового Edge-TTS в процентах.", "Base Edge-TTS speed in percent."),
+        {
+            "key": "tts_rate",
+            "label": _("Скорость TTS (%)", "TTS Speed (%)"),
+            "type": "number_stepper",
+            "options": {
+                "default": _EDGE_TTS_RATE_DEFAULT,
+                "min": _EDGE_TTS_RATE_MIN,
+                "max": _EDGE_TTS_RATE_MAX,
+                "step": 1,
+                "suffix": " %",
+            },
+            "help": _(
+                "Изменение скорости Edge-TTS в процентах (-50..100). 0 — обычная скорость.",
+                "Edge-TTS speed adjustment in percent (-50..100). 0 is the normal speed.",
+            ),
+        },
         _setting_entry("volume", "Громкость (volume)", "Volume", "1.0", "Итоговая громкость.", "Final loudness."),
     ]
 
@@ -1003,7 +1044,11 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 f"test_audio={bool(TEST_WITH_DONE_AUDIO)}"
             )
             if not TEST_WITH_DONE_AUDIO:
-                inference_params["tts_rate"] = int(settings.get("tts_rate", 0)) if config_id != "medium+low" else 0
+                inference_params["tts_rate"] = (
+                    _coerce_edge_tts_rate(settings.get("tts_rate", _EDGE_TTS_RATE_DEFAULT))
+                    if config_id != "medium+low"
+                    else _EDGE_TTS_RATE_DEFAULT
+                )
                 output_file_rvc = await asyncio.to_thread(
                     self.current_tts_rvc,
                     text=text,
