@@ -101,79 +101,65 @@ class ProviderDelegate(QStyledItemDelegate):
     def set_presets_meta(self, presets_meta):
         self.presets_meta = {p.id: p for p in presets_meta}
 
+    def _badges(self, index):
+        preset = self.presets_meta.get(index.data(Qt.ItemDataRole.UserRole))
+        pricing = getattr(preset, "pricing", "")
+        kind = getattr(preset, "badge_kind", "")
+        badges = []
+        if kind == "local":
+            badges.append(self._local_pixmap())
+        elif kind == "ru":
+            badges.append(self._ru_pixmap())
+        if kind != "local":
+            if pricing in ("free", "mixed"):
+                badges.append(self._free_pixmap())
+            if pricing in ("paid", "mixed"):
+                badges.append(qta.icon("fa5s.dollar-sign", color="#FFC107").pixmap(10, 14))
+        return badges
+
     def paint(self, painter, option, index):
-        if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, option.palette.highlight())
-        else:
-            painter.fillRect(option.rect, option.palette.base())
-
-        preset_id = index.data(Qt.ItemDataRole.UserRole)
-        text = index.data()
-
-        if preset_id and preset_id in self.presets_meta:
-            preset = self.presets_meta[preset_id]
-            pricing = preset.pricing
-            badge_kind = getattr(preset, "badge_kind", "") or ""
-        else:
-            pricing = ""
-            badge_kind = ""
-
-        dollar_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
-        ascent = QFontMetrics(dollar_font).ascent()
-
-        x = option.rect.x() + 4
-        y = option.rect.y() + (option.rect.height() - 16) // 2
-
-        if badge_kind == "local":
-            painter.drawPixmap(x, y, self._local_pixmap())
-            x += self._local_pixmap().width() + 6
-
-        elif badge_kind == "ru":
-            painter.drawPixmap(x, y, self._ru_pixmap())
-            x += self._ru_pixmap().width() + 6
-
-        if badge_kind != "local" and pricing == "free":
-            painter.drawPixmap(x, y, self._free_pixmap())
-            x += self._free_pixmap().width() + 6
-
-        elif badge_kind != "local" and pricing == "paid":
-            painter.setPen(QColor("#FFC107"))
-            painter.setFont(dollar_font)
-            painter.drawText(x, y + ascent, "$")
-            x += 12
-
-        elif badge_kind != "local" and pricing == "mixed":
-            painter.drawPixmap(x, y, self._free_pixmap())
-            x += self._free_pixmap().width() + 4
-
-            painter.setPen(QColor("#666"))
-            painter.setFont(QFont("Segoe UI", 8))
-            painter.drawText(x, y + 10, "/")
-            x += 8
-
-            painter.setPen(QColor("#FFC107"))
-            painter.setFont(dollar_font)
-            painter.drawText(x, y + ascent, "$")
-            x += 12
-
-        painter.setPen(option.palette.color(
-            QPalette.ColorRole.HighlightedText
-            if option.state & QStyle.StateFlag.State_Selected
-            else QPalette.ColorRole.Text
-        ))
+        painter.save()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.fillRect(option.rect, option.palette.highlight() if selected else option.palette.base())
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        x = option.rect.left() + 10
+        if icon is not None:
+            icon.paint(painter, QRect(x, option.rect.center().y() - 10, 20, 20))
+        x += 30
+        badges = self._badges(index)
+        reserved = sum(badge.width() + 6 for badge in badges)
+        metrics = QFontMetrics(option.font)
+        text = metrics.elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight,
+                                  max(0, option.rect.right() - x - reserved - 10))
         painter.setFont(option.font)
-        txt_rect = option.rect.adjusted(x - option.rect.x(), 0, -4, 0)
-        painter.drawText(txt_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        painter.setPen(option.palette.color(QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text))
+        painter.drawText(QRect(x, option.rect.top(), metrics.horizontalAdvance(text), option.rect.height()), Qt.AlignmentFlag.AlignVCenter, text)
+        x += metrics.horizontalAdvance(text) + 6
+        for badge in badges:
+            painter.drawPixmap(x, option.rect.center().y() - badge.height() // 2, badge)
+            x += badge.width() + 6
+        painter.restore()
 
     def sizeHint(self, option, index):
-        sz = super().sizeHint(option, index)
-        return sz.expandedTo(QSize(140, 24))
+        width = QFontMetrics(option.font).horizontalAdvance(str(index.data() or "")) + 50
+        width += sum(badge.width() + 6 for badge in self._badges(index))
+        return QSize(width, 32)
+
+
+def template_provider(name: str, protocol_id: str = "") -> str:
+    return {
+        "Mistral AI": "mistral", "OpenRouter": "openrouter",
+        "Google AI Studio": "google", "Ai.iO": "aiio",
+        "ProxyAPI": "proxyapi", "Groq": "groq", "Together AI": "together",
+        "Chutes": "chutes", "KodikRouter": "kodikrouter",
+        "LM Studio": "lmstudio", "Ollama": "ollama",
+    }.get(name, protocol_provider(protocol_id))
 
 
 def protocol_provider(protocol_id: str) -> str:
     return {
         "google_gemini_default": "gemini",
-        "openai_compatible_default": "openai",
+        "openai_compatible_default": "",
         "openrouter_default": "openrouter",
         "mistral_default": "mistral",
         "lmstudio_default": "lmstudio",
@@ -182,8 +168,17 @@ def protocol_provider(protocol_id: str) -> str:
 
 @lru_cache(maxsize=32)
 def provider_icon(provider: str):
-    if str(provider).lower() in ("google", "gemini"):
-        return svg_icon("providers/google")
+    svg_names = {
+        "google": "google", "gemini": "google", "openai": "openai",
+        "mistral": "mistral-color", "openrouter": "openrouter", "groq": "groq",
+        "together": "together-color", "chutes": "chutes", "aiio": "aiio",
+        "proxyapi": "proxyapi", "kodikrouter": "kodikrouter",
+        "lmstudio": "lmstudio", "ollama": "ollama",
+    }
+    name = svg_names.get(str(provider).lower())
+    if name:
+        color = {"openrouter": "#c8ff00", "groq": "#f43e01"}.get(str(provider).lower())
+        return svg_icon("providers/" + name, color=color)
     names = {
         "gemini": ("fa5b.google", "#4285f4"),
         "google": ("fa5b.google", "#4285f4"),

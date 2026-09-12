@@ -58,7 +58,8 @@ class ProtocolsMixin:
         pid = str(protocol_id or "").strip()
         proto = self._protocols.get(pid) or {}
         from ui.settings.api_settings.widgets import provider_icon, protocol_provider
-        v.preset_provider_icon.setPixmap(provider_icon(protocol_provider(pid)).pixmap(38, 38))
+        icon = v.template_combo.itemIcon(v.template_combo.currentIndex()) if v.template_combo.currentData() is not None else provider_icon(protocol_provider(pid))
+        v.preset_provider_icon.setPixmap(icon.pixmap(38, 38))
         v.api_type_label.setText(str(proto.get("name") or ""))
         if hasattr(v, "openrouter_routing_section"):
             v.openrouter_routing_section.setVisible(pid == "openrouter_default")

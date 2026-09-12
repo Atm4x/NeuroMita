@@ -25,9 +25,11 @@ def svg_stylesheet_url(name: str, color: str) -> str:
 
 
 @lru_cache(maxsize=32)
-def svg_icon(name: str) -> QIcon:
+def svg_icon(name: str, color: str | None = None) -> QIcon:
     """Load an SVG resource from source or a zipapp without extracting it."""
     data = files("ui").joinpath("icons", name + ".svg").read_bytes()
+    from styles.theme import THEME
+    data = data.replace(b"currentColor", (color or THEME["text"]).encode("utf-8"))
     renderer = QSvgRenderer(QByteArray(data))
     if not renderer.isValid():
         raise ValueError(f"Invalid SVG icon: {name}")

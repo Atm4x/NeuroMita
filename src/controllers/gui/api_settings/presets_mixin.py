@@ -10,7 +10,7 @@ from core.services import use
 from services.contracts import ApiPresetService
 from main_logger import logger
 from utils import _
-from ui.settings.api_settings.widgets import protocol_provider
+from ui.settings.api_settings.widgets import template_provider, provider_icon
 
 
 class PresetsMixin:
@@ -72,10 +72,13 @@ class PresetsMixin:
             v.template_combo.blockSignals(True)
             v.template_combo.clear()
             v.template_combo.add_tr_item("Без шаблона", "No template", value=None)
-            for p in builtin:
+            v.template_combo.setItemIcon(0, provider_icon(""))
+            priority = {"Google AI Studio": 0, "OpenRouter": 1, "Mistral AI": 2}
+            ordered_templates = sorted(builtin, key=lambda p: priority.get(str(getattr(p, "name", "")), 3))
+            for p in ordered_templates:
                 v.template_combo.add_provider_item(
                     getattr(p, "name", ""), value=getattr(p, "id", None),
-                    provider=protocol_provider(str(getattr(p, "protocol_id", "") or "")),
+                    provider=template_provider(str(getattr(p, "name", "")), str(getattr(p, "protocol_id", "") or "")),
                 )
             v.template_combo.blockSignals(False)
 
@@ -95,12 +98,9 @@ class PresetsMixin:
                 item = Item(pid, str(name), has_changes=bool(current_changes.get(pid, False)),
                             model=str(getattr(p, "default_model", "") or ""))
                 protocol_id = str(getattr(p, "protocol_id", "") or "")
-                item.provider = protocol_provider(protocol_id)
-                item.provider_label = next(
-                    (str(getattr(t, "name", "")) for t in builtin
-                     if getattr(t, "protocol_id", "") == protocol_id),
-                    str(_("Пользовательский API", "Custom API")),
-                )
+                template = next((t for t in builtin if getattr(t, "id", None) == getattr(p, "base", None)), None)
+                item.provider = template_provider(str(getattr(template, "name", "")), protocol_id)
+                item.provider_label = str(getattr(template, "name", "")) or str(_("Пользовательский API", "Custom API"))
                 item.is_default = pid == int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
                 v.custom_presets_list.addItem(item)
                 self.custom_presets_list_items[pid] = item
