@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QCursor
+from ui.widgets.number_stepper import NumberStepper
 
 from styles.voice_model_styles import get_stylesheet
 from utils import getTranslationVariant as _
@@ -310,6 +311,35 @@ class ModelDetailView(QWidget):
             widget_layout.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
             widget_layout.addStretch()
 
+        elif widget_type == "number_stepper":
+            w = NumberStepper()
+            w.setFixedHeight(28)
+            try:
+                minimum = int(options.get("min", 0))
+            except (TypeError, ValueError, OverflowError):
+                minimum = 0
+            try:
+                maximum = int(options.get("max", 100))
+            except (TypeError, ValueError, OverflowError):
+                maximum = 100
+            try:
+                step = max(1, int(options.get("step", 1)))
+            except (TypeError, ValueError, OverflowError):
+                step = 1
+            try:
+                value = int(float(current))
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            w.setRange(minimum, maximum)
+            w.setSingleStep(step)
+            w.setValue(max(minimum, min(maximum, value)))
+            suffix = str(options.get("suffix") or "")
+            if suffix:
+                w.setSuffix(suffix)
+            w.setEnabled(not locked)
+            w.valueChanged.connect(lambda *_: notify_changed())
+            widget_layout.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self._attach_hover_handlers(
             [label_frame, lab, widget_frame] + ([w] if w is not None else []),
             key
@@ -366,6 +396,8 @@ class ModelDetailView(QWidget):
                 values[key] = w.text()
             elif isinstance(w, QCheckBox):
                 values[key] = w.isChecked()
+            elif isinstance(w, NumberStepper):
+                values[key] = w.value()
         return values
 
     # ---- public API for view ----

@@ -10,6 +10,16 @@ from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec, FishS
 
 
 class FishSpeechInstallablesTests(unittest.TestCase):
+    def test_fish_runtime_device_settings_are_selectable_for_multi_gpu(self):
+        for model_id, key in (
+            ("medium", "device"),
+            ("medium+", "device"),
+            ("medium+low", "fsprvc_fsp_device"),
+        ):
+            model = FishSpeechModel._find_model_config(model_id)
+            setting = next(item for item in model["settings"] if item["key"] == key)
+            self.assertFalse(bool(setting.get("locked")), f"{model_id}:{key}")
+
     def test_cuda_rvc_settings_do_not_offer_directml(self):
         model = FishSpeechModel._find_model_config("medium+low")
         settings = {item["key"]: item for item in model["settings"]}
