@@ -423,6 +423,13 @@ if BUILD_MODE in ("full", "fast"):
                 if not bin_filter(arcname):
                     continue
                 zf.write(path, arcname)
+            required_ui_resources = {
+                "ui/svg_icons.py", "ui/icons/providers/google.svg",
+                "ui/icons/controls/chevron-up.svg",
+            }
+            missing_ui_resources = required_ui_resources.difference(zf.namelist())
+            if missing_ui_resources:
+                raise RuntimeError(f"Missing UI resources in .pyz: {sorted(missing_ui_resources)}")
     print(f"Архив собран: {pyz_temp}")
 
     print(f"Перемещаю в {pyz_dest}...")

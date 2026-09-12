@@ -6,11 +6,12 @@ from typing import Optional, Any
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox, QInputDialog
 
-from ui.settings.api_settings.dialogs.new_preset_dialog import NewPresetDialog
 from ui.settings.api_settings.widgets import CustomPresetListItem
 import qtawesome as qta
 
 from utils import _
+from styles.theme import THEME
+from ui.settings.api_settings.generation_fields import validate_generation
 from core.events import Events
 from core.services import use
 from services.contracts import ApiPresetService
@@ -45,6 +46,7 @@ class EditorMixin:
     def _write_generation_overrides(self, overrides: dict) -> None:
         """Populate generation overrides UI widgets from a dict."""
         from PyQt6.QtWidgets import QCheckBox, QComboBox
+        from ui.settings.api_settings.ui import generation_placeholder
         widgets = getattr(self.view, 'gen_override_widgets', {})
         for key, (chk, val_widget) in widgets.items():
             spec = (overrides or {}).get(key) or {}
@@ -59,8 +61,10 @@ class EditorMixin:
                 if raw and val_widget.findText(raw) >= 0:
                     val_widget.setCurrentText(raw)
             else:
+                val_widget.setPlaceholderText(generation_placeholder(self.view, key))
                 raw = spec.get("value")
-                val_widget.setText(str(raw) if raw is not None else "")
+                val_widget.setText(str(raw) if raw is not None and str(raw).strip() else generation_placeholder(self.view, key))
+        validate_generation(self.view)
 
     def _read_model_profile_overrides(self) -> dict:
         editor = getattr(self.view, "model_profile_overrides_edit", None)
@@ -224,6 +228,7 @@ class EditorMixin:
             for fb in (getattr(v, "fallback_editor", None).get_value() if getattr(v, "fallback_editor", None) else [])
         )
         return PresetSnapshot(
+            name=v.preset_name_row.text(),
             url=str(v.api_url_row.text() or ""),
             model=str(v.api_model_row.text() or ""),
             key=str(v.api_key_row.text() or ""),
@@ -250,6 +255,7 @@ class EditorMixin:
 
         if self._snapshot:
             cur = self._get_snapshot()
+            v.preset_name_row.set_dirty(cur.name != self._snapshot.name)
             v.api_url_row.set_dirty(cur.url != self._snapshot.url)
             v.api_model_row.set_dirty(cur.model != self._snapshot.model)
             v.api_key_row.set_dirty(cur.key != self._snapshot.key)
@@ -267,20 +273,8 @@ class EditorMixin:
             item.update_changes_indicator(dirty)
 
         v.save_preset_button.setVisible(True)
-        v.save_preset_button.setEnabled(dirty)
+        v.save_preset_button.setEnabled(dirty and validate_generation(v))
         v.cancel_button.setVisible(dirty)
-
-        if dirty:
-            v.save_preset_button.setStyleSheet("""
-                QPushButton { background-color: #b74b7d; color: white; font-weight: bold; border: none; padding: 8px; border-radius: 4px; }
-                QPushButton:hover { background-color: #c04c80; }
-                QPushButton:pressed { background-color: #a0436c; }
-            """)
-        else:
-            v.save_preset_button.setStyleSheet("""
-                QPushButton { background-color: #95a5a6; color: #ecf0f1; font-weight: normal; border: none; padding: 8px; border-radius: 4px; }
-                QPushButton:disabled { background-color: #7f8c8d; color: #bdc3c7; }
-            """)
 
     def _on_field_changed(self, *_args) -> None:
         if self._is_loading_ui:
@@ -396,6 +390,8 @@ class EditorMixin:
         self._bus_call_async(_call, _apply, name="load_template")
 
     def _emit_save_state(self) -> None:
+        if not validate_generation(self.view):
+            return
         if self._is_loading_ui:
             return
         if not self.current_preset_id:
@@ -426,8 +422,9 @@ class EditorMixin:
         v = self.view
         data = dict(self.current_preset_data or {})
         data["id"] = preset_id
-        if name is not None:
-            data["name"] = str(name).strip()
+        data["name"] = str(name if name is not None else v.preset_name_row.text()).strip()
+        if not data["name"]:
+            raise ValueError(str(_("Укажите название пресета", "Enter a preset name")))
         data["url"] = v.api_url_row.text()
         data["default_model"] = v.api_model_row.text()
         data["key"] = v.api_key_row.text()
@@ -455,10 +452,10 @@ class EditorMixin:
         v = self.view
         if v.api_key_row.edit.echoMode() == v.api_key_row.edit.EchoMode.Password:
             v.api_key_row.edit.setEchoMode(v.api_key_row.edit.EchoMode.Normal)
-            v.key_visibility_button.setIcon(qta.icon('fa5s.eye-slash'))
+            v.key_visibility_button.setIcon(qta.icon('fa5s.eye-slash', color='#b6bbce'))
         else:
             v.api_key_row.edit.setEchoMode(v.api_key_row.edit.EchoMode.Password)
-            v.key_visibility_button.setIcon(qta.icon('fa5s.eye'))
+            v.key_visibility_button.setIcon(qta.icon('fa5s.eye', color='#b6bbce'))
 
     def _apply_help_links(self, preset: dict) -> None:
         # Запоминаем последний пресет и подписываемся (один раз) на смену языка:
@@ -481,16 +478,17 @@ class EditorMixin:
         key_url = str(preset.get("key_url") or "")
 
         v.url_help_label.setVisible(bool(doc_url))
-        v.url_help_label.setText(f'<a href="{doc_url}" style="color: #ab5df5; text-decoration: underline;">{_("Документация", "Documentation")}</a>' if doc_url else "")
+        v.url_help_label.setText(f'<a href="{doc_url}" style="color: {THEME["link"]}; text-decoration: underline;">{_("Документация", "Documentation")}</a>' if doc_url else "")
 
         v.model_help_label.setVisible(bool(models_url))
-        v.model_help_label.setText(f'<a href="{models_url}" style="color: #ab5df5; text-decoration: underline;">{_("Список моделей", "Models list")}</a>' if models_url else "")
+        v.model_help_label.setText(f'<a href="{models_url}" style="color: {THEME["link"]}; text-decoration: underline;">{_("Список моделей", "Models list")}</a>' if models_url else "")
 
         v.key_help_label.setVisible(bool(key_url))
-        v.key_help_label.setText(f'<a href="{key_url}" style="color: #ab5df5; text-decoration: underline;">{_("Получить ключ", "Get API key")}</a>' if key_url else "")
+        v.key_help_label.setText(f'<a href="{key_url}" style="color: {THEME["link"]}; text-decoration: underline;">{_("Получить ключ", "Get API key")}</a>' if key_url else "")
 
     def _set_protocol_config_visible(self, visible: bool) -> None:
         v = self.view
+        v.protocol_row.set_enabled(visible)
         sec = getattr(v, "protocol_section", None)
         if sec is not None:
             sec.setVisible(bool(visible))
@@ -502,6 +500,7 @@ class EditorMixin:
         self._is_loading_ui = True
         v = self.view
 
+        v.preset_name_row.set_text(self._snapshot.name)
         v.api_url_row.set_text(self._snapshot.url)
         v.api_model_row.set_text(self._snapshot.model)
         v.api_key_row.set_text(self._snapshot.key)
@@ -540,6 +539,8 @@ class EditorMixin:
         self._set_dirty(False)
 
     def _save_preset_async(self) -> None:
+        if not validate_generation(self.view):
+            return
         if not self.current_preset_id or self.current_preset_id not in self.custom_presets_list_items:
             return
 
@@ -560,6 +561,12 @@ class EditorMixin:
         def _apply(new_id):
             if not isinstance(new_id, int):
                 return
+            self.current_preset_data = dict(data)
+            item = self.custom_presets_list_items.get(pid)
+            if item is not None:
+                item.base_name = data["name"]
+                item.model = data["default_model"]
+                item.update_display()
             self._snapshot = self._get_snapshot()
             self._set_dirty(False)
 
@@ -616,101 +623,20 @@ class EditorMixin:
                     _("Не удалось скопировать пресет.", "Failed to copy preset."),
                 )
                 return
+            self._pending_select_id = int(new_id)
             self.reload_presets_async()
-            QTimer.singleShot(200, lambda: self._select_custom_preset(int(new_id)))
 
         self._bus_call_async(_call, _apply, name="copy_preset")
 
     def _add_custom_preset_async(self) -> None:
         logger.info("[API UI] add preset clicked")
         v = self.view
-        template_options: list[tuple[str, object]] = []
-        template_presets_meta: list[object] = []
-        for i in range(v.template_combo.count()):
-            template_options.append((v.template_combo.itemText(i), v.template_combo.itemData(i)))
-            template_id = v.template_combo.itemData(i)
-            if template_id is None:
-                continue
-            preset_meta = getattr(getattr(v, "provider_delegate", None), "presets_meta", {}).get(template_id)
-            if preset_meta is not None:
-                template_presets_meta.append(preset_meta)
-
-        initial_template = v.template_combo.currentData() if getattr(v, "template_combo", None) is not None else None
-        dlg = NewPresetDialog(
-            v,
-            template_options=template_options,
-            initial_template_data=initial_template,
-            template_presets_meta=template_presets_meta,
-        )
-        if dlg.exec() != dlg.DialogCode.Accepted:
-            logger.info("[API UI] add preset cancelled")
-            return
-
-        name = dlg.preset_name()
-        selected_base = self._parse_base(dlg.selected_template_data())
-
-        payload = {
-            "name": str(name).strip(),
-            "id": None,
-            "pricing": "mixed",
-            "base": selected_base,
-            "url": "",
-            "default_model": "",
-            "key": "",
-            "reserve_keys": [],
-            "protocol_id": "" if selected_base is not None else (getattr(self, "_protocol_default_id", "") or ""),
-        }
-
-        logger.info(f"[API UI] Creating preset name='{payload['name']}', base={payload['base']}")
-
-        def _call():
-            logger.info("[API UI] saving custom preset through ApiPresetService...")
-            result = use(ApiPresetService).save_custom(payload)
-            logger.info(f"[API UI] save_custom result={result}")
-            return result
-
-        def _apply(new_id):
-            logger.info(f"[API UI] Created preset new_id={new_id} type={type(new_id)}")
-            if not isinstance(new_id, int):
-                QMessageBox.warning(
-                    v,
-                    _("Ошибка", "Error"),
-                    _("Не удалось создать пресет. Проверь логи (SAVE_CUSTOM_PRESET).",
-                    "Failed to create preset. Check logs (SAVE_CUSTOM_PRESET).")
-                )
-                return
-            self.reload_presets_async()
-            QTimer.singleShot(200, lambda: self._select_custom_preset(int(new_id)))
-
-        self._bus_call_async(_call, _apply, name="add_preset")
-        return
-        name, ok = QInputDialog.getText(v, _("Новый пресет", "New preset"), _("Название пресета:", "Preset name:"))
-        if not ok or not str(name or "").strip():
-            logger.info("[API UI] add preset cancelled/empty")
-            return
-
-        template_options: list[tuple[str, object]] = []
-        for i in range(v.template_combo.count()):
-            template_options.append((v.template_combo.itemText(i), v.template_combo.itemData(i)))
-
+        existing = {item.base_name for item in self.custom_presets_list_items.values()}
+        number = 1
+        while str(_("Пустой пресет", "Empty preset")) + f" {number}" in existing:
+            number += 1
+        name = str(_("Пустой пресет", "Empty preset")) + f" {number}"
         selected_base = None
-        if template_options:
-            labels = [label for label, _data in template_options]
-            selected_label, tpl_ok = QInputDialog.getItem(
-                v,
-                _("Шаблон для пресета", "Preset template"),
-                _("Шаблон (опционально):", "Template (optional):"),
-                labels,
-                0,
-                False,
-            )
-            if not tpl_ok:
-                logger.info("[API UI] add preset cancelled at template selection")
-                return
-            for label, data in template_options:
-                if label == selected_label:
-                    selected_base = self._parse_base(data)
-                    break
 
         payload = {
             "name": str(name).strip(),
@@ -742,10 +668,32 @@ class EditorMixin:
                     "Failed to create preset. Check logs (SAVE_CUSTOM_PRESET).")
                 )
                 return
+            self._pending_select_id = int(new_id)
             self.reload_presets_async()
-            QTimer.singleShot(200, lambda: self._select_custom_preset(int(new_id)))
 
         self._bus_call_async(_call, _apply, name="add_preset")
+
+    def _on_preset_action(self, action: str, preset_id: int) -> None:
+        if action == "default":
+            self.event_bus.emit(Events.ApiPresets.SET_CURRENT_PRESET_ID, {"id": preset_id})
+            for pid, item in self.custom_presets_list_items.items():
+                item.is_default = pid == preset_id
+            self.view.custom_presets_list.viewport().update()
+            self.view.preset_active_tag.setVisible(preset_id == self.current_preset_id)
+            return
+        selected = self.view.custom_presets_list.currentItem()
+        if self.current_preset_id != preset_id or getattr(selected, "preset_id", None) != preset_id:
+            self._pending_preset_action = (action, preset_id)
+            self._select_custom_preset(preset_id)
+            return
+        callbacks = {
+            "rename": self._rename_custom_preset_async,
+            "copy": self._copy_custom_preset_async,
+            "remove": self._remove_custom_preset_async,
+        }
+        callback = callbacks.get(action)
+        if callback is not None:
+            callback()
 
     def _rename_custom_preset_async(self) -> None:
         v = self.view
@@ -783,6 +731,9 @@ class EditorMixin:
             if self.current_preset_data is not None:
                 self.current_preset_data["name"] = new_name
             v.provider_label.setText(new_name)
+            v.preset_name_row.set_text(new_name)
+            if self._snapshot is not None:
+                self._snapshot.name = new_name
 
         self._bus_call_async(_call, _apply, name="rename_preset")
 

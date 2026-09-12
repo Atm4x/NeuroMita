@@ -10,6 +10,7 @@ from core.services import use
 from services.contracts import ApiPresetService
 from main_logger import logger
 from utils import _
+from ui.settings.api_settings.widgets import protocol_provider
 
 
 class PresetsMixin:
@@ -72,7 +73,10 @@ class PresetsMixin:
             v.template_combo.clear()
             v.template_combo.add_tr_item("Без шаблона", "No template", value=None)
             for p in builtin:
-                v.template_combo.add_data_item(getattr(p, "name", ""), value=getattr(p, "id", None))
+                v.template_combo.add_provider_item(
+                    getattr(p, "name", ""), value=getattr(p, "id", None),
+                    provider=protocol_provider(str(getattr(p, "protocol_id", "") or "")),
+                )
             v.template_combo.blockSignals(False)
 
             # keep dirty markers
@@ -90,18 +94,30 @@ class PresetsMixin:
                     continue
                 item = Item(pid, str(name), has_changes=bool(current_changes.get(pid, False)),
                             model=str(getattr(p, "default_model", "") or ""))
+                protocol_id = str(getattr(p, "protocol_id", "") or "")
+                item.provider = protocol_provider(protocol_id)
+                item.provider_label = next(
+                    (str(getattr(t, "name", "")) for t in builtin
+                     if getattr(t, "protocol_id", "") == protocol_id),
+                    str(_("Пользовательский API", "Custom API")),
+                )
+                item.is_default = pid == int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
                 v.custom_presets_list.addItem(item)
                 self.custom_presets_list_items[pid] = item
 
             v.custom_presets_list.blockSignals(False)
 
             # restore selection
-            saved_id = int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
+            saved_id = self._pending_select_id or int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
+            self._pending_select_id = None
             logger.info(f"[API UI] built list: custom_count={len(custom)} widget_count={v.custom_presets_list.count()}")
             if saved_id and saved_id in self.custom_presets_list_items:
                 self._select_custom_preset(saved_id)
             else:
-                v.api_settings_container.setVisible(False)
+                if v.custom_presets_list.count():
+                    v.custom_presets_list.setCurrentRow(0)
+                else:
+                    v.api_settings_container.setVisible(False)
 
         self._bus_call_async(_call, _apply, name="load_presets")
 
@@ -147,6 +163,7 @@ class PresetsMixin:
                     QMessageBox.StandardButton.Cancel
                 )
                 if reply == QMessageBox.StandardButton.Cancel:
+                    self._pending_preset_action = None
                     self._select_custom_preset(self.current_preset_id)
                     return
                 if reply == QMessageBox.StandardButton.Yes:
@@ -247,6 +264,7 @@ class PresetsMixin:
                 v.fallback_editor.set_value(fb_value)
                 v.fallback_editor.blockSignals(False)
 
+            v.protocol_row.set_enabled(base is None)
             v.api_url_row.set_enabled(base is None)
 
             self._apply_help_links(preset)
@@ -256,10 +274,10 @@ class PresetsMixin:
             if isinstance(known_models, list) and known_models:
                 v.api_model_list_model.setStringList([str(x) for x in known_models if str(x).strip()])
 
-            v.provider_label.setText(f"{_('Пресет', 'Preset')}: {preset.get('name', '')}")
+            v.provider_label.setText(str(preset.get("name", "")))
+            v.preset_name_row.set_text(preset.get("name", ""))
             v.api_settings_container.setVisible(True)
-
-            self.event_bus.emit(Events.ApiPresets.SET_CURRENT_PRESET_ID, {"id": int(preset_id)})
+            v.preset_active_tag.setVisible(int(v.settings.get("LAST_API_PRESET_ID", 0) or 0) == int(preset_id))
 
             self._snapshot = self._get_snapshot()
             self._set_dirty(False)
@@ -269,6 +287,10 @@ class PresetsMixin:
             v.cancel_button.setVisible(False)
 
             self._is_loading_ui = False
+            pending_action = getattr(self, "_pending_preset_action", None)
+            if pending_action is not None and pending_action[1] == preset_id:
+                self._pending_preset_action = None
+                QTimer.singleShot(0, lambda: self._on_preset_action(*pending_action))
 
             if self._pending_select_id and self._pending_select_id != preset_id:
                 pid = int(self._pending_select_id)

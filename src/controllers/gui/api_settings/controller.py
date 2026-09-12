@@ -138,6 +138,9 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         v = self.view
 
         v.custom_presets_list.itemSelectionChanged.connect(self._safe(self._on_selection_changed, "selection_changed"))
+        v.custom_presets_list.action_requested.connect(self._safe(self._on_preset_action, "preset_action"))
+        v.custom_presets_list.order_changed.connect(self._safe(self._save_presets_order, "reorder_presets"))
+        v.preset_name_row.edit.textChanged.connect(self._safe(self._on_field_changed, "preset_name_changed"))
         if hasattr(v.custom_presets_list, "create_requested"):
             v.custom_presets_list.create_requested.connect(self._safe(self._add_custom_preset_async, "add_preset_from_placeholder"))
 

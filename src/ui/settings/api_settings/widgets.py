@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QSize
+from functools import lru_cache
+
+from PyQt6.QtCore import Qt, QSize, QRect, QTimer, QPointF
 from PyQt6.QtGui import QPainter, QPixmap, QColor, QFont, QFontMetrics, QPalette
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QStyledItemDelegate, QStyle, QListWidget, QListWidgetItem, QComboBox, QSizePolicy, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QTextEdit, QToolButton, QPushButton, QFrame, QCheckBox
+    QStyledItemDelegate, QStyle, QListWidget, QListWidgetItem, QComboBox, QSizePolicy, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QTextEdit, QToolButton, QPushButton, QFrame, QCheckBox, QAbstractItemView, QMenu
 )
 import qtawesome as qta
 
 from utils import _
 from localization.live import tr_set, register_if_tr
+from styles.theme import THEME
+from ui.svg_icons import svg_icon
+from PyQt6.QtWidgets import QToolTip
 
 
 class ProviderDelegate(QStyledItemDelegate):
@@ -165,18 +170,135 @@ class ProviderDelegate(QStyledItemDelegate):
         return sz.expandedTo(QSize(140, 24))
 
 
-class PresetsListWidget(QListWidget):
-    """Список пресетов с подсказкой-приглашением, когда пресетов ещё нет.
+def protocol_provider(protocol_id: str) -> str:
+    return {
+        "google_gemini_default": "gemini",
+        "openai_compatible_default": "openai",
+        "openrouter_default": "openrouter",
+        "mistral_default": "mistral",
+        "lmstudio_default": "lmstudio",
+    }.get(protocol_id, "")
 
-    Пустой QListWidget выглядел как пустое поле без намёка на то, что делать.
-    Теперь по центру рисуется «Нажмите, чтобы создать пресет», а клик по
-    пустому списку эмитит create_requested (то же, что кнопка «+» рядом).
-    """
+
+@lru_cache(maxsize=32)
+def provider_icon(provider: str):
+    if str(provider).lower() in ("google", "gemini"):
+        return svg_icon("providers/google")
+    names = {
+        "gemini": ("fa5b.google", "#4285f4"),
+        "google": ("fa5b.google", "#4285f4"),
+        "openai": ("fa6b.openai", "#e8edf5"),
+        "openrouter": ("fa5s.route", "#a991e8"),
+        "mistral": ("fa5s.wind", "#eea052"),
+        "deepseek": ("fa5s.water", "#619afa"),
+        "lmstudio": ("fa5s.desktop", "#9cbde6"),
+    }
+    name, color = names.get(str(provider).lower(), ("fa5s.plug", "#aab2c5"))
+    try:
+        return qta.icon(name, color=color)
+    except Exception:
+        return qta.icon("fa5s.robot" if provider == "openai" else "fa5s.plug", color=color)
+
+
+class PresetCardDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        item = self.parent().item(index.row())
+        rect = option.rect.adjusted(2, 3, -2, -3)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        background = QColor(THEME["accent"] if selected else THEME["bg_root"])
+        if selected:
+            background.setAlphaF(0.12)
+        border = QColor(THEME["accent"] if selected else THEME["muted"])
+        if not selected:
+            border.setAlphaF(0.18)
+        painter.setBrush(background)
+        painter.setPen(border)
+        painter.drawRoundedRect(rect, 10, 10)
+        icon_rect = QRect(rect.left() + 14, rect.center().y() - 13, 26, 26)
+        provider_icon(getattr(item, "provider", "")).paint(painter, icon_rect)
+        x = rect.left() + 52
+        width = max(0, rect.width() - 82)
+        font = QFont(option.font)
+        font.setPixelSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor(THEME["text"]))
+        title = item.base_name + (" *" if item.has_changes else "")
+        display_title, title_width, indicator = self._title_layout(rect, font, title, getattr(item, "is_default", False))
+        if indicator is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(THEME["success"]))
+            painter.drawEllipse(indicator)
+            painter.setPen(QColor(THEME["text"]))
+        self._draw_text(painter, x, rect.center().y() - 10, display_title)
+        font = QFont(option.font)
+        painter.setFont(font)
+        painter.setPen(QColor(THEME["muted"]))
+        text = item.model or str(_("Модель не выбрана", "No model selected"))
+        self._draw_text(painter, x, rect.center().y() + 10,
+                        QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, width))
+        qta.icon("fa5s.ellipsis-v", color=THEME["muted"]).paint(
+            painter, QRect(rect.right() - 23, rect.center().y() - 9, 14, 18)
+        )
+        painter.restore()
+
+    @staticmethod
+    def _draw_text(painter, x, center_y, text):
+        bounds = QFontMetrics(painter.font()).tightBoundingRect(text)
+        baseline = center_y - (bounds.top() + bounds.bottom()) / 2
+        painter.drawText(QPointF(x, baseline), text)
+
+    @staticmethod
+    def _title_layout(rect, font, title, is_default):
+        width = max(0, rect.width() - 82 - (18 if is_default else 0))
+        metrics = QFontMetrics(font)
+        shown = metrics.elidedText(title, Qt.TextElideMode.ElideRight, width)
+        indicator = QRect(rect.left() + 52 + metrics.horizontalAdvance(shown) + 6, rect.center().y() - 15, 10, 10) if is_default else None
+        return shown, width, indicator
+
+    def sizeHint(self, option, index):
+        return QSize(270, 62)
+
+    def helpEvent(self, event, view, option, index):
+        rect = option.rect.adjusted(2, 3, -2, -3)
+        icon_rect = QRect(rect.left() + 14, rect.center().y() - 13, 26, 26)
+        if icon_rect.contains(event.pos()):
+            item = view.item(index.row())
+            text = getattr(item, "provider_label", "") or str(_("Пользовательский API", "Custom API"))
+            QToolTip.showText(event.globalPos(), text, view.viewport(), icon_rect)
+            return True
+        item = view.item(index.row())
+        font = QFont(option.font)
+        font.setPixelSize(14)
+        font.setBold(True)
+        title = item.base_name + (" *" if item.has_changes else "")
+        _, _, indicator = self._title_layout(rect, font, title, getattr(item, "is_default", False))
+        if indicator is not None and indicator.adjusted(-3, -3, 3, 3).contains(event.pos()):
+            QToolTip.showText(event.globalPos(), str(_("По умолчанию", "Default")), view.viewport())
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class PresetsListWidget(QListWidget):
+    """Preset cards with context actions, internal reordering and an empty-state invitation."""
 
     create_requested = pyqtSignal()
+    action_requested = pyqtSignal(str, int)
+    order_changed = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setItemDelegate(PresetCardDelegate(self))
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_menu)
         # Текст плейсхолдера рисуется в paintEvent (берётся свежим из `_()`),
         # а на смену языка перерисовываем виджет по сигналу.
         try:
@@ -191,7 +313,33 @@ class PresetsListWidget(QListWidget):
 
     @property
     def _placeholder_hint(self) -> str:
-        return _("или нажмите «+» рядом", "or use the “+” button on the right")
+        return _("Кнопка «Добавить пресет» находится сверху", "Use Add preset above")
+
+    def _open_menu(self, position):
+        item = self.itemAt(position)
+        if item is None:
+            return
+        menu = QMenu(self)
+        for key, label in (
+            ("default", _("Выбрать по умолчанию", "Use by default")),
+            ("rename", _("Переименовать", "Rename")),
+            ("copy", _("Дублировать", "Duplicate")),
+            ("remove", _("Удалить", "Delete")),
+        ):
+            action = menu.addAction(str(label))
+            if key == "default":
+                action.setEnabled(not getattr(item, "is_default", False))
+            action.triggered.connect(lambda checked=False, k=key, pid=item.preset_id: self.action_requested.emit(k, pid))
+        menu.exec(self.viewport().mapToGlobal(position))
+
+    def dropEvent(self, event):
+        blocked = self.blockSignals(True)
+        try:
+            super().dropEvent(event)
+        finally:
+            self.blockSignals(blocked)
+        if event.isAccepted():
+            QTimer.singleShot(0, self.order_changed.emit)
 
     def _is_empty(self) -> bool:
         return self.count() == 0
@@ -222,6 +370,11 @@ class PresetsListWidget(QListWidget):
         painter.end()
 
     def mousePressEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item is not None and event.button() == Qt.MouseButton.LeftButton:
+            if event.pos().x() >= self.visualItemRect(item).right() - 30:
+                self._open_menu(event.pos())
+                return
         if self._is_empty():
             self.create_requested.emit()
             return
@@ -235,6 +388,10 @@ class CustomPresetListItem(QListWidgetItem):
         self.base_name = name
         self.model = str(model or "")
         self.has_changes = has_changes
+        self.provider = ""
+        self.provider_label = ""
+        self.is_default = False
+        self.setData(Qt.ItemDataRole.UserRole, preset_id)
         self.update_display()
 
     def update_changes_indicator(self, has_changes):
@@ -361,7 +518,8 @@ class ReserveKeyRow(QWidget):
         self.key_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.eye_btn = QToolButton()
-        self.eye_btn.setText("\U0001F441")
+        self.eye_btn.setIcon(qta.icon("fa5s.eye", color=THEME["muted"]))
+        self.eye_btn.toggled.connect(lambda on: self.eye_btn.setIcon(qta.icon("fa5s.eye-slash" if on else "fa5s.eye", color=THEME["muted"])))
         self.eye_btn.setCheckable(True)
         self.eye_btn.setFixedWidth(24)
         tr_set(self.eye_btn, "Показать/скрыть ключ", "Show/hide key", "setToolTip")
@@ -372,7 +530,7 @@ class ReserveKeyRow(QWidget):
         )
 
         self.remove_btn = QToolButton()
-        self.remove_btn.setIcon(qta.icon("fa5s.times", color="#c04c80"))
+        self.remove_btn.setIcon(qta.icon("fa5s.times", color=THEME["accent"]))
         self.remove_btn.setFixedSize(22, 22)
         self.remove_btn.setIconSize(QSize(11, 11))
         self.remove_btn.setAutoRaise(True)
@@ -440,12 +598,14 @@ class ReserveKeysEditor(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
-        self.add_btn = tr_set(QPushButton(), "+ Добавить ключ", "+ Add key")
+        self.add_btn = tr_set(QPushButton(), "Добавить ключ", "Add key")
+        self.add_btn.setIcon(qta.icon("fa5s.plus", color=THEME["text"]))
         self.add_btn.clicked.connect(lambda *_: self._on_add_clicked())
         btn_row.addWidget(self.add_btn)
 
         self._toggle_all_btn = QToolButton()
-        self._toggle_all_btn.setText("\U0001F441")
+        self._toggle_all_btn.setIcon(qta.icon("fa5s.eye", color=THEME["muted"]))
+        self._toggle_all_btn.toggled.connect(lambda on: self._toggle_all_btn.setIcon(qta.icon("fa5s.eye-slash" if on else "fa5s.eye", color=THEME["muted"])))
         self._toggle_all_btn.setCheckable(True)
         self._toggle_all_btn.setFixedWidth(24)
         tr_set(self._toggle_all_btn, "Показать/скрыть все ключи", "Show/hide all keys", "setToolTip")
@@ -509,6 +669,8 @@ class ReserveKeysEditor(QWidget):
             ks = str(k or "").strip()
             if ks:
                 self._add_row(ks)
+        if hasattr(self, "count_label"):
+            self.count_label.setText(str(len(self.get_keys())) + str(_(" ключей", " keys")))
 
     def is_distribute(self) -> bool:
         return bool(self.distribute_checkbox.isChecked())
@@ -582,7 +744,7 @@ class FallbackRow(QWidget):
         self.down_btn.setAutoRaise(True)
 
         self.remove_btn = QToolButton()
-        self.remove_btn.setIcon(qta.icon("fa5s.times", color="#c04c80"))
+        self.remove_btn.setIcon(qta.icon("fa5s.times", color=THEME["accent"]))
         self.remove_btn.setFixedSize(22, 22)
         self.remove_btn.setIconSize(QSize(11, 11))
         self.remove_btn.setAutoRaise(True)
