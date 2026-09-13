@@ -493,6 +493,7 @@ class EditorMixin:
                 )
                 return
             self._pending_select_id = int(new_id)
+            self._selection_retry_count = 0
             self.reload_presets_async()
 
         self._bus_call_async(_call, _apply, name="copy_preset")
@@ -538,6 +539,7 @@ class EditorMixin:
                 )
                 return
             self._pending_select_id = int(new_id)
+            self._selection_retry_count = 0
             self.reload_presets_async()
 
         self._bus_call_async(_call, _apply, name="add_preset")

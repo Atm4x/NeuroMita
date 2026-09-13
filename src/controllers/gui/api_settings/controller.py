@@ -41,6 +41,7 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         self._is_loading_ui = False
         self._snapshot = None
         self._pending_select_id: Optional[int] = None
+        self._preset_reload_serial = 0
 
         self._protocols = self._load_protocol_catalog()
         self._protocol_default_id = self._pick_default_protocol_id()

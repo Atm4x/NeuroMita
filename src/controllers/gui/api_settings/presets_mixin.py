@@ -25,12 +25,16 @@ class PresetsMixin:
 
     def reload_presets_async(self) -> None:
         logger.info("[API UI] reload_presets_async called")
+        reload_serial = int(getattr(self, "_preset_reload_serial", 0) or 0) + 1
+        self._preset_reload_serial = reload_serial
         def _call():
             meta = use(ApiPresetService).list_meta()
             logger.info(f"[API UI] preset metadata loaded: {type(meta)}")
             return meta
 
         def _apply(meta):
+            if reload_serial != getattr(self, "_preset_reload_serial", reload_serial):
+                return
             logger.info(f"[API UI] GET_PRESET_LIST meta={type(meta)} keys={list(meta.keys()) if isinstance(meta, dict) else None}")
             v = self.view
             Item = self._item_cls()
@@ -113,9 +117,18 @@ class PresetsMixin:
             logger.info(f"[API UI] built list: custom_count={len(custom)} widget_count={v.custom_presets_list.count()}")
             if saved_id and saved_id in self.custom_presets_list_items:
                 self._pending_select_id = None
+                self._selection_retry_count = 0
                 self._select_custom_preset(saved_id)
             else:
-                if pending_id is None:
+                if pending_id is not None:
+                    retries = int(getattr(self, "_selection_retry_count", 0) or 0)
+                    if retries < 8:
+                        self._selection_retry_count = retries + 1
+                        QTimer.singleShot(120, self.reload_presets_async)
+                    else:
+                        self._pending_select_id = None
+                        self._selection_retry_count = 0
+                else:
                     self._pending_select_id = None
                 if v.custom_presets_list.count():
                     v.custom_presets_list.setCurrentRow(0)
@@ -124,7 +137,7 @@ class PresetsMixin:
 
         self._bus_call_async(_call, _apply, name="load_presets")
 
-    def _select_custom_preset(self, preset_id: int) -> None:
+    def _select_custom_preset(self, preset_id: int) -> bool:
         v = self.view
         Item = self._item_cls()
         if Item is None:
@@ -133,7 +146,8 @@ class PresetsMixin:
             item = v.custom_presets_list.item(i)
             if isinstance(item, Item) and item.preset_id == preset_id:
                 v.custom_presets_list.setCurrentItem(item)
-                return
+                return True
+        return False
 
     def _on_selection_changed(self) -> None:
         if self._is_loading_ui:
@@ -171,6 +185,7 @@ class PresetsMixin:
                     return
                 if reply == QMessageBox.StandardButton.Yes:
                     self._pending_select_id = int(cur_item.preset_id)
+                    self._selection_retry_count = 0
                     self._select_custom_preset(self.current_preset_id)
                     self._save_preset_async()
                     return
@@ -292,7 +307,8 @@ class PresetsMixin:
 
             if self._pending_select_id and self._pending_select_id != preset_id:
                 pid = int(self._pending_select_id)
-                self._pending_select_id = None
-                self._select_custom_preset(pid)
+                if self._select_custom_preset(pid):
+                    self._pending_select_id = None
+                    self._selection_retry_count = 0
 
         self._bus_call_async(_call, _apply, name="load_preset")
