@@ -260,7 +260,7 @@ class LocalVoiceController(LocalVoiceService):
                     "message": _(
                         "Не удалось инициализировать модель {}. Причина записана в логах TTS/инициализации.",
                         "Failed to initialize model {}. The reason was written to the TTS/init logs."
-                    ).format(model_id)
+                    ).format(model_id) + "\n\n" + _("Смотреть логи", "See logs")
                 })
                 self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
@@ -270,7 +270,7 @@ class LocalVoiceController(LocalVoiceService):
             self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {"status": _("Ошибка!", "Error!")})
             self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
                 "title": _("Ошибка", "Error"),
-                "message": f"{_('Критическая ошибка при инициализации модели:', 'Critical init error:')} {format_exception(e)}"
+                "message": f"{_('Критическая ошибка при инициализации модели:', 'Critical init error:')} {format_exception(e)}\n\n{_('Смотреть логи', 'See logs')}"
             })
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
@@ -309,7 +309,7 @@ class LocalVoiceController(LocalVoiceService):
             self.event_bus.emit(Events.Audio.UPDATE_MODEL_LOADING_STATUS, {"status": _("Ошибка!", "Error!")})
             self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
                 "title": _("Ошибка", "Error"),
-                "message": f"{_('Критическая ошибка при переинициализации модели:', 'Critical reinitialization error:')} {format_exception(e)}"
+                "message": f"{_('Критическая ошибка при переинициализации модели:', 'Critical reinitialization error:')} {format_exception(e)}\n\n{_('Смотреть логи', 'See logs')}"
             })
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 

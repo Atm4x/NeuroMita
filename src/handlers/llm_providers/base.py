@@ -86,6 +86,7 @@ class LLMRequest:
     tools_payload: Optional[Any] = None
     tools_dialect: Optional[str] = None
 
+    native_parameters: Optional[Dict[str, Any]] = None
     extra: Dict[str, Any] = field(default_factory=dict)
     settings: Optional[Any] = None
     depth: int = 0

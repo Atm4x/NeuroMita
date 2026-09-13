@@ -122,7 +122,7 @@ class VoiceoverGuiController(BaseController):
             )
             self.event_bus.emit(
                 Events.GUI.SHOW_ERROR_MESSAGE,
-                {"title": _("Ошибка", "Error"), "message": format_exception(exc)},
+                {"title": _("Ошибка", "Error"), "message": format_exception(exc) + "\n\n" + _("Смотреть логи", "See logs")},
             )
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 
@@ -144,7 +144,7 @@ class VoiceoverGuiController(BaseController):
             )
             self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
                 "title": _("Ошибка", "Error"),
-                "message": format_exception(exc),
+                "message": format_exception(exc) + "\n\n" + _("Смотреть логи", "See logs"),
             })
             self.event_bus.emit(Events.Audio.CANCEL_MODEL_LOADING)
 

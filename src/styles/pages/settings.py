@@ -12,6 +12,7 @@ QLabel#ApiSettingsTitle { font-size: 22px; font-weight: 700; color: {text}; }
 QLabel#ApiEditorTitle { font-size: 13px; font-weight: 600; color: {text}; }
 QLabel#ApiPresetName { font-size: 18px; font-weight: 700; color: {text}; }
 QLabel#ApiSettingsSubtitle { color: {muted}; font-size: 12px; }
+QLabel#ApiParameterKey { color: {muted}; font-size: 11px; }
 QFrame#ApiWorkspacePanel {
     background: transparent; border: none;
 }
@@ -51,6 +52,9 @@ QListWidget#ApiPresetCards, QScrollArea#ApiEditorScroll, QScrollArea#ApiConfigur
     background: transparent; border: none; padding: 0; outline: 0;
 }
 QListWidget#ApiPresetCards::item { padding: 0; border: none; background: transparent; }
+QListWidget#ModelParameterFields { background: {bg_root}; border: 1px solid {panel_border}; border-radius: 10px; padding: 6px; }
+QListWidget#ModelParameterFields::item { padding: 8px; border-radius: 6px; color: {text}; }
+QListWidget#ModelParameterFields::item:selected { background: rgba({accent_rgb}, 0.18); color: {text}; }
 QWidget#ApiSettingsWorkspace QPushButton { padding: 0px 14px; border-radius: 8px; font-weight: 600; }
 QPushButton#ApiAddPresetButton, QPushButton#ApiSaveButton {
     background: {accent}; color: {text}; border: 1px solid {accent_border}; font-weight: 600;
@@ -72,7 +76,9 @@ QWidget#ApiEditorContent QComboBox:disabled { color: {muted}; }
 QWidget#ApiEditorContent QLineEdit:focus, QWidget#ApiEditorContent QComboBox:focus { border-color: {accent}; }
 QWidget#ApiEditorContent QLabel[dirty="true"] { color: {link}; }
 QWidget#ApiEditorContent QLineEdit[invalid="true"],
-QWidget#ApiEditorContent QLineEdit[invalid="true"]:focus {
+QWidget#ApiEditorContent QLineEdit[invalid="true"]:focus,
+QWidget#ApiEditorContent QComboBox[invalid="true"],
+QWidget#ApiEditorContent QComboBox[invalid="true"]:focus {
     border: 1px solid {danger};
 }
 QWidget#ApiSettingsWorkspace QWidget#CollapsibleHeader {

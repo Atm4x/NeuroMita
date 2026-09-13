@@ -11,12 +11,10 @@ import qtawesome as qta
 
 from utils import _
 from styles.theme import THEME
-from ui.settings.api_settings.generation_fields import validate_generation
 from core.events import Events
 from core.services import use
 from services.contracts import ApiPresetService
 from main_logger import logger
-from presets.model_profiles import resolve_model_profile
 from .state import PresetSnapshot
 
 
@@ -27,140 +25,10 @@ class EditorMixin:
         except Exception:
             return None
 
-    def _read_generation_overrides(self) -> dict:
-        """Read current generation overrides state from the UI widgets."""
-        from PyQt6.QtWidgets import QCheckBox, QComboBox
-        widgets = getattr(self.view, 'gen_override_widgets', {})
-        overrides = {}
-        for key, (chk, val_widget) in widgets.items():
-            enabled = chk.isChecked()
-            if isinstance(val_widget, QCheckBox):
-                value = val_widget.isChecked()
-            elif isinstance(val_widget, QComboBox):
-                value = val_widget.currentText()
-            else:
-                value = val_widget.text() if hasattr(val_widget, 'text') else ""
-            overrides[key] = {"enabled": enabled, "value": value}
-        return overrides
-
-    def _write_generation_overrides(self, overrides: dict) -> None:
-        """Populate generation overrides UI widgets from a dict."""
-        from PyQt6.QtWidgets import QCheckBox, QComboBox
-        from ui.settings.api_settings.ui import generation_placeholder
-        widgets = getattr(self.view, 'gen_override_widgets', {})
-        for key, (chk, val_widget) in widgets.items():
-            spec = (overrides or {}).get(key) or {}
-            enabled = bool(spec.get("enabled", False))
-            chk.setChecked(enabled)
-            val_widget.setEnabled(enabled)
-            if isinstance(val_widget, QCheckBox):
-                val_widget.setChecked(bool(spec.get("value", False)))
-            elif isinstance(val_widget, QComboBox):
-                raw = str(spec.get("value") or "").strip()
-                # Чужое/пустое значение не должно молча сбрасывать список на первый пункт.
-                if raw and val_widget.findText(raw) >= 0:
-                    val_widget.setCurrentText(raw)
-            else:
-                val_widget.setPlaceholderText(generation_placeholder(self.view, key))
-                raw = spec.get("value")
-                val_widget.setText(str(raw) if raw is not None and str(raw).strip() else generation_placeholder(self.view, key))
-        validate_generation(self.view)
-
-    def _read_model_profile_overrides(self) -> dict:
-        editor = getattr(self.view, "model_profile_overrides_edit", None)
-        raw = editor.toPlainText().strip() if editor is not None else ""
-        if not raw:
-            result = {}
-        else:
-            try:
-                result = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise ValueError(_("Некорректный JSON профиля модели: {error}", "Invalid model profile JSON: {error}").format(error=exc.msg)) from exc
-            if not isinstance(result, dict):
-                raise ValueError(_("JSON профиля модели должен содержать объект.", "Model profile JSON must contain an object."))
-
-        safe_mode = bool(getattr(self.view, "model_safe_mode_cb", None).isChecked()) \
-            if getattr(self.view, "model_safe_mode_cb", None) is not None else False
-        if safe_mode:
-            result["safe_mode"] = True
-        else:
-            result.pop("safe_mode", None)
-        return result
-
-    def _write_model_profile_overrides(self, overrides: dict) -> None:
-        value = dict(overrides) if isinstance(overrides, dict) else {}
-        safe_mode = bool(value.pop("safe_mode", False))
-        checkbox = getattr(self.view, "model_safe_mode_cb", None)
-        if checkbox is not None:
-            checkbox.setChecked(safe_mode)
-        editor = getattr(self.view, "model_profile_overrides_edit", None)
-        if editor is not None:
-            editor.setPlainText(json.dumps(value, ensure_ascii=False, indent=2) if value else "")
-
-    def _refresh_model_profile_controls(self) -> None:
-        """Reflect the selected model profile in the editable preset controls."""
-        v = self.view
-        model = str(v.api_model_row.text() or "").strip()
-        source = getattr(self, "_active_template", None)
-        if not isinstance(source, dict):
-            source = self.current_preset_data if isinstance(self.current_preset_data, dict) else {}
-
-        try:
-            overrides = self._read_model_profile_overrides()
-        except ValueError:
-            summary = getattr(v, "model_profile_summary_label", None)
-            if summary is not None:
-                summary.setText(_("Профиль модели: JSON содержит ошибку.", "Model profile: JSON is invalid."))
-            return
-
-        protocol_id = self._current_protocol_id_ui()
-        profile = resolve_model_profile(
-            model,
-            source.get("model_profiles"),
-            overrides,
-            default_safe=protocol_id == "google_gemini_default",
-        )
-        summary = getattr(v, "model_profile_summary_label", None)
-        if summary is not None:
-            if profile.get("safe_mode"):
-                summary.setText(_(
-                    "Профиль: безопасная совместимость — дополнительные параметры и thinking отключены.",
-                    "Profile: safe compatibility — optional generation parameters and explicit thinking controls are disabled.",
-                ))
-            elif profile:
-                profile_id = str(profile.get("id") or model or "custom")
-                transport = str((profile.get("thinking") or {}).get("transport") or "none")
-                summary.setText(_(
-                    f"Профиль: {profile_id}; thinking: {transport}.",
-                    f"Profile: {profile_id}; thinking: {transport}.",
-                ))
-            else:
-                summary.setText(_(
-                    "Профиль не задан: используются настройки провайдера по умолчанию.",
-                    "No profile: provider defaults are used.",
-                ))
-
-        widget_pair = getattr(v, "gen_override_widgets", {}).get("reasoning_effort")
-        if not widget_pair:
-            return
-        _enabled_checkbox, combo = widget_pair
-        thinking = profile.get("thinking") if isinstance(profile, dict) else {}
-        allowed_levels = [
-            str(value).strip()
-            for value in (thinking.get("allowed_levels") or [])
-            if str(value).strip()
-        ] if isinstance(thinking, dict) else []
-        levels = allowed_levels or ["minimal", "low", "medium", "high"]
-        current = str(combo.currentText() or "")
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(levels)
-        if current in levels:
-            combo.setCurrentText(current)
-        else:
-            default_level = str((thinking or {}).get("default_level") or levels[0])
-            combo.setCurrentText(default_level if default_level in levels else levels[0])
-        combo.blockSignals(False)
+    def _refresh_model_settings_dialect(self) -> None:
+        protocol = self._protocols.get(self._current_protocol_id_ui()) or {}
+        dialect = str(protocol.get("dialect") or "openai_chat_completions")
+        self.model_settings_controller.set_dialect(dialect)
 
     def _read_openrouter_routing(self) -> dict:
         v = self.view
@@ -236,9 +104,7 @@ class EditorMixin:
             reserve_keys_text=str(v.reserve_keys_row.text() or "").strip(),
             reserve_keys_distribute=bool(v.reserve_keys_row.is_distribute()),
             protocol_id=self._current_protocol_id_ui(),
-            model_safe_mode=bool(getattr(v, "model_safe_mode_cb", None).isChecked()) if getattr(v, "model_safe_mode_cb", None) is not None else False,
-            model_profile_overrides_text=str(getattr(v, "model_profile_overrides_edit", None).toPlainText() or "") if getattr(v, "model_profile_overrides_edit", None) is not None else "",
-            generation_overrides=self._read_generation_overrides(),
+            model_settings=v.model_settings_form.document() or {},
             openrouter_routing=self._read_openrouter_routing(),
             fallbacks=fb_tuple,
         )
@@ -273,7 +139,7 @@ class EditorMixin:
             item.update_changes_indicator(dirty)
 
         v.save_preset_button.setVisible(True)
-        v.save_preset_button.setEnabled(dirty and validate_generation(v))
+        v.save_preset_button.setEnabled(dirty and v.model_settings_form.validate())
         v.cancel_button.setVisible(dirty)
 
     def _on_field_changed(self, *_args) -> None:
@@ -313,7 +179,7 @@ class EditorMixin:
                     v.api_url_row.set_text(new_url)
                     self._is_loading_ui = False
 
-        self._refresh_model_profile_controls()
+        self._refresh_model_settings_dialect()
 
         # normal dirty + debounce state
         self._set_dirty(self._snapshot is not None and (self._get_snapshot() != self._snapshot))
@@ -353,6 +219,8 @@ class EditorMixin:
             self._is_loading_ui = True
 
             self._active_template = dict(tpl)
+            dialect = str((self._protocols.get(str(tpl.get("protocol_id") or "")) or {}).get("dialect") or "openai_chat_completions")
+            self.model_settings_controller.set_dialect(dialect, str(tpl.get("settings_schema_id") or ""))
 
             pid = str(tpl.get("protocol_id") or "").strip() or self._protocol_default_id
             v.protocol_row.set_current_by_data(pid)
@@ -382,7 +250,7 @@ class EditorMixin:
                 v.api_model_list_model.setStringList([str(x) for x in known_models if str(x).strip()])
 
             self._apply_help_links(tpl)
-            self._refresh_model_profile_controls()
+            self._refresh_model_settings_dialect()
 
             self._is_loading_ui = False
             self._on_field_changed()
@@ -390,7 +258,7 @@ class EditorMixin:
         self._bus_call_async(_call, _apply, name="load_template")
 
     def _emit_save_state(self) -> None:
-        if not validate_generation(self.view):
+        if not self.view.model_settings_form.validate():
             return
         if self._is_loading_ui:
             return
@@ -442,8 +310,9 @@ class EditorMixin:
             data.pop("protocol_overrides", None)
             data["url"] = ""
 
-        data["generation_overrides"] = self._read_generation_overrides()
-        data["model_profile_overrides"] = self._read_model_profile_overrides()
+        data["generation_overrides"] = {}
+        data["model_settings"] = v.model_settings_form.document()
+        data.pop("model_profile_overrides", None)
         data["openrouter_routing"] = self._read_openrouter_routing()
         data["fallbacks"] = v.fallback_editor.get_value() if hasattr(v, "fallback_editor") else []
         return data
@@ -520,13 +389,13 @@ class EditorMixin:
         v.protocol_row.set_current_by_data(self._snapshot.protocol_id or self._protocol_default_id)
         self._apply_protocol_details(self._current_protocol_id_ui())
 
-        self._write_generation_overrides(self._snapshot.generation_overrides)
-        if getattr(v, "model_safe_mode_cb", None) is not None:
-            v.model_safe_mode_cb.setChecked(self._snapshot.model_safe_mode)
-        if getattr(v, "model_profile_overrides_edit", None) is not None:
-            v.model_profile_overrides_edit.setPlainText(self._snapshot.model_profile_overrides_text)
+        dialect = str((self._protocols.get(self._snapshot.protocol_id) or {}).get("dialect") or "openai_chat_completions")
+        self.model_settings_controller.restore(self._snapshot.model_settings, dialect)
+        self._active_template = dict(self.current_preset_data) if self._snapshot.base is not None else None
+        self._set_protocol_config_visible(self._snapshot.base is None)
+        self._apply_help_links(self.current_preset_data)
         self._write_openrouter_routing(self._snapshot.openrouter_routing)
-        self._refresh_model_profile_controls()
+        self._refresh_model_settings_dialect()
 
         if hasattr(v, "fallback_editor"):
             v.fallback_editor.blockSignals(True)
@@ -539,7 +408,7 @@ class EditorMixin:
         self._set_dirty(False)
 
     def _save_preset_async(self) -> None:
-        if not validate_generation(self.view):
+        if not self.view.model_settings_form.validate():
             return
         if not self.current_preset_id or self.current_preset_id not in self.custom_presets_list_items:
             return

@@ -1472,11 +1472,7 @@ class ModelController(GenerationService, ModelStateService):
             _custom_params = copy.deepcopy(getattr(char, "custom_params", []) or [])
         effective_capabilities["has_custom_params"] = bool(_custom_params)
         effective_capabilities["custom_params"] = _custom_params
-        # Схемный CoT — свойство конкретной модели, а не всей программы: локальной
-        # он нужен, чтобы думать вслух, большой хостовой только жжёт токены.
-        effective_capabilities["schema_reasoning"] = self._resolve_preset_bool(
-            effective_preset, "schema_reasoning", "SCHEMA_REASONING", default=False
-        )
+        effective_capabilities["schema_reasoning"] = bool(self.settings.get("SCHEMA_REASONING", False))
 
         # The selected DSL template is the only owner of intent support. The
         # capability is finalized after PromptController processes the template.

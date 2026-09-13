@@ -181,7 +181,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
 
     def _supports_structured_output(self, req: LLMRequest) -> bool:
         caps = req.capabilities or {}
-        return bool(caps.get("structured_output", False))
+        return bool(caps.get("structured_output", False) and caps.get("native_structured_output", True))
 
     def _resolve_request_url(self, req: LLMRequest) -> str:
         url = str(req.api_url or "").strip()
@@ -219,8 +219,12 @@ class OpenAIHTTPProviderBase(BaseProvider):
         }
         if req.stream and self.should_request_stream_usage(req):
             payload["stream_options"] = {"include_usage": True}
-        payload.update(self._map_unified_params(req.extra or {}, model_to_use))
-        self._apply_reasoning(payload, req)
+        if req.native_parameters is None:
+            payload.update(self._map_unified_params(req.extra or {}, model_to_use))
+            self._apply_reasoning(payload, req)
+        else:
+            from copy import deepcopy
+            payload.update(deepcopy(req.native_parameters))
 
         if req.protocol_id == "openrouter_default":
             routing = normalize_openrouter_routing((req.extra or {}).get("openrouter_routing"))

@@ -11,6 +11,7 @@ class Dialects:
 API_PROTOCOLS_DATA = [
     {
         "id": "mistral_default",
+        "settings_schema_id": "mistral",
         "name": "Mistral (OpenAI-compatible)",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
@@ -24,6 +25,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "openrouter_default",
+        "settings_schema_id": "openrouter",
         "name": "OpenRouter (OpenAI-compatible)",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
@@ -40,6 +42,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "openai_compatible_default",
+        "settings_schema_id": "openai-compatible",
         "name": "OpenAI-compatible (Generic)",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
@@ -50,6 +53,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "lmstudio_default",
+        "settings_schema_id": "local-openai",
         "name": "LM Studio (OpenAI-compatible)",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
@@ -70,6 +74,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "aiio_default",
+        "settings_schema_id": "openai-compatible",
         "name": "Ai.iO (OpenAI-compatible)",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
@@ -80,6 +85,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "google_gemini_default",
+        "settings_schema_id": "google-level",
         "name": "Google Gemini API (generateContent)",
         "dialect": Dialects.GEMINI_GENERATE_CONTENT,
         "provider": "gemini",
@@ -90,6 +96,7 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "g4f_default",
+        "settings_schema_id": "g4f",
         "name": "GPT4Free",
         "dialect": Dialects.G4F,
         "provider": "g4f",

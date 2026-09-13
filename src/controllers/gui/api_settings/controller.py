@@ -17,6 +17,7 @@ from .protocols_mixin import ProtocolsMixin
 from .editor_mixin import EditorMixin
 from .presets_mixin import PresetsMixin
 from .test_mixin import TestMixin
+from .model_settings_controller import PresetModelSettingsController
 from controllers.gui.settings_data_prefetch import API_PROVIDER_NAMES
 
 
@@ -31,6 +32,7 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         self.view = view
         self._settings_data = settings_data
         self.event_bus = get_event_bus()
+        self.model_settings_controller = PresetModelSettingsController(view.model_settings_form, self)
 
         self.current_preset_id: Optional[int] = None
         self.current_preset_data: dict = {}
@@ -165,12 +167,7 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         v.api_model_row.edit.textChanged.connect(self._safe(self._on_field_changed, "model_changed"))
         v.api_key_row.edit.textChanged.connect(self._safe(self._on_field_changed, "key_changed"))
         v.reserve_keys_row.changed.connect(self._safe(self._on_field_changed, "reserve_keys_changed"))
-        if getattr(v, "model_safe_mode_cb", None) is not None:
-            v.model_safe_mode_cb.toggled.connect(self._safe(self._on_field_changed, "model_safe_mode_changed"))
-        if getattr(v, "model_profile_overrides_edit", None) is not None:
-            v.model_profile_overrides_edit.textChanged.connect(
-                self._safe(self._on_field_changed, "model_profile_overrides_changed")
-            )
+        v.model_settings_form.changed.connect(self._safe(self._on_field_changed, "model_settings_changed"))
 
         if hasattr(v, "fallback_editor"):
             v.fallback_editor.changed.connect(self._safe(self._on_field_changed, "fallbacks_changed"))
@@ -183,17 +180,6 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
                     widget.toggled.connect(self._safe(self._on_field_changed, f"openrouter_routing_{key}"))
                 elif hasattr(widget, "currentIndexChanged"):
                     widget.currentIndexChanged.connect(self._safe(self._on_field_changed, f"openrouter_routing_{key}"))
-
-        # Wire generation override widgets
-        for key, (chk, val_widget) in getattr(v, 'gen_override_widgets', {}).items():
-            chk.toggled.connect(self._safe(self._on_field_changed, f"gen_override_enable_{key}"))
-            from PyQt6.QtWidgets import QCheckBox, QComboBox, QLineEdit
-            if isinstance(val_widget, QCheckBox):
-                val_widget.toggled.connect(self._safe(self._on_field_changed, f"gen_override_value_{key}"))
-            elif isinstance(val_widget, QComboBox):
-                val_widget.currentTextChanged.connect(self._safe(self._on_field_changed, f"gen_override_value_{key}"))
-            elif isinstance(val_widget, QLineEdit):
-                val_widget.textChanged.connect(self._safe(self._on_field_changed, f"gen_override_value_{key}"))
 
         # IMPORTANT: pipeline button
         if hasattr(v, "configure_pipeline_btn"):

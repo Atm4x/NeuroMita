@@ -12,7 +12,7 @@ import qtawesome as qta
 from utils import _
 from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
-from .generation_fields import GENERATION_FIELDS, field_default, field_error
+from .model_settings_form import ModelSettingsForm
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
     FallbackChainEditor, ReserveKeysEditor,
@@ -335,76 +335,8 @@ def build_api_settings_ui(self, parent_layout):
 
 
 def _build_generation(self, layout):
-    note = tr_set(QLabel(), "Переопределяют глобальные настройки только для этого пресета.",
-                  "Override global generation settings for this preset only.")
-    note.setObjectName("ApiSettingsSubtitle")
-    note.setWordWrap(True)
-    layout.addWidget(note)
-    self.gen_override_widgets = {}
-    for key, spec in GENERATION_FIELDS.items():
-        row = QWidget()
-        row.setObjectName("ApiGenerationRow")
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 10, 0, 10)
-        row_layout.setSpacing(16)
-        labels = QVBoxLayout()
-        labels.setSpacing(4)
-        labels.addWidget(tr_set(QLabel(), *spec["title"]))
-        description = tr_set(QLabel(), *spec["description"])
-        description.setObjectName("ApiSettingsSubtitle")
-        description.setWordWrap(True)
-        labels.addWidget(description)
-        row_layout.addLayout(labels, 1)
-        checkbox = QCheckBox()
-        tr_set(checkbox, "Включить переопределение", "Enable override", "setToolTip")
-        field = QLineEdit()
-        field.setFixedWidth(180)
-        field.setMinimumHeight(40)
-        field.setText(field_default(self, key))
-        field.setPlaceholderText(field_default(self, key))
-        field.setEnabled(False)
-        register(field, lambda widget, key=key: widget.setToolTip(
-            field_error(key, widget.text()) if widget.property("invalid") else ""
-        ))
-        checkbox.toggled.connect(field.setEnabled)
-        row_layout.addWidget(checkbox)
-        row_layout.addWidget(field)
-        self.gen_override_widgets[key] = (checkbox, field)
-        layout.addWidget(row)
-    extra = (
-        ("enable_thinking", ("Режим мышления", "Thinking mode"), ("Запрашивает размышления перед ответом, если модель их поддерживает.", "Requests reasoning before the response when supported."), None),
-        ("reasoning_effort", ("Глубина размышлений", "Reasoning effort"), ("Уровень усилий на размышления для поддерживаемых моделей.", "Reasoning effort level for supported models."), ("minimal", "low", "medium", "high")),
-        ("schema_reasoning", ("Reasoning в схеме", "Schema reasoning"), ("Добавляет поле размышлений в схему структурированного ответа.", "Adds a reasoning field to the structured response schema."), None),
-    )
-    for key, title, explanation, values in extra:
-        row = QWidget()
-        row.setObjectName("ApiGenerationRow")
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 10, 0, 10)
-        row_layout.setSpacing(16)
-        labels = QVBoxLayout()
-        labels.setSpacing(4)
-        labels.addWidget(tr_set(QLabel(), *title))
-        description = tr_set(QLabel(), *explanation)
-        description.setObjectName("ApiSettingsSubtitle")
-        description.setWordWrap(True)
-        labels.addWidget(description)
-        row_layout.addLayout(labels, 1)
-        enabled = QCheckBox()
-        tr_set(enabled, "Включить переопределение", "Enable override", "setToolTip")
-        value = QComboBox() if values else tr_set(QCheckBox(), "Вкл", "On")
-        value.setFixedWidth(180)
-        if values:
-            value.setObjectName("ApiArrowCombo")
-            value.addItems(values)
-            value.setCurrentText("medium")
-            value.setMinimumHeight(40)
-        value.setEnabled(False)
-        enabled.toggled.connect(value.setEnabled)
-        row_layout.addWidget(enabled)
-        row_layout.addWidget(value)
-        self.gen_override_widgets[key] = (enabled, value)
-        layout.addWidget(row)
+    self.model_settings_form = ModelSettingsForm()
+    layout.addWidget(self.model_settings_form)
 
 
 def _build_protocol(self, layout):
@@ -442,12 +374,6 @@ def _build_protocol(self, layout):
 
 
 def _build_retained_state(self, parent):
-    self.model_safe_mode_cb = QCheckBox(parent)
-    self.model_safe_mode_cb.hide()
-    self.model_profile_summary_label = QLabel(parent)
-    self.model_profile_summary_label.hide()
-    self.model_profile_overrides_edit = QTextEdit(parent)
-    self.model_profile_overrides_edit.hide()
     self.fallback_editor = FallbackChainEditor(parent)
     self.fallback_editor.hide()
     for name in ("remove_preset_btn", "rename_preset_btn", "copy_preset_btn", "move_up_btn", "move_down_btn"):
@@ -600,9 +526,6 @@ def _build_routing(self, layout):
     }
     self.openrouter_routing_section.setVisible(False)
 
-
-def generation_placeholder(view, key):
-    return field_default(view, key)
 
 
 def _filter_presets(widget, text):

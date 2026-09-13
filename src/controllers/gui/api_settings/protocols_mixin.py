@@ -98,4 +98,9 @@ class ProtocolsMixin:
         if self._is_loading_ui:
             return
         self._apply_protocol_details(self._current_protocol_id_ui())
+        protocol = self._protocols.get(self._current_protocol_id_ui()) or {}
+        self.model_settings_controller.set_dialect(
+            str(protocol.get("dialect") or "openai_chat_completions"),
+            str(protocol.get("settings_schema_id") or ""),
+        )
         self._on_field_changed()

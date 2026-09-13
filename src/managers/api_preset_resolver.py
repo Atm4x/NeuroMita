@@ -10,7 +10,7 @@ from core.services import use
 from services.contracts import ApiPresetService, ProtocolBuilderService
 from main_logger import logger
 from managers.protocol_registry import get_protocol_registry
-from presets.model_profiles import resolve_model_profile
+from model_settings.service import ModelSettingsService
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class PresetSettings:
     distribute_keys: bool = False
     generation_overrides: Dict[str, Any] = field(default_factory=dict)
     openrouter_routing: Dict[str, Any] = field(default_factory=dict)
+    native_parameters: Optional[Dict[str, Any]] = None
 
     def to_safe_dict(self) -> Dict[str, Any]:
         return {
@@ -46,7 +47,8 @@ class PresetSettings:
 
 
 class ApiPresetResolver:
-    def __init__(self, settings: Any, event_bus: Any):
+    def __init__(self, settings: Any, event_bus: Any, *, model_settings_service=None):
+        self.model_settings_service = model_settings_service or ModelSettingsService()
         self.settings = settings
         self.event_bus = event_bus
         # Round-robin для режима «Всегда распределять» (ключ словарей — имя пресета).
@@ -118,22 +120,9 @@ class ApiPresetResolver:
                 for k, v in oc.items():
                     capabilities[str(k)] = v
 
-        model_profile = resolve_model_profile(
-            api_model,
-            (preset or {}).get("model_profiles"),
-            (preset or {}).get("model_profile_overrides"),
-            default_safe=dialect_id == "gemini_generate_content",
-        )
-        if model_profile:
-            capabilities["model_profile"] = model_profile
-            if model_profile.get("safe_mode"):
-                capabilities.update({
-                    "tools_native": False,
-                    "tools_prompt_enabled": False,
-                    "streaming": False,
-                    "streaming_with_tools": False,
-                    "reasoning_control": "",
-                })
+        document = self.model_settings_service.for_preset(preset or {}, dialect_id, self.settings)
+        native_parameters = self.model_settings_service.compile(document, dialect_id)
+        capabilities = self.model_settings_service.capabilities(document, dialect_id, capabilities)
 
         # headers: let ProtocolsController build final headers/auth,
         # but allow preset overrides to contribute extra headers.
@@ -175,6 +164,7 @@ class ApiPresetResolver:
             distribute_keys=distribute_keys,
             generation_overrides=generation_overrides,
             openrouter_routing=openrouter_routing,
+            native_parameters=native_parameters,
         )
 
     def resolve_chain(self, preset_id: Optional[int] = None, *, max_depth: int = 6) -> List[PresetSettings]:

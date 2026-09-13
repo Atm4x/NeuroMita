@@ -268,21 +268,25 @@ class ChatModel:
         def build_request(preset_settings, effective_model: str) -> LLMRequest:
             cfg = self.cfg_loader.effective_for_preset(self.cfg, preset_settings, effective_model)
 
-            params = build_unified_generation_params(
-                settings=self.settings,
-                temperature=cfg.temperature,
-                max_response_tokens=cfg.max_response_tokens,
-                presence_penalty=cfg.presence_penalty,
-                frequency_penalty=cfg.frequency_penalty,
-                log_probability=cfg.log_probability,
-                top_k=cfg.top_k,
-                top_p=cfg.top_p,
-                thinking_budget=cfg.thinking_budget,
-                enable_thinking=cfg.enable_thinking,
-                reasoning_effort=getattr(cfg, "reasoning_effort", None),
-                gemini_thinking_budget=getattr(cfg, "gemini_thinking_budget", None),
-                force_params=getattr(cfg, "preset_forced_params", frozenset()),
-            )
+            native_parameters = getattr(preset_settings, "native_parameters", None)
+            if native_parameters is not None:
+                params = {}
+            else:
+                params = build_unified_generation_params(
+                    settings=self.settings,
+                    temperature=cfg.temperature,
+                    max_response_tokens=cfg.max_response_tokens,
+                    presence_penalty=cfg.presence_penalty,
+                    frequency_penalty=cfg.frequency_penalty,
+                    log_probability=cfg.log_probability,
+                    top_k=cfg.top_k,
+                    top_p=cfg.top_p,
+                    thinking_budget=cfg.thinking_budget,
+                    enable_thinking=cfg.enable_thinking,
+                    reasoning_effort=getattr(cfg, "reasoning_effort", None),
+                    gemini_thinking_budget=getattr(cfg, "gemini_thinking_budget", None),
+                    force_params=getattr(cfg, "preset_forced_params", frozenset()),
+                )
             if request_id:
                 params["request_id"] = str(request_id)
 
@@ -310,6 +314,7 @@ class ChatModel:
                 stream_cb=stream_callback,
                 stream_event_cb=stream_event_callback,
                 extra=params,
+                native_parameters=native_parameters,
                 tool_manager=self.tool_manager,
                 settings=self.settings,
                 structured_model=structured_model,

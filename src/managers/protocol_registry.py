@@ -18,6 +18,7 @@ class ApiProtocol:
     headers: Dict[str, str] = field(default_factory=dict)
     capabilities: Dict[str, Any] = field(default_factory=dict)
     transforms: List[Dict[str, Any]] = field(default_factory=list)
+    settings_schema_id: str = ""
 
 
 class ProtocolRegistry:
@@ -34,6 +35,7 @@ class ProtocolRegistry:
                     headers=dict(raw.get("headers", {}) or {}),
                     capabilities=dict(raw.get("capabilities", {}) or {}),
                     transforms=list(raw.get("transforms", []) or []),
+                    settings_schema_id=str(raw.get("settings_schema_id") or ""),
                 )
                 items[p.id] = p
             except Exception as e:

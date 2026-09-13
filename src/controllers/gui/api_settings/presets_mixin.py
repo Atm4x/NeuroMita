@@ -205,6 +205,7 @@ class PresetsMixin:
                 state.get("reserve_keys_distribute", preset.get("reserve_keys_distribute", False)))
 
             base = self._parse_base(preset.get("base", None))
+            self._active_template = dict(preset) if base is not None else None
             self._set_protocol_config_visible(base is None)
 
             v.template_combo.blockSignals(True)
@@ -242,14 +243,8 @@ class PresetsMixin:
             v.reserve_keys_row.set_text("\n".join([str(k).strip() for k in reserve_keys if str(k).strip()]))
             v.reserve_keys_row.set_distribute(reserve_keys_distribute)
 
-            gen_overrides = preset.get("generation_overrides") or {}
-            if isinstance(gen_overrides, dict):
-                self._write_generation_overrides(gen_overrides)
-
-            model_profile_overrides = preset.get("model_profile_overrides") or {}
-            self._write_model_profile_overrides(
-                model_profile_overrides if isinstance(model_profile_overrides, dict) else {}
-            )
+            dialect = str((self._protocols.get(eff_pid) or {}).get("dialect") or "openai_chat_completions")
+            self.model_settings_controller.load(preset, dialect, v.settings)
 
             openrouter_routing = preset.get("openrouter_routing") or {}
             if isinstance(openrouter_routing, dict):
@@ -268,7 +263,7 @@ class PresetsMixin:
             v.api_url_row.set_enabled(base is None)
 
             self._apply_help_links(preset)
-            self._refresh_model_profile_controls()
+            self._refresh_model_settings_dialect()
 
             known_models = preset.get("known_models", []) or []
             if isinstance(known_models, list) and known_models:
