@@ -108,12 +108,15 @@ class PresetsMixin:
             v.custom_presets_list.blockSignals(False)
 
             # restore selection
-            saved_id = self._pending_select_id or int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
-            self._pending_select_id = None
+            pending_id = self._pending_select_id
+            saved_id = pending_id or int(v.settings.get("LAST_API_PRESET_ID", 0) or 0)
             logger.info(f"[API UI] built list: custom_count={len(custom)} widget_count={v.custom_presets_list.count()}")
             if saved_id and saved_id in self.custom_presets_list_items:
+                self._pending_select_id = None
                 self._select_custom_preset(saved_id)
             else:
+                if pending_id is None:
+                    self._pending_select_id = None
                 if v.custom_presets_list.count():
                     v.custom_presets_list.setCurrentRow(0)
                 else:
