@@ -12,7 +12,7 @@ import qtawesome as qta
 from utils import _
 from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
-from .generation_fields import GENERATION_FIELDS, field_default
+from .generation_fields import GENERATION_FIELDS, field_default, field_error
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
     FallbackChainEditor, ReserveKeysEditor,
@@ -363,6 +363,9 @@ def _build_generation(self, layout):
         field.setText(field_default(self, key))
         field.setPlaceholderText(field_default(self, key))
         field.setEnabled(False)
+        register(field, lambda widget, key=key: widget.setToolTip(
+            field_error(key, widget.text()) if widget.property("invalid") else ""
+        ))
         checkbox.toggled.connect(field.setEnabled)
         row_layout.addWidget(checkbox)
         row_layout.addWidget(field)
@@ -413,6 +416,9 @@ def _build_protocol(self, layout):
     self.reserve_keys_row.attach_section(self.reserve_keys_section, title)
     self.reserve_keys_count = QLabel()
     self.reserve_keys_count.setObjectName("ApiReserveCount")
+    register(self.reserve_keys_count, lambda label: label.setText(
+        str(label.property("keyCount") or 0) + str(_(" ключей", " keys"))
+    ))
     header_layout = self.reserve_keys_section.header.layout()
     header_layout.insertWidget(header_layout.count() - 1, self.reserve_keys_count)
     self.reserve_keys_row.count_label = self.reserve_keys_count
@@ -608,4 +614,5 @@ def _filter_presets(widget, text):
 
 
 def _update_reserve_count(editor):
+    editor.count_label.setProperty("keyCount", len(editor.get_keys()))
     editor.count_label.setText(str(len(editor.get_keys())) + str(_(" ключей", " keys")))

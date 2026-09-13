@@ -75,9 +75,9 @@ class EditorMixin:
             try:
                 result = json.loads(raw)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Model profile JSON is invalid: {exc.msg}") from exc
+                raise ValueError(_("Некорректный JSON профиля модели: {error}", "Invalid model profile JSON: {error}").format(error=exc.msg)) from exc
             if not isinstance(result, dict):
-                raise ValueError("Model profile JSON must contain an object.")
+                raise ValueError(_("JSON профиля модели должен содержать объект.", "Model profile JSON must contain an object."))
 
         safe_mode = bool(getattr(self.view, "model_safe_mode_cb", None).isChecked()) \
             if getattr(self.view, "model_safe_mode_cb", None) is not None else False

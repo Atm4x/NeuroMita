@@ -11,10 +11,15 @@ from PyQt6.QtWidgets import (
 import qtawesome as qta
 
 from utils import _
-from localization.live import tr_set, register_if_tr
+from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
 from ui.svg_icons import svg_icon
 from PyQt6.QtWidgets import QToolTip
+
+
+def _label_translation(text):
+    ru = getattr(text, "tr_ru", None)
+    return str(_(ru, getattr(text, "tr_en", ""))) if ru is not None else str(text)
 
 
 class ProviderDelegate(QStyledItemDelegate):
@@ -405,7 +410,7 @@ class CustomPresetListItem(QListWidgetItem):
 class LabeledLineEditRow(QWidget):
     def __init__(self, label: str, *, password: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
-        self._base_label = str(label)
+        self._base_label = label
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 2, 0, 2)
@@ -418,6 +423,9 @@ class LabeledLineEditRow(QWidget):
         # Живая смена языка: если метка пришла из _()/TrStr — регистрируем, чтобы
         # переустанавливалась при смене языка (иначе застывает на языке сборки).
         register_if_tr(self.label, label)
+        register(self.label, lambda widget, text=label: widget.setText(
+            _label_translation(text) + ("*" if widget.property("dirty") else "")
+        ))
 
         self.edit = QLineEdit()
         if password:
@@ -443,24 +451,28 @@ class LabeledLineEditRow(QWidget):
         if dirty == self._dirty:
             return
         self._dirty = dirty
+        self.label.setProperty("dirty", dirty)
         if dirty:
-            self.label.setText(f"{self._base_label}*")
+            self.label.setText(_label_translation(self._base_label) + "*")
             self.label.setStyleSheet("color: #f39c12; font-weight: bold;")
         else:
-            self.label.setText(self._base_label)
+            self.label.setText(_label_translation(self._base_label))
             self.label.setStyleSheet("")
 
 
 class LabeledTextEditRow(QWidget):
     def __init__(self, label: str, *, parent: QWidget | None = None):
         super().__init__(parent)
-        self._base_label = str(label)
+        self._base_label = label
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 2, 0, 2)
         lay.setSpacing(4)
 
         self.label = QLabel(self._base_label)
+        register(self.label, lambda widget, text=label: widget.setText(
+            _label_translation(text) + ("*" if widget.property("dirty") else "")
+        ))
         self.label.setWordWrap(True)
         lay.addWidget(self.label)
 
@@ -485,11 +497,12 @@ class LabeledTextEditRow(QWidget):
         if dirty == self._dirty:
             return
         self._dirty = dirty
+        self.label.setProperty("dirty", dirty)
         if dirty:
-            self.label.setText(f"{self._base_label}*")
+            self.label.setText(_label_translation(self._base_label) + "*")
             self.label.setStyleSheet("color: #f39c12; font-weight: bold;")
         else:
-            self.label.setText(self._base_label)
+            self.label.setText(_label_translation(self._base_label))
             self.label.setStyleSheet("")
 
 
@@ -613,7 +626,10 @@ class ReserveKeysEditor(QWidget):
     def attach_section(self, section, base_title: str) -> None:
         """Секция-обёртка, заголовок которой получает '*' при наличии изменений."""
         self._section = section
-        self._section_base_title = str(base_title or "")
+        self._section_base_title = base_title or ""
+        register(section.title_label, lambda widget, text=base_title: widget.setText(
+            _label_translation(text) + ("*" if widget.property("dirty") else "")
+        ))
 
     def _iter_rows(self):
         for i in range(self._rows_layout.count()):
@@ -665,6 +681,7 @@ class ReserveKeysEditor(QWidget):
             if ks:
                 self._add_row(ks)
         if hasattr(self, "count_label"):
+            self.count_label.setProperty("keyCount", len(self.get_keys()))
             self.count_label.setText(str(len(self.get_keys())) + str(_(" ключей", " keys")))
 
     def is_distribute(self) -> bool:
@@ -694,7 +711,8 @@ class ReserveKeysEditor(QWidget):
             return
         self._dirty = dirty
         if self._section is not None and hasattr(self._section, "title_label"):
-            title = f"{self._section_base_title}*" if dirty else self._section_base_title
+            self._section.title_label.setProperty("dirty", dirty)
+            title = _label_translation(self._section_base_title) + ("*" if dirty else "")
             self._section.title_label.setText(title)
 
 
@@ -933,13 +951,16 @@ class FallbackChainEditor(QWidget):
 class LabeledComboRow(QWidget):
     def __init__(self, label: str, *, parent: QWidget | None = None):
         super().__init__(parent)
-        self._base_label = str(label)
+        self._base_label = label
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 2, 0, 2)
         lay.setSpacing(10)
 
         self.label = QLabel(self._base_label)
+        register(self.label, lambda widget, text=label: widget.setText(
+            _label_translation(text) + ("*" if widget.property("dirty") else "")
+        ))
         self.label.setMinimumWidth(140)
         self.label.setMaximumWidth(140)
         self.label.setWordWrap(True)
@@ -986,9 +1007,10 @@ class LabeledComboRow(QWidget):
         if dirty == self._dirty:
             return
         self._dirty = dirty
+        self.label.setProperty("dirty", dirty)
         if dirty:
-            self.label.setText(f"{self._base_label}*")
+            self.label.setText(_label_translation(self._base_label) + "*")
             self.label.setStyleSheet("color: #f39c12; font-weight: bold;")
         else:
-            self.label.setText(self._base_label)
+            self.label.setText(_label_translation(self._base_label))
             self.label.setStyleSheet("")
