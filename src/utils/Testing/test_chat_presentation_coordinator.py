@@ -30,6 +30,43 @@ def test_live_message_present_before_snapshot_request_is_replayed_when_snapshot_
     assert plan.replay == (live,)
 
 
+def test_failed_live_message_keeps_its_error_through_history_replay() -> None:
+    coordinator = ChatPresentationCoordinator()
+    live = _command("in:req-failed", "request that did not reach the model")
+    other_live = _command("in:req-ok", "another request")
+
+    assert coordinator.record_live(live) is True
+    assert coordinator.record_live(other_live) is True
+    assert coordinator.mark_failed(
+        message_id="in:req-failed",
+        character_id="Crazy",
+        error="Provider rejected the request",
+    ) is True
+
+    ticket = coordinator.begin_history_load("Crazy")
+    plan = coordinator.plan_history_projection(
+        request_id=ticket.request_id,
+        response_character_id="Crazy",
+        current_character_id="Crazy",
+        history_messages=[],
+    )
+
+    assert plan.accepted is True
+    replay_by_id = {command.message_id: command for command in plan.replay}
+    assert replay_by_id["in:req-failed"].delivery_error == "Provider rejected the request"
+    assert replay_by_id["in:req-ok"].delivery_error == ""
+
+    assert coordinator.clear_failed(message_id="in:req-failed", character_id="Crazy") is True
+    retry_ticket = coordinator.begin_history_load("Crazy")
+    retry_plan = coordinator.plan_history_projection(
+        request_id=retry_ticket.request_id,
+        response_character_id="Crazy",
+        current_character_id="Crazy",
+        history_messages=[],
+    )
+    assert all(command.delivery_error == "" for command in retry_plan.replay)
+
+
 def test_commit_after_snapshot_start_is_replayed_when_snapshot_was_taken_too_early() -> None:
     coordinator = ChatPresentationCoordinator()
     live = _command("in:req-2", "player live line")

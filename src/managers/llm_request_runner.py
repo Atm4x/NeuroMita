@@ -88,6 +88,7 @@ class LLMRequestRunner:
         suppress_failure_events: bool = False,
         trace_id: str | None = None,
         cancellation: CancellationToken | None = None,
+        failure_context: dict[str, Any] | None = None,
     ) -> Optional[LLMResponse]:
         if messages is None:
             messages = []
@@ -154,11 +155,13 @@ class LLMRequestRunner:
         logger.error("All generation attempts failed across preset chain: %s", terminal_summary)
         if self.last_error and not suppress_failure_events:
             provider_error = self.last_error.to_payload()
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+            failure_payload = {
                 "error": self.last_error.to_user_message(),
                 "details": self.last_error.to_console_summary(),
                 "provider_error": provider_error,
-            })
+            }
+            failure_payload.update(dict(failure_context or {}))
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, failure_payload)
         if stream_channel_holder[0] is not None and self.last_error is not None:
             stream_channel_holder[0].fail(self.last_error)
         if last_response is not None:

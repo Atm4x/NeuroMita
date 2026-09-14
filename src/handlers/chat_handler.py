@@ -367,6 +367,7 @@ class ChatModel:
                 suppress_failure_events=suppress_failure_events,
                 trace_id=trace_id,
                 cancellation=cancellation,
+                failure_context=request_options.get("failure_context"),
             )
         except OperationCancelledError:
             raise

@@ -44,6 +44,7 @@ from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
 from domain.world_character_relations import get_world_context_text
+from domain.conversation_message_ids import ConversationMessageIds
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
     structured_response_to_result_dict,
@@ -1682,6 +1683,10 @@ class ModelController(GenerationService, ModelStateService):
                     request_options_override={
                         "trace_id": trace_id,
                         "cancellation": request.cancellation,
+                        "failure_context": {
+                            "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                            "character_id": char_id,
+                        },
                     },
                     structured_model=structured_model_cls,
                     context_character_id=char_id,

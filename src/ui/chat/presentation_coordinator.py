@@ -18,6 +18,7 @@ class ChatRenderCommand:
     sample_id: str = ""
     context_snapshot_id: str = ""
     insert_at_start: bool = False
+    delivery_error: str = ""
 
     def clone(self) -> "ChatRenderCommand":
         return ChatRenderCommand(
@@ -30,6 +31,7 @@ class ChatRenderCommand:
             sample_id=self.sample_id,
             context_snapshot_id=self.context_snapshot_id,
             insert_at_start=self.insert_at_start,
+            delivery_error=self.delivery_error,
         )
 
 
@@ -258,6 +260,49 @@ class ChatPresentationCoordinator:
 
         while len(self._persisted_acks) > self._max_stable_messages * 2:
             self._persisted_acks.popitem(last=False)
+
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        character_id: str,
+        error: str,
+    ) -> bool:
+        """Attach a terminal delivery error to one live user message.
+
+        The state lives beside the replay commands, rather than only on the
+        transient Qt widget, so a history refresh cannot erase the marker.
+        """
+        key = (self._character_key(character_id), self._message_key(message_id))
+        if not key[1]:
+            return False
+        state = self._stable.get(key)
+        if state is None:
+            return False
+        reason = str(error or "").strip()
+        changed = False
+        commands: list[tuple[int, ChatRenderCommand]] = []
+        for revision, command in state.commands:
+            if command.role == "user" and command.delivery_error != reason:
+                command = ChatRenderCommand(
+                    role=command.role,
+                    content=command.content,
+                    character_id=command.character_id,
+                    message_id=command.message_id,
+                    message_time=command.message_time,
+                    structured_data=command.structured_data,
+                    sample_id=command.sample_id,
+                    context_snapshot_id=command.context_snapshot_id,
+                    insert_at_start=command.insert_at_start,
+                    delivery_error=reason,
+                )
+                changed = True
+            commands.append((revision, command))
+        state.commands = commands
+        return changed
+
+    def clear_failed(self, *, message_id: str, character_id: str) -> bool:
+        return self.mark_failed(message_id=message_id, character_id=character_id, error="")
 
     def begin_history_load(self, character_id: str) -> HistoryLoadTicket:
         ticket = HistoryLoadTicket(
