@@ -1296,7 +1296,9 @@ class ModelController(GenerationService, ModelStateService):
             if char is None:
                 logger.error(f"generate_chat: неизвестный character_id='{request.character_id}'.")
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": _("Неизвестный персонаж.", "Unknown character.")
+                    "error": _("Неизвестный персонаж.", "Unknown character."),
+                    "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                    "character_id": str(request.character_id or ""),
                 })
                 return None
         else:
@@ -1305,7 +1307,9 @@ class ModelController(GenerationService, ModelStateService):
         if not char:
             logger.error("Генерация невозможна: персонаж не выбран.")
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Персонаж не выбран.", "Character not selected.")
+                "error": _("Персонаж не выбран.", "Character not selected."),
+                "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                "character_id": str(request.character_id or ""),
             })
             return None
 
@@ -1619,7 +1623,9 @@ class ModelController(GenerationService, ModelStateService):
         except Exception as e:
             logger.error(f"Ошибка при сборке промпта: {format_exception(e)}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
+                "error": _("Не удалось сформировать промпт.", "Failed to build prompt."),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
             })
             return None
 
@@ -1710,6 +1716,8 @@ class ModelController(GenerationService, ModelStateService):
                 if provider_error is None:
                     self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
                         "error": error_message,
+                        "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                        "character_id": char_id,
                     })
                 return ChatGenerationResult(
                     text="",
@@ -1883,7 +1891,11 @@ class ModelController(GenerationService, ModelStateService):
             raise
         except Exception as e:
             logger.error(f"Error during LLM generation/processing: {format_exception(e)}", exc_info=True)
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": format_exception(e)})
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                "error": format_exception(e),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
+            })
             return None
 
     # Default RAG output templates

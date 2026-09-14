@@ -719,7 +719,11 @@ class ChatController(GenerationActivityService):
                 trace_status = "error"
                 trace_error_stage = "generation.empty_response"
                 if eff_policy.echo_to_ui and not getattr(result, "error", ""):
-                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": "Пустой ответ модели"})
+                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                        "error": "Пустой ответ модели",
+                        "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                        "character_id": str(character_id or ""),
+                    })
                 return None
 
             effective_character_name = self._resolve_character_name(effective_character_id)
@@ -866,7 +870,11 @@ class ChatController(GenerationActivityService):
                     "error": format_exception(e)
                 })
             if eff_policy and eff_policy.echo_to_ui:
-                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": f"Ошибка: {format_exception(e)[:50]}..."})
+                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                    "error": f"Ошибка: {format_exception(e)[:50]}...",
+                    "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                    "character_id": str(character_id or ""),
+                })
             return None
         finally:
             if stream_coalescer is not None:
