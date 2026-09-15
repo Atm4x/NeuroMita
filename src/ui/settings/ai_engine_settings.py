@@ -169,6 +169,13 @@ def setup_ai_engine_settings_controls(self, parent_layout, *, view_model) -> Non
     info_layout.addLayout(self.ai_hardware_chips)
     info_layout.addStretch(1)
     hardware_content.addWidget(self.ai_hardware_info)
+
+    self.ai_hardware_devices = QWidget()
+    self.ai_hardware_devices.setObjectName("AIEngineHardwareDevices")
+    self.ai_hardware_devices_layout = QVBoxLayout(self.ai_hardware_devices)
+    self.ai_hardware_devices_layout.setContentsMargins(0, 0, 0, 0)
+    self.ai_hardware_devices_layout.setSpacing(4)
+    hardware_content.addWidget(self.ai_hardware_devices)
     hardware_layout.addLayout(hardware_content, 1)
 
     hardware_refresh = QPushButton()
@@ -453,6 +460,27 @@ def setup_ai_engine_settings_controls(self, parent_layout, *, view_model) -> Non
         vram = _format_bytes(primary.get("dedicated_vram_bytes"))
         cuda = dict(hardware.get("cuda") or {})
         cuda_devices = list(cuda.get("devices") or [])
+        accelerators = list(hardware.get("accelerators") or [])
+        if not accelerators:
+            accelerators = [
+                {
+                    "name": item.get("name"),
+                    "vendor": item.get("vendor"),
+                    "dedicated_vram_bytes": item.get("dedicated_vram_bytes"),
+                    "cuda_device": (
+                        f"cuda:{int(item['cuda'].get('ordinal', 0))}"
+                        if isinstance(item.get("cuda"), dict)
+                        else None
+                    ),
+                    "compute_capability": (
+                        item["cuda"].get("compute_capability")
+                        if isinstance(item.get("cuda"), dict)
+                        else None
+                    ),
+                }
+                for item in (hardware.get("adapters") or [])
+                if isinstance(item, dict)
+            ]
         driver = str(cuda.get("driver_version") or "—")
         capabilities = ", ".join(
             str(item.get("compute_capability") or "").upper()
@@ -498,6 +526,39 @@ def setup_ai_engine_settings_controls(self, parent_layout, *, view_model) -> Non
             self.ai_hardware_chips.addWidget(_chip(f"VRAM {vram}"))
         if capabilities:
             self.ai_hardware_chips.addWidget(_chip(capabilities))
+
+        _clear_layout(self.ai_hardware_devices_layout)
+        for accelerator in accelerators:
+            if not isinstance(accelerator, dict):
+                continue
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+
+            device_name = QLabel(str(accelerator.get("name") or "GPU"))
+            device_name.setObjectName("AIEngineCardSubtitle")
+            device_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            row_layout.addWidget(device_name, 0, Qt.AlignmentFlag.AlignVCenter)
+
+            cuda_device = str(accelerator.get("cuda_device") or "").strip()
+            accelerator_vendor = str(accelerator.get("vendor") or "UNKNOWN").upper()
+            if cuda_device:
+                row_layout.addWidget(_chip(cuda_device, "cuda"), 0)
+            elif accelerator_vendor in {"NVIDIA", "AMD", "INTEL"}:
+                row_layout.addWidget(_chip(accelerator_vendor, "gpu"), 0)
+
+            capability = str(accelerator.get("compute_capability") or "").upper()
+            if capability:
+                row_layout.addWidget(_chip(capability), 0)
+
+            device_vram = int(accelerator.get("dedicated_vram_bytes") or 0)
+            if device_vram:
+                row_layout.addWidget(_chip(_format_bytes(device_vram)), 0)
+            row_layout.addStretch(1)
+            self.ai_hardware_devices_layout.addWidget(row)
+
+        self.ai_hardware_devices.setVisible(bool(accelerators))
 
     def render_topology(state) -> None:
         topology = dict(state.topology or {})

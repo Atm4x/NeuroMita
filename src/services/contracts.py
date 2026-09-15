@@ -434,6 +434,9 @@ class RuntimeCapabilitiesService(ABC):
 class PreparedHistory:
     messages: List[Dict[str, Any]]
     summary: str = ""
+    # Small deterministic bridge of requested actions whose source turns were
+    # already summarized. Recent actions stay with their assistant message.
+    action_context: str = ""
     # Время последнего сообщения истории. Сами messages уезжают провайдеру
     # строго как role/content, поэтому таймстемп едет отдельным полем —
     # иначе «сколько прошло с прошлого раза» посчитать не из чего.
@@ -935,6 +938,11 @@ class LocalVoiceService(ABC):
 
     @abstractmethod
     def initialize_model(self, model_id: str) -> Any: ...
+
+    @abstractmethod
+    def reinitialize_model(self, model_id: str) -> Any:
+        """Restart the owning TTS runtime if needed, then initialize with current settings."""
+        ...
 
     @abstractmethod
     def triton_status(self, *, refresh: bool = False) -> Dict[str, Any]: ...

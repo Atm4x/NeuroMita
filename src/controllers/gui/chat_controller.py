@@ -14,6 +14,7 @@ class ChatController(BaseController):
         self.event_bus.subscribe(Events.GUI.FINISH_STREAM_UI, self._on_finish_stream_ui, weak=False)
         self.event_bus.subscribe(Events.GUI.UPDATE_TOKEN_COUNT, self._on_update_token_count, weak=False)
         self.event_bus.subscribe(Events.GUI.UPDATE_TOKEN_COUNT_UI, self._on_update_token_count_ui, weak=False)
+        self.event_bus.subscribe(Events.GUI.CLEAR_CHAT_MESSAGE_ERROR, self._on_clear_chat_message_error, weak=False)
         # Пересчитываем счётчик под чатом, когда персонаж стал активным: на
         # старте первый пересчёт (из _on_chat_ui_ready) случается ДО готовности
         # персонажа/модели, поэтому окно контекста залипало на дефолтных 32к, а
@@ -151,6 +152,11 @@ class ChatController(BaseController):
 
     def _on_finish_stream_ui(self, event: Event):
         self.finish_stream(event.data or {})
+
+    def _on_clear_chat_message_error(self, event: Event):
+        if self.view and hasattr(self.view, "clear_chat_message_error_signal"):
+            payload = event.data if isinstance(event.data, dict) else {}
+            self.view.clear_chat_message_error_signal.emit(dict(payload))
 
     def _on_update_token_count(self, event: Event):
         self.update_token_count()

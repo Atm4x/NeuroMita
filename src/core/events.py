@@ -557,6 +557,7 @@ class Events:
         UPDATE_CHAT_FONT_SIZE = "update_chat_font_size"
         RELOAD_CHAT_HISTORY = "reload_chat_history"
         REMOVE_LAST_CHAT_WIDGETS = "remove_last_chat_widgets"
+        CLEAR_CHAT_MESSAGE_ERROR = "clear_chat_message_error"
         UPDATE_TOKEN_COUNT_UI = "update_token_count_ui"
         GET_GUI_WINDOW_ID = "get_gui_window_id"
         CHECK_TRITON_DEPENDENCIES = "check_triton_dependencies"
@@ -574,6 +575,7 @@ class Events:
         VOICEOVER_UI_READY = "voiceover_ui_ready"
         VOICEOVER_REFRESH = "voiceover_refresh"
         VOICEOVER_MODEL_SELECTED = "voiceover_model_selected"
+        VOICEOVER_MODEL_REINITIALIZE = "voiceover_model_reinitialize"
 
     class Model:
         """События для управления LLM, персонажами и историей"""

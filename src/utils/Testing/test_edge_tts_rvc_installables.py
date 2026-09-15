@@ -15,6 +15,7 @@ from handlers.voice_models.edge_tts_rvc_model import (
     SILERO_RVC_ONNX_ID,
     EdgeTTSRVCCudaModel,
     EdgeTTSRVCOnnxModel,
+    _coerce_edge_tts_rate,
 )
 from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec
 from installables.registry_builder import build_installable_registry
@@ -126,6 +127,27 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
             ["pm", "dio", "crepe", "rmvpe", "harvest", "fcpe"],
         )
         self.assertEqual(f0_setting["options"]["default"], "rmvpe")
+
+    def test_edge_tts_rate_uses_number_stepper_with_zero_default(self):
+        for model_class, model_id in (
+            (EdgeTTSRVCCudaModel, EDGE_TTS_RVC_CUDA_ID),
+            (EdgeTTSRVCOnnxModel, EDGE_TTS_RVC_ONNX_ID),
+        ):
+            config = model_class._find_model_config(model_id)
+            rate_setting = next(item for item in config["settings"] if item["key"] == "tts_rate")
+
+            self.assertEqual(rate_setting["type"], "number_stepper")
+            self.assertEqual(
+                rate_setting["options"],
+                {"default": 0, "min": -50, "max": 100, "step": 1, "suffix": " %"},
+            )
+
+    def test_edge_tts_rate_coercion_migrates_old_decimal_without_crashing(self):
+        self.assertEqual(_coerce_edge_tts_rate("0.8"), 0)
+        self.assertEqual(_coerce_edge_tts_rate("25"), 25)
+        self.assertEqual(_coerce_edge_tts_rate("invalid"), 0)
+        self.assertEqual(_coerce_edge_tts_rate(-500), -50)
+        self.assertEqual(_coerce_edge_tts_rate(500), 100)
 
     def test_edge_runtime_uses_schema_pitch_default_when_no_values_are_saved(self):
         class _Parent:

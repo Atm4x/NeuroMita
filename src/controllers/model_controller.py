@@ -44,6 +44,7 @@ from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
 from domain.world_character_relations import get_world_context_text
+from domain.conversation_message_ids import ConversationMessageIds
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
     structured_response_to_result_dict,
@@ -917,6 +918,8 @@ class ModelController(GenerationService, ModelStateService):
                 capabilities = dict(getattr(self.preset_resolver.resolve(preset_id), "capabilities", {}) or {})
             except Exception:
                 capabilities = {}
+            capabilities["working_state"] = bool(self.settings.get("ENABLE_WORKING_STATE", False))
+            capabilities["action_memory"] = bool(self.settings.get("ENABLE_ACTION_MEMORY", False))
             cfg = getattr(self.model, "cfg", None)
             memory_limit = int(getattr(cfg, "memory_limit", 40) or 40)
             prompt_request = PromptBuildRequest(
@@ -1253,7 +1256,10 @@ class ModelController(GenerationService, ModelStateService):
                 return UtilityGenerationResult(
                     ok=True,
                     text=result.text,
-                    provider=getattr(result, "provider_name", None),
+                    provider=(
+                        getattr(result, "provider_display_name", None)
+                        or getattr(result, "provider_name", None)
+                    ),
                 )
 
             logger.warning(f"[ModelController] {request.kind}: model.generate() returned empty/None")
@@ -1295,7 +1301,9 @@ class ModelController(GenerationService, ModelStateService):
             if char is None:
                 logger.error(f"generate_chat: неизвестный character_id='{request.character_id}'.")
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": _("Неизвестный персонаж.", "Unknown character.")
+                    "error": _("Неизвестный персонаж.", "Unknown character."),
+                    "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                    "character_id": str(request.character_id or ""),
                 })
                 return None
         else:
@@ -1304,7 +1312,9 @@ class ModelController(GenerationService, ModelStateService):
         if not char:
             logger.error("Генерация невозможна: персонаж не выбран.")
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Персонаж не выбран.", "Character not selected.")
+                "error": _("Персонаж не выбран.", "Character not selected."),
+                "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                "character_id": str(request.character_id or ""),
             })
             return None
 
@@ -1477,6 +1487,20 @@ class ModelController(GenerationService, ModelStateService):
         effective_capabilities["schema_reasoning"] = self._resolve_preset_bool(
             effective_preset, "schema_reasoning", "SCHEMA_REASONING", default=False
         )
+        # Working state is an application-level opt-in, independent of native
+        # provider reasoning. When off, remove its field from strict schemas so
+        # the model's old response contract remains byte-for-byte compatible.
+        effective_capabilities["working_state"] = bool(
+            self.settings.get("ENABLE_WORKING_STATE", False)
+            and effective_capabilities.get("structured_output", False)
+        )
+        effective_capabilities["action_memory"] = bool(
+            self.settings.get("ENABLE_ACTION_MEMORY", False)
+        )
+        if not effective_capabilities["working_state"]:
+            excluded_fields = set(effective_capabilities.get("structured_exclude_fields") or ())
+            excluded_fields.add("working_state")
+            effective_capabilities["structured_exclude_fields"] = tuple(sorted(excluded_fields))
 
         # The selected DSL template is the only owner of intent support. The
         # capability is finalized after PromptController processes the template.
@@ -1622,7 +1646,9 @@ class ModelController(GenerationService, ModelStateService):
         except Exception as e:
             logger.error(f"Ошибка при сборке промпта: {format_exception(e)}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
+                "error": _("Не удалось сформировать промпт.", "Failed to build prompt."),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
             })
             return None
 
@@ -1686,6 +1712,10 @@ class ModelController(GenerationService, ModelStateService):
                     request_options_override={
                         "trace_id": trace_id,
                         "cancellation": request.cancellation,
+                        "failure_context": {
+                            "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                            "character_id": char_id,
+                        },
                     },
                     structured_model=structured_model_cls,
                     context_character_id=char_id,
@@ -1709,6 +1739,8 @@ class ModelController(GenerationService, ModelStateService):
                 if provider_error is None:
                     self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
                         "error": error_message,
+                        "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                        "character_id": char_id,
                     })
                 return ChatGenerationResult(
                     text="",
@@ -1718,9 +1750,12 @@ class ModelController(GenerationService, ModelStateService):
                 )
 
             raw_text = llm_response.text
+            response_provider_display_name = (
+                llm_response.provider_display_name or llm_response.provider_name or ""
+            )
             trace = get_trace(trace_id)
             if trace is not None:
-                trace.set_attribute("provider", llm_response.provider_name or "")
+                trace.set_attribute("provider", response_provider_display_name)
                 trace.set_attribute("model", llm_response.model or "")
                 trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
@@ -1743,7 +1778,7 @@ class ModelController(GenerationService, ModelStateService):
                     think_text=think_text,
                     usage=llm_response.usage,
                     response_model=llm_response.model or "",
-                    response_provider=llm_response.provider_name or "",
+                    response_provider=response_provider_display_name,
                     pricing_info=active_pricing,
                     char=char,
                     char_id=char_id,
@@ -1812,7 +1847,7 @@ class ModelController(GenerationService, ModelStateService):
             usage_snapshot = self._build_usage_snapshot(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -1847,7 +1882,7 @@ class ModelController(GenerationService, ModelStateService):
             self._store_last_usage(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -1882,7 +1917,11 @@ class ModelController(GenerationService, ModelStateService):
             raise
         except Exception as e:
             logger.error(f"Error during LLM generation/processing: {format_exception(e)}", exc_info=True)
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": format_exception(e)})
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                "error": format_exception(e),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
+            })
             return None
 
     # Default RAG output templates
@@ -2162,6 +2201,25 @@ class ModelController(GenerationService, ModelStateService):
                 dialogue=dialogue,
             )
 
+        # A tool-call response is only an intermediate turn. Commit its working
+        # state only when this is the final answer, so failed tools cannot leave
+        # a stale plan for the next player message.
+        if capabilities.get("working_state", False):
+            try:
+                if structured.working_state is None:
+                    char.working_state.clear()
+                else:
+                    char.working_state.update(
+                        structured.working_state,
+                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[ModelController][%s] Failed to update working state: %s",
+                    char_id,
+                    format_exception(exc),
+                )
+
         # Extract reasoning from structured response (if model used the reasoning field)
         if structured.reasoning:
             schema_reasoning = structured.reasoning.strip()
@@ -2176,6 +2234,9 @@ class ModelController(GenerationService, ModelStateService):
             result_dict = structured_response_to_result_dict(structured)
         # Remove reasoning from debug display — it's shown as a think block
         result_dict.pop("reasoning", None)
+        # Working state is an internal session handoff, never visible in UI,
+        # returned task data, or persisted assistant structured_data.
+        result_dict.pop("working_state", None)
         # Attach raw LLM JSON for the debug panel (not saved to history)
         result_dict["_raw_json"] = visible_raw
         final_text = result_dict["response"]
@@ -2336,6 +2397,9 @@ class ModelController(GenerationService, ModelStateService):
         # Build first response result dict
         result_dict = structured_response_to_result_dict(structured)
         result_dict.pop("reasoning", None)
+        # Tool calls are intermediate responses too; working state must stay
+        # private and be committed only by the final response in the chain.
+        result_dict.pop("working_state", None)
         result_dict["_raw_json"] = visible_raw
         first_text = result_dict.get("response", "")
 
@@ -2501,7 +2565,11 @@ class ModelController(GenerationService, ModelStateService):
             think_text=combined_think or "",
             usage=merged_usage,
             response_model=llm_response_2.model or response_model,
-            response_provider=llm_response_2.provider_name or response_provider,
+            response_provider=(
+                llm_response_2.provider_display_name
+                or llm_response_2.provider_name
+                or response_provider
+            ),
             pricing_info=pricing_info,
             char=char,
             char_id=char_id,
