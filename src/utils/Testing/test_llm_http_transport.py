@@ -172,6 +172,7 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
     req.extra["_request_cancellation"] = cancellation
     accumulator = StreamAccumulator(req, provider="common", model="model")
 
+    assert events == []
     accumulator.add_reasoning("think")
     accumulator.add_text("answer")
     response = accumulator.complete(finish_reason="stop")
@@ -821,8 +822,6 @@ def test_stream_fallback_updates_display_provider_name_for_fallback_events():
     class ProviderManager:
         def generate(self, req):
             if req.model == "openrouter-model":
-                channel = req.extra["_stream_event_channel"]
-                channel.start(provider=req.provider_display_name, model=req.model)
                 raise LLMProviderError(
                     provider=req.provider_name,
                     friendly_message="OpenRouter disconnected",
@@ -865,7 +864,7 @@ def test_stream_fallback_updates_display_provider_name_for_fallback_events():
 
     assert response is not None and response.text == "fallback answer"
     assert [(event.type, event.provider) for event in events] == [
-        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.STARTED, "Google AI Studio"),
         (LLMStreamEventType.TEXT_DELTA, "Google AI Studio"),
         (LLMStreamEventType.COMPLETED, "Google AI Studio"),
     ]
@@ -877,9 +876,7 @@ def test_stream_fallback_failure_uses_last_preset_display_provider_name():
 
     class ProviderManager:
         def generate(self, req):
-            channel = req.extra["_stream_event_channel"]
             if req.model == "openrouter-model":
-                channel.start(provider=req.provider_display_name, model=req.model)
                 raise LLMProviderError(
                     provider=req.provider_name,
                     friendly_message="OpenRouter disconnected",
@@ -920,7 +917,7 @@ def test_stream_fallback_failure_uses_last_preset_display_provider_name():
 
     assert response is not None and response.text is None
     assert [(event.type, event.provider) for event in events] == [
-        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.STARTED, "Google AI Studio"),
         (LLMStreamEventType.FAILED, "Google AI Studio"),
     ]
     runner.close()

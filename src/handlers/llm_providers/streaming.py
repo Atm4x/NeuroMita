@@ -117,6 +117,9 @@ class StreamEventChannel:
         with self._lock:
             if self._terminal:
                 raise RuntimeError("Cannot emit after terminal stream event")
+            if not self._started:
+                self._started = True
+                self._emit_locked(LLMStreamEventType.STARTED, provider=provider, model=model)
             return self._emit_locked(event_type, provider=provider, model=model, **kwargs)
 
     def complete(self, response: LLMResponse) -> None:
@@ -209,7 +212,8 @@ class StreamAccumulator:
             req.extra["_stream_event_channel"] = channel
         self.channel = channel
         self.channel.set_provider_display_name(self.provider_display_name)
-        self.channel.start(provider=self.provider_display_name, model=self.model)
+        # A retryable pre-body failure may move to another preset. Do not expose
+        # this preset as the logical stream provider until it emits real output.
 
     def emit(self, event_type: LLMStreamEventType, **kwargs: Any) -> LLMStreamEvent:
         event = self.channel.emit(
