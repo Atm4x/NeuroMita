@@ -273,6 +273,9 @@ class FishSpeechInstallSpec:
                     "--reference-audio",
                     ref_wav,
                 ]
+                compile_device = str(ctx.get("device") or "cuda:0").strip()
+                if compile_device:
+                    init_cmd.extend(["--device", compile_device])
                 creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 child_env = cls._runtime_subprocess_env(python_paths)
                 proc = subprocess.Popen(
@@ -505,8 +508,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
                  "options": {"values": ["False", "True"], "default": "False"},
@@ -546,8 +548,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},
@@ -588,8 +589,7 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "fsprvc_fsp_device", "label": _("[FSP] Устройство", "[FSP] Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство для части Fish Speech+.", "Device for Fish Speech+ part.")},
                 {"key": "fsprvc_fsp_half", "label": _("[FSP] Half-precision", "[FSP] Half-precision"), "type": "combobox",
                  "options": {"values": ["True", "False"], "default": "False"},
@@ -881,6 +881,7 @@ class FishSpeechModel(IVoiceModel):
                     filter_radius=int(settings.get("fsprvc_filter_radius", 3)),
                     rms_mix_rate=float(settings.get("fsprvc_rvc_rms_mix_rate", 0.5)),
                     is_half=settings.get("fsprvc_is_half", "True").lower() == "true",
+                    device=str(settings.get("fsprvc_rvc_device", "cuda:0") or "cuda:0"),
                     f0method=settings.get("fsprvc_f0method", None),
                     use_index_file=settings.get("fsprvc_use_index_file", True),
                     volume=vol,
@@ -908,9 +909,8 @@ class FishSpeechModel(IVoiceModel):
 
             return final_output_path
 
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"Ошибка при создании озвучки с Fish Speech ({self.model_id}): {format_exception(error)}")
+        except Exception:
+            logger.exception("Ошибка при создании озвучки с Fish Speech (%s)", self.model_id)
             return None
 
     def _mode(self) -> str:

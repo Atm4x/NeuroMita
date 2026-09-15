@@ -919,6 +919,7 @@ class F5TTSModel(IVoiceModel):
                     filter_radius=int(settings.get("f5rvc_filter_radius", 3)),
                     rms_mix_rate=float(settings.get("f5rvc_rvc_rms_mix_rate", 0.5)),
                     is_half=str(settings.get("f5rvc_is_half", "True")).lower() == "true",
+                    device=str(settings.get("f5rvc_rvc_device", "cuda:0") or "cuda:0"),
                     f0method=settings.get("f5rvc_f0method", None),
                     use_index_file=bool(settings.get("f5rvc_use_index_file", True)),
                     volume=vol

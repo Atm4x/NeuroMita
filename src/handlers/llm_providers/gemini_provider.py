@@ -42,6 +42,8 @@ class GeminiProvider(BaseProvider):
         caps = capabilities or {}
         if not caps.get("structured_output", False):
             return False
+        if not caps.get("native_structured_output", True):
+            return False
         model_profile = caps.get("model_profile")
         return not (
             isinstance(model_profile, dict)
@@ -297,6 +299,14 @@ class GeminiProvider(BaseProvider):
 
         return filter_jsonable_params(cfg)
 
+    def _generation_config(self, req: LLMRequest) -> dict:
+        if req.native_parameters is not None:
+            from copy import deepcopy
+            return deepcopy(req.native_parameters.get("generationConfig", {}))
+        return self._map_unified_params_to_generation_config(
+            req.extra, req.model, (req.capabilities or {}).get("model_profile"),
+        )
+
     def generate_request_gemini(self, req: LLMRequest) -> LLMResponse:
         if req.depth > 3:
             logger.error("Превышена глубина рекурсии для Gemini tool calls")
@@ -331,11 +341,7 @@ class GeminiProvider(BaseProvider):
                 if "text" in part:
                     part["text"] = f"[SYSTEM INFO] {part['text']}"
 
-        gen_cfg = self._map_unified_params_to_generation_config(
-            req.extra,
-            req.model,
-            (req.capabilities or {}).get("model_profile"),
-        )
+        gen_cfg = self._generation_config(req)
 
         caps = req.capabilities or {}
         if self._should_send_native_structured_output(caps):

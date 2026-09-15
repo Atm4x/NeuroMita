@@ -8,7 +8,6 @@ import multiprocessing
 import queue # Для command_queue
 import time # Для цикла обработки
 import threading # Для блока __main__
-import traceback # Added for error reporting
 import sys
 
 # Импортируем контроллер из соседнего файла
@@ -17,6 +16,7 @@ from .board_logic import PureBoardLogic # Не используется напр
 from ui.app_icon import application_icon, set_app_user_model_id
 from utils import getTranslationVariant as _
 from utils.win_titlebar import apply_dark_titlebar, install_dark_titlebar_sync
+from main_logger import logger
 
 try:
     from styles.theme import THEME
@@ -843,7 +843,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 pass 
             except Exception as e_loop_command:
                 print(f"CONSOLE (chess_board_process): [LOOP] Ошибка в цикле обработки команд: {format_exception(e_loop_command)}")
-                traceback.print_exc() 
+                logger.exception("[Chess] Ошибка в цикле обработки команд")
 
             try:
                 while not gui_event_queue.empty():
@@ -860,7 +860,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 pass
             except Exception as e_gui_event_loop:
                 print(f"CONSOLE (chess_board_process): [LOOP] Ошибка в цикле обработки GUI событий: {format_exception(e_gui_event_loop)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Ошибка в цикле обработки GUI событий")
 
         timer.timeout.connect(process_queues)
         timer.start(50)
@@ -871,7 +871,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
 
     except Exception as e_main_run_try:
         print(f"CONSOLE (chess_board_process): КРИТИЧЕСКАЯ ОШИБКА В ОСНОВНОМ TRY-EXCEPT ПРОЦЕССА GUI: {format_exception(e_main_run_try)}")
-        traceback.print_exc() 
+        logger.exception("[Chess] Критическая ошибка в GUI-процессе")
         if state_q: 
             try:
                 state_q.put({"error": f"Critical unhandled error in GUI process: {format_exception(e_main_run_try)}", "critical_process_failure": True})
@@ -893,14 +893,14 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                  print(f"CONSOLE (chess_board_process): [FINALLY] app.close() вызван.")
             except Exception as e_destroy_generic_app:
                 print(f"CONSOLE (chess_board_process): [FINALLY] Непредвиденная ошибка при app.close(): {format_exception(e_destroy_generic_app)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Непредвиденная ошибка при закрытии QApplication")
         elif app_instance_ref.get("instance"): 
             print(f"CONSOLE (chess_board_process): [FINALLY] app не был присвоен в try, но app_instance_ref['instance'] существует. Попытка close() для instance.")
             try:
                  app_instance_ref["instance"].close()
             except Exception as e_destroy_instance_alt:
                  print(f"CONSOLE (chess_board_process): [FINALLY] Ошибка при app_instance_ref['instance'].close(): {format_exception(e_destroy_instance_alt)}")
-                 traceback.print_exc()
+                 logger.exception("[Chess] Ошибка при закрытии резервного QApplication")
 
         print(f"CONSOLE (chess_board_process): >>> ПРОЦЕСС GUI ЗАВЕРШЕН.")
 
@@ -923,7 +923,7 @@ if __name__ == '__main__':
             except queue.Empty: pass
             except Exception as e_monitor: 
                 print(f"[MAIN TEST] Ошибка чтения из state_queue: {format_exception(e_monitor)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Ошибка чтения state_queue")
                 break
             time.sleep(0.1)
         print("[MAIN TEST] Мониторинг завершен.")

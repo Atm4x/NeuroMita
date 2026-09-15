@@ -219,6 +219,7 @@ class ChatController(GenerationActivityService):
         # Последний UI-запрос пользователя — для «отправить снова», когда
         # генерация упала и ход не попал в историю (write_turn не вызывался).
         self._last_ui_request: dict | None = None
+        self._ui_requests_by_message_id: dict[str, dict] = {}
         self._subscribe_to_events()
 
     @property
@@ -718,7 +719,11 @@ class ChatController(GenerationActivityService):
                 trace_status = "error"
                 trace_error_stage = "generation.empty_response"
                 if eff_policy.echo_to_ui and not getattr(result, "error", ""):
-                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": "Пустой ответ модели"})
+                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                        "error": "Пустой ответ модели",
+                        "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                        "character_id": str(character_id or ""),
+                    })
                 return None
 
             effective_character_name = self._resolve_character_name(effective_character_id)
@@ -865,7 +870,11 @@ class ChatController(GenerationActivityService):
                     "error": format_exception(e)
                 })
             if eff_policy and eff_policy.echo_to_ui:
-                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": f"Ошибка: {format_exception(e)[:50]}..."})
+                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                    "error": f"Ошибка: {format_exception(e)[:50]}...",
+                    "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                    "character_id": str(character_id or ""),
+                })
             return None
         finally:
             if stream_coalescer is not None:
@@ -914,8 +923,11 @@ class ChatController(GenerationActivityService):
                     "status": TaskStatus.FAILED_ON_GENERATION,
                     "error": "Generation queue is full",
                 })
+            req_id = str(kwargs.get("req_id") or "").strip()
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": "Слишком много запросов одновременно. Подождите ответа."
+                "error": "Слишком много запросов одновременно. Подождите ответа.",
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": str(kwargs.get("character_id") or ""),
             })
 
     def _ensure_perf_trace(self, data: dict) -> str:
@@ -961,8 +973,17 @@ class ChatController(GenerationActivityService):
         # Запоминаем ручную отправку пользователя (без task_uid — это не игровой/
         # телеграм-ход), чтобы кнопка «отправить снова» на упавшем пузыре могла
         # повторить ровно тот же запрос. Копия — чтобы вызывающий не менял её потом.
-        if not data.get("task_uid") and str(data.get("event_type") or "chat") == "chat":
+        req_id = str(data.get("req_id") or "").strip()
+        if (
+            req_id
+            and not data.get("task_uid")
+            and str(data.get("event_type") or "chat") == "chat"
+        ):
             self._last_ui_request = dict(data)
+            message_id = ConversationMessageIds.incoming(req_id)
+            self._ui_requests_by_message_id[message_id] = dict(data)
+            while len(self._ui_requests_by_message_id) > 256:
+                self._ui_requests_by_message_id.pop(next(iter(self._ui_requests_by_message_id)))
 
         if image_data:
             self.event_bus.emit(Events.Capture.UPDATE_LAST_IMAGE_REQUEST_TIME)
@@ -1138,17 +1159,30 @@ class ChatController(GenerationActivityService):
             self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
 
     def _on_retry_last(self, event: Event):
-        """Повторно отправить последний упавший запрос пользователя.
+        """Повторно отправить выбранный упавший запрос пользователя.
 
         Пузырь пользователя уже нарисован (эхо делает app_shell при исходной
         отправке), а в историю ход не попал — поэтому просто пере-отправляем
         сохранённый запрос. Дубля пузыря не будет: путь SEND_MESSAGE сам эхо не
         рисует, а image-пузыри защищены флагом images_shown из исходной отправки.
         """
-        if not self._last_ui_request:
+        data = event.data if isinstance(event.data, dict) else {}
+        message_id = str(data.get("message_id") or "")
+        if message_id:
+            request = self._ui_requests_by_message_id.get(message_id)
+        else:
+            # Совместимость со старым вызовом без id: тогда доступен только
+            # прежний сценарий «повторить последний запрос».
+            request = self._last_ui_request
+        if not request:
             logger.warning("[ChatController] RETRY_LAST: нет сохранённого запроса для повтора")
             return
-        self.event_bus.emit(Events.Chat.SEND_MESSAGE, dict(self._last_ui_request))
+        if message_id:
+            self.event_bus.emit(Events.GUI.CLEAR_CHAT_MESSAGE_ERROR, {
+                "message_id": message_id,
+                "character_id": str(data.get("character_id") or request.get("character_id") or ""),
+            })
+        self.event_bus.emit(Events.Chat.SEND_MESSAGE, dict(request))
 
     def _on_regenerate(self, event: Event):
         data = event.data or {}
