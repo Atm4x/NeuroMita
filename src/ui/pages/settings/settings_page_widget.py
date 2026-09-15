@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -55,7 +56,10 @@ _SECTION_GUI_FEATURES: dict[str, str] = {
     "microphone": "speech",
 }
 
-_BACKEND_REQUIRED_SECTIONS = frozenset({"api", "characters", "models"})
+# Characters and model-runtime settings consume services materialized by the
+# conversation backend. API presets are application-scoped and deliberately do
+# not wait for optional voice/game initialization.
+_BACKEND_REQUIRED_SECTIONS = frozenset({"characters", "models"})
 
 
 def normalize_mode(value):
@@ -121,10 +125,17 @@ class SettingsSectionPage(QFrame):
         self.body_layout.setSpacing(12)
         body_layout.addWidget(self.body_host)
 
-        content_layout.addWidget(self.body)
-        content_layout.addStretch(1)
-        self.scroll.setWidget(self.content)
-        root.addWidget(self.scroll)
+        if spec.key == "api":
+            self.content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            body_layout.setStretch(0, 1)
+            content_layout.addWidget(self.body, 1)
+            self.scroll.setWidget(self.content)
+            root.addWidget(self.scroll, 1)
+        else:
+            content_layout.addWidget(self.body)
+            content_layout.addStretch(1)
+            self.scroll.setWidget(self.content)
+            root.addWidget(self.scroll)
 
     def is_expanded(self) -> bool:
         return True
@@ -136,7 +147,12 @@ class SettingsSectionPage(QFrame):
         self.body.setVisible(True)
 
     def scroll_to_top(self, *, smooth: bool = False, animate=None):
-        bar = self.scroll.verticalScrollBar()
+        scroll = self.scroll
+        if self.spec.key == "api":
+            tabs = self.findChild(QTabWidget, "ApiEditorTabs")
+            if tabs is not None and isinstance(tabs.currentWidget(), QScrollArea):
+                scroll = tabs.currentWidget()
+        bar = (scroll or self.scroll).verticalScrollBar()
         if smooth and callable(animate):
             animate(bar, bar.value(), 0)
         else:

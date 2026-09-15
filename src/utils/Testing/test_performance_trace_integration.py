@@ -205,6 +205,7 @@ def _preset(name):
         protocol_id="openai_compatible_default",
         dialect_id="openai_chat_completions",
         provider_name="common",
+        provider_display_name="OpenAI-compatible API",
         headers={},
         transforms=[],
         capabilities={},

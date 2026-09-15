@@ -44,6 +44,7 @@ from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
 from domain.world_character_relations import get_world_context_text
+from domain.conversation_message_ids import ConversationMessageIds
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
     structured_response_to_result_dict,
@@ -1255,7 +1256,10 @@ class ModelController(GenerationService, ModelStateService):
                 return UtilityGenerationResult(
                     ok=True,
                     text=result.text,
-                    provider=getattr(result, "provider_name", None),
+                    provider=(
+                        getattr(result, "provider_display_name", None)
+                        or getattr(result, "provider_name", None)
+                    ),
                 )
 
             logger.warning(f"[ModelController] {request.kind}: model.generate() returned empty/None")
@@ -1297,7 +1301,9 @@ class ModelController(GenerationService, ModelStateService):
             if char is None:
                 logger.error(f"generate_chat: неизвестный character_id='{request.character_id}'.")
                 self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": _("Неизвестный персонаж.", "Unknown character.")
+                    "error": _("Неизвестный персонаж.", "Unknown character."),
+                    "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                    "character_id": str(request.character_id or ""),
                 })
                 return None
         else:
@@ -1306,7 +1312,9 @@ class ModelController(GenerationService, ModelStateService):
         if not char:
             logger.error("Генерация невозможна: персонаж не выбран.")
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Персонаж не выбран.", "Character not selected.")
+                "error": _("Персонаж не выбран.", "Character not selected."),
+                "message_id": ConversationMessageIds.incoming(request.req_id) if request.req_id else "",
+                "character_id": str(request.character_id or ""),
             })
             return None
 
@@ -1638,7 +1646,9 @@ class ModelController(GenerationService, ModelStateService):
         except Exception as e:
             logger.error(f"Ошибка при сборке промпта: {format_exception(e)}", exc_info=True)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": _("Не удалось сформировать промпт.", "Failed to build prompt.")
+                "error": _("Не удалось сформировать промпт.", "Failed to build prompt."),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
             })
             return None
 
@@ -1702,6 +1712,10 @@ class ModelController(GenerationService, ModelStateService):
                     request_options_override={
                         "trace_id": trace_id,
                         "cancellation": request.cancellation,
+                        "failure_context": {
+                            "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                            "character_id": char_id,
+                        },
                     },
                     structured_model=structured_model_cls,
                     context_character_id=char_id,
@@ -1725,6 +1739,8 @@ class ModelController(GenerationService, ModelStateService):
                 if provider_error is None:
                     self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
                         "error": error_message,
+                        "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                        "character_id": char_id,
                     })
                 return ChatGenerationResult(
                     text="",
@@ -1734,9 +1750,12 @@ class ModelController(GenerationService, ModelStateService):
                 )
 
             raw_text = llm_response.text
+            response_provider_display_name = (
+                llm_response.provider_display_name or llm_response.provider_name or ""
+            )
             trace = get_trace(trace_id)
             if trace is not None:
-                trace.set_attribute("provider", llm_response.provider_name or "")
+                trace.set_attribute("provider", response_provider_display_name)
                 trace.set_attribute("model", llm_response.model or "")
                 trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
@@ -1759,7 +1778,7 @@ class ModelController(GenerationService, ModelStateService):
                     think_text=think_text,
                     usage=llm_response.usage,
                     response_model=llm_response.model or "",
-                    response_provider=llm_response.provider_name or "",
+                    response_provider=response_provider_display_name,
                     pricing_info=active_pricing,
                     char=char,
                     char_id=char_id,
@@ -1828,7 +1847,7 @@ class ModelController(GenerationService, ModelStateService):
             usage_snapshot = self._build_usage_snapshot(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -1863,7 +1882,7 @@ class ModelController(GenerationService, ModelStateService):
             self._store_last_usage(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -1898,7 +1917,11 @@ class ModelController(GenerationService, ModelStateService):
             raise
         except Exception as e:
             logger.error(f"Error during LLM generation/processing: {format_exception(e)}", exc_info=True)
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {"error": format_exception(e)})
+            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                "error": format_exception(e),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                "character_id": char_id,
+            })
             return None
 
     # Default RAG output templates
@@ -2542,7 +2565,11 @@ class ModelController(GenerationService, ModelStateService):
             think_text=combined_think or "",
             usage=merged_usage,
             response_model=llm_response_2.model or response_model,
-            response_provider=llm_response_2.provider_name or response_provider,
+            response_provider=(
+                llm_response_2.provider_display_name
+                or llm_response_2.provider_name
+                or response_provider
+            ),
             pricing_info=pricing_info,
             char=char,
             char_id=char_id,

@@ -472,6 +472,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             "pip_installer",
             "callbacks",
             "initialize_mode",
+            "device",
         }
         for key, value in dict(execution_ctx or {}).items():
             if key in trusted_execution_keys:

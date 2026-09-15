@@ -181,7 +181,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
 
     def _supports_structured_output(self, req: LLMRequest) -> bool:
         caps = req.capabilities or {}
-        return bool(caps.get("structured_output", False))
+        return bool(caps.get("structured_output", False) and caps.get("native_structured_output", True))
 
     def _resolve_request_url(self, req: LLMRequest) -> str:
         url = str(req.api_url or "").strip()
@@ -219,8 +219,12 @@ class OpenAIHTTPProviderBase(BaseProvider):
         }
         if req.stream and self.should_request_stream_usage(req):
             payload["stream_options"] = {"include_usage": True}
-        payload.update(self._map_unified_params(req.extra or {}, model_to_use))
-        self._apply_reasoning(payload, req)
+        if req.native_parameters is None:
+            payload.update(self._map_unified_params(req.extra or {}, model_to_use))
+            self._apply_reasoning(payload, req)
+        else:
+            from copy import deepcopy
+            payload.update(deepcopy(req.native_parameters))
 
         if req.protocol_id == "openrouter_default":
             routing = normalize_openrouter_routing((req.extra or {}).get("openrouter_routing"))
@@ -273,7 +277,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
             logger.error(f"[{self.name}] Too deep tool recursion.")
             return LLMResponse(
                 text=None,
-                provider_name=self.name,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
                 error_message="Too deep tool recursion.",
             )
 
@@ -407,7 +412,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
                 text=None,
                 usage=self._extract_usage(data, request_url),
                 model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-                provider_name=self.name,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
                 finish_reason=finish_reason,
                 error_message=error_message,
                 raw=data if isinstance(data, dict) else {},
@@ -417,7 +423,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
             text=content.strip() if content else None,
             usage=self._extract_usage(data, request_url),
             model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-            provider_name=self.name,
+            provider_name=req.provider_name or self.name,
+            provider_display_name=req.provider_display_name or req.provider_name or self.name,
             finish_reason=finish_reason,
             raw=data if isinstance(data, dict) else {},
             reasoning=reasoning.strip() or None,

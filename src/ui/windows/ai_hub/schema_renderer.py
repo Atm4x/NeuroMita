@@ -6,9 +6,11 @@ Schema entries are plain dicts with keys:
     type          — "entry" | "combobox" | "checkbutton" | "spinbox" | ...
     options       — type-specific config:
         entry:        {"default": str}
-        combobox:     {"values": list[str], "default": str}
+        combobox:     {"values": list[str], "default": str,
+                       "display_labels": {raw_value: display_text}}
         checkbutton:  {"default": bool}
-        spinbox:      {"default": int, "min": int, "max": int, "step": int}
+        spinbox / number_stepper:
+                      {"default": int, "min": int, "max": int, "step": int}
     help          — tooltip / inline help (optional)
     locked        — if True, the input is rendered disabled
 
@@ -35,6 +37,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ui.widgets.number_stepper import NumberStepper
 
 
 class SchemaForm(QWidget):
@@ -266,9 +269,13 @@ class SchemaForm(QWidget):
         if type_ == "combobox":
             w = QComboBox()
             values = [str(v) for v in (opts.get("values") or []) if str(v).strip()]
-            w.addItems(values)
+            labels = opts.get("display_labels") if isinstance(opts.get("display_labels"), dict) else {}
+            for value in values:
+                w.addItem(str(labels.get(value, value)), value)
             default_str = str(default or (values[0] if values else ""))
-            idx = w.findText(default_str)
+            idx = w.findData(default_str)
+            if idx < 0:
+                idx = w.findText(default_str)
             if idx >= 0:
                 w.setCurrentIndex(idx)
             self._defaults[key] = default_str
@@ -292,6 +299,36 @@ class SchemaForm(QWidget):
                 w.setEnabled(False)
             return w
 
+        if type_ == "number_stepper":
+            w = NumberStepper()
+            try:
+                minimum = int(opts.get("min", 0))
+            except (TypeError, ValueError, OverflowError):
+                minimum = 0
+            try:
+                maximum = int(opts.get("max", 100))
+            except (TypeError, ValueError, OverflowError):
+                maximum = 100
+            try:
+                step = max(1, int(opts.get("step", 1)))
+            except (TypeError, ValueError, OverflowError):
+                step = 1
+            try:
+                value = int(float(default))
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            w.setRange(minimum, maximum)
+            w.setSingleStep(step)
+            w.setValue(max(minimum, min(maximum, value)))
+            suffix = str(opts.get("suffix") or "")
+            if suffix:
+                w.setSuffix(suffix)
+            self._defaults[key] = str(w.value())
+            w.valueChanged.connect(self._fire_change)
+            if locked:
+                w.setEnabled(False)
+            return w
+
         # default = entry
         w = QLineEdit()
         w.setText(str(default))
@@ -309,8 +346,11 @@ class SchemaForm(QWidget):
         if type_ == "checkbutton" and isinstance(widget, QCheckBox):
             return "True" if widget.isChecked() else "False"
         if type_ == "combobox" and isinstance(widget, QComboBox):
-            return widget.currentText()
+            data = widget.currentData()
+            return str(data) if data is not None else widget.currentText()
         if type_ == "spinbox" and isinstance(widget, QSpinBox):
+            return str(widget.value())
+        if type_ == "number_stepper" and isinstance(widget, NumberStepper):
             return str(widget.value())
         if isinstance(widget, QLineEdit):
             return widget.text()
@@ -327,7 +367,9 @@ class SchemaForm(QWidget):
                 return
             if type_ == "combobox" and isinstance(widget, QComboBox):
                 widget.blockSignals(True)
-                idx = widget.findText(str(value))
+                idx = widget.findData(str(value))
+                if idx < 0:
+                    idx = widget.findText(str(value))
                 if idx >= 0:
                     widget.setCurrentIndex(idx)
                 widget.blockSignals(False)
@@ -338,6 +380,14 @@ class SchemaForm(QWidget):
                     widget.setValue(int(value))
                 except Exception:
                     pass
+                widget.blockSignals(False)
+                return
+            if type_ == "number_stepper" and isinstance(widget, NumberStepper):
+                widget.blockSignals(True)
+                try:
+                    widget.setValue(int(float(value)))
+                except (TypeError, ValueError, OverflowError):
+                    widget.setValue(0)
                 widget.blockSignals(False)
                 return
             if isinstance(widget, QLineEdit):
