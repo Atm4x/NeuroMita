@@ -768,7 +768,6 @@
   "Исп. процентное снижение": "Usa riduzione percentuale",
   "Использовать FTS5 для поиска": "Usa FTS5 per ricerca",
   "Использовать RUAccent": "Usa RUAccent",
-  "Использовать gpt4free последней попыткой ": "Usa gpt4free come ultimo tentativo",
   "Использовать озвучку": "Usa sintesi vocale",
   "Использовать основной и резервные ключи по кругу на каждый запрос (лимиты всех ключей тратятся одновременно), а не только при сбое.": "Usa il principale e riserva chiavi in round-robin attivo ogni richiesta (tutti chiavi' limiti sono spent at once), non solo attivo failure.",
   "Использовать реакции (react)": "Usa reazioni (react)",

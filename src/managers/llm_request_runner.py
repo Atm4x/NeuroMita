@@ -41,7 +41,6 @@ class LLMRequestRunner:
     - задержку между попытками
     - ротацию ключей через ApiPresetResolver
 
-    NOTE: GPT4FREE_LAST_ATTEMPT removed from logic.
     """
 
     def __init__(

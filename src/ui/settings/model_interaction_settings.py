@@ -34,14 +34,16 @@ def setup_model_interaction_controls(
         {'label': _('Reasoning в схеме (schema CoT)', 'Schema reasoning (CoT)'), 'key': 'SCHEMA_REASONING',
          'type': 'checkbutton',
          'default_checkbutton': False,
-         'tooltip': _('Включает поле reasoning в JSON-схему структурированного ответа. '
-                      'Модель "думает вслух" перед заполнением полей — улучшает качество для локальных моделей. '
-                      'Отключите если используете нативный thinking или хотите сэкономить токены.',
-                      'Adds a reasoning field to the structured output JSON schema. '
-                      'The model "thinks aloud" before filling other fields — improves quality for local models. '
-                      'Disable if using native thinking or to save tokens.')},
-        {'label': _('Использовать gpt4free последней попыткой ', 'Use gpt4free as last attempt'),
-         'key': 'GPT4FREE_LAST_ATTEMPT', 'type': 'checkbutton', 'default_checkbutton': False},
+         'description': _('Добавляет явное поле reasoning в схему вывода перед остальными полями. В основном полезно для локальных моделей без нативного reasoning. Отключите при нативном thinking/reasoning, чтобы избежать дублирования и лишних токенов.',
+                          'Adds an explicit reasoning field to the output schema before other fields. Useful mainly for local or non-reasoning models. Disable with native thinking/reasoning to avoid duplicate reasoning and extra token usage.'),
+         'tooltip': _('Когда включать: используйте для моделей без нативного reasoning, если они иногда выбирают неправильные действия, эмоции, вызовы инструментов или другие структурированные поля. '
+                      'Модель сначала пишет короткий шаг рассуждения, а затем заполняет финальные поля ответа, используя этот контекст.\n\n'
+                      'Когда отключать: отключите для моделей, которые уже используют нативный thinking/reasoning, блоки <think> или отдельный канал reasoning. '
+                      'В таких случаях настройка обычно дублирует внутренние рассуждения модели и расходует токены впустую.',
+                      'When to enable: Use this for models without native reasoning when they sometimes choose incorrect actions, emotions, tool calls, or other structured fields. '
+                      'The model first writes a short reasoning step and then fills the final response fields using that context.\n\n'
+                      'When to disable: Disable it for models that already use native thinking/reasoning, <think> blocks, or a separate reasoning channel. '
+                      'In those cases it usually duplicates the model\'s internal reasoning and wastes tokens.')},
 
         {'type': 'end'},
 

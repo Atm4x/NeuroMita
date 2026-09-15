@@ -764,7 +764,6 @@
   "Исп. процентное снижение": "Fol. reducere procentuală",
   "Использовать FTS5 для поиска": "Folosește FTS5 pentru căutare",
   "Использовать RUAccent": "Folosește RUAccent",
-  "Использовать gpt4free последней попыткой ": "Folosește gpt4free ca ultimă încercare",
   "Использовать озвучку": "Folosește sinteza vocală",
   "Использовать основной и резервные ключи по кругу на каждый запрос (лимиты всех ключей тратятся одновременно), а не только при сбое.": "Utilizati acest principal si rezerva chei in round-robin activat fiecare cerere (toate chei' limite sunt spent at once), nu doar activat failure.",
   "Использовать реакции (react)": "Folosește reacții (react)",

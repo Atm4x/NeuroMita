@@ -154,6 +154,7 @@ def create_settings_section(gui, parent_layout, title, cfg_list, *, icon_name=No
                 options=cfg.get('options'), default=cfg.get('default', ''),
                 default_checkbutton=cfg.get('default_checkbutton', False),
                 validation=cfg.get('validation'), tooltip=cfg.get('tooltip'),
+                description=cfg.get('description'),
                 hide=cfg.get('hide', False), command=cfg.get('command'),
                 widget_name=cfg.get('widget_name', cfg.get('key')),
                 depends_on=cfg.get('depends_on'),
@@ -221,6 +222,7 @@ def create_settings_direct(gui, parent_layout, cfg_list, title=None):
                 options=cfg.get('options'), default=cfg.get('default', ''),
                 default_checkbutton=cfg.get('default_checkbutton', False),
                 validation=cfg.get('validation'), tooltip=cfg.get('tooltip'),
+                description=cfg.get('description'),
                 hide=cfg.get('hide', False), command=cfg.get('command'),
                 widget_name=cfg.get('widget_name', cfg.get('key')),
                 depends_on=cfg.get('depends_on'),
@@ -317,6 +319,7 @@ def create_setting_widget(
         default_checkbutton=False,
         validation=None,
         tooltip=None,
+        description=None,
         hide=False,
         command=None,
         widget_name=None,
@@ -489,9 +492,10 @@ def create_setting_widget(
         title_col.setContentsMargins(0, 0, 0, 0)
         title_col.setSpacing(2)
         title_col.addWidget(lbl)
-        if tooltip:
-            desc = QLabel(str(tooltip))
-            register_if_tr(desc, tooltip)
+        inline_description = description if description is not None else tooltip
+        if inline_description:
+            desc = QLabel(str(inline_description))
+            register_if_tr(desc, inline_description)
             desc.setObjectName("SettingRowDescription")
             desc.setTextFormat(Qt.TextFormat.PlainText)
             desc.setWordWrap(True)
