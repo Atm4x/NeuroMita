@@ -76,8 +76,8 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
             logger.error(f"Слишком много рекурсивных tool-вызовов ({self.name}).")
             return LLMResponse(
                 text=None,
-                provider_name=req.provider_display_name or self.name,
-                transport_provider_name=self.name,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
                 error_message="Too deep tool recursion.",
             )
 
@@ -171,8 +171,8 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
                     text=content.strip() if content else None,
                     usage=usage,
                     model=getattr(completion, "model", None) or model_to_use,
-                    provider_name=req.provider_display_name or self.name,
-                    transport_provider_name=self.name,
+                    provider_name=req.provider_name or self.name,
+                    provider_display_name=req.provider_display_name or req.provider_name or self.name,
                     finish_reason=finish_reason,
                     error_message=None if content else (
                         "Provider returned completion without message content."
@@ -185,8 +185,8 @@ class OpenAICompatibleProvider(BaseProvider, ABC):
             return LLMResponse(
                 text=None,
                 model=model_to_use,
-                provider_name=req.provider_display_name or self.name,
-                transport_provider_name=self.name,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
                 error_message="Provider returned no completion choices.",
             )
 

@@ -87,8 +87,8 @@ def _save_last_request_context(req, character_name: str = "") -> None:
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "context_snapshot_id": context_snapshot_id,
             "model": getattr(req, "model", None),
-            "provider_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
-            "transport_provider_name": getattr(req, "provider_name", None),
+            "provider_name": getattr(req, "provider_name", None),
+            "provider_display_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
             "protocol_id": getattr(req, "protocol_id", None),
             "dialect_id": getattr(req, "dialect_id", None),
             "character_name": character_name or "",
@@ -124,8 +124,8 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
                 "context_snapshot_id": context_snapshot_id,
                 "model": getattr(req, "model", None),
-                "provider_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
-                "transport_provider_name": getattr(req, "provider_name", None),
+                "provider_name": getattr(req, "provider_name", None),
+                "provider_display_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
                 "protocol_id": getattr(req, "protocol_id", None),
                 "dialect_id": getattr(req, "dialect_id", None),
                 "character_name": "",
@@ -139,7 +139,12 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
             "response_raw": raw_response_text or getattr(response, "text", "") or "",
             "response_model": getattr(response, "model", None) or getattr(req, "model", None),
             "response_provider_name": getattr(response, "provider_name", None) or getattr(req, "provider_name", None),
-            "response_transport_provider_name": getattr(response, "transport_provider_name", None) or getattr(req, "provider_name", None),
+            "response_provider_display_name": (
+                getattr(response, "provider_display_name", None)
+                or getattr(req, "provider_display_name", None)
+                or getattr(response, "provider_name", None)
+                or getattr(req, "provider_name", None)
+            ),
             "finish_reason": getattr(response, "finish_reason", None),
             "usage": usage.to_payload() if usage is not None else None,
         })

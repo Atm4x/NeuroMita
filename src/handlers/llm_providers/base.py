@@ -165,9 +165,10 @@ class LLMResponse:
     text: Optional[str]
     usage: Optional[LLMUsage] = None
     model: Optional[str] = None
+    # Technical routing key; the same meaning as LLMRequest.provider_name.
     provider_name: Optional[str] = None
-    # Implementation that performed the request; retained for diagnostics.
-    transport_provider_name: Optional[str] = None
+    # Human-readable external service name for UI and diagnostics.
+    provider_display_name: Optional[str] = None
     finish_reason: Optional[str] = None
     error_message: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None

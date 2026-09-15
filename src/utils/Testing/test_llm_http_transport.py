@@ -34,6 +34,7 @@ from handlers.llm_providers.streaming import (
     StreamAccumulator,
     StreamDeadlineExceeded,
     StreamDeadlinePolicy,
+    StreamEventChannel,
     StreamSupervisor,
     iter_sse_data,
 )
@@ -164,6 +165,7 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
     legacy = []
     cancellation = RequestCancellation()
     req = _request()
+    req.provider_display_name = "OpenRouter"
     req.stream = True
     req.stream_cb = lambda text, channel: legacy.append((channel, text))
     req.stream_event_cb = events.append
@@ -182,6 +184,7 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
         LLMStreamEventType.COMPLETED,
     ]
     assert [event.sequence for event in events] == [1, 2, 3, 4]
+    assert [event.provider for event in events] == ["OpenRouter"] * 4
     # Мост stream_cb различает каналы явным аргументом, а не <think>-тегами
     # в тексте: подписчику незачем парсить строку, чтобы понять, что пришло.
     assert legacy == [
@@ -190,6 +193,8 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
     ]
     assert response.text == "answer"
     assert response.reasoning == "think"
+    assert response.provider_name == "common"
+    assert response.provider_display_name == "OpenRouter"
     assert cancellation.has_meaningful_stream_event
 
 
@@ -205,6 +210,24 @@ def test_stream_accumulator_rescues_answer_left_in_the_reasoning_channel():
 
     assert response.text == "весь ответ тут"
     assert response.reasoning is None
+
+
+@pytest.mark.parametrize("after_delta", [False, True])
+def test_stream_failure_keeps_display_provider_name(after_delta):
+    events = []
+    req = _request()
+    req.stream = True
+    req.provider_display_name = "OpenRouter"
+    req.stream_event_cb = events.append
+    channel = StreamEventChannel(req)
+    channel.start(provider="OpenRouter", model="model")
+    if after_delta:
+        channel.emit(LLMStreamEventType.TEXT_DELTA, provider="OpenRouter", model="model", text="partial")
+
+    channel.fail(LLMProviderError(provider="common", friendly_message="upstream failed"))
+
+    assert [event.provider for event in events] == ["OpenRouter"] * len(events)
+    assert events[-1].type is LLMStreamEventType.FAILED
 
 
 def test_sse_decoder_supports_comments_and_multiline_data():
@@ -368,8 +391,8 @@ def test_openai_compatible_provider_streams_sse_through_normalized_accumulator()
     assert response.text == "hello world"
     assert response.reasoning == "r"
     assert response.finish_reason == "stop"
-    assert response.provider_name == "OpenRouter"
-    assert response.transport_provider_name == "common"
+    assert response.provider_name == "common"
+    assert response.provider_display_name == "OpenRouter"
     assert legacy == [
         (StreamChannel.REASONING, "r"),
         (StreamChannel.CONTENT, "hello"),
@@ -438,6 +461,7 @@ def test_gemini_provider_uses_real_sse_endpoint_and_streams_deltas():
         messages=[{"role": "user", "content": "hi"}],
         api_url="https://example.test/v1/models/gemini-test:generateContent?key=secret",
         provider_name="gemini",
+        provider_display_name="Google AI Studio",
         stream=True,
     )
 
@@ -448,6 +472,8 @@ def test_gemini_provider_uses_real_sse_endpoint_and_streams_deltas():
     assert response.text == "answer"
     assert response.reasoning == "thought"
     assert response.finish_reason == "STOP"
+    assert response.provider_name == "gemini"
+    assert response.provider_display_name == "Google AI Studio"
     assert requested_urls and ":streamGenerateContent" in requested_urls[0]
     assert "alt=sse" in requested_urls[0]
     transport.close()

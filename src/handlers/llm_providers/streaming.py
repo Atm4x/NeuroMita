@@ -94,6 +94,7 @@ class StreamEventChannel:
     def __init__(self, req: LLMRequest) -> None:
         self.request_id = str((req.extra or {}).get("request_id") or "")
         self.callback = req.stream_event_cb
+        self.provider_display_name = str(req.provider_display_name or req.provider_name or "")
         self._sequence = 0
         self._started = False
         self._terminal = False
@@ -120,19 +121,19 @@ class StreamEventChannel:
                 self._started = True
                 self._emit_locked(
                     LLMStreamEventType.STARTED,
-                    provider=str(response.provider_name or ""),
+                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
                     model=str(response.model or ""),
                 )
             if response.usage is not None:
                 self._emit_locked(
                     LLMStreamEventType.USAGE,
-                    provider=str(response.provider_name or ""),
+                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
                     model=str(response.model or ""),
                     usage=response.usage,
                 )
             self._emit_locked(
                 LLMStreamEventType.COMPLETED,
-                provider=str(response.provider_name or ""),
+                provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
                 model=str(response.model or ""),
                 finish_reason=response.finish_reason,
             )
@@ -146,12 +147,12 @@ class StreamEventChannel:
                 self._started = True
                 self._emit_locked(
                     LLMStreamEventType.STARTED,
-                    provider=str(getattr(error, "provider", "") or ""),
+                    provider=self.provider_display_name or str(getattr(error, "provider", "") or ""),
                     model="",
                 )
             self._emit_locked(
                 LLMStreamEventType.FAILED,
-                provider=str(getattr(error, "provider", "") or ""),
+                provider=self.provider_display_name or str(getattr(error, "provider", "") or ""),
                 model="",
                 retryable=bool(getattr(error, "retryable", False)),
                 error_code=getattr(error, "code", None),
@@ -287,8 +288,8 @@ class StreamAccumulator:
             text=visible or None,
             usage=self.usage,
             model=self.model or None,
-            provider_name=self.provider_display_name,
-            transport_provider_name=self.provider,
+            provider_name=self.req.provider_name or self.provider,
+            provider_display_name=self.provider_display_name,
             finish_reason=self.finish_reason,
             reasoning=reasoning or None,
         )

@@ -1254,7 +1254,10 @@ class ModelController(GenerationService, ModelStateService):
                 return UtilityGenerationResult(
                     ok=True,
                     text=result.text,
-                    provider=getattr(result, "provider_name", None),
+                    provider=(
+                        getattr(result, "provider_display_name", None)
+                        or getattr(result, "provider_name", None)
+                    ),
                 )
 
             logger.warning(f"[ModelController] {request.kind}: model.generate() returned empty/None")
@@ -1727,9 +1730,12 @@ class ModelController(GenerationService, ModelStateService):
                 )
 
             raw_text = llm_response.text
+            response_provider_display_name = (
+                llm_response.provider_display_name or llm_response.provider_name or ""
+            )
             trace = get_trace(trace_id)
             if trace is not None:
-                trace.set_attribute("provider", llm_response.provider_name or "")
+                trace.set_attribute("provider", response_provider_display_name)
                 trace.set_attribute("model", llm_response.model or "")
                 trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
@@ -1752,7 +1758,7 @@ class ModelController(GenerationService, ModelStateService):
                     think_text=think_text,
                     usage=llm_response.usage,
                     response_model=llm_response.model or "",
-                    response_provider=llm_response.provider_name or "",
+                    response_provider=response_provider_display_name,
                     pricing_info=active_pricing,
                     char=char,
                     char_id=char_id,
@@ -1821,7 +1827,7 @@ class ModelController(GenerationService, ModelStateService):
             usage_snapshot = self._build_usage_snapshot(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -1856,7 +1862,7 @@ class ModelController(GenerationService, ModelStateService):
             self._store_last_usage(
                 llm_response.usage,
                 model=llm_response.model or "",
-                provider=llm_response.provider_name or "",
+                provider=response_provider_display_name,
                 cost_fallback=usage_cost_fallback,
                 cost_fallback_currency=getattr(active_pricing, "currency", None),
                 cost_fallback_source=getattr(active_pricing, "source", None),
@@ -2514,7 +2520,11 @@ class ModelController(GenerationService, ModelStateService):
             think_text=combined_think or "",
             usage=merged_usage,
             response_model=llm_response_2.model or response_model,
-            response_provider=llm_response_2.provider_name or response_provider,
+            response_provider=(
+                llm_response_2.provider_display_name
+                or llm_response_2.provider_name
+                or response_provider
+            ),
             pricing_info=pricing_info,
             char=char,
             char_id=char_id,
