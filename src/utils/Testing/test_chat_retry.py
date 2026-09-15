@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 PROJECT_SRC = Path(__file__).resolve().parents[2]
@@ -11,6 +12,7 @@ if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from controllers.chat_controller import ChatController
+from core.executors import PoolSaturated, Pools
 from core.events import Events
 
 
@@ -61,6 +63,53 @@ class ChatRetryTests(unittest.TestCase):
         }))
 
         self.assertEqual(bus.emitted, [])
+
+    def test_request_without_req_id_does_not_displace_retryable_ui_request(self) -> None:
+        controller, _bus = self._controller()
+        submitted = []
+        controller._ensure_perf_trace = lambda _data: "trace-1"
+        controller._resolve_player_message_source_transition = lambda _source: (None, None)
+        controller._normalize_character_id = lambda data: str(data.get("character_id") or "")
+        controller._normalize_sender = lambda _data: "Player"
+        controller._normalize_participants = lambda _value: []
+        controller._submit_request = lambda **kwargs: submitted.append(kwargs)
+
+        controller._on_send_message(SimpleNamespace(data={
+            "user_input": "regenerate this",
+            "character_id": "Crazy",
+        }))
+
+        self.assertEqual(
+            controller._ui_requests_by_message_id,
+            {"in:older": {"req_id": "older", "character_id": "Crazy"}},
+        )
+        self.assertEqual(controller._last_ui_request["req_id"], "newest")
+        self.assertEqual(submitted[0]["req_id"], None)
+
+    def test_queue_rejection_without_req_id_does_not_invent_message_id(self) -> None:
+        controller, bus = self._controller()
+        controller._register_generation = lambda *_args: None
+        controller._finish_generation = lambda *_args: None
+
+        class _SaturatedRegistry:
+            @staticmethod
+            def try_submit(*_args, **_kwargs):
+                raise PoolSaturated(Pools.GENERATION, 1)
+
+        with patch("controllers.chat_controller.executors", return_value=_SaturatedRegistry()), patch(
+            "controllers.chat_controller.performance_traces",
+            return_value=SimpleNamespace(finish=lambda *_args, **_kwargs: None),
+        ):
+            controller._submit_request(req_id="", character_id="Crazy")
+
+        self.assertEqual(
+            bus.emitted[-1],
+            (Events.Model.ON_FAILED_RESPONSE, {
+                "error": "Слишком много запросов одновременно. Подождите ответа.",
+                "message_id": "",
+                "character_id": "Crazy",
+            }),
+        )
 
 
 if __name__ == "__main__":

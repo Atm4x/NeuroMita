@@ -923,9 +923,10 @@ class ChatController(GenerationActivityService):
                     "status": TaskStatus.FAILED_ON_GENERATION,
                     "error": "Generation queue is full",
                 })
+            req_id = str(kwargs.get("req_id") or "").strip()
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
                 "error": "Слишком много запросов одновременно. Подождите ответа.",
-                "message_id": ConversationMessageIds.incoming(str(kwargs.get("req_id") or "")),
+                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
                 "character_id": str(kwargs.get("character_id") or ""),
             })
 
@@ -972,13 +973,17 @@ class ChatController(GenerationActivityService):
         # Запоминаем ручную отправку пользователя (без task_uid — это не игровой/
         # телеграм-ход), чтобы кнопка «отправить снова» на упавшем пузыре могла
         # повторить ровно тот же запрос. Копия — чтобы вызывающий не менял её потом.
-        if not data.get("task_uid") and str(data.get("event_type") or "chat") == "chat":
+        req_id = str(data.get("req_id") or "").strip()
+        if (
+            req_id
+            and not data.get("task_uid")
+            and str(data.get("event_type") or "chat") == "chat"
+        ):
             self._last_ui_request = dict(data)
-            message_id = ConversationMessageIds.incoming(str(data.get("req_id") or ""))
-            if message_id:
-                self._ui_requests_by_message_id[message_id] = dict(data)
-                while len(self._ui_requests_by_message_id) > 256:
-                    self._ui_requests_by_message_id.pop(next(iter(self._ui_requests_by_message_id)))
+            message_id = ConversationMessageIds.incoming(req_id)
+            self._ui_requests_by_message_id[message_id] = dict(data)
+            while len(self._ui_requests_by_message_id) > 256:
+                self._ui_requests_by_message_id.pop(next(iter(self._ui_requests_by_message_id)))
 
         if image_data:
             self.event_bus.emit(Events.Capture.UPDATE_LAST_IMAGE_REQUEST_TIME)

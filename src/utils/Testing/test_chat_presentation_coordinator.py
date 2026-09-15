@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
+from ui.windows.app_window_base import AppWindowBase
 
 
 def _command(message_id: str, content: str, *, character_id: str = "Crazy") -> ChatRenderCommand:
@@ -65,6 +68,30 @@ def test_failed_live_message_keeps_its_error_through_history_replay() -> None:
         history_messages=[],
     )
     assert all(command.delivery_error == "" for command in retry_plan.replay)
+
+
+def test_failure_is_recorded_before_chat_surface_is_bound() -> None:
+    calls = []
+    window = SimpleNamespace(
+        mita_status=None,
+        _pending_chat_error="",
+        _chat_render_context=SimpleNamespace(is_bound=False),
+        _chat_presentation=SimpleNamespace(
+            mark_failed=lambda **kwargs: calls.append(kwargs),
+        ),
+    )
+
+    AppWindowBase._show_error_slot(window, {
+        "error": "Provider rejected the request",
+        "message_id": "in:req-unbound",
+        "character_id": "Crazy",
+    })
+
+    assert calls == [{
+        "message_id": "in:req-unbound",
+        "character_id": "Crazy",
+        "error": "Provider rejected the request",
+    }]
 
 
 def test_commit_after_snapshot_start_is_replayed_when_snapshot_was_taken_too_early() -> None:

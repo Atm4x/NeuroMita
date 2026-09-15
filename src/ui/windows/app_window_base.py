@@ -1156,13 +1156,14 @@ class AppWindowBase(QMainWindow):
             self._pending_chat_error = None
         message_id = str(payload.get("message_id") or "")
         character_id = str(payload.get("character_id") or "")
-        if self._chat_render_context.is_bound and message_id:
-            from ui.chat import message_renderer
+        if message_id:
             self._chat_presentation.mark_failed(
                 message_id=message_id,
                 character_id=character_id,
                 error=error_message,
             )
+        if self._chat_render_context.is_bound and message_id:
+            from ui.chat import message_renderer
             message_renderer.mark_user_error(
                 self._chat_render_context, message_id, error_message
             )

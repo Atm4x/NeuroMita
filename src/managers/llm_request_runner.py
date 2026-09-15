@@ -160,7 +160,11 @@ class LLMRequestRunner:
                 "details": self.last_error.to_console_summary(),
                 "provider_error": provider_error,
             }
-            failure_payload.update(dict(failure_context or {}))
+            context = failure_context if isinstance(failure_context, dict) else {}
+            for key in ("message_id", "character_id"):
+                value = context.get(key)
+                if value:
+                    failure_payload[key] = str(value)
             self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, failure_payload)
         if stream_channel_holder[0] is not None and self.last_error is not None:
             stream_channel_holder[0].fail(self.last_error)
