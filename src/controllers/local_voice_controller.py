@@ -486,6 +486,9 @@ class LocalVoiceController(LocalVoiceService):
         absolute_audio_path = os.path.abspath(output_file)
         os.makedirs(os.path.dirname(absolute_audio_path), exist_ok=True)
 
+        # Lazy init releases its lock before synthesis. Re-activate the selected
+        # environment here because another request may have selected a different
+        # TTS model in the meantime.
         await self._ensure_model_environment(model_id, initialize=False)
         result_path = await self._engine_call_async(
             "synthesize",
