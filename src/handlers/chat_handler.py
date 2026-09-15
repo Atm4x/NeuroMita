@@ -87,7 +87,8 @@ def _save_last_request_context(req, character_name: str = "") -> None:
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "context_snapshot_id": context_snapshot_id,
             "model": getattr(req, "model", None),
-            "provider_name": getattr(req, "provider_name", None),
+            "provider_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
+            "transport_provider_name": getattr(req, "provider_name", None),
             "protocol_id": getattr(req, "protocol_id", None),
             "dialect_id": getattr(req, "dialect_id", None),
             "character_name": character_name or "",
@@ -123,7 +124,8 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
                 "context_snapshot_id": context_snapshot_id,
                 "model": getattr(req, "model", None),
-                "provider_name": getattr(req, "provider_name", None),
+                "provider_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
+                "transport_provider_name": getattr(req, "provider_name", None),
                 "protocol_id": getattr(req, "protocol_id", None),
                 "dialect_id": getattr(req, "dialect_id", None),
                 "character_name": "",
@@ -137,6 +139,7 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
             "response_raw": raw_response_text or getattr(response, "text", "") or "",
             "response_model": getattr(response, "model", None) or getattr(req, "model", None),
             "response_provider_name": getattr(response, "provider_name", None) or getattr(req, "provider_name", None),
+            "response_transport_provider_name": getattr(response, "transport_provider_name", None) or getattr(req, "provider_name", None),
             "finish_reason": getattr(response, "finish_reason", None),
             "usage": usage.to_payload() if usage is not None else None,
         })
@@ -303,6 +306,7 @@ class ChatModel:
                 protocol_id=preset_settings.protocol_id,
                 dialect_id=preset_settings.dialect_id,
                 provider_name=preset_settings.provider_name,
+                provider_display_name=preset_settings.provider_display_name,
                 headers=dict(preset_settings.headers or {}),
                 transforms=list(preset_settings.transforms or []),
                 capabilities=caps,
@@ -440,7 +444,11 @@ class ChatModel:
         preset_settings = self.preset_resolver.resolve(preset_id)
 
         logger.info(f"Using preset: {preset_settings.preset_name}")
-        logger.info(f"Protocol: {preset_settings.protocol_id} | Dialect: {preset_settings.dialect_id} | Provider: {preset_settings.provider_name}")
+        logger.info(
+            f"Protocol: {preset_settings.protocol_id} | Dialect: {preset_settings.dialect_id} "
+            f"| Provider: {preset_settings.provider_display_name} "
+            f"| Transport: {preset_settings.provider_name}"
+        )
         logger.info(f"Capabilities: {preset_settings.capabilities}")
         logger.info(f"Max Response Tokens: {self.cfg.max_response_tokens}, Temperature: {self.cfg.temperature} (base; preset overrides applied separately)")
         logger.info(

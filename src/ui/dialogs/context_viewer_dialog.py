@@ -190,7 +190,7 @@ class ContextViewerDialog(QDialog):
 
     Принимает dict с полями:
       - messages: list[dict]  (обязательно)
-      - model, provider_name, protocol_id, dialect_id, timestamp  (опционально)
+      - model, provider_name, transport_provider_name, protocol_id, dialect_id, timestamp  (опционально)
       - character_name  (опционально)
       - extra: dict  (параметры генерации)
       - response: str  (если есть — из finetune JSONL)
@@ -416,6 +416,9 @@ class ContextViewerDialog(QDialog):
 
         lay.addWidget(kv(_("Модель", "Model"), str(self._data.get("model") or "")))
         lay.addWidget(kv(_("Провайдер", "Provider"), str(self._data.get("provider_name") or "")))
+        transport = str(self._data.get("transport_provider_name") or "")
+        if transport:
+            lay.addWidget(kv(_("Транспорт", "Transport"), transport))
         proto = f"{self._data.get('protocol_id') or ''} / {self._data.get('dialect_id') or ''}"
         lay.addWidget(kv(_("Протокол", "Protocol"), proto))
         ts = str(self._data.get("timestamp") or "")
@@ -908,6 +911,7 @@ class ContextViewerDialog(QDialog):
         finish_reason = str(self._data.get("finish_reason") or "")
         response_model = str(self._data.get("response_model") or self._data.get("model") or "")
         response_provider = str(self._data.get("response_provider_name") or self._data.get("provider_name") or "")
+        response_transport = str(self._data.get("response_transport_provider_name") or self._data.get("transport_provider_name") or "")
         response_ts = str(self._data.get("response_timestamp") or "")
 
         sections: list[str] = []
@@ -921,6 +925,11 @@ class ContextViewerDialog(QDialog):
             meta_rows.append(
                 f"<tr><td style='color:{_MUTED};padding-right:16px'><b>{_('Provider', 'Provider')}</b></td>"
                 f"<td style='color:{_TEXT}'>{self._colorize(response_provider)}</td></tr>"
+            )
+        if response_transport:
+            meta_rows.append(
+                f"<tr><td style='color:{_MUTED};padding-right:16px'><b>{_('Transport', 'Transport')}</b></td>"
+                f"<td style='color:{_TEXT}'>{self._colorize(response_transport)}</td></tr>"
             )
         if finish_reason:
             meta_rows.append(
@@ -1574,6 +1583,7 @@ class ContextViewerDialog(QDialog):
             "response_raw": self._data.get("response_raw"),
             "response_model": self._data.get("response_model") or self._data.get("model"),
             "response_provider_name": self._data.get("response_provider_name") or self._data.get("provider_name"),
+            "response_transport_provider_name": self._data.get("response_transport_provider_name") or self._data.get("transport_provider_name"),
             "finish_reason": self._data.get("finish_reason"),
             "usage": self._data.get("usage"),
         }

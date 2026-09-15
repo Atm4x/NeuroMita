@@ -355,6 +355,7 @@ def test_openai_compatible_provider_streams_sse_through_normalized_accumulator()
         messages=[{"role": "user", "content": "hi"}],
         api_url="http://localhost:1234/v1",
         provider_name="common",
+        provider_display_name="OpenRouter",
         dialect_id="openai_chat_completions",
         stream=True,
         stream_cb=lambda text, channel: legacy.append((channel, text)),
@@ -367,6 +368,8 @@ def test_openai_compatible_provider_streams_sse_through_normalized_accumulator()
     assert response.text == "hello world"
     assert response.reasoning == "r"
     assert response.finish_reason == "stop"
+    assert response.provider_name == "OpenRouter"
+    assert response.transport_provider_name == "common"
     assert legacy == [
         (StreamChannel.REASONING, "r"),
         (StreamChannel.CONTENT, "hello"),
@@ -709,6 +712,7 @@ def _runner_preset(name: str) -> PresetSettings:
         protocol_id="openai_compatible_default",
         dialect_id="openai_chat_completions",
         provider_name="common",
+        provider_display_name="OpenAI-compatible API",
         headers={},
         transforms=[],
         capabilities={"streaming": True},

@@ -277,7 +277,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
             logger.error(f"[{self.name}] Too deep tool recursion.")
             return LLMResponse(
                 text=None,
-                provider_name=self.name,
+                provider_name=req.provider_display_name or self.name,
+                transport_provider_name=self.name,
                 error_message="Too deep tool recursion.",
             )
 
@@ -411,7 +412,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
                 text=None,
                 usage=self._extract_usage(data, request_url),
                 model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-                provider_name=self.name,
+                provider_name=req.provider_display_name or self.name,
+                transport_provider_name=self.name,
                 finish_reason=finish_reason,
                 error_message=error_message,
                 raw=data if isinstance(data, dict) else {},
@@ -421,7 +423,8 @@ class OpenAIHTTPProviderBase(BaseProvider):
             text=content.strip() if content else None,
             usage=self._extract_usage(data, request_url),
             model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-            provider_name=self.name,
+            provider_name=req.provider_display_name or self.name,
+            transport_provider_name=self.name,
             finish_reason=finish_reason,
             raw=data if isinstance(data, dict) else {},
             reasoning=reasoning.strip() or None,

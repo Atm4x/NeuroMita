@@ -310,7 +310,11 @@ class GeminiProvider(BaseProvider):
     def generate_request_gemini(self, req: LLMRequest) -> LLMResponse:
         if req.depth > 3:
             logger.error("Превышена глубина рекурсии для Gemini tool calls")
-            return LLMResponse(text=None, provider_name=self.name)
+            return LLMResponse(
+                text=None,
+                provider_name=req.provider_display_name or self.name,
+                transport_provider_name=self.name,
+            )
 
         formatted = self._format_messages_for_gemini_api(req.messages)
 
@@ -451,7 +455,8 @@ class GeminiProvider(BaseProvider):
                 text=response_text,
                 usage=self._extract_usage(response_data),
                 model=(response_data.get("modelVersion") if isinstance(response_data, dict) else None) or req.model,
-                provider_name=self.name,
+                provider_name=req.provider_display_name or self.name,
+                transport_provider_name=self.name,
                 raw=response_data if isinstance(response_data, dict) else {},
                 reasoning="\n".join(think_texts) or None,
             )

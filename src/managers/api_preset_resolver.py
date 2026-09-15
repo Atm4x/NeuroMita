@@ -32,6 +32,8 @@ class PresetSettings:
     generation_overrides: Dict[str, Any] = field(default_factory=dict)
     openrouter_routing: Dict[str, Any] = field(default_factory=dict)
     native_parameters: Optional[Dict[str, Any]] = None
+    # Optional to keep callers that build legacy PresetSettings compatible.
+    provider_display_name: str = ""
 
     def to_safe_dict(self) -> Dict[str, Any]:
         return {
@@ -39,6 +41,7 @@ class PresetSettings:
             "protocol_id": self.protocol_id,
             "dialect_id": self.dialect_id,
             "provider_name": self.provider_name,
+            "provider_display_name": self.provider_display_name,
             "api_url": self.api_url,
             "api_model": self.api_model,
             "reserve_keys_count": len(self.reserve_keys or []),
@@ -82,6 +85,7 @@ class ApiPresetResolver:
 
         # Core fields from preset
         preset_name = str((preset or {}).get("name", "Unknown") or "Unknown")
+        provider_display_name = self._resolve_provider_display_name(preset, proto, preset_name)
         api_model = str((preset or {}).get("default_model", "") or "")
         if model_override is not None:
             mo = str(model_override or "").strip()
@@ -153,6 +157,7 @@ class ApiPresetResolver:
             protocol_id=protocol_id,
             dialect_id=dialect_id,
             provider_name=provider_name,
+            provider_display_name=provider_display_name,
             headers=final_headers,
             transforms=transforms,
             capabilities=capabilities,
@@ -313,6 +318,23 @@ class ApiPresetResolver:
     # ---------------------------
     # Internal helpers
     # ---------------------------
+
+    @staticmethod
+    def _resolve_provider_display_name(
+        preset: Optional[Dict[str, Any]], proto: Any, preset_name: str,
+    ) -> str:
+        """Return a human-readable service name without affecting transport routing."""
+        # ApiPresetService includes `base` only for user-created presets (both
+        # standalone and those cloned from a built-in template). Their chosen
+        # name identifies the actual endpoint better than a generic protocol.
+        if isinstance(preset, dict) and "base" in preset:
+            return str(preset_name or "Custom API")
+
+        # `provider_name` selects the implementation (for example, `common` for
+        # every OpenAI-compatible API). Built-ins instead expose this label.
+        return str(
+            getattr(proto, "display_name", "") or getattr(proto, "name", "") or preset_name
+        )
 
     def _load_preset_full(self, preset_id: Optional[int]) -> Optional[Dict[str, Any]]:
         if not preset_id:

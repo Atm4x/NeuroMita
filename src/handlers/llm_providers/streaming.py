@@ -190,6 +190,7 @@ class StreamAccumulator:
     def __init__(self, req: LLMRequest, *, provider: str, model: str) -> None:
         self.req = req
         self.provider = str(provider or "")
+        self.provider_display_name = str(req.provider_display_name or self.provider)
         self.model = str(model or req.model or "")
         self.text_parts: list[str] = []
         self.reasoning_parts: list[str] = []
@@ -200,12 +201,12 @@ class StreamAccumulator:
             channel = StreamEventChannel(req)
             req.extra["_stream_event_channel"] = channel
         self.channel = channel
-        self.channel.start(provider=self.provider, model=self.model)
+        self.channel.start(provider=self.provider_display_name, model=self.model)
 
     def emit(self, event_type: LLMStreamEventType, **kwargs: Any) -> LLMStreamEvent:
         event = self.channel.emit(
             event_type,
-            provider=self.provider,
+            provider=self.provider_display_name,
             model=self.model,
             **kwargs,
         )
@@ -280,13 +281,14 @@ class StreamAccumulator:
         visible, reasoning = resolve_content_and_reasoning(
             "".join(self.text_parts),
             "".join(self.reasoning_parts),
-            provider_name=self.provider,
+            provider_name=self.provider_display_name,
         )
         return LLMResponse(
             text=visible or None,
             usage=self.usage,
             model=self.model or None,
-            provider_name=self.provider,
+            provider_name=self.provider_display_name,
+            transport_provider_name=self.provider,
             finish_reason=self.finish_reason,
             reasoning=reasoning or None,
         )
