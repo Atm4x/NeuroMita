@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from core.services import use
+from core.settings_values import as_bool
 from services.contracts import (
     CharacterRegistry,
     InstallableCatalogService,
@@ -31,6 +32,9 @@ class LocalVoiceController(LocalVoiceService):
         self._model_configs_cache: Optional[list] = None
         self._installed_cache: Dict[str, bool] = {}
         self._initialized_cache: Dict[str, bool] = {}
+        # Не допускаем две параллельные тяжёлые инициализации при первых
+        # запросах озвучки после включения соответствующей настройки.
+        self._model_init_lock = asyncio.Lock()
 
         self._triton_status_cache: Optional[Dict[str, Any]] = None
 
@@ -440,10 +444,33 @@ class LocalVoiceController(LocalVoiceService):
         initialized = bool(self._initialized_cache.get(model_id, False))
 
         if not initialized:
-            raise RuntimeError(
-                f"Local voice model '{model_id}' is not initialized. "
-                "Initialize it explicitly in the voice model settings before synthesis."
-            )
+            if not as_bool(self._get_setting("LOCAL_VOICE_INIT_ON_REQUEST", False)):
+                raise RuntimeError(
+                    f"Local voice model '{model_id}' is not initialized. "
+                    "Initialize it explicitly in the voice model settings before synthesis."
+                )
+
+            # Cache проверяется повторно под lock: два первых запроса не должны
+            # одновременно переключать runtime и загружать одну и ту же модель.
+            init_lock = getattr(self, "_model_init_lock", None)
+            if init_lock is None:
+                init_lock = asyncio.Lock()
+                self._model_init_lock = init_lock
+            async with init_lock:
+                initialized = bool(self._initialized_cache.get(model_id, False))
+                if not initialized:
+                    logger.info(
+                        f"LocalVoiceController on-demand init start: model_id='{model_id}'"
+                    )
+                    await self._ensure_model_environment(model_id, initialize=True)
+                    self._initialized_cache[model_id] = True
+                    initialized = True
+                    event_bus = getattr(self, "event_bus", None)
+                    if event_bus is not None:
+                        event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
+                    logger.info(
+                        f"LocalVoiceController on-demand init done: model_id='{model_id}'"
+                    )
 
         resolved_profile = voice_profile if isinstance(voice_profile, dict) else None
         registry = use(CharacterRegistry)

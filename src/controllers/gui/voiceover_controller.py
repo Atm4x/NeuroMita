@@ -62,7 +62,8 @@ class VoiceoverGuiController(BaseController):
             self._on_setting_changed,
             keys=(
                 "USE_VOICEOVER", "VOICEOVER_METHOD", "NM_CURRENT_VOICEOVER",
-                "LOCAL_VOICE_LOAD_LAST", "VOICE_LANGUAGE", "TG_AUTOCONNECT",
+                "LOCAL_VOICE_LOAD_LAST", "LOCAL_VOICE_INIT_ON_REQUEST",
+                "VOICE_LANGUAGE", "TG_AUTOCONNECT",
             ),
         )
 
