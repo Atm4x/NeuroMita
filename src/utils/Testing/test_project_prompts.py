@@ -66,6 +66,13 @@ class ProjectInfoTests(unittest.TestCase):
         else_block = script[else_idx:endif_idx]
         self.assertNotIn("reasoning", else_block.lower())
 
+    def test_language_island_rules_are_present_and_english_memory_hint_is_gone(self):
+        script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")
+        self.assertGreaterEqual(script.count("commitments_conflicts, language"), 2)
+        self.assertIn("primary conversation language", script)
+        self.assertIn("explicit request to switch", script)
+        self.assertNotIn("Use English to save tokens.", script)
+
 
 class WorldKnowledgeTests(unittest.TestCase):
     def setUp(self):
