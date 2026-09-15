@@ -70,6 +70,7 @@ class ProjectInfoTests(unittest.TestCase):
         script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")
         self.assertGreaterEqual(script.count("commitments_conflicts, language"), 2)
         self.assertIn("primary conversation language", script)
+        self.assertIn("create the language island", script)
         self.assertIn("explicit request to switch", script)
         self.assertNotIn("Use English to save tokens.", script)
 

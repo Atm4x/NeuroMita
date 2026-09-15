@@ -1569,7 +1569,7 @@ class MemoryManager(CharacterScopedService):
             'memory_delete: ["2"]                — delete N:2; range: "3-7"; multi: "2,5"',
             'memory_merge: ["3,7,12:merged text"] — merge into first ID; rest deleted; content optional',
             'memory_add: ["island:relationship|summary"] — replace one running island',
-            'memory_add: ["island:language|Russian (ru). Reply to the Player in Russian."] — store/update primary language',
+            'memory_add: ["island:language|<language>. Reply to the Player in <language>."] — store/update primary language',
             "Keep memory entries concise.",
         ]
 
