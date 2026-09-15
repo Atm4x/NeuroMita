@@ -240,6 +240,10 @@ class LLMRequestRunner:
                 req.extra.setdefault("http_read_timeout_seconds", float(request_timeout))
                 if stream_channel_holder[0] is None:
                     stream_channel_holder[0] = StreamEventChannel(req)
+                else:
+                    stream_channel_holder[0].set_provider_display_name(
+                        req.provider_display_name or req.provider_name
+                    )
                 req.extra["_stream_event_channel"] = stream_channel_holder[0]
             cancellation = RequestCancellation(operation_cancellation)
             req.extra["_request_cancellation"] = cancellation

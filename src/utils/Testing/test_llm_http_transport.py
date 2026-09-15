@@ -212,22 +212,32 @@ def test_stream_accumulator_rescues_answer_left_in_the_reasoning_channel():
     assert response.reasoning is None
 
 
-@pytest.mark.parametrize("after_delta", [False, True])
-def test_stream_failure_keeps_display_provider_name(after_delta):
+def test_stream_failure_before_started_emits_display_provider_name():
     events = []
     req = _request()
     req.stream = True
     req.provider_display_name = "OpenRouter"
     req.stream_event_cb = events.append
     channel = StreamEventChannel(req)
-    channel.start(provider="OpenRouter", model="model")
-    if after_delta:
-        channel.emit(LLMStreamEventType.TEXT_DELTA, provider="OpenRouter", model="model", text="partial")
 
     channel.fail(LLMProviderError(provider="common", friendly_message="upstream failed"))
 
-    assert [event.provider for event in events] == ["OpenRouter"] * len(events)
-    assert events[-1].type is LLMStreamEventType.FAILED
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.FAILED, "OpenRouter"),
+    ]
+
+
+def test_stream_complete_never_serializes_missing_provider_as_none():
+    events = []
+    req = _request()
+    req.provider_name = ""
+    req.stream_event_cb = events.append
+    channel = StreamEventChannel(req)
+
+    channel.complete(LLMResponse(text="ok"))
+
+    assert [event.provider for event in events] == ["", ""]
 
 
 def test_sse_decoder_supports_comments_and_multiline_data():
@@ -733,12 +743,12 @@ class _RunnerResolver:
         return preset
 
 
-def _runner_preset(name: str) -> PresetSettings:
+def _runner_preset(name: str, *, display_name: str = "OpenAI-compatible API") -> PresetSettings:
     return PresetSettings(
         protocol_id="openai_compatible_default",
         dialect_id="openai_chat_completions",
         provider_name="common",
-        provider_display_name="OpenAI-compatible API",
+        provider_display_name=display_name,
         headers={},
         transforms=[],
         capabilities={"streaming": True},
@@ -802,6 +812,117 @@ def test_stream_timeout_before_body_allows_fallback_preset():
 
     assert response is not None and response.text == "fallback ok"
     assert calls == ["main", "main", "fallback"]
+    runner.close()
+
+
+def test_stream_fallback_updates_display_provider_name_for_fallback_events():
+    events = []
+
+    class ProviderManager:
+        def generate(self, req):
+            if req.model == "openrouter-model":
+                channel = req.extra["_stream_event_channel"]
+                channel.start(provider=req.provider_display_name, model=req.model)
+                raise LLMProviderError(
+                    provider=req.provider_name,
+                    friendly_message="OpenRouter disconnected",
+                    retryable=True,
+                )
+
+            accumulator = StreamAccumulator(req, provider=req.provider_name, model=req.model)
+            accumulator.add_text("fallback answer")
+            return accumulator.complete(finish_reason="stop")
+
+        def close(self):
+            return None
+
+    presets = [
+        _runner_preset("openrouter-model", display_name="OpenRouter"),
+        _runner_preset("google-model", display_name="Google AI Studio"),
+    ]
+    runner = _runner_with_provider(presets, ProviderManager())
+
+    def build_request(preset, model):
+        return LLMRequest(
+            model=model,
+            messages=[],
+            api_url="http://localhost:1234/v1",
+            provider_name=preset.provider_name,
+            provider_display_name=preset.provider_display_name,
+            stream=True,
+            stream_event_cb=events.append,
+        )
+
+    response = runner.run(
+        messages=[],
+        preset_id=None,
+        stream_callback=None,
+        build_request=build_request,
+        max_attempts=1,
+        retry_delay=0.0,
+        request_timeout=1.0,
+    )
+
+    assert response is not None and response.text == "fallback answer"
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.TEXT_DELTA, "Google AI Studio"),
+        (LLMStreamEventType.COMPLETED, "Google AI Studio"),
+    ]
+    runner.close()
+
+
+def test_stream_fallback_failure_uses_last_preset_display_provider_name():
+    events = []
+
+    class ProviderManager:
+        def generate(self, req):
+            channel = req.extra["_stream_event_channel"]
+            if req.model == "openrouter-model":
+                channel.start(provider=req.provider_display_name, model=req.model)
+                raise LLMProviderError(
+                    provider=req.provider_name,
+                    friendly_message="OpenRouter disconnected",
+                    retryable=True,
+                )
+            raise LLMProviderError(
+                provider=req.provider_name,
+                friendly_message="Google AI Studio disconnected",
+                retryable=False,
+            )
+
+        def close(self):
+            return None
+
+    presets = [
+        _runner_preset("openrouter-model", display_name="OpenRouter"),
+        _runner_preset("google-model", display_name="Google AI Studio"),
+    ]
+    runner = _runner_with_provider(presets, ProviderManager())
+
+    response = runner.run(
+        messages=[],
+        preset_id=None,
+        stream_callback=None,
+        build_request=lambda preset, model: LLMRequest(
+            model=model,
+            messages=[],
+            api_url="http://localhost:1234/v1",
+            provider_name=preset.provider_name,
+            provider_display_name=preset.provider_display_name,
+            stream=True,
+            stream_event_cb=events.append,
+        ),
+        max_attempts=1,
+        retry_delay=0.0,
+        request_timeout=1.0,
+    )
+
+    assert response is not None and response.text is None
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.FAILED, "Google AI Studio"),
+    ]
     runner.close()
 
 

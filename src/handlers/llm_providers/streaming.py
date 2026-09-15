@@ -100,6 +100,12 @@ class StreamEventChannel:
         self._terminal = False
         self._lock = threading.RLock()
 
+    def set_provider_display_name(self, provider_display_name: Any) -> None:
+        """Use the active preset name for subsequent fallback stream events."""
+        with self._lock:
+            if not self._terminal:
+                self.provider_display_name = str(provider_display_name or "")
+
     def start(self, *, provider: str, model: str) -> None:
         with self._lock:
             if self._started:
@@ -121,19 +127,19 @@ class StreamEventChannel:
                 self._started = True
                 self._emit_locked(
                     LLMStreamEventType.STARTED,
-                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
+                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name or ""),
                     model=str(response.model or ""),
                 )
             if response.usage is not None:
                 self._emit_locked(
                     LLMStreamEventType.USAGE,
-                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
+                    provider=str(response.provider_display_name or self.provider_display_name or response.provider_name or ""),
                     model=str(response.model or ""),
                     usage=response.usage,
                 )
             self._emit_locked(
                 LLMStreamEventType.COMPLETED,
-                provider=str(response.provider_display_name or self.provider_display_name or response.provider_name),
+                provider=str(response.provider_display_name or self.provider_display_name or response.provider_name or ""),
                 model=str(response.model or ""),
                 finish_reason=response.finish_reason,
             )
@@ -202,6 +208,7 @@ class StreamAccumulator:
             channel = StreamEventChannel(req)
             req.extra["_stream_event_channel"] = channel
         self.channel = channel
+        self.channel.set_provider_display_name(self.provider_display_name)
         self.channel.start(provider=self.provider_display_name, model=self.model)
 
     def emit(self, event_type: LLMStreamEventType, **kwargs: Any) -> LLMStreamEvent:
