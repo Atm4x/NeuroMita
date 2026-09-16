@@ -123,6 +123,9 @@ class ModelController(GenerationService, ModelStateService):
         self._history_character_id = ""
 
         self.preset_resolver = ApiPresetResolver(settings=self.settings, event_bus=self.event_bus)
+        from presets.character_provider import migrate_character_provider_settings
+        from services.contracts import ApiPresetService
+        migrate_character_provider_settings(self._settings_service, use(ApiPresetService).list_meta())
         self.model = ChatModel(settings)
 
         from managers.tools.builtin.memory_search import MemorySearchTool
@@ -870,14 +873,17 @@ class ModelController(GenerationService, ModelStateService):
         except Exception:
             return None
 
-    def _char_provider_label(self, character_id: str, character_name: str) -> str:
+    def _char_provider_value(self, character_id: str, character_name: str):
         label = self.settings.get(f"CHAR_PROVIDER_{character_id}", None)
         if label is None and character_name:
             label = self.settings.get(f"CHAR_PROVIDER_{character_name}", None)
-        return str(label if label is not None else "Current")
+        return label if label is not None else -1
 
     def _resolve_chat_preset_id(self, character_id: str, character_name: str) -> Optional[int]:
-        return self._preset_id_from_label(self._char_provider_label(character_id, character_name))
+        from presets.character_provider import provider_preset_id
+        return provider_preset_id(
+            self._char_provider_value(character_id, character_name),
+        )
 
     def _resolve_preset_id(
         self, event_type: str, policy: RequestPolicy, char_id: str, char_name: str

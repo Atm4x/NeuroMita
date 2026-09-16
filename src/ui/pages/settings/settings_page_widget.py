@@ -125,7 +125,7 @@ class SettingsSectionPage(QFrame):
         self.body_layout.setSpacing(12)
         body_layout.addWidget(self.body_host)
 
-        if spec.key == "api":
+        if spec.key in {"api", "characters"}:
             self.content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             body_layout.setStretch(0, 1)
             content_layout.addWidget(self.body, 1)

@@ -1,6 +1,59 @@
 from __future__ import annotations
 
 SETTINGS_PAGE_QSS = r"""
+QWidget#CharacterSettingsWorkspace, QWidget#CharacterSettingsWorkspace QLabel,
+QWidget#CharacterSettingsWorkspace QLineEdit, QWidget#CharacterSettingsWorkspace QComboBox,
+QWidget#CharacterSettingsWorkspace QPushButton, QWidget#CharacterSettingsWorkspace QListWidget,
+QWidget#CharacterSettingsWorkspace QTabBar {
+    font-family: "Segoe UI"; letter-spacing: 0px;
+}
+QLabel#CharacterSettingsTitle { font-size: 22px; font-weight: 700; }
+QWidget#CharacterSettingsWorkspace QLabel#SeparatorLabel { color: {muted}; font-weight: 400; }
+QFrame#CharacterLibrary, QFrame#CharacterDetail {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 12px;
+}
+QFrame#CharacterSection {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection,
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleHeader,
+QWidget#CharacterSettingsWorkspace QFrame#CollapsibleContent {
+    background: {settings_panel_bg};
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection {
+    border: 1px solid {panel_border}; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleHeader {
+    border: none; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QLabel#CharacterLibraryTitle,
+QLabel#CharacterCount { margin: 0px; padding: 0px; border: none; }
+QLabel#CharacterCount { color: {muted}; }
+QWidget#CharacterSettingsWorkspace QWidget#CharacterActionRow {
+    border-bottom: 1px solid {panel_border};
+}
+QLabel#CharacterActionTitle { font-weight: 600; }
+QListWidget#CharacterList { background: transparent; border: none; outline: none; padding: 0px; }
+QListWidget#CharacterList::item {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+    padding: 3px 8px; font-size: 14px; font-weight: 600;
+}
+QListWidget#CharacterList::item:selected {
+    background: {settings_panel_bg}; border: 1px solid {muted};
+}
+QListWidget#CharacterList::item:hover { border: 1px solid {muted}; }
+QLabel#CharacterName { font-size: 20px; font-weight: 700; }
+QLabel#CharacterId { color: {muted}; font-size: 12px; font-weight: 400; }
+QWidget#CharacterSettingsWorkspace QLabel#CharacterActionDescription {
+    color: {muted}; font-weight: 400; font-size: 12px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection[danger="true"] {
+    border: 1px solid {warn_border}; border-radius: 10px;
+}
+QLabel#CharacterLibraryTitle { font-size: 14px; font-weight: 600; }
+QLabel#CharacterActiveBadge {
+    background: rgba({accent_rgb}, 0.18); color: {text}; border-radius: 6px; padding: 5px 9px;
+}
 /* ========= API workspace ========= */
 QWidget#ApiSettingsWorkspace { background: transparent; }
 QWidget#ApiSettingsWorkspace, QWidget#ApiSettingsWorkspace QLabel,
