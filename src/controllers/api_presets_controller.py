@@ -34,6 +34,7 @@ class PresetMeta:
     dialect_id: str = ""
     provider_name: str = ""
     default_model: str = ""
+    template_name: str = ""
 
 
 @dataclass
@@ -875,6 +876,7 @@ class ApiPresetsController(ApiPresetService):
                 dialect_id=str(getattr(proto, "dialect", "") or ""),
                 provider_name=str(getattr(proto, "provider", "") or ""),
                 default_model=str(tpl.default_model or ""),
+                template_name=tpl.name,
             ))
 
         ordered_custom: List[UserPreset] = []
@@ -902,6 +904,7 @@ class ApiPresetsController(ApiPresetService):
                 dialect_id=str(getattr(proto, "dialect", "") or ""),
                 provider_name=str(getattr(proto, "provider", "") or ""),
                 default_model=str(eff_model or ""),
+                template_name=tpl.name if tpl else "",
             ))
         return meta
 

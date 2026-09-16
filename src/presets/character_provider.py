@@ -43,5 +43,6 @@ def character_provider_choices(meta):
         def field(key, default=""):
             return preset.get(key, default) if isinstance(preset, dict) else getattr(preset, key, default)
         choices.append({"id": int(field("id")), "name": str(field("name")),
-                        "model": str(field("default_model")), "provider": str(field("provider_name"))})
+                        "model": str(field("default_model")), "provider": str(field("provider_name")),
+                        "template": str(field("template_name")), "protocol": str(field("protocol_id"))})
     return choices

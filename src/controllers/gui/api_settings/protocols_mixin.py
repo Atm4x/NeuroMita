@@ -57,7 +57,7 @@ class ProtocolsMixin:
         v = self.view
         pid = str(protocol_id or "").strip()
         proto = self._protocols.get(pid) or {}
-        from ui.settings.api_settings.widgets import provider_icon, protocol_provider
+        from ui.provider_icons import provider_icon, protocol_provider
         icon = v.template_combo.itemIcon(v.template_combo.currentIndex()) if v.template_combo.currentData() is not None else provider_icon(protocol_provider(pid))
         v.preset_provider_icon.setPixmap(icon.pixmap(38, 38))
         v.api_type_label.setText(str(proto.get("name") or ""))

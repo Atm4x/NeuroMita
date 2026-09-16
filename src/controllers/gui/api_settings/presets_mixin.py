@@ -10,7 +10,7 @@ from core.services import use
 from services.contracts import ApiPresetService
 from main_logger import logger
 from utils import _
-from ui.settings.api_settings.widgets import template_provider, provider_icon
+from ui.provider_icons import template_provider, provider_icon
 
 
 class PresetsMixin:

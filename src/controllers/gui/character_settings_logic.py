@@ -368,7 +368,7 @@ def _provider_items_from_presets_result(presets_meta):
 
 
 def _set_character_provider_items(gui, provider_items):
-    from ui.settings.api_settings.widgets import provider_icon
+    from ui.provider_icons import provider_icon, template_provider
     combo = gui.char_provider_combobox
     choices = [item for item in provider_items if isinstance(item, dict)]
     gui._character_provider_choices = choices
@@ -383,7 +383,7 @@ def _set_character_provider_items(gui, provider_items):
         for item in choices:
             label = f'{item["name"]} ({item["model"]})' if item["model"] else item["name"]
             combo.add_data_item(label, value=item["id"])
-            combo.setItemIcon(combo.count() - 1, provider_icon(item["provider"]))
+            combo.setItemIcon(combo.count() - 1, provider_icon(template_provider(item.get("template", ""), item.get("protocol", "")) or item["provider"]))
         combo.setCurrentIndex(max(0, combo.findData(selected if selected is not None else CURRENT_PRESET_ID)))
     finally:
         combo.blockSignals(blocked)

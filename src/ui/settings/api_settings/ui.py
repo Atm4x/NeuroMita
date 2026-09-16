@@ -16,8 +16,8 @@ from .model_settings_form import ModelSettingsForm
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
     FallbackChainEditor, ReserveKeysEditor,
-    provider_icon,
 )
+from ui.provider_icons import provider_icon
 from ui.widgets.tr_combobox import TRQComboBox
 from ui.widgets.settings_sections import CollapsibleSection
 
