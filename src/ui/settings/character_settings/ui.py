@@ -13,6 +13,7 @@ from ui.widgets.settings_sections import InnerCollapsibleSection, CollapsibleSec
 from utils import getTranslationVariant as _
 from localization.live import register_if_tr, tr_set, register
 from styles.theme import THEME
+from ui.character_names import character_display_name, retranslate_character_list
 from .action_titles import ACTION_TITLES
 from .widgets import CharacterWorkspace, CharacterWorkspaceSplitter, CharacterSection, CharacterListDelegate, tab_page
 
@@ -530,6 +531,7 @@ def build_character_settings_ui(self, parent_layout):
     left.addWidget(self.character_search)
     self.character_library = QListWidget()
     self.character_library.setObjectName("CharacterList")
+    register(self.character_library, retranslate_character_list)
     self.character_library.setItemDelegate(CharacterListDelegate(self.character_library))
     self.character_library.setSpacing(3)
     self.character_library.setMinimumHeight(0)
@@ -556,6 +558,7 @@ def build_character_settings_ui(self, parent_layout):
     name_row = QHBoxLayout()
     self.character_name = QLabel()
     self.character_name.setObjectName("CharacterName")
+    register(self.character_name, lambda label: label.setText(character_display_name(label.property("characterId"), label.property("fallbackName"))))
     name_row.addWidget(self.character_name)
     name_row.addStretch()
     text.addLayout(name_row)

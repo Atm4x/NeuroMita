@@ -2287,5 +2287,14 @@
   "Удалить повторяющиеся сообщения из истории всех персонажей": "Remover mensagens duplicadas do histórico de todos os personagens",
   "Создать недостающие векторы памяти для RAG у всех персонажей": "Gerar vetores de memória ausentes para RAG para todos os personagens",
   "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Regenerar todos os vetores de memória para RAG para todos os personagens (lento)",
-  "Очистить историю ВСЕХ": "Limpar TODO o histórico"
+  "Очистить историю ВСЕХ": "Limpar TODO o histórico",
+  "Безумная Мита": "Mita maluca",
+  "Добрая Мита": "Mita bondosa",
+  "Кепочка": "Cappie",
+  "Коротковолосая Мита": "Mita de cabelo curto",
+  "Мила": "Mila",
+  "Сонная Мита": "Mita sonolenta",
+  "Призрачная Мита": "Mita fantasma",
+  "Жуткая Мита": "Mita assustadora",
+  "Мастер игры": "Mestre do jogo"
 }

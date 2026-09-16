@@ -12,6 +12,11 @@ from controllers.gui.character_settings_logic import (
 
 
 class CharacterSettingsWorkspaceTest(unittest.TestCase):
+    def setUp(self):
+        language = patch("localization._current_language", return_value="EN")
+        language.start()
+        self.addCleanup(language.stop)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
@@ -36,7 +41,7 @@ class CharacterSettingsWorkspaceTest(unittest.TestCase):
         with patch("controllers.gui.character_settings_logic.change_character_actions") as load:
             _build_character_library(window, ["Crazy", "Creepy", "Ghost", "GameMaster"], "Crazy")
             self.assertEqual([window.character_library.item(i).text() for i in range(4)],
-                             ["Crazy Mita", "Ghost", "Creepy Mita", "GameMaster"])
+                             ["Crazy Mita", "Ghostly Mita", "Creepy Mita", "Game Master"])
             _select_character_settings(window, window.character_library.item(2))
             self.assertEqual(window._configured_char_id, "Creepy")
             self.assertEqual(window._active_character_id, "Crazy")
@@ -46,6 +51,13 @@ class CharacterSettingsWorkspaceTest(unittest.TestCase):
         _filter_character_library(window, "ghost")
         self.assertFalse(window.character_library.item(1).isHidden())
         self.assertTrue(window.character_library.item(0).isHidden())
+        from ui.character_names import character_display_name, retranslate_character_list
+        with patch("localization._current_language", return_value="RU"):
+            self.assertEqual(character_display_name("Crazy"), "Безумная Мита")
+            retranslate_character_list(window.character_library)
+            self.assertEqual(window.character_library.item(0).text(), "Безумная Мита")
+            from PyQt6.QtCore import Qt
+            self.assertEqual(window.character_library.item(0).data(Qt.ItemDataRole.UserRole), "Crazy")
         for section in (window.character_provider_section, window.character_history_section, window.maintenance_section,
                         window.character_danger_section):
             self.assertTrue(section.is_collapsed)

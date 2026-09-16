@@ -2281,5 +2281,14 @@
   "Удалить повторяющиеся сообщения из истории всех персонажей": "Tüm karakterlerin geçmişinden yinelenen mesajları kaldır",
   "Создать недостающие векторы памяти для RAG у всех персонажей": "Tüm karakterler için RAG amaçlı eksik bellek vektörlerini oluştur",
   "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Tüm karakterler için RAG amaçlı tüm bellek vektörlerini yeniden oluştur (yavaş)",
-  "Очистить историю ВСЕХ": "TÜM geçmişi temizle"
+  "Очистить историю ВСЕХ": "TÜM geçmişi temizle",
+  "Безумная Мита": "Çılgın Mita",
+  "Добрая Мита": "İyi Mita",
+  "Кепочка": "Cappie",
+  "Коротковолосая Мита": "Kısa saçlı Mita",
+  "Мила": "Mila",
+  "Сонная Мита": "Uykulu Mita",
+  "Призрачная Мита": "Hayalet Mita",
+  "Жуткая Мита": "Ürkütücü Mita",
+  "Мастер игры": "Oyun yöneticisi"
 }

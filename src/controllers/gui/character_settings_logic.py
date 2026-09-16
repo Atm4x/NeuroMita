@@ -30,6 +30,7 @@ from controllers.gui.settings_data_prefetch import (
 )
 
 
+from ui.character_names import character_display_name
 from presets.character_provider import CURRENT_PRESET_ID, character_provider_choices, provider_preset_id
 
 _CHARACTER_PROVIDER_OPTIONS = "character_provider_options"
@@ -637,8 +638,9 @@ def _build_character_library(gui, character_list, current_char_id):
     target = previous if previous in ids else current_char_id
     selected = None
     for cid in ids:
-        item = QListWidgetItem(QIcon(resolve_character_avatar(cid, 32)), getattr(gui, "_character_names", {}).get(cid, cid))
+        item = QListWidgetItem(QIcon(resolve_character_avatar(cid, 32)), character_display_name(cid, getattr(gui, "_character_names", {}).get(cid, cid)))
         item.setData(Qt.ItemDataRole.UserRole, cid)
+        item.setData(Qt.ItemDataRole.UserRole + 2, getattr(gui, "_character_names", {}).get(cid, cid))
         item.setSizeHint(QSize(0, 48))
         library.addItem(item)
         if cid == target:
@@ -663,13 +665,17 @@ def _select_character_settings(gui, item):
     if item is None:
         gui._char_config_panel.setEnabled(False)
         gui.character_name.clear()
+        gui.character_name.setProperty("characterId", "")
+        gui.character_name.setProperty("fallbackName", "")
         gui.character_avatar.clear()
         gui.character_id_label.clear()
         return
     from ui.chat.message_widget import resolve_character_avatar
     cid = item.data(Qt.ItemDataRole.UserRole)
     gui._configured_char_id = cid
-    gui.character_name.setText(getattr(gui, "_character_names", {}).get(cid, cid))
+    gui.character_name.setProperty("characterId", cid)
+    gui.character_name.setProperty("fallbackName", getattr(gui, "_character_names", {}).get(cid, cid))
+    gui.character_name.setText(character_display_name(cid, getattr(gui, "_character_names", {}).get(cid, cid)))
     gui.character_id_label.setText("id: " + cid)
     gui.character_avatar.setPixmap(resolve_character_avatar(cid, 56))
     gui._char_config_panel.setEnabled(True)
