@@ -2281,5 +2281,10 @@
   "Пересоздать все векторы памяти": "Rigenera tutti i vettori di memoria",
   "Удалить повторяющиеся сообщения": "Rimuovi messaggi duplicati",
   "Преобразовать формат файла истории": "Converti il formato del file di cronologia",
-  "Окончательно удалить очищенные записи": "Elimina definitivamente i record cancellati"
+  "Окончательно удалить очищенные записи": "Elimina definitivamente i record cancellati",
+  "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей": "Importa la cronologia dai file JSON nel database SQLite per tutti i personaggi",
+  "Удалить повторяющиеся сообщения из истории всех персонажей": "Rimuovi i messaggi duplicati dalla cronologia di tutti i personaggi",
+  "Создать недостающие векторы памяти для RAG у всех персонажей": "Genera i vettori di memoria mancanti per RAG per tutti i personaggi",
+  "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Rigenera tutti i vettori di memoria per RAG per tutti i personaggi (lento)",
+  "Очистить историю ВСЕХ": "Cancella TUTTA la cronologia"
 }

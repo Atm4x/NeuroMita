@@ -2276,5 +2276,10 @@
   "Пересоздать все векторы памяти": "Alle geheugenvectoren opnieuw genereren",
   "Удалить повторяющиеся сообщения": "Dubbele berichten verwijderen",
   "Преобразовать формат файла истории": "Indeling van het geschiedenisbestand converteren",
-  "Окончательно удалить очищенные записи": "Verwijderde records definitief wissen"
+  "Окончательно удалить очищенные записи": "Verwijderde records definitief wissen",
+  "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей": "Geschiedenis uit JSON-bestanden naar de SQLite-database importeren voor alle personages",
+  "Удалить повторяющиеся сообщения из истории всех персонажей": "Dubbele berichten uit de geschiedenis van alle personages verwijderen",
+  "Создать недостающие векторы памяти для RAG у всех персонажей": "Ontbrekende geheugenvectoren voor RAG genereren voor alle personages",
+  "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Alle geheugenvectoren voor RAG opnieuw genereren voor alle personages (langzaam)",
+  "Очистить историю ВСЕХ": "ALLE geschiedenis wissen"
 }

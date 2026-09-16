@@ -14,7 +14,7 @@ from utils import getTranslationVariant as _
 from localization.live import register_if_tr, tr_set, register
 from styles.theme import THEME
 from .action_titles import ACTION_TITLES
-from .widgets import CharacterWorkspaceSplitter, CharacterSection, CharacterListDelegate, tab_page
+from .widgets import CharacterWorkspace, CharacterWorkspaceSplitter, CharacterSection, CharacterListDelegate, tab_page
 
 
 def _make_row(label_text: str, field_widget: QWidget, label_w: int) -> QWidget:
@@ -421,6 +421,8 @@ def _build_danger_zone(self) -> QWidget:
     # «all»-обслуживание (не деструктивное) — сверху.
     self.btn_all_files_db = tr_set(QPushButton(), "Файлы → БД (все)", "Files → DB (all)")
     self.btn_all_files_db.setProperty("actionTitle", "files_db")
+    tr_set(self.btn_all_files_db, "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей",
+           "Import history from JSON files into the SQLite database for all characters", "setToolTip")
     self.btn_all_files_db.setIcon(qta.icon('fa5s.database', color=THEME["text"]))
     self.btn_all_files_db.setObjectName("SecondaryButton")
     _make_compact(self.btn_all_files_db)
@@ -437,6 +439,8 @@ def _build_danger_zone(self) -> QWidget:
 
     self.btn_all_dedupe = tr_set(QPushButton(), "Удалить дубли (все)", "Remove duplicates (all)")
     self.btn_all_dedupe.setProperty("actionTitle", "dedupe")
+    tr_set(self.btn_all_dedupe, "Удалить повторяющиеся сообщения из истории всех персонажей",
+           "Remove duplicate messages from all characters' history", "setToolTip")
     self.btn_all_dedupe.setIcon(qta.icon('fa5s.broom', color=THEME["text"]))
     self.btn_all_dedupe.setObjectName("SecondaryButton")
     _make_compact(self.btn_all_dedupe)
@@ -446,12 +450,16 @@ def _build_danger_zone(self) -> QWidget:
 
     self.btn_all_index_new = tr_set(QPushButton(), "Индекс нового (все)", "Index new (all)")
     self.btn_all_index_new.setProperty("actionTitle", "index_new")
+    tr_set(self.btn_all_index_new, "Создать недостающие векторы памяти для RAG у всех персонажей",
+           "Generate missing memory embeddings for RAG for all characters", "setToolTip")
     self.btn_all_index_new.setIcon(qta.icon('fa5s.brain', color=THEME["text"]))
     self.btn_all_index_new.setObjectName("SecondaryButton")
     _make_compact(self.btn_all_index_new)
 
     self.btn_all_reindex = tr_set(QPushButton(), "Переиндексация (все)", "Reindex (all)")
     self.btn_all_reindex.setProperty("actionTitle", "reindex")
+    tr_set(self.btn_all_reindex, "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)",
+           "Regenerate all memory embeddings for RAG for all characters (slow)", "setToolTip")
     self.btn_all_reindex.setIcon(qta.icon('fa5s.brain', color=THEME["text"]))
     self.btn_all_reindex.setObjectName("SecondaryButton")
     _make_compact(self.btn_all_reindex)
@@ -461,7 +469,7 @@ def _build_danger_zone(self) -> QWidget:
     section.add_widget(_make_separator())
 
     # Красные деструктивные — снизу.
-    self.btn_all_reset_history = tr_set(QPushButton(), "Сбросить историю ВСЕХ", "Reset ALL history")
+    self.btn_all_reset_history = tr_set(QPushButton(), "Очистить историю ВСЕХ", "Clear ALL history")
     self.btn_all_reset_history.setProperty("actionTitle", "history_reset")
     tr_set(self.btn_all_reset_history, "Удалить историю всех персонажей без возможности восстановления",
           "Delete the history of all characters, cannot be undone", "setToolTip")
@@ -469,7 +477,7 @@ def _build_danger_zone(self) -> QWidget:
     self.btn_all_reset_history.setStyleSheet(_DANGER_QSS)
     self.btn_all_reset_history.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     _make_compact(self.btn_all_reset_history)
-    section.add_widget(self.btn_all_reset_history)
+    section.add_widget(_btn_row(self.btn_all_reset_history))
 
     self.btn_all_purge = tr_set(QPushButton(), "Очистить удалённое (все)", "Purge deleted (all)")
     self.btn_all_purge.setProperty("actionTitle", "purge")
@@ -479,13 +487,13 @@ def _build_danger_zone(self) -> QWidget:
     self.btn_all_purge.setStyleSheet(_DANGER_QSS)
     self.btn_all_purge.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     _make_compact(self.btn_all_purge)
-    section.add_widget(self.btn_all_purge)
+    section.add_widget(_btn_row(self.btn_all_purge))
 
     return section
 
 
 def build_character_settings_ui(self, parent_layout):
-    container = QWidget()
+    container = CharacterWorkspace()
     container.setObjectName("CharacterSettingsWorkspace")
     container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     layout = QVBoxLayout(container)
@@ -562,4 +570,11 @@ def build_character_settings_ui(self, parent_layout):
     content_layout.addWidget(self._char_config_panel, 1)
     right.addWidget(scroll, 1)
     splitter.addWidget(detail)
+    container.sections = [(self.character_prompt_section, True),
+                          (self.character_provider_section, False),
+                          (self.character_history_section, False),
+                          (self.maintenance_section, False),
+                          (self.character_danger_section, False)]
+    for section, _expanded in container.sections:
+        section.setProperty("rememberExpansion", False)
     parent_layout.addWidget(container, 1)

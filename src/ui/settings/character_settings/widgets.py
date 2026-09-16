@@ -5,6 +5,17 @@ from localization.live import register_if_tr
 from styles.theme import THEME
 
 
+class CharacterWorkspace(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.sections = []
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        for section, expanded in self.sections:
+            section.expand() if expanded else section.collapse()
+
+
 class CharacterListDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         painter.save()

@@ -2276,5 +2276,10 @@
   "Пересоздать все векторы памяти": "Regenerar todos los vectores de memoria",
   "Удалить повторяющиеся сообщения": "Eliminar mensajes duplicados",
   "Преобразовать формат файла истории": "Convertir el formato del archivo de historial",
-  "Окончательно удалить очищенные записи": "Eliminar permanentemente los registros borrados"
+  "Окончательно удалить очищенные записи": "Eliminar permanentemente los registros borrados",
+  "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей": "Importar historial de archivos JSON a la base SQLite para todos los personajes",
+  "Удалить повторяющиеся сообщения из истории всех персонажей": "Eliminar mensajes duplicados del historial de todos los personajes",
+  "Создать недостающие векторы памяти для RAG у всех персонажей": "Generar vectores de memoria faltantes para RAG para todos los personajes",
+  "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Regenerar todos los vectores de memoria para RAG para todos los personajes (lento)",
+  "Очистить историю ВСЕХ": "Borrar TODO el historial"
 }

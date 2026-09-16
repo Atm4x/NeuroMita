@@ -338,6 +338,8 @@ class SettingsPage(QWidget):
         for section in page.findChildren(QWidget):
             if section.objectName() != "CollapsibleSection":
                 continue
+            if section.property("rememberExpansion") is False:
+                continue
             title_label = getattr(section, "title_label", None)
             if title_label is None:
                 continue

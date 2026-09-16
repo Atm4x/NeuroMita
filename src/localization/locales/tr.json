@@ -2276,5 +2276,10 @@
   "Пересоздать все векторы памяти": "Tüm bellek vektörlerini yeniden oluştur",
   "Удалить повторяющиеся сообщения": "Yinelenen mesajları kaldır",
   "Преобразовать формат файла истории": "Geçmiş dosyasının biçimini dönüştür",
-  "Окончательно удалить очищенные записи": "Silinen kayıtları kalıcı olarak temizle"
+  "Окончательно удалить очищенные записи": "Silinen kayıtları kalıcı olarak temizle",
+  "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей": "Tüm karakterlerin geçmişini JSON dosyalarından SQLite veritabanına aktar",
+  "Удалить повторяющиеся сообщения из истории всех персонажей": "Tüm karakterlerin geçmişinden yinelenen mesajları kaldır",
+  "Создать недостающие векторы памяти для RAG у всех персонажей": "Tüm karakterler için RAG amaçlı eksik bellek vektörlerini oluştur",
+  "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Tüm karakterler için RAG amaçlı tüm bellek vektörlerini yeniden oluştur (yavaş)",
+  "Очистить историю ВСЕХ": "TÜM geçmişi temizle"
 }

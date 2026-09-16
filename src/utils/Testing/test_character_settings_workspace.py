@@ -28,6 +28,9 @@ class CharacterSettingsWorkspaceTest(unittest.TestCase):
         self.assertEqual(window.btn_history_view.property("actionTitle"), "history_view")
         self.assertEqual(window.btn_maint_index_new.property("actionTitle"), "index_new")
         self.assertEqual(window.btn_maint_tags.property("actionTitle"), "tags")
+        for name in ("history_view", "history_export", "history_import", "files_db", "tags",
+                     "dedupe", "index_new", "reindex", "reset_history", "purge"):
+            self.assertTrue(getattr(window, "btn_all_" + name).toolTip(), name)
         window._active_character_id = "Crazy"
         window._character_names = {"Crazy": "Crazy Mita", "Creepy": "Creepy Mita"}
         with patch("controllers.gui.character_settings_logic.change_character_actions") as load:
@@ -61,6 +64,14 @@ class CharacterSettingsWorkspaceTest(unittest.TestCase):
         window.maintenance_section.expand()
         self.app.processEvents()
         window.grab().save(os.path.join(os.environ.get("TEMP", "."), "character-settings-actions-qa.png"))
+        window.character_danger_section.expand()
+        window.character_prompt_section.collapse()
+        window.hide()
+        window.show()
+        self.app.processEvents()
+        self.assertFalse(window.character_prompt_section.is_collapsed)
+        self.assertTrue(window.maintenance_section.is_collapsed)
+        self.assertTrue(window.character_danger_section.is_collapsed)
         window.close()
 
     def test_character_section_fills_parent_height(self):

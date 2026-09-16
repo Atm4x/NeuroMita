@@ -2158,5 +2158,10 @@
   "Пересоздать все векторы памяти": "Regenerate all memory embeddings",
   "Удалить повторяющиеся сообщения": "Remove duplicate messages",
   "Преобразовать формат файла истории": "Convert the history file format",
-  "Окончательно удалить очищенные записи": "Permanently purge deleted records"
+  "Окончательно удалить очищенные записи": "Permanently purge deleted records",
+  "Перенести историю из JSON-файлов в базу данных SQLite для всех персонажей": "Import history from JSON files into the SQLite database for all characters",
+  "Удалить повторяющиеся сообщения из истории всех персонажей": "Remove duplicate messages from all characters’ history",
+  "Создать недостающие векторы памяти для RAG у всех персонажей": "Generate missing memory embeddings for RAG for all characters",
+  "Пересоздать все векторы памяти для RAG у всех персонажей (медленно)": "Regenerate all memory embeddings for RAG for all characters (slow)",
+  "Очистить историю ВСЕХ": "Clear ALL history"
 }
