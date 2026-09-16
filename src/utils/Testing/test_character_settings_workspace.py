@@ -100,6 +100,9 @@ class CharacterSettingsWorkspaceTest(unittest.TestCase):
             provider_name="openai_compatible", template_name="OpenRouter", protocol_id="openai_compatible_default")]})
         _set_character_provider_items(window, inherited)
         self.assertEqual(window.char_provider_combobox.itemIcon(1).cacheKey(), provider_icon("openrouter").cacheKey())
+        inherited[0]["model"] = "  "
+        _set_character_provider_items(window, inherited)
+        self.assertEqual(window.char_provider_combobox.currentText(), "Router (None)")
         save_character_provider(window, 101)
         self.assertEqual(window.settings.values["CHAR_PROVIDER_Crazy"], 101)
         self.assertIsNone(provider_preset_id(-1))

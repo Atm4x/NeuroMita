@@ -381,7 +381,8 @@ def _set_character_provider_items(gui, provider_items):
         combo.add_tr_item("Текущий", "Current", value=CURRENT_PRESET_ID)
         combo.setItemIcon(0, provider_icon(""))
         for item in choices:
-            label = f'{item["name"]} ({item["model"]})' if item["model"] else item["name"]
+            model = str(item.get("model") or "").strip() or "None"
+            label = f'{item["name"]} ({model})'
             combo.add_data_item(label, value=item["id"])
             combo.setItemIcon(combo.count() - 1, provider_icon(template_provider(item.get("template", ""), item.get("protocol", "")) or item["provider"]))
         combo.setCurrentIndex(max(0, combo.findData(selected if selected is not None else CURRENT_PRESET_ID)))
