@@ -55,12 +55,12 @@ class _StubRegistry(CharacterRegistry):
         return "Crazy"
 
     def current_profile(self):
-        return {"character_id": "Crazy", "name": "Crazy"}
+        return {"character_id": "Crazy", "display_name": "Crazy"}
 
-    def current_name(self):
+    def current_display_name(self):
         return "Crazy"
 
-    def name_of(self, character_id):
+    def display_name_of(self, character_id):
         return str(character_id or "")
 
 

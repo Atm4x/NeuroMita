@@ -500,6 +500,6 @@ class ChatModel:
         logger.info("Reloading current character data.")
         if self.current_character:
             self.current_character.reload_character_data()
-            logger.info(f"Character {self.current_character.name} data reloaded.")
+            logger.info(f"Character {self.current_character.display_name} data reloaded.")
         else:
             logger.warning("No current character selected to reload.")

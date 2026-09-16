@@ -26,13 +26,13 @@ class _ReminderState:
 class ReminderManager(CharacterScopedService):
     """One reminder service with isolated state per character id."""
 
-    def __init__(self, character_name: str = ""):
+    def __init__(self, character_id: str = ""):
         super().__init__(
-            default_character_id=str(character_name or ""),
-            default_character_name=str(character_name or ""),
+            default_character_id=str(character_id or ""),
+            default_storage_name=str(character_id or ""),
         )
         self._states: dict[str, _ReminderState] = {}
-        if character_name:
+        if character_id:
             self.load_reminders()
 
     def _state(self) -> _ReminderState:

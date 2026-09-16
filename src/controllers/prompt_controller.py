@@ -1240,7 +1240,11 @@ class PromptController(PromptBuilderService):
         participants_lines = "\n".join(f"- {x}" for x in (participants or [])) if participants else "- (none)"
 
         vars_to_set = {
-            "CHARACTER_NAME": str(getattr(character, "name", "") or getattr(character, "char_id", "") or "Character"),
+            "CHARACTER_NAME": str(
+                getattr(character, "display_name", "")
+                or getattr(character, "char_id", "")
+                or "Character"
+            ),
             "PARTICIPANTS_TEXT": participants_lines,
             "SENDER_NAME": str(sender or "Player"),
         }

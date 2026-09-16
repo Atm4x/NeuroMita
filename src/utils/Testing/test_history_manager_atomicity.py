@@ -53,7 +53,7 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         self._conn_patcher.start()
         DatabaseManager._instance = None
         DatabaseManager._path_override = None
-        self.hm = HistoryManager(character_name="Test", character_id="char:test")
+        self.hm = HistoryManager(storage_name="Test", character_id="char:test")
 
     def tearDown(self) -> None:
         self._conn_patcher.stop()

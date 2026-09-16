@@ -366,14 +366,14 @@ class CharacterRegistry(ABC):
     def current_profile(self) -> Dict[str, Any]: ...
 
     @abstractmethod
-    def current_name(self) -> str: ...
+    def current_display_name(self) -> str: ...
 
-    def name_of(self, character_id: str) -> str:
-        """Имя персонажа; если его нет — сам id (для подписей в UI)."""
+    def display_name_of(self, character_id: str) -> str:
+        """Display label for a character; falls back to its stable id."""
         if not character_id:
             return ""
         ref = self.get(str(character_id))
-        return str(getattr(ref, "name", "") or character_id)
+        return str(getattr(ref, "display_name", "") or character_id)
 
 
 # ---------------------------------------------------------------------------

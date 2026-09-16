@@ -143,7 +143,11 @@ class ModelController(GenerationService, ModelStateService):
         self._temporary_system_infos_lock = threading.Lock()
 
         self.event_writer = ConversationEventWriter(character_ref_resolver=self._get_character_ref)
-        self.ui_projector = HistoryUiProjector(resolve_name=lambda cid: str(getattr(self._get_character_ref(cid), "name", "") or cid))
+        self.ui_projector = HistoryUiProjector(
+            resolve_name=lambda cid: str(
+                getattr(self._get_character_ref(cid), "display_name", "") or cid
+            )
+        )
 
         from handlers.image_description_handler import ImageDescriptionHandler
         self.image_description_handler = ImageDescriptionHandler(model=self.model, settings=self.settings)
@@ -873,23 +877,21 @@ class ModelController(GenerationService, ModelStateService):
         except Exception:
             return None
 
-    def _char_provider_value(self, character_id: str, character_name: str):
+    def _char_provider_value(self, character_id: str):
         label = self.settings.get(f"CHAR_PROVIDER_{character_id}", None)
-        if label is None and character_name:
-            label = self.settings.get(f"CHAR_PROVIDER_{character_name}", None)
         return label if label is not None else -1
 
-    def _resolve_chat_preset_id(self, character_id: str, character_name: str) -> Optional[int]:
+    def _resolve_chat_preset_id(self, character_id: str) -> Optional[int]:
         from presets.character_provider import provider_preset_id
         return provider_preset_id(
-            self._char_provider_value(character_id, character_name),
+            self._char_provider_value(character_id),
         )
 
     def _resolve_preset_id(
-        self, event_type: str, policy: RequestPolicy, char_id: str, char_name: str
+        self, event_type: str, policy: RequestPolicy, char_id: str
     ) -> Optional[int]:
         if event_type != "react":
-            return self._resolve_chat_preset_id(char_id, char_name)
+            return self._resolve_chat_preset_id(char_id)
 
         lvl = int(getattr(policy, "react_level", None) or 1)
         default_label = self.settings.get("REACT_PROVIDER", _("Текущий", "Current"))
@@ -898,7 +900,7 @@ class ModelController(GenerationService, ModelStateService):
 
         preset_id = self._preset_id_from_label(label)
         if preset_id is None:
-            preset_id = self._resolve_chat_preset_id(char_id, char_name)
+            preset_id = self._resolve_chat_preset_id(char_id)
 
         logger.info(f"[ModelController] react policy: level={lvl}, provider_label='{label}', preset_id={preset_id}")
         return preset_id
@@ -916,9 +918,9 @@ class ModelController(GenerationService, ModelStateService):
             char = self._get_character_ref(cid)
             if char is None:
                 return None
-            char_name = str(getattr(char, "name", "") or "")
+            char_name = str(getattr(char, "display_name", "") or "")
             policy = resolve_policy(model_event_type=str(event_type))
-            preset_id = self._resolve_chat_preset_id(cid, char_name)
+            preset_id = self._resolve_chat_preset_id(cid)
             capabilities: Dict[str, Any] = {}
             try:
                 capabilities = dict(getattr(self.preset_resolver.resolve(preset_id), "capabilities", {}) or {})
@@ -976,8 +978,8 @@ class ModelController(GenerationService, ModelStateService):
         cid, messages, context_tokens = self._build_current_context_messages()
         cfg = getattr(self.model, "cfg", None)
         char = self._get_character_ref(cid) if cid else None
-        char_name = str(getattr(char, "name", "") or "")
-        preset_id = self._resolve_chat_preset_id(cid, char_name) if cid else None
+        char_name = str(getattr(char, "display_name", "") or "")
+        preset_id = self._resolve_chat_preset_id(cid) if cid else None
 
         pricing_info = None
         model_name = ""
@@ -1226,7 +1228,7 @@ class ModelController(GenerationService, ModelStateService):
         Ни RAG, ни промпт-сборка, ни запись в историю тут не участвуют.
         """
         char_ref = self._get_character_ref(request.character_id)
-        char_name = str(getattr(char_ref, "name", "") or "") or request.character_id or "Мита"
+        char_name = str(getattr(char_ref, "display_name", "") or "") or request.character_id or "Мита"
 
         # Один user-месседж: запрос из одного лишь system-сообщения часть
         # провайдеров (в т.ч. маршруты OpenRouter) отклоняет с HTTP 400.
@@ -1361,7 +1363,7 @@ class ModelController(GenerationService, ModelStateService):
             policy = request.policy or resolve_policy(model_event_type=str(event_type))
 
         char_id = getattr(char, "char_id", "") or ""
-        char_name = getattr(char, "name", "") or ""
+        char_name = getattr(char, "display_name", "") or ""
         is_game_master = char_id.casefold() == "gamemaster"
 
         rag_context = ""
@@ -1439,7 +1441,7 @@ class ModelController(GenerationService, ModelStateService):
         # Пресет резолвим ДО capabilities. Раньше capabilities брались у текущего
         # пресета, а запрос уходил в пресет персонажа — structured_output мог не
         # совпадать с тем, что реально поддерживает провайдер.
-        preset_id = self._resolve_preset_id(event_type, policy, char_id, char_name)
+        preset_id = self._resolve_preset_id(event_type, policy, char_id)
 
         effective_capabilities = {}
         effective_preset = None

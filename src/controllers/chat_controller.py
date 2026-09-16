@@ -337,7 +337,7 @@ class ChatController(GenerationActivityService):
     def _resolve_character_name(self, character_id: str | None) -> str:
         if not character_id:
             return ""
-        return use(CharacterRegistry).name_of(str(character_id))
+        return use(CharacterRegistry).display_name_of(str(character_id))
 
     def _run_request(
         self,

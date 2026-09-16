@@ -431,7 +431,7 @@ def _load_character_settings_snapshot_async(gui, settings_data) -> None:
         return {
             "character_list": [str(c or "").strip() for c in (character_list or []) if str(c or "").strip()],
             "current_char_id": current_char_id,
-            "character_names": {cid: registry.name_of(cid) for cid in character_list},
+            "character_names": {cid: registry.display_name_of(cid) for cid in character_list},
         }
 
     def _apply(snapshot: dict) -> None:

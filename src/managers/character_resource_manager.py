@@ -15,7 +15,7 @@ from managers.working_state_manager import WorkingStateManager
 @dataclass
 class _CharacterDescriptor:
     character_id: str
-    character_name: str
+    storage_name: str
     prompt_set_path: str = ""
 
 
@@ -45,7 +45,7 @@ class CharacterResourceManager:
     def register_character(
         self,
         character_id: str,
-        character_name: str,
+        storage_name: str,
         prompt_set_path: str = "",
     ) -> None:
         key = self._key(character_id)
@@ -54,13 +54,13 @@ class CharacterResourceManager:
             if descriptor is None:
                 descriptor = _CharacterDescriptor(
                     character_id=key,
-                    character_name=str(character_name or key),
+                    storage_name=str(storage_name or key),
                     prompt_set_path=str(prompt_set_path or ""),
                 )
                 self._descriptors[key] = descriptor
             else:
-                descriptor.character_name = str(
-                    character_name or descriptor.character_name or key
+                descriptor.storage_name = str(
+                    storage_name or descriptor.storage_name or key
                 )
                 descriptor.prompt_set_path = str(
                     prompt_set_path or descriptor.prompt_set_path or ""
@@ -68,22 +68,22 @@ class CharacterResourceManager:
 
             self.history_manager.register_scope(
                 key,
-                descriptor.character_name,
+                descriptor.storage_name,
                 descriptor.prompt_set_path,
             )
             self.memory_manager.register_scope(
                 key,
-                descriptor.character_name,
+                descriptor.storage_name,
                 descriptor.prompt_set_path,
             )
             self.reminder_manager.register_scope(
                 key,
-                descriptor.character_name,
+                descriptor.storage_name,
                 descriptor.prompt_set_path,
             )
             self.working_state_manager.register_scope(
                 key,
-                descriptor.character_name,
+                descriptor.storage_name,
                 descriptor.prompt_set_path,
             )
 
@@ -97,70 +97,70 @@ class CharacterResourceManager:
             descriptor.prompt_set_path = str(prompt_set_path or "")
             self.register_character(
                 key,
-                descriptor.character_name,
+                descriptor.storage_name,
                 descriptor.prompt_set_path,
             )
 
     def _descriptor(
         self,
         character_id: str,
-        character_name: str = "",
+        storage_name: str = "",
     ) -> _CharacterDescriptor:
         key = self._key(character_id)
         descriptor = self._descriptors.get(key)
         if descriptor is None:
-            descriptor = _CharacterDescriptor(key, str(character_name or key))
+            descriptor = _CharacterDescriptor(key, str(storage_name or key))
             self._descriptors[key] = descriptor
-            self.register_character(key, descriptor.character_name, "")
+            self.register_character(key, descriptor.storage_name, "")
         return descriptor
 
-    def history_for(self, character_id: str, character_name: str = ""):
+    def history_for(self, character_id: str, storage_name: str = ""):
         with self._lock:
-            descriptor = self._descriptor(character_id, character_name)
+            descriptor = self._descriptor(character_id, storage_name)
             view = self._history_views.get(descriptor.character_id)
             if view is None:
                 view = self.history_manager.bind(
                     descriptor.character_id,
-                    descriptor.character_name,
+                    descriptor.storage_name,
                     descriptor.prompt_set_path,
                 )
                 self._history_views[descriptor.character_id] = view
             return view
 
-    def memory_for(self, character_id: str, character_name: str = ""):
+    def memory_for(self, character_id: str, storage_name: str = ""):
         with self._lock:
-            descriptor = self._descriptor(character_id, character_name)
+            descriptor = self._descriptor(character_id, storage_name)
             view = self._memory_views.get(descriptor.character_id)
             if view is None:
                 view = self.memory_manager.bind(
                     descriptor.character_id,
-                    descriptor.character_name,
+                    descriptor.storage_name,
                     descriptor.prompt_set_path,
                 )
                 self._memory_views[descriptor.character_id] = view
             return view
 
-    def reminders_for(self, character_id: str, character_name: str = ""):
+    def reminders_for(self, character_id: str, storage_name: str = ""):
         with self._lock:
-            descriptor = self._descriptor(character_id, character_name)
+            descriptor = self._descriptor(character_id, storage_name)
             view = self._reminder_views.get(descriptor.character_id)
             if view is None:
                 view = self.reminder_manager.bind(
                     descriptor.character_id,
-                    descriptor.character_name,
+                    descriptor.storage_name,
                     descriptor.prompt_set_path,
                 )
                 self._reminder_views[descriptor.character_id] = view
             return view
 
-    def working_state_for(self, character_id: str, character_name: str = ""):
+    def working_state_for(self, character_id: str, storage_name: str = ""):
         with self._lock:
-            descriptor = self._descriptor(character_id, character_name)
+            descriptor = self._descriptor(character_id, storage_name)
             view = self._working_state_views.get(descriptor.character_id)
             if view is None:
                 view = self.working_state_manager.bind(
                     descriptor.character_id,
-                    descriptor.character_name,
+                    descriptor.storage_name,
                     descriptor.prompt_set_path,
                 )
                 self._working_state_views[descriptor.character_id] = view

@@ -685,7 +685,7 @@ class HistoryController(HistoryService):
 
         prompt = self._CANDIDATE_PROMPT.format(
             max_n=max_n,
-            char_name=getattr(character, "name", "Character"),
+            char_name=getattr(character, "display_name", "Character"),
             chunk=self._truncate_text_for_prompt(chunk, 6000),
         )
 
@@ -1043,8 +1043,8 @@ class HistoryController(HistoryService):
                 )
 
             full_prompt = prompt_template.replace("{history_messages}", formatted_messages)
-            full_prompt = full_prompt.replace("{your character}", getattr(character, "name", "Character"))
-            full_prompt = full_prompt.replace("{current_character_name}", getattr(character, "name", "Character"))
+            full_prompt = full_prompt.replace("{your character}", getattr(character, "display_name", "Character"))
+            full_prompt = full_prompt.replace("{current_character_name}", getattr(character, "display_name", "Character"))
             full_prompt = full_prompt.replace("{previous_summary}", previous_summary_trimmed)
             max_attempts = max(1, int(self._get_setting("HISTORY_COMPRESSION_MAX_ATTEMPTS", 3)))
             base_retry_delay = max(0.0, float(self._get_setting("HISTORY_COMPRESSION_RETRY_BASE_DELAY_SEC", 2.0)))
@@ -1561,7 +1561,7 @@ class HistoryController(HistoryService):
                 )
             )
 
-        assistant_name = str(getattr(character, "name", "") or "Character")
+        assistant_name = str(getattr(character, "display_name", "") or "Character")
         for msg in messages_to_compress:
             if not isinstance(msg, dict):
                 continue

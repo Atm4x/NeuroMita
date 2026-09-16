@@ -50,10 +50,10 @@ class MemoryManager(CharacterScopedService):
     _EMBED_EXECUTOR_LOCK: ClassVar[Lock] = Lock()
     _EMBED_EXECUTOR_SHUTDOWN: ClassVar[bool] = False
 
-    def __init__(self, character_name: str = ""):
+    def __init__(self, character_id: str = ""):
         super().__init__(
-            default_character_id=str(character_name or ""),
-            default_character_name=str(character_name or ""),
+            default_character_id=str(character_id or ""),
+            default_storage_name=str(character_id or ""),
         )
         self.db = DatabaseManager()
         self._total_characters: dict[str, int] = {}
