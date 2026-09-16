@@ -183,7 +183,8 @@ def setup_model_interaction_controls(
     create_settings_section(
         self, parent,
         _("Настройки реакций", "React settings"),
-        react_settings_config
+        react_settings_config,
+        icon_name='fa5s.bolt'
     )
 
     build_memory_section(self, parent, provider_options)
