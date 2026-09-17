@@ -566,8 +566,32 @@ class ChessGuiTkinter(QMainWindow):
 
     def show_game_over_message_slot(self, message):
         if self.is_closing: return
-        self.update_status_bar_slot(message) 
-        QMessageBox.information(self, "Игра окончена", message)
+        self.update_status_bar_slot(message)
+        self._request_game_over_reaction(message)
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(_("Игра окончена", "Game over"))
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.setStyleSheet(f"""
+            QMessageBox {{ background-color: {ChessGameModelTkStyles.COLOR_PANEL_BG}; }}
+            QMessageBox QLabel {{
+                color: {ChessGameModelTkStyles.COLOR_TEXT_LIGHT};
+                font-family: {ChessGameModelTkStyles.UI_FONT_FAMILY};
+                font-size: 11pt;
+            }}
+            QPushButton {{
+                background-color: {ChessGameModelTkStyles.COLOR_BUTTON_BG};
+                color: {ChessGameModelTkStyles.COLOR_BUTTON_TEXT};
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-family: {ChessGameModelTkStyles.UI_FONT_FAMILY};
+                font-size: 10pt;
+                min-width: 60px;
+            }}
+            QPushButton:hover {{ background-color: {ChessGameModelTkStyles.COLOR_BUTTON_HOVER_BG}; }}
+        """)
+        msg_box.exec()
 
     def update_status_bar_slot(self, message):
         if self.is_closing: return
@@ -650,7 +674,7 @@ class ChessGuiTkinter(QMainWindow):
                 san_move = current_board_obj.san(chess.Move.from_uci(uci_move_str))
             except Exception:
                 san_move = uci_move_str
-            if self.game_controller.handle_player_move_from_gui(uci_move_str):
+            if self.game_controller.handle_player_move_from_gui(uci_move_str) and not current_board_obj.is_game_over():
                 self._request_mita_reaction(uci_move_str, san_move)
             self.selected_square_gui_coords = None
             self.possible_moves_for_selected_gui_coords = []
@@ -668,6 +692,14 @@ class ChessGuiTkinter(QMainWindow):
             })
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess reaction: {format_exception(exc)}")
+
+    def _request_game_over_reaction(self, outcome):
+        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+            return
+        try:
+            self.reaction_queue.put({"event": "player_game_over", "outcome": str(outcome or "")})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue Mita chess game-over reaction: {format_exception(exc)}")
 
     def closeEvent(self, event):
         # Programmatic stops use ``is_closing`` and must neither prompt the

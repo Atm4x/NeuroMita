@@ -76,6 +76,18 @@ class SeaBattleLifecycleReactionTests(unittest.TestCase):
         self.assertIn("MakeMove,<coordinate>", payload["system_input"])
         self.assertNotIn("Do not take a Sea Battle turn", payload["system_input"])
 
+    def test_game_over_emits_reaction_without_another_shot(self):
+        character = _Character()
+        game = SeaBattleGame(character)
+
+        with patch("modules.SeaBattle.seabattle_instance.use", return_value=_Settings()):
+            game._dispatch_game_over_reaction({"winner": 0, "player_id": 0})
+
+        self.assertEqual(len(character.event_bus.events), 1)
+        _event, payload = character.event_bus.events[0]
+        self.assertIn("The player won", payload["system_input"])
+        self.assertIn("do not take another shot", payload["system_input"])
+
     def test_runtime_state_uses_shared_game_prompt(self):
         character = _Character()
         character.dsl_interpreter = _DslInterpreter()

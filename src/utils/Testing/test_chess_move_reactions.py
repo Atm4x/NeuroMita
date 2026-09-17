@@ -96,6 +96,18 @@ class ChessMoveReactionTests(unittest.TestCase):
         self.assertEqual(payload["event_type"], "react")
         self.assertIn("closed the chess game window", payload["system_input"])
 
+    def test_game_over_emits_reaction_without_a_chess_move(self):
+        character = _Character()
+        game = ChessGame(character, "chess")
+
+        with patch("modules.Chess.game_instance.use", return_value=_Settings()):
+            game._dispatch_game_over_reaction({"outcome": "Checkmate."})
+
+        self.assertEqual(len(character.event_bus.events), 1)
+        _event, payload = character.event_bus.events[0]
+        self.assertIn("game has ended", payload["system_input"])
+        self.assertIn("do not make a chess move", payload["system_input"])
+
     def test_chess_reaction_checkbox_is_checked_by_default(self):
         window = ChessGuiTkinter(_Controller())
         try:

@@ -138,6 +138,8 @@ class SeaBattleGame(GameInterface):
             event_name = event.get("event")
             if event_name == "player_target_selected":
                 self._dispatch_player_target_reaction(event)
+            elif event_name == "player_game_over":
+                self._dispatch_game_over_reaction(event)
             elif event_name == "player_placement_completed":
                 self._dispatch_placement_completed_reaction()
             elif event_name == "player_game_closed":
@@ -197,6 +199,13 @@ class SeaBattleGame(GameInterface):
             "In this same response, react briefly in character and complete your own placement: "
             "put PlaceShipsRandomly in commands when you still have ships to place. "
             "Do not wait for the player to ask again."
+        )
+
+    def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
+        winner = event.get("winner")
+        outcome = "The player won" if winner == event.get("player_id") else "Mita won"
+        self._emit_reaction(
+            f"[Sea Battle] The game has ended: {outcome}. React briefly and naturally in character; do not take another shot."
         )
 
     def _dispatch_player_close_reaction(self):

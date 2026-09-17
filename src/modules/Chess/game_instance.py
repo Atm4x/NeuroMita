@@ -158,6 +158,8 @@ class ChessGame(GameInterface):
                 continue
             if event.get("event") == "player_chess_move":
                 self._dispatch_player_move_reaction(event)
+            elif event.get("event") == "player_game_over":
+                self._dispatch_game_over_reaction(event)
             elif event.get("event") == "player_game_closed":
                 self._dispatch_player_close_reaction()
 
@@ -214,6 +216,30 @@ class ChessGame(GameInterface):
                     "[Chess] The player closed the chess game window. "
                     "React briefly and naturally in character to the end of this match."
                 ),
+                "event_type": "react",
+                "character_id": self.character.char_id,
+                "sender": "Player",
+                "participants": [],
+                "policy": policy.to_dict(),
+            },
+        )
+
+    def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
+        try:
+            settings = use(SettingsService)
+            if not bool(settings.get("REACT_ENABLED", True)) or not bool(settings.get("REACT_L2_ENABLED", True)):
+                return
+        except Exception as exc:
+            logger.debug(f"[{self.character.char_id}] Не удалось проверить настройки реакции на конец шахмат: {format_exception(exc)}")
+            return
+
+        outcome = str(event.get("outcome") or "The chess game has ended.")
+        policy = resolve_policy(model_event_type="react", react_level=2)
+        self.character.event_bus.emit(
+            Events.Chat.SEND_MESSAGE,
+            {
+                "user_input": "",
+                "system_input": f"[Chess] The game has ended: {outcome}. React briefly and naturally in character; do not make a chess move.",
                 "event_type": "react",
                 "character_id": self.character.char_id,
                 "sender": "Player",

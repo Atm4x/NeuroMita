@@ -380,6 +380,9 @@ class SeaBattleWindow(QWidget):
                 placement_completed = not self.game.get_full_state()['player_ships_to_place']
                 self.update_view()
                 self.send_state_update()
+                final_state = self.game.get_full_state()
+                if action == "mita_move" and final_state["phase"] == "game_over":
+                    self._request_game_over_reaction(final_state.get("winner"), final_state.get("player_id"))
                 if placement_completed:
                     self._request_placement_completed_reaction()
             else:
@@ -393,7 +396,11 @@ class SeaBattleWindow(QWidget):
         result, message = self.game.engine.make_move(self.game.player_id, x, y)
         self.update_view()
         self.send_state_update()
-        if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
+        final_state = self.game.get_full_state()
+        game_over = final_state["phase"] == "game_over"
+        if game_over:
+            self._request_game_over_reaction(final_state.get("winner"), final_state.get("player_id"))
+        elif result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
             self._request_mita_reaction(x, y, result, message)
 
     def _request_mita_reaction(self, x, y, result, message):
@@ -408,6 +415,14 @@ class SeaBattleWindow(QWidget):
             })
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita reaction: {format_exception(exc)}")
+
+    def _request_game_over_reaction(self, winner, player_id):
+        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+            return
+        try:
+            self.reaction_queue.put({"event": "player_game_over", "winner": winner, "player_id": player_id})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue Mita Sea Battle game-over reaction: {format_exception(exc)}")
 
     def _request_placement_completed_reaction(self):
         if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
