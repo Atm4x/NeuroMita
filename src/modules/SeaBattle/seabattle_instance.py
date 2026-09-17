@@ -169,10 +169,11 @@ class SeaBattleGame(GameInterface):
         coord = str(event.get("coord") or "неизвестную клетку")
         result = str(event.get("message") or event.get("result") or "сделал ход")
         system_input = (
-            "[Sea Battle] The player fired at "
+            "[Sea Battle automatic turn request] The player fired at "
             f"{coord}. Result: {result}. "
-            "React briefly and naturally in character to this move. "
-            "Do not take a Sea Battle turn yourself in this reply."
+            "It is now your turn. In this same response, react briefly in character "
+            "and put exactly one legal MakeMove,<coordinate> command in commands. "
+            "Do not wait for the player to ask again."
         )
         policy = resolve_policy(model_event_type="react", react_level=2)
         self.character.event_bus.emit(
@@ -193,7 +194,9 @@ class SeaBattleGame(GameInterface):
             return
         self._emit_reaction(
             "[Sea Battle] The player has finished placing all ships. "
-            "React briefly and naturally in character before the battle begins."
+            "In this same response, react briefly in character and complete your own placement: "
+            "put PlaceShipsRandomly in commands when you still have ships to place. "
+            "Do not wait for the player to ask again."
         )
 
     def _dispatch_player_close_reaction(self):
@@ -359,7 +362,7 @@ class SeaBattleGame(GameInterface):
         self.character.set_variable("GAME_STATE_SHOT_HISTORY_STRING", latest_state.get('shot_history_str', ''))
         self.character.set_variable("GAME_STATE_ERROR_MSG", latest_state.get('error'))
 
-        template_filename = f"{self.game_id}.system"
+        template_filename = f"_CommonPrompts/{self.game_id}.system"
         try:
             content, _ = self.character.dsl_interpreter.process_file(template_filename)
             return content

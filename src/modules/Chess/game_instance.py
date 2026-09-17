@@ -181,9 +181,11 @@ class ChessGame(GameInterface):
             {
                 "user_input": "",
                 "system_input": (
-                    "[Chess] The player made the move "
+                    "[Chess automatic turn request] The player made the move "
                     f"{san_move}" + (f" ({uci_move})" if uci_move else "") + ". "
-                    "React briefly and naturally in character. Do not make a chess move yourself in this reply."
+                    "It is now your turn. In this same response, react briefly in character "
+                    "and put exactly RequestBestChessMove in commands. Do not wait for the player "
+                    "to ask again; the recommended legal move will be selected and applied."
                 ),
                 "event_type": "react",
                 "character_id": self.character.char_id,
@@ -419,7 +421,7 @@ class ChessGame(GameInterface):
         self.character.set_variable("GAME_STATE_INVALID_MOVE_TEXT", latest_state_data.get("error_move", None))
         self.character.set_variable("GAME_STATE_INVALID_MOVE_REASON", latest_state_data.get("error_message_for_move", None))
 
-        template_filename = f"{self.game_id}.system"
+        template_filename = f"_CommonPrompts/{self.game_id}.system"
         try:
             content, _ = self.character.dsl_interpreter.process_file(template_filename)
             return content

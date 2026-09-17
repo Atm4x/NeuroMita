@@ -407,13 +407,13 @@ class ChessGuiTkinter(QMainWindow):
             control_panel_layout.addWidget(self.btn_new_game_black)
 
             self.mita_reaction_checkbox = QCheckBox(
-                _("Реакция Миты на ход игрока", "Mita reacts to the player's move")
+                _("Автоматически запрашивать ход Миты", "Automatically request Mita's turn")
             )
             self.mita_reaction_checkbox.setChecked(True)
             self.mita_reaction_checkbox.setToolTip(
                 _(
-                    "После принятого хода Мита получает повод для реакции в чате.",
-                    "After an accepted move, Mita gets a prompt to react in chat.",
+                    "После принятого хода автоматически запрашивается ответный ход Миты.",
+                    "After an accepted move, Mita is automatically asked for her reply move.",
                 )
             )
             # The application-wide checkbox styling is intentionally neutral,

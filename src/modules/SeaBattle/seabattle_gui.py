@@ -256,10 +256,10 @@ class SeaBattleWindow(QWidget):
         self.controls_layout.setVerticalSpacing(6)
         controls_panel_layout.addLayout(self.controls_layout)
 
-        self.mita_reaction_checkbox = QCheckBox(_("Мита реагирует на мой выстрел", "Mita reacts to my shot"))
+        self.mita_reaction_checkbox = QCheckBox(_("Автоматически запрашивать ход Миты", "Automatically request Mita's turn"))
         self.mita_reaction_checkbox.setChecked(True)
         self.mita_reaction_checkbox.setToolTip(
-            _("После вашего действительного хода Мита сразу получает повод для реакции в чате.", "After an accepted shot, Mita gets a prompt to react in chat.")
+            _("После вашего действительного хода автоматически запрашивается ответный ход Миты.", "After an accepted shot, Mita is automatically asked for her reply move.")
         )
         controls_panel_layout.addWidget(self.mita_reaction_checkbox)
         controls_panel_layout.addWidget(QLabel(
@@ -377,10 +377,11 @@ class SeaBattleWindow(QWidget):
             success, msg = self.game.engine.place_ship(self.game.player_id, x, y, l, o)
             if success:
                 self.ship_to_place = None
-                if not self.game.get_full_state()['player_ships_to_place']:
-                    self._request_placement_completed_reaction()
+                placement_completed = not self.game.get_full_state()['player_ships_to_place']
                 self.update_view()
                 self.send_state_update()
+                if placement_completed:
+                    self._request_placement_completed_reaction()
             else:
                 self.info_label.setText(f"<font color='#BF616A'>{msg}</font>")
 
@@ -390,10 +391,10 @@ class SeaBattleWindow(QWidget):
         if button != Qt.MouseButton.LeftButton: return
 
         result, message = self.game.engine.make_move(self.game.player_id, x, y)
-        if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
-            self._request_mita_reaction(x, y, result, message)
         self.update_view()
         self.send_state_update()
+        if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
+            self._request_mita_reaction(x, y, result, message)
 
     def _request_mita_reaction(self, x, y, result, message):
         if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:

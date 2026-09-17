@@ -142,6 +142,28 @@ class ContextBudgetTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("Common/Dialogue.txt", text, str(path))
 
+    def test_every_prompt_set_uses_the_shared_games_layer(self):
+        games_layer = PROMPTS / "Common" / "games.txt"
+        self.assertEqual(
+            games_layer.read_text(encoding="utf-8"),
+            "[<./chess_handler.script>]\n[<./seabattle_handler.script>]\n",
+        )
+
+        templates = list(PROMPTS.rglob("main_template.txt"))
+        self.assertTrue(templates)
+        for path in templates:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("Common/games.txt", text, str(path))
+
+    def test_shared_chess_context_keeps_maia_out_of_mita_dialogue(self):
+        chess_handler = (PROMPTS / "Common" / "chess_handler.script").read_text(encoding="utf-8")
+        runtime_state = (PROMPTS / "_CommonPrompts" / "chess.system").read_text(encoding="utf-8")
+
+        self.assertIn("пока Игрок сам не спросит", chess_handler)
+        self.assertIn("unless the player explicitly asks", runtime_state)
+        self.assertNotIn("Maia (твой движок)", chess_handler)
+        self.assertNotIn("Maia выберет", chess_handler)
+
     def test_personality_opener_lives_in_exactly_one_block(self):
         """Личность не должна расползаться по нескольким статическим блокам.
 

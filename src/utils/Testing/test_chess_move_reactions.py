@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import unittest
 from pathlib import Path
@@ -54,6 +55,15 @@ class _Controller:
         return True
 
 
+class _DslInterpreter:
+    def __init__(self):
+        self.paths = []
+
+    def process_file(self, path):
+        self.paths.append(path)
+        return "game state", []
+
+
 class ChessMoveReactionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -71,6 +81,8 @@ class ChessMoveReactionTests(unittest.TestCase):
         self.assertEqual(payload["event_type"], "react")
         self.assertEqual(payload["policy"]["react_level"], 2)
         self.assertIn("e4", payload["system_input"])
+        self.assertIn("RequestBestChessMove", payload["system_input"])
+        self.assertNotIn("Do not make a chess move", payload["system_input"])
 
     def test_player_closing_chess_emits_l2_reaction(self):
         character = _Character()
@@ -92,6 +104,29 @@ class ChessMoveReactionTests(unittest.TestCase):
         finally:
             window.hide()
             window.deleteLater()
+
+    def test_runtime_state_uses_shared_game_prompt(self):
+        character = _Character()
+        character.dsl_interpreter = _DslInterpreter()
+        game = ChessGame(character, "chess")
+        game.state_queue = queue.Queue()
+        game.state_queue.put({
+            "player_is_white_in_gui": True,
+            "turn": "black",
+            "current_elo": 1500,
+            "last_move_san": "e4",
+            "fen": "test-fen",
+            "board_ascii": None,
+            "is_game_over": False,
+            "outcome_message": "Playing",
+            "legal_moves_uci": ["e7e5"],
+            "legal_moves_short": ["e7e5"],
+            "is_auto": False,
+            "is_cheat": False,
+        })
+
+        self.assertEqual(game.get_state_prompt(), "game state")
+        self.assertEqual(character.dsl_interpreter.paths, ["_CommonPrompts/chess.system"])
 
 
 if __name__ == "__main__":
