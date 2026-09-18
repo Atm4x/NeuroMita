@@ -203,6 +203,7 @@ class EditorMixin:
             pid = self._current_protocol_id_ui() or self._protocol_default_id
             v.protocol_row.set_current_by_data(pid)
             self._apply_protocol_details(pid)
+            self._apply_help_links({})
 
             self._on_field_changed()
             return
@@ -345,6 +346,9 @@ class EditorMixin:
         doc_url = str(preset.get("documentation_url") or "")
         models_url = str(preset.get("models_url") or "")
         key_url = str(preset.get("key_url") or "")
+        test_url = str(preset.get("test_url") or "").strip()
+
+        v.test_button.setVisible(bool(test_url))
 
         v.url_help_label.setVisible(bool(doc_url))
         v.url_help_label.setText(f'<a href="{doc_url}" style="color: {THEME["link"]}; text-decoration: underline;">{_("Документация", "Documentation")}</a>' if doc_url else "")
