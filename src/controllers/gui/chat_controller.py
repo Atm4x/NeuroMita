@@ -123,6 +123,7 @@ class ChatController(BaseController):
             "structured_data": structured_data,
             "message_id": str(data.get("message_id") or ""),
             "character_id": str(data.get("character_id") or ""),
+            "surface_character_ids": list(data.get("surface_character_ids") or []),
             "sample_id": str(data.get("sample_id") or ""),
             "context_snapshot_id": str(data.get("context_snapshot_id") or ""),
         }

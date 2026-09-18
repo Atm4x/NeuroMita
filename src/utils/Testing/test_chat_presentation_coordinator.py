@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
 from ui.windows.app_window_base import AppWindowBase
+from controllers.gui.chat_controller import ChatController as GuiChatController
+from core.events import Event, Events
 
 
 def _command(message_id: str, content: str, *, character_id: str = "Crazy") -> ChatRenderCommand:
@@ -489,6 +491,46 @@ def test_group_dialogue_surface_renders_participant_stream_immediately() -> None
         current_character_id="Crazy",
         surface_character_ids=("Crazy", "Kind", "Cappie"),
     ) is True
+
+
+def test_request_participants_define_surface_without_structured_dialogue_snapshot() -> None:
+    assert AppWindowBase._chat_surface_character_ids(
+        "Crazy",
+        ("Crazy", "Kind", "Cappie"),
+    ) == ("Crazy", "Kind", "Cappie")
+
+
+def test_request_participants_do_not_leak_into_unrelated_selected_character() -> None:
+    assert AppWindowBase._chat_surface_character_ids(
+        "Ghost",
+        ("Crazy", "Kind", "Cappie"),
+    ) == ("Ghost",)
+
+
+def test_gui_adapter_preserves_request_participants_for_live_projection() -> None:
+    emitted = []
+
+    class _Signal:
+        def emit(self, payload):
+            emitted.append(payload)
+
+    class _View:
+        render_chat_event_signal = _Signal()
+
+    controller = object.__new__(GuiChatController)
+    controller.view = _View()
+    controller._on_update_chat_ui(Event(
+        Events.GUI.UPDATE_CHAT_UI,
+        {
+            "role": "assistant",
+            "response": "Kind reply",
+            "character_id": "Kind",
+            "surface_character_ids": ["Crazy", "Kind", "Cappie"],
+        },
+    ))
+
+    assert emitted[0]["character_id"] == "Kind"
+    assert emitted[0]["surface_character_ids"] == ["Crazy", "Kind", "Cappie"]
 
 
 def test_unscoped_stream_conservatively_blocks_history_projection() -> None:

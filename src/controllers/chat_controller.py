@@ -501,6 +501,13 @@ class ChatController(ChatService, GenerationActivityService):
                 runtime_source = DialogueRuntimeSource.NONE
         if dialogue is not None and dialogue.conversation_id:
             self.dialogue_runtime_state.update_from_context(dialogue, runtime_source)
+        surface_character_ids = self._normalize_participants(list(participants or []))
+        normalized_character_id = str(character_id or "").strip()
+        if normalized_character_id and not any(
+            item.casefold() == normalized_character_id.casefold()
+            for item in surface_character_ids
+        ):
+            surface_character_ids.append(normalized_character_id)
         trace_status = "ok"
         trace_error_stage = ""
         trace_error_type = ""
@@ -547,6 +554,7 @@ class ChatController(ChatService, GenerationActivityService):
                         "chunk": text,
                         "role": role,
                         "character_id": character_id or "",
+                        "surface_character_ids": surface_character_ids,
                     }, delivery=EventDelivery.ORDERED)
 
             stream_coalescer = TextDeltaCoalescer(append_stream_chunk) if is_streaming else None
@@ -567,6 +575,7 @@ class ChatController(ChatService, GenerationActivityService):
                             "character_name": effective_character_name,
                             "speaker_name": effective_character_name,
                             "role": "think",
+                            "surface_character_ids": surface_character_ids,
                         }, delivery=EventDelivery.ORDERED)
                         stream_current_role = "think"
                         stream_started = True
@@ -591,6 +600,7 @@ class ChatController(ChatService, GenerationActivityService):
                             "character_name": effective_character_name,
                             "speaker_name": effective_character_name,
                             "role": "assistant",
+                            "surface_character_ids": surface_character_ids,
                         }, delivery=EventDelivery.ORDERED)
                         stream_current_role = "assistant"
                         stream_started = True
@@ -658,6 +668,7 @@ class ChatController(ChatService, GenerationActivityService):
                     "emotion": "",
                     "character_id": character_id or "",
                     "message_id": system_message_id,
+                    "surface_character_ids": surface_character_ids,
                 }, delivery=EventDelivery.ORDERED)
 
             if image_data and eff_policy.echo_to_ui and not images_shown:
@@ -677,6 +688,7 @@ class ChatController(ChatService, GenerationActivityService):
                     "emotion": "",
                     "character_id": character_id or "",
                     "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                    "surface_character_ids": surface_character_ids,
                 }, delivery=EventDelivery.ORDERED)
 
             result: ChatGenerationResult | None = use(GenerationService).generate_chat(
@@ -921,6 +933,7 @@ class ChatController(ChatService, GenerationActivityService):
                     "character_id": effective_character_id or "",
                     "sample_id": sample_id or "",
                     "context_snapshot_id": context_snapshot_id or "",
+                    "surface_character_ids": surface_character_ids,
                 }
                 if structured_data:
                     finish_payload["structured_data"] = structured_data
@@ -945,6 +958,7 @@ class ChatController(ChatService, GenerationActivityService):
                         "character_name": effective_character_name or "",
                         "speaker_name": effective_character_name or "",
                         "message_id": assistant_message_id or "",
+                        "surface_character_ids": surface_character_ids,
                     }, delivery=EventDelivery.ORDERED)
                 self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
                     "role": "assistant",
@@ -958,6 +972,7 @@ class ChatController(ChatService, GenerationActivityService):
                     "message_id": assistant_message_id,
                     "sample_id": sample_id or "",
                     "context_snapshot_id": context_snapshot_id or "",
+                    "surface_character_ids": surface_character_ids,
                 }, delivery=EventDelivery.ORDERED)
                 perf_mark(trace_id, "response.ui_complete")
             self.event_bus.emit(Events.GUI.UPDATE_STATUS)

@@ -1598,12 +1598,16 @@ class AppWindowBase(QMainWindow):
         )
 
     def _on_render_chat_event_signal(self, data: dict):
-        command = self._command_from_render_payload(data if isinstance(data, dict) else {})
+        payload = data if isinstance(data, dict) else {}
+        command = self._command_from_render_payload(payload)
         current_character_id = str(self._shell_actions.current_character_id() or "")
         if not self._chat_presentation.record_live(
             command,
             current_character_id=current_character_id,
-            surface_character_ids=self._chat_surface_character_ids(current_character_id),
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             return False
         return self._render_chat_command(command)
@@ -1677,7 +1681,10 @@ class AppWindowBase(QMainWindow):
                 stream_id,
                 current_character_id=current_character_id,
                 character_id=character_id,
-                surface_character_ids=self._chat_surface_character_ids(current_character_id),
+                surface_character_ids=self._chat_surface_character_ids(
+                    current_character_id,
+                    payload.get("surface_character_ids") or (),
+                ),
             ):
                 return False
         if not self._chat_render_context.is_bound:
@@ -1714,7 +1721,10 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
-            surface_character_ids=self._chat_surface_character_ids(current_character_id),
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             return False
         if not self._chat_presentation.is_stream_mounted(stream_id):
@@ -1761,7 +1771,10 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
-            surface_character_ids=self._chat_surface_character_ids(current_character_id),
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             message_renderer.discard_stream_slot(self._chat_render_context, stream_id)
             return False
@@ -1785,8 +1798,24 @@ class AppWindowBase(QMainWindow):
         )
 
     @staticmethod
-    def _chat_surface_character_ids(current_character_id: str) -> tuple[str, ...]:
+    def _chat_surface_character_ids(
+        current_character_id: str,
+        request_character_ids=(),
+    ) -> tuple[str, ...]:
         current = str(current_character_id or "").strip()
+        request_participants = tuple(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in request_character_ids
+                if str(item or "").strip()
+            )
+        )
+        request_keys = {item.casefold() for item in request_participants}
+        if request_participants:
+            if current and current.casefold() in request_keys:
+                return request_participants
+            return (current,) if current else ()
+
         snapshot = get_dialogue_runtime_state_service().snapshot()
         participants = tuple(
             str(item.character_id or "").strip()
