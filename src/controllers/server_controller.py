@@ -135,6 +135,7 @@ class ServerController:
             "GAME_BLOCK_LEVEL",
             "MIC_INSTANT_SENT",
             "MITA_DIALOGUE_AUTO",
+            "DIALOGUE_AUTO_ROUNDS",
             "DIALOGUE_MAX_CHAIN_TURNS",
             "DIALOGUE_MAX_CONTINUES",
             "GM_ON",
@@ -451,13 +452,21 @@ class ServerController:
     def _prepare_loaded_settings_body(self) -> Dict[str, Any]:
         settings = {}
         for setting in self.settings_to_send:
+            if setting == "GM_ON":
+                settings[str(setting)] = False
+                continue
             if setting == 'BEAT_SYNC_USE_FILE_TRANSFER':
                 settings[str(setting)] = True
                 continue
             if setting == 'BEAT_SYNC_AUTO_INSTALL':
                 settings[str(setting)] = False
                 continue
-            default = True if setting == "MITA_DIALOGUE_AUTO" else None
+            defaults = {
+                "MITA_DIALOGUE_AUTO": True,
+                "DIALOGUE_AUTO_ROUNDS": 1,
+                "DIALOGUE_MAX_CHAIN_TURNS": 24,
+            }
+            default = defaults.get(setting)
             settings[str(setting)] = self._get_setting(setting, default)
 
         characters_stats = self._collect_characters_stats()

@@ -464,6 +464,33 @@ def test_stream_rendering_is_isolated_by_character() -> None:
     ) is False
 
 
+def test_group_dialogue_surface_renders_live_messages_from_every_participant() -> None:
+    coordinator = ChatPresentationCoordinator()
+    kind = _command("out:kind", "Kind reply", character_id="Kind")
+
+    assert coordinator.record_live(
+        kind,
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is True
+    assert coordinator.record_live(
+        _command("out:ghost", "Unrelated reply", character_id="Ghost"),
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is False
+
+
+def test_group_dialogue_surface_renders_participant_stream_immediately() -> None:
+    coordinator = ChatPresentationCoordinator()
+    coordinator.begin_stream("kind-stream", character_id="Kind")
+
+    assert coordinator.should_render_stream(
+        "kind-stream",
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is True
+
+
 def test_unscoped_stream_conservatively_blocks_history_projection() -> None:
     coordinator = ChatPresentationCoordinator()
     coordinator.begin_stream("legacy-stream")

@@ -31,6 +31,7 @@ from ui.chat import message_renderer
 from ui.chat.chat_delegate import ChatMessageDelegate
 from ui.chat.render_context import ChatRenderContext
 from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
+from services.dialogue_runtime_state import get_dialogue_runtime_state_service
 from ui.dialogs.ffmpeg_dialogs import create_ffmpeg_install_popup, show_ffmpeg_error_popup
 from ui.dialogs.telegram_auth_dialogs import show_tg_code_dialog, show_tg_password_dialog
 from ui.widgets.image_viewer_widget import ImageViewerWidget
@@ -1602,6 +1603,7 @@ class AppWindowBase(QMainWindow):
         if not self._chat_presentation.record_live(
             command,
             current_character_id=current_character_id,
+            surface_character_ids=self._chat_surface_character_ids(current_character_id),
         ):
             return False
         return self._render_chat_command(command)
@@ -1641,6 +1643,7 @@ class AppWindowBase(QMainWindow):
         if not self._chat_presentation.record_live(
             command,
             current_character_id=command.character_id,
+            surface_character_ids=self._chat_surface_character_ids(command.character_id),
         ):
             return False
         return self._render_chat_command(command)
@@ -1674,6 +1677,7 @@ class AppWindowBase(QMainWindow):
                 stream_id,
                 current_character_id=current_character_id,
                 character_id=character_id,
+                surface_character_ids=self._chat_surface_character_ids(current_character_id),
             ):
                 return False
         if not self._chat_render_context.is_bound:
@@ -1710,6 +1714,7 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
+            surface_character_ids=self._chat_surface_character_ids(current_character_id),
         ):
             return False
         if not self._chat_presentation.is_stream_mounted(stream_id):
@@ -1756,6 +1761,7 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
+            surface_character_ids=self._chat_surface_character_ids(current_character_id),
         ):
             message_renderer.discard_stream_slot(self._chat_render_context, stream_id)
             return False
@@ -1777,6 +1783,20 @@ class AppWindowBase(QMainWindow):
             sample_id=str(payload.get("sample_id") or ""),
             context_snapshot_id=str(payload.get("context_snapshot_id") or ""),
         )
+
+    @staticmethod
+    def _chat_surface_character_ids(current_character_id: str) -> tuple[str, ...]:
+        current = str(current_character_id or "").strip()
+        snapshot = get_dialogue_runtime_state_service().snapshot()
+        participants = tuple(
+            str(item.character_id or "").strip()
+            for item in snapshot.participants
+            if item.is_active and str(item.character_id or "").strip()
+        )
+        participant_keys = {item.casefold() for item in participants}
+        if current and current.casefold() in participant_keys:
+            return participants
+        return (current,) if current else ()
 
     # ===== Слоты прогресса установки ASR (если вдруг отсутствуют) =====
     def _on_asr_install_progress(self, data: dict):
