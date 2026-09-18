@@ -617,6 +617,11 @@ class ServerController:
         origin_message_id = p.get("origin_message_id")
         presentation_message_id = str(p.get("presentation_message_id") or "")
         character_id = str(p.get("character_id") or "")
+        surface_character_ids = [
+            str(item or "").strip()
+            for item in (p.get("participants") or [])
+            if str(item or "").strip()
+        ]
 
         if not text.strip() or sender_kind is not DialogueActorKind.PLAYER:
             return
@@ -631,7 +636,7 @@ class ServerController:
         ):
             return
 
-        self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+        ui_payload = {
             "role": "user",
             "response": text,
             "is_initial": False,
@@ -639,7 +644,10 @@ class ServerController:
             "speaker_name": "",
             "message_id": presentation_message_id,
             "character_id": character_id,
-        })
+        }
+        if surface_character_ids:
+            ui_payload["surface_character_ids"] = list(dict.fromkeys(surface_character_ids))
+        self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, ui_payload)
 
 
 
