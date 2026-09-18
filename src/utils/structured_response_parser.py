@@ -299,6 +299,16 @@ def _schema_aware_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> 
     import copy
     data = copy.deepcopy(data)
 
+    # OpenAI-compatible gateways such as OpenRouter may expose only the
+    # generic ``json_object`` contract.  In that mode Gemini sometimes emits
+    # the compact working state as a plain sentence instead of the richer
+    # object accepted by ``WorkingState``.  Treat the sentence as the current
+    # focus so the otherwise valid structured reply stays on the structured
+    # path.  Native-schema responses are unaffected because this runs only
+    # after the initial strict validation fails.
+    if isinstance(data.get("working_state"), str):
+        data["working_state"] = {"focus": data["working_state"]}
+
     segment_list_fields = (
         "emotions",
         "animations",

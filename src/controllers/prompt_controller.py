@@ -986,7 +986,9 @@ class PromptController(PromptBuilderService):
                     "Use the working_state response field as a compact handoff to your next turn. "
                     "Keep only the current focus, established understanding, tentative assumptions, "
                     "open loops, and immediate next steps. Do not copy dialogue, long-term memories, "
-                    "or chain-of-thought. Current observations, game state and newer dialogue override it.\n"
+                    "or chain-of-thought. When present, working_state must be an object with focus, "
+                    "situation, assumptions, open_loops and next_steps. Current observations, game state "
+                    "and newer dialogue override it.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })

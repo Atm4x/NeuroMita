@@ -98,6 +98,23 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         self.assertEqual(response.boredom_change, 0.5)
         self.assertEqual(response.stress_change, -0.75)
 
+    def test_string_working_state_becomes_focus(self) -> None:
+        payload = {
+            "segments": [{"text": "Enough with the acrobatics!"}],
+            "working_state": "Игра всё ещё не запущена.",
+        }
+
+        outcome = parse_structured_response_with_meta(
+            json.dumps(payload, ensure_ascii=False)
+        )
+
+        self.assertTrue(outcome.schema_coerced)
+        self.assertEqual(
+            outcome.response.working_state.focus,
+            "Игра всё ещё не запущена.",
+        )
+        self.assertEqual(outcome.response.working_state.situation, [])
+
 
 if __name__ == "__main__":
     unittest.main()
