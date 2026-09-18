@@ -299,16 +299,6 @@ def _schema_aware_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> 
     import copy
     data = copy.deepcopy(data)
 
-    # OpenAI-compatible gateways such as OpenRouter may expose only the
-    # generic ``json_object`` contract.  In that mode Gemini sometimes emits
-    # the compact working state as a plain sentence instead of the richer
-    # object accepted by ``WorkingState``.  Treat the sentence as the current
-    # focus so the otherwise valid structured reply stays on the structured
-    # path.  Native-schema responses are unaffected because this runs only
-    # after the initial strict validation fails.
-    if isinstance(data.get("working_state"), str):
-        data["working_state"] = {"focus": data["working_state"]}
-
     segment_list_fields = (
         "emotions",
         "animations",
@@ -328,6 +318,21 @@ def _schema_aware_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> 
         if isinstance(value, list):
             return [str(item) for item in value if item is not None]
         return [str(value)]
+
+    # OpenAI-compatible gateways such as OpenRouter may expose only the
+    # generic ``json_object`` contract.  In that mode Gemini sometimes emits
+    # compact working-state values as plain sentences instead of the richer
+    # object accepted by ``WorkingState``.  Normalize both compatibility
+    # forms so an otherwise valid structured reply stays on the structured
+    # path.  Native-schema responses are unaffected because this runs only
+    # after the initial strict validation fails.
+    if isinstance(data.get("working_state"), str):
+        data["working_state"] = {"focus": data["working_state"]}
+    if isinstance(data.get("working_state"), dict):
+        working_state = data["working_state"]
+        for field in ("situation", "assumptions", "open_loops", "next_steps"):
+            if field in working_state:
+                working_state[field] = _coerce_string_list(working_state[field])
 
     custom_field_names = _extract_custom_field_names(model_cls)
     if custom_field_names:

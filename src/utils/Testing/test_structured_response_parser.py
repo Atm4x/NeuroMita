@@ -98,6 +98,36 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         self.assertEqual(response.boredom_change, 0.5)
         self.assertEqual(response.stress_change, -0.75)
 
+    def test_scalar_working_state_fields_are_coerced_to_lists(self) -> None:
+        payload = {
+            "segments": [{"text": "Enough with the acrobatics!"}],
+            "working_state": {
+                "focus": "Игра всё ещё не запущена.",
+                "situation": "Игрок продолжает делать сальто.",
+                "assumptions": "Игрок ждёт запуска игры.",
+                "open_loops": "Запустить игру.",
+                "next_steps": "Вернуться к запуску игры.",
+            },
+        }
+
+        outcome = parse_structured_response_with_meta(
+            json.dumps(payload, ensure_ascii=False)
+        )
+
+        self.assertTrue(outcome.schema_coerced)
+        self.assertEqual(
+            outcome.response.working_state.focus,
+            "Игра всё ещё не запущена.",
+        )
+        self.assertEqual(
+            outcome.response.working_state.situation,
+            ["Игрок продолжает делать сальто."],
+        )
+        self.assertEqual(
+            outcome.response.working_state.next_steps,
+            ["Вернуться к запуску игры."],
+        )
+
     def test_string_working_state_becomes_focus(self) -> None:
         payload = {
             "segments": [{"text": "Enough with the acrobatics!"}],
