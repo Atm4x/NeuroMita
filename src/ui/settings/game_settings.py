@@ -311,7 +311,8 @@ def setup_game_controls(self, parent, *, beat_view_model) -> None:
         self,
         parent,
         _("Настройки мода", "Mod Settings"),
-        mod_config
+        mod_config,
+        icon_name='fa5s.sliders-h'
     )
 
     add_dialogue_settings_section(self, parent)
@@ -399,7 +400,8 @@ def setup_game_controls(self, parent, *, beat_view_model) -> None:
         self,
         parent,
         _("Игры", "Games"),
-        games_config
+        games_config,
+        icon_name='fa5s.gamepad'
     )
     _bind_manual_game_launch_buttons(self)
 
@@ -472,7 +474,8 @@ def setup_game_controls(self, parent, *, beat_view_model) -> None:
         self,
         parent,
         _('Бит-синхронизация (Beat This)', 'Beat Sync (Beat This)'),
-        beat_sync_config
+        beat_sync_config,
+        icon_name='fa5s.music'
     )
     beat_view_model.dispatch(BeatSettingsActivated())
 

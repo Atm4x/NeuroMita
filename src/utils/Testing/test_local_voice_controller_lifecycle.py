@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 import unittest
 from concurrent.futures import Future
 from pathlib import Path
@@ -139,6 +140,140 @@ class LocalVoiceControllerSynthesisTests(unittest.IsolatedAsyncioTestCase):
             await controller.synthesize("hello")
 
         self.assertEqual(environment_calls, [])
+
+    async def test_enabled_on_demand_initialization_runs_before_synthesis(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller._initialized_cache = {}
+        controller._get_setting = lambda key, default=None: {
+            "NM_CURRENT_VOICEOVER": "medium+",
+            "LOCAL_VOICE_INIT_ON_REQUEST": True,
+        }.get(key, default)
+        controller.event_bus = _EventBusStub()
+        environment_calls = []
+
+        async def ensure_environment(model_id, *, initialize=False):
+            environment_calls.append((model_id, initialize))
+
+        async def engine_call(_method, _payload=None, *, timeout=None):
+            return "voice.wav"
+
+        controller._ensure_model_environment = ensure_environment
+        controller._engine_call_async = engine_call
+        registry = SimpleNamespace(current_profile=lambda: None, get=lambda _id: None)
+
+        with patch("controllers.local_voice_controller.use", return_value=registry):
+            result = await controller.synthesize("hello")
+
+        self.assertEqual(result, "voice.wav")
+        self.assertEqual(environment_calls, [("medium+", True), ("medium+", False)])
+        self.assertTrue(controller._initialized_cache["medium+"])
+
+    async def test_concurrent_on_demand_initialization_runs_once(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller._initialized_cache = {}
+        controller._model_init_lock = asyncio.Lock()
+        controller._get_setting = lambda key, default=None: {
+            "NM_CURRENT_VOICEOVER": "medium+",
+            "LOCAL_VOICE_INIT_ON_REQUEST": True,
+        }.get(key, default)
+        controller.event_bus = _EventBusStub()
+        environment_calls = []
+
+        async def ensure_environment(model_id, *, initialize=False):
+            environment_calls.append((model_id, initialize))
+            if initialize:
+                await asyncio.sleep(0)
+
+        async def engine_call(_method, _payload=None, *, timeout=None):
+            return "voice.wav"
+
+        controller._ensure_model_environment = ensure_environment
+        controller._engine_call_async = engine_call
+        registry = SimpleNamespace(current_profile=lambda: None, get=lambda _id: None)
+
+        with patch("controllers.local_voice_controller.use", return_value=registry):
+            results = await asyncio.gather(
+                controller.synthesize("first"),
+                controller.synthesize("second"),
+            )
+
+        self.assertEqual(results, ["voice.wav", "voice.wav"])
+        self.assertEqual(
+            [call for call in environment_calls if call[1]],
+            [("medium+", True)],
+        )
+        self.assertEqual(environment_calls.count(("medium+", False)), 2)
+
+    async def test_failed_on_demand_initialization_is_retried(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller._initialized_cache = {}
+        controller._model_init_lock = asyncio.Lock()
+        controller._get_setting = lambda key, default=None: {
+            "NM_CURRENT_VOICEOVER": "medium+",
+            "LOCAL_VOICE_INIT_ON_REQUEST": True,
+        }.get(key, default)
+        controller.event_bus = _EventBusStub()
+        init_attempts = 0
+
+        async def ensure_environment(_model_id, *, initialize=False):
+            nonlocal init_attempts
+            if initialize:
+                init_attempts += 1
+                if init_attempts == 1:
+                    raise RuntimeError("initialization failed")
+
+        async def engine_call(_method, _payload=None, *, timeout=None):
+            return "voice.wav"
+
+        controller._ensure_model_environment = ensure_environment
+        controller._engine_call_async = engine_call
+        registry = SimpleNamespace(current_profile=lambda: None, get=lambda _id: None)
+
+        with patch("controllers.local_voice_controller.use", return_value=registry):
+            with self.assertRaisesRegex(RuntimeError, "initialization failed"):
+                await controller.synthesize("first")
+            result = await controller.synthesize("second")
+
+        self.assertEqual(result, "voice.wav")
+        self.assertEqual(init_attempts, 2)
+        self.assertTrue(controller._initialized_cache["medium+"])
+
+    async def test_switching_models_keeps_per_model_initialization_state(self):
+        controller = LocalVoiceController.__new__(LocalVoiceController)
+        controller._initialized_cache = {}
+        controller._model_init_lock = asyncio.Lock()
+        selected_models = iter(("model-a", "model-b", "model-a"))
+        controller._get_setting = lambda key, default=None: (
+            next(selected_models)
+            if key == "NM_CURRENT_VOICEOVER"
+            else True if key == "LOCAL_VOICE_INIT_ON_REQUEST" else default
+        )
+        controller.event_bus = _EventBusStub()
+        environment_calls = []
+
+        async def ensure_environment(model_id, *, initialize=False):
+            environment_calls.append((model_id, initialize))
+
+        async def engine_call(_method, _payload=None, *, timeout=None):
+            return "voice.wav"
+
+        controller._ensure_model_environment = ensure_environment
+        controller._engine_call_async = engine_call
+        registry = SimpleNamespace(current_profile=lambda: None, get=lambda _id: None)
+
+        with patch("controllers.local_voice_controller.use", return_value=registry):
+            await controller.synthesize("a")
+            await controller.synthesize("b")
+            await controller.synthesize("a again")
+
+        self.assertEqual(
+            [call for call in environment_calls if call[1]],
+            [("model-a", True), ("model-b", True)],
+        )
+        self.assertEqual(
+            [call for call in environment_calls if not call[1]],
+            [("model-a", False), ("model-b", False), ("model-a", False)],
+        )
 
 
 async def _completed(value):

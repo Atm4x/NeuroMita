@@ -57,6 +57,9 @@ def _evaluate_custom_param_formula(
 
 
 class Character:
+    DISPLAY_NAME = "Character"
+    STORAGE_NAME = "Character"
+
     dialogue_actor_kind = DialogueActorKind.CHARACTER
     BASE_DEFAULTS: Dict[str, Any] = {
         "attitude": 60.0,
@@ -76,9 +79,10 @@ class Character:
     def __init__(
         self,
         char_id: str,
-        name: str,
+        display_name: str,
         silero_command: str,
         short_name: str,
+        storage_name: str | None = None,
         miku_tts_name: str = "Player",
         silero_turn_off_video: bool = False,
         initial_vars_override: Dict[str, Any] | None = None,
@@ -87,7 +91,8 @@ class Character:
         self.event_bus = get_event_bus()
 
         self.char_id = char_id
-        self.name = name
+        self.display_name = str(display_name or char_id)
+        self.storage_name = str(storage_name or char_id)
 
         self.silero_command = silero_command
         self.silero_turn_off_video = silero_turn_off_video
@@ -143,7 +148,7 @@ class Character:
         logger.info(
             "\n\nCharacter '%s' (%s) initialized. Prompt set: %s. Base path: %s. Initial effective vars: %s\n\n",
             self.char_id,
-            self.name,
+            self.display_name,
             self.prompt_set_name,
             self.base_data_path,
             ", ".join(
@@ -178,7 +183,7 @@ class Character:
 
     def bind_resource_manager(self, manager) -> None:
         self._resource_manager = manager
-        manager.register_character(self.char_id, self.name, self.base_data_path)
+        manager.register_character(self.char_id, self.storage_name, self.base_data_path)
 
     def _resources(self):
         manager = self._resource_manager
@@ -191,15 +196,19 @@ class Character:
 
     @property
     def history_manager(self):
-        return self._resources().history_for(self.char_id, self.name)
+        return self._resources().history_for(self.char_id, self.storage_name)
 
     @property
     def memory_system(self):
-        return self._resources().memory_for(self.char_id, self.name)
+        return self._resources().memory_for(self.char_id, self.storage_name)
 
     @property
     def reminder_system(self):
-        return self._resources().reminders_for(self.char_id, self.name)
+        return self._resources().reminders_for(self.char_id, self.storage_name)
+
+    @property
+    def working_state(self):
+        return self._resources().working_state_for(self.char_id, self.storage_name)
 
     def ensure_runtime_loaded(self) -> None:
         if self._runtime_loaded:
@@ -1094,6 +1103,10 @@ class Character:
             reset_core_triggers(self.char_id)
         except Exception:
             pass
+        try:
+            self.working_state.clear()
+        except Exception:
+            pass
 
         composed_initials = Character.BASE_DEFAULTS.copy()
         if hasattr(self, "DEFAULT_OVERRIDES"):
@@ -1153,7 +1166,7 @@ class Character:
     def current_variables_string(self) -> str:
         """Returns a string representation of key variables for UI/debug display,
         customizable via Post-DSL DEBUG_DISPLAY section."""
-        display_str = f"Character: {self.name} ({self.char_id})\n"
+        display_str = f"Character: {self.display_name} ({self.char_id})\n"
 
         vars_to_display = {}
         if (
@@ -1264,7 +1277,7 @@ class Character:
         """
         return {
             "character_id": str(getattr(self, "char_id", "") or ""),
-            "name": str(getattr(self, "name", "") or ""),
+            "display_name": self.display_name,
             "is_cartridge": bool(getattr(self, "is_cartridge", False)),
             "silero_command": str(getattr(self, "silero_command", "") or ""),
             "short_name": str(getattr(self, "short_name", "") or ""),
@@ -1273,5 +1286,5 @@ class Character:
         }
 
     def __str__(self):
-        return f"Character(id='{self.char_id}', name='{self.name}')"
+        return f"Character(id='{self.char_id}', display_name='{self.display_name}')"
 

@@ -310,11 +310,11 @@ class ConversationEventWriter:
             ch_ref = self._get_character_ref(character_id)
             if ch_ref is None or not hasattr(ch_ref, "history_manager"):
                 return
-            char_name = getattr(ch_ref.history_manager, "character_name", None) or character_id
+            storage_name = getattr(ch_ref.history_manager, "storage_name", None) or character_id
             histories_dir = os.environ.get(
                 "NEUROMITA_HISTORIES_DIR", os.path.join(os.getcwd(), "Histories")
             )
-            drawings_dir = os.path.join(histories_dir, char_name, "Drawings")
+            drawings_dir = os.path.join(histories_dir, storage_name, "Drawings")
             os.makedirs(drawings_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             for i, img in enumerate(image_data):

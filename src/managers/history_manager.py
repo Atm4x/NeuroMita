@@ -75,10 +75,10 @@ class HistoryManager(CharacterScopedService):
         "meta_data",
     )
 
-    def __init__(self, character_name: str = "", history_file_name: str = "", character_id: str | None = None):
+    def __init__(self, storage_name: str = "", history_file_name: str = "", character_id: str | None = None):
         super().__init__(
-            default_character_id=str(character_id or character_name or ""),
-            default_character_name=str(character_name or character_id or ""),
+            default_character_id=str(character_id or storage_name or ""),
+            default_storage_name=str(storage_name or character_id or ""),
         )
         self.db = DatabaseManager()
 
@@ -279,7 +279,7 @@ class HistoryManager(CharacterScopedService):
                 ext = "jpg"
 
             histories_dir = os.environ.get("NEUROMITA_HISTORIES_DIR", os.path.join(os.getcwd(), "Histories"))
-            save_dir = os.path.join(histories_dir, self.character_name, "Images")
+            save_dir = os.path.join(histories_dir, self.storage_name, "Images")
             os.makedirs(save_dir, exist_ok=True)
 
             # ВАЖНО: убираем пробелы/переводы строк (иногда встречаются)

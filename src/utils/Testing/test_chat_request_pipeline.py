@@ -55,12 +55,12 @@ class _StubRegistry(CharacterRegistry):
         return "Crazy"
 
     def current_profile(self):
-        return {"character_id": "Crazy", "name": "Crazy"}
+        return {"character_id": "Crazy", "display_name": "Crazy"}
 
-    def current_name(self):
+    def current_display_name(self):
         return "Crazy"
 
-    def name_of(self, character_id):
+    def display_name_of(self, character_id):
         return str(character_id or "")
 
 
@@ -376,6 +376,31 @@ class ChatRequestPipelineTests(unittest.TestCase):
             result = self.controller._run_request("hi", character_id="Crazy")
 
         self.assertEqual(result, "ok")
+
+    def test_non_stream_group_reply_carries_request_participants_to_live_ui(self):
+        services().register(GenerationService, _ImmediateGeneration(), replace=True)
+        self.controller.settings = _StubSettings({"ENABLE_STREAMING": False})
+
+        with patch.object(self.controller.event_bus, "emit", wraps=self.controller.event_bus.emit) as emit:
+            result = self.controller._run_request(
+                "hi",
+                character_id="Kind",
+                participants=["Crazy", "Kind", "Cappie"],
+            )
+
+        self.assertEqual(result, "ok")
+        assistant_payload = next(
+            call.args[1]
+            for call in emit.call_args_list
+            if len(call.args) >= 2
+            and call.args[0] == Events.GUI.UPDATE_CHAT_UI
+            and isinstance(call.args[1], dict)
+            and call.args[1].get("role") == "assistant"
+        )
+        self.assertEqual(
+            assistant_payload["surface_character_ids"],
+            ["Crazy", "Kind", "Cappie"],
+        )
 
     def test_non_stream_thinking_uses_assistant_message_identity(self):
         services().register(GenerationService, _ThinkingGeneration(), replace=True)

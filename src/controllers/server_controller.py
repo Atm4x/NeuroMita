@@ -135,6 +135,7 @@ class ServerController:
             "GAME_BLOCK_LEVEL",
             "MIC_INSTANT_SENT",
             "MITA_DIALOGUE_AUTO",
+            "DIALOGUE_AUTO_ROUNDS",
             "DIALOGUE_MAX_CHAIN_TURNS",
             "DIALOGUE_MAX_CONTINUES",
             "GM_ON",
@@ -451,13 +452,21 @@ class ServerController:
     def _prepare_loaded_settings_body(self) -> Dict[str, Any]:
         settings = {}
         for setting in self.settings_to_send:
+            if setting == "GM_ON":
+                settings[str(setting)] = False
+                continue
             if setting == 'BEAT_SYNC_USE_FILE_TRANSFER':
                 settings[str(setting)] = True
                 continue
             if setting == 'BEAT_SYNC_AUTO_INSTALL':
                 settings[str(setting)] = False
                 continue
-            default = True if setting == "MITA_DIALOGUE_AUTO" else None
+            defaults = {
+                "MITA_DIALOGUE_AUTO": True,
+                "DIALOGUE_AUTO_ROUNDS": 1,
+                "DIALOGUE_MAX_CHAIN_TURNS": 24,
+            }
+            default = defaults.get(setting)
             settings[str(setting)] = self._get_setting(setting, default)
 
         characters_stats = self._collect_characters_stats()
@@ -608,6 +617,11 @@ class ServerController:
         origin_message_id = p.get("origin_message_id")
         presentation_message_id = str(p.get("presentation_message_id") or "")
         character_id = str(p.get("character_id") or "")
+        surface_character_ids = [
+            str(item or "").strip()
+            for item in (p.get("participants") or [])
+            if str(item or "").strip()
+        ]
 
         if not text.strip() or sender_kind is not DialogueActorKind.PLAYER:
             return
@@ -622,7 +636,7 @@ class ServerController:
         ):
             return
 
-        self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+        ui_payload = {
             "role": "user",
             "response": text,
             "is_initial": False,
@@ -630,7 +644,10 @@ class ServerController:
             "speaker_name": "",
             "message_id": presentation_message_id,
             "character_id": character_id,
-        })
+        }
+        if surface_character_ids:
+            ui_payload["surface_character_ids"] = list(dict.fromkeys(surface_character_ids))
+        self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, ui_payload)
 
 
 

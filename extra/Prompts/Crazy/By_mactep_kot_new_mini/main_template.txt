@@ -14,5 +14,4 @@ behavior_state=custom
 [<States/hello.txt>]
 [<../../Common/TimeAwareness.txt>]
 [<../../Common/Security.txt>]
-[<../../Common/chess_handler.script>]
-[<../../Common/seabattle_handler.script>]
+[<../../Common/games.txt>]

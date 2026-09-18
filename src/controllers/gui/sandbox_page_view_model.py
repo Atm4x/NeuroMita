@@ -150,20 +150,22 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
         self._update(selectors_loading=True, error=None)
 
         def worker() -> dict[str, Any]:
-            meta, current_model_id = self._controller.model_snapshot()
             characters, current_character = self._controller.character_snapshot()
+            meta, current_model_id = self._controller.model_snapshot(current_character)
             character_id, prompts, current_prompt = self._controller.prompt_snapshot(
                 current_character
             )
             model_items: list[SandboxModelItem] = []
-            for preset in list((meta or {}).get("custom", []) or []):
-                preset_id = getattr(preset, "id", None)
-                if preset_id is None:
-                    continue
-                name = str(getattr(preset, "name", "") or "")
-                model = str(getattr(preset, "default_model", "") or "")
-                label = f"{name} ({model})" if model else name
-                model_items.append(SandboxModelItem(int(preset_id), label))
+            for bucket in ("custom", "builtin"):
+                for preset in list((meta or {}).get(bucket, []) or []):
+                    field = preset.get if isinstance(preset, dict) else lambda key, default=None: getattr(preset, key, default)
+                    preset_id = field("id")
+                    if preset_id is None:
+                        continue
+                    name = str(field("name", "") or "")
+                    model = str(field("default_model", "") or "")
+                    label = f"{name} ({model})" if model else name
+                    model_items.append(SandboxModelItem(int(preset_id), label))
             return {
                 "model_items": tuple(model_items),
                 "current_model_id": (
@@ -351,7 +353,7 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
                 self.refresh_memory()
             if key in self._BUDGET_SETTING_KEYS:
                 self.refresh_budget()
-            if key.startswith("PROMPT_SET_"):
+            if key == "LAST_API_PRESET_ID" or key.startswith(("PROMPT_SET_", "CHAR_PROVIDER_")):
                 self.refresh_selectors()
 
         self._post_ui(apply)

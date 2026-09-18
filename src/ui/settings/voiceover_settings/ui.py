@@ -271,6 +271,10 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
          'key': 'LOCAL_VOICE_LOAD_LAST', 'type': 'checkbutton',
          'default_checkbutton': False},
 
+        {'label': _('Инициализировать модель при запросе', 'Initialize model on request'),
+         'key': 'LOCAL_VOICE_INIT_ON_REQUEST', 'type': 'checkbutton',
+         'default_checkbutton': False},
+
         {'label': _('Озвучивать в чате', 'Voiceover in chat'),
          'key': 'VOICEOVER_LOCAL_CHAT', 'type': 'checkbutton',
          'default_checkbutton': True},

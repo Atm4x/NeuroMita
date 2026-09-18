@@ -375,6 +375,7 @@ class CreateTaskAction:
                     "presentation_message_id": ConversationMessageIds.incoming(req_id),
                     "origin_message_id": origin_message_id,
                     "character_id": character_id,
+                    "participants": list(participants or []),
                 })
 
             system_input = ""

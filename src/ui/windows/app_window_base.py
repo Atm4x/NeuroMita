@@ -31,6 +31,7 @@ from ui.chat import message_renderer
 from ui.chat.chat_delegate import ChatMessageDelegate
 from ui.chat.render_context import ChatRenderContext
 from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
+from services.dialogue_runtime_state import get_dialogue_runtime_state_service
 from ui.dialogs.ffmpeg_dialogs import create_ffmpeg_install_popup, show_ffmpeg_error_popup
 from ui.dialogs.telegram_auth_dialogs import show_tg_code_dialog, show_tg_password_dialog
 from ui.widgets.image_viewer_widget import ImageViewerWidget
@@ -54,7 +55,8 @@ class AppWindowBase(QMainWindow):
     finish_stream_signal = pyqtSignal(object)
 
     show_thinking_signal = pyqtSignal(object)
-    show_error_signal = pyqtSignal(str)
+    show_error_signal = pyqtSignal(object)
+    clear_chat_message_error_signal = pyqtSignal(dict)
     hide_status_signal = pyqtSignal()
     hide_generation_status_signal = pyqtSignal()
     pulse_error_signal = pyqtSignal()
@@ -190,6 +192,7 @@ class AppWindowBase(QMainWindow):
 
         self.show_thinking_signal.connect(self._show_thinking_slot)
         self.show_error_signal.connect(self._show_error_slot)
+        self.clear_chat_message_error_signal.connect(self._clear_chat_message_error_slot)
         self.hide_status_signal.connect(self._hide_status_slot)
         self.hide_generation_status_signal.connect(self._hide_generation_status_slot)
         self.pulse_error_signal.connect(self._pulse_error_slot)
@@ -1140,27 +1143,45 @@ class AppWindowBase(QMainWindow):
                 logger.error(f"Error toggling think block {block_id}: {format_exception(e)}")
 
     def _show_thinking_slot(self, character_name):
-        # Старт новой генерации (имя персонажа — строка, а не dict сжатия/инструмента):
-        # снимаем пометку «не дошло» с прошлого упавшего пузыря.
-        if isinstance(character_name, str) and self._chat_render_context.is_bound:
-            from ui.chat import message_renderer
-            message_renderer.clear_message_errors(self._chat_render_context)
         if hasattr(self, 'mita_status') and self.mita_status:
             logger.info('Показываем статус "Думает" для персонажа: %s', character_name)
             self.mita_status.show_thinking(character_name)
 
-    def _show_error_slot(self, error_message: str):
-        self._pending_chat_error = str(error_message or "")
+    def _show_error_slot(self, error_payload):
+        payload = error_payload if isinstance(error_payload, dict) else {}
+        error_message = str(payload.get("error") or error_payload or "")
+        self._pending_chat_error = error_message
         if hasattr(self, 'mita_status') and self.mita_status:
             logger.info('Показываем статус ошибки: %s', error_message)
             self.mita_status.show_error(error_message)
             self._pending_chat_error = None
-        # Помечаем сам пузырь пользователя: «сообщение не дошло» + отправить снова.
-        if self._chat_render_context.is_bound:
-            from ui.chat import message_renderer
-            message_renderer.mark_last_user_error(
-                self._chat_render_context, str(error_message or "")
+        message_id = str(payload.get("message_id") or "")
+        character_id = str(payload.get("character_id") or "")
+        if message_id:
+            self._chat_presentation.mark_failed(
+                message_id=message_id,
+                character_id=character_id,
+                error=error_message,
             )
+        if self._chat_render_context.is_bound and message_id:
+            from ui.chat import message_renderer
+            message_renderer.mark_user_error(
+                self._chat_render_context, message_id, error_message
+            )
+
+    def _clear_chat_message_error_slot(self, payload: dict):
+        data = payload if isinstance(payload, dict) else {}
+        message_id = str(data.get("message_id") or "")
+        character_id = str(data.get("character_id") or "")
+        if not message_id:
+            return
+        self._chat_presentation.clear_failed(
+            message_id=message_id,
+            character_id=character_id,
+        )
+        for widget in getattr(getattr(self, "chat_window", None), "_messages", []):
+            if getattr(widget, "_message_id", None) == message_id and hasattr(widget, "clear_error"):
+                widget.clear_error()
 
     def _hide_status_slot(self):
         if hasattr(self, 'mita_status') and self.mita_status:
@@ -1559,6 +1580,7 @@ class AppWindowBase(QMainWindow):
             character_id=command.character_id or None,
             sample_id=command.sample_id or None,
             context_snapshot_id=command.context_snapshot_id or None,
+            delivery_error=command.delivery_error,
         )
 
     def _command_from_render_payload(self, data: dict) -> ChatRenderCommand:
@@ -1576,11 +1598,16 @@ class AppWindowBase(QMainWindow):
         )
 
     def _on_render_chat_event_signal(self, data: dict):
-        command = self._command_from_render_payload(data if isinstance(data, dict) else {})
+        payload = data if isinstance(data, dict) else {}
+        command = self._command_from_render_payload(payload)
         current_character_id = str(self._shell_actions.current_character_id() or "")
         if not self._chat_presentation.record_live(
             command,
             current_character_id=current_character_id,
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             return False
         return self._render_chat_command(command)
@@ -1620,6 +1647,7 @@ class AppWindowBase(QMainWindow):
         if not self._chat_presentation.record_live(
             command,
             current_character_id=command.character_id,
+            surface_character_ids=self._chat_surface_character_ids(command.character_id),
         ):
             return False
         return self._render_chat_command(command)
@@ -1653,6 +1681,10 @@ class AppWindowBase(QMainWindow):
                 stream_id,
                 current_character_id=current_character_id,
                 character_id=character_id,
+                surface_character_ids=self._chat_surface_character_ids(
+                    current_character_id,
+                    payload.get("surface_character_ids") or (),
+                ),
             ):
                 return False
         if not self._chat_render_context.is_bound:
@@ -1689,6 +1721,10 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             return False
         if not self._chat_presentation.is_stream_mounted(stream_id):
@@ -1735,6 +1771,10 @@ class AppWindowBase(QMainWindow):
             stream_id,
             current_character_id=current_character_id,
             character_id=character_id,
+            surface_character_ids=self._chat_surface_character_ids(
+                current_character_id,
+                payload.get("surface_character_ids") or (),
+            ),
         ):
             message_renderer.discard_stream_slot(self._chat_render_context, stream_id)
             return False
@@ -1756,6 +1796,36 @@ class AppWindowBase(QMainWindow):
             sample_id=str(payload.get("sample_id") or ""),
             context_snapshot_id=str(payload.get("context_snapshot_id") or ""),
         )
+
+    @staticmethod
+    def _chat_surface_character_ids(
+        current_character_id: str,
+        request_character_ids=(),
+    ) -> tuple[str, ...]:
+        current = str(current_character_id or "").strip()
+        request_participants = tuple(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in request_character_ids
+                if str(item or "").strip()
+            )
+        )
+        request_keys = {item.casefold() for item in request_participants}
+        if request_participants:
+            if current and current.casefold() in request_keys:
+                return request_participants
+            return (current,) if current else ()
+
+        snapshot = get_dialogue_runtime_state_service().snapshot()
+        participants = tuple(
+            str(item.character_id or "").strip()
+            for item in snapshot.participants
+            if item.is_active and str(item.character_id or "").strip()
+        )
+        participant_keys = {item.casefold() for item in participants}
+        if current and current.casefold() in participant_keys:
+            return participants
+        return (current,) if current else ()
 
     # ===== Слоты прогресса установки ASR (если вдруг отсутствуют) =====
     def _on_asr_install_progress(self, data: dict):

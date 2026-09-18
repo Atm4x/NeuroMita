@@ -366,14 +366,14 @@ class CharacterRegistry(ABC):
     def current_profile(self) -> Dict[str, Any]: ...
 
     @abstractmethod
-    def current_name(self) -> str: ...
+    def current_display_name(self) -> str: ...
 
-    def name_of(self, character_id: str) -> str:
-        """Имя персонажа; если его нет — сам id (для подписей в UI)."""
+    def display_name_of(self, character_id: str) -> str:
+        """Display label for a character; falls back to its stable id."""
         if not character_id:
             return ""
         ref = self.get(str(character_id))
-        return str(getattr(ref, "name", "") or character_id)
+        return str(getattr(ref, "display_name", "") or character_id)
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +434,9 @@ class RuntimeCapabilitiesService(ABC):
 class PreparedHistory:
     messages: List[Dict[str, Any]]
     summary: str = ""
+    # Small deterministic bridge of requested actions whose source turns were
+    # already summarized. Recent actions stay with their assistant message.
+    action_context: str = ""
     # Время последнего сообщения истории. Сами messages уезжают провайдеру
     # строго как role/content, поэтому таймстемп едет отдельным полем —
     # иначе «сколько прошло с прошлого раза» посчитать не из чего.
@@ -892,6 +895,43 @@ class ModelStateService(ABC):
 
     @abstractmethod
     def schedule_g4f_update(self, version: str = "latest") -> bool: ...
+
+
+class ChatService(ABC):
+    """Application-level semantic entrypoint for character chat turns."""
+
+    @abstractmethod
+    def reply(
+        self,
+        *,
+        character_id: str,
+        message_id: str,
+        user_input: str = "",
+        system_input: str = "",
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def react(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        visible: bool = True,
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def initiate(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        sender: str = "System",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
 
 
 class GenerationActivityService(ABC):

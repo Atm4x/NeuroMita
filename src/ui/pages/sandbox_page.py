@@ -680,12 +680,6 @@ class SandboxPage(QWidget):
                     "No configured models",
                     value=None,
                 )
-            combo.insertSeparator(combo.count())
-            combo.add_tr_item(
-                "Настроить...",
-                "Configure...",
-                value=_MODEL_CONFIGURE_SENTINEL,
-            )
             if state.current_model_id is not None:
                 for index in range(combo.count()):
                     if combo.itemData(index) == state.current_model_id:
@@ -708,12 +702,6 @@ class SandboxPage(QWidget):
                     combo.add_data_item(item, value=item)
             else:
                 combo.add_tr_item("Нет наборов", "No sets", value=None)
-            combo.insertSeparator(combo.count())
-            combo.add_tr_item(
-                "Настроить...",
-                "Configure...",
-                value=_PROMPT_CONFIGURE_SENTINEL,
-            )
             if state.current_prompt:
                 index = combo.findText(
                     state.current_prompt,
@@ -1652,20 +1640,23 @@ class SandboxPage(QWidget):
     def _build_inspector_session_tab(self) -> QWidget:
         page, layout = self._make_tab_page()
 
-        # ── Visible comboboxes (label + combo per row) ─────────────────────
+        # ── Session selectors (character is editable; the other values are
+        # read-only snapshots with a direct route to their settings) ─────────
         # Other modules (chat_panel, character_settings/logic, etc.) reference
         # gui.chat_*_combobox to read the active character / sync model lists.
         # These are _NoWheelComboBox, so the mouse wheel can't change the
         # selection — scrolling used to trigger a spurious re-initialization.
-        # To switch a value the user clicks the combo and picks an item; the
-        # final "Настроить…" entry jumps to the matching settings section.
-        def _session_combo(attr: str, *, tooltip: str, change_slot, by_text: bool = False) -> QComboBox:
+        # Prompt and model are disabled snapshots; their gears open the place
+        # where those values can actually be changed.
+        def _session_combo(attr: str, *, tooltip: str, change_slot, by_text: bool = False,
+                           read_only: bool = False) -> QComboBox:
             combo = _NoWheelComboBox()
             combo.setObjectName("ChatCharacterCombo")
             combo.setToolTip(tooltip)
-            if by_text:
+            combo.setEnabled(not read_only)
+            if by_text and not read_only:
                 combo.currentTextChanged.connect(change_slot)
-            else:
+            elif not read_only:
                 combo.currentIndexChanged.connect(change_slot)
             setattr(self, f"_{attr}", combo)
             return combo
@@ -1715,17 +1706,35 @@ class SandboxPage(QWidget):
 
         prompt_combo = _session_combo(
             "chat_prompt_pack_combobox",
-            tooltip=_("Активный набор промптов", "Active prompt set"),
+            tooltip=_("Текущий набор промптов. Изменяется в настройках персонажа", "Current prompt set. Change it in character settings"),
             change_slot=self._on_chat_prompt_pack_changed,
+            read_only=True,
         )
-        _combo_row(active_layout, _("Набор промптов", "Prompt set"), prompt_combo)
+        prompt_settings_btn = QPushButton()
+        prompt_settings_btn.setObjectName("SandboxInlineIconBtn")
+        prompt_settings_btn.setIcon(qta.icon("fa6s.gear", color="#ffd2ec"))
+        prompt_settings_btn.setFixedSize(28, 28)
+        prompt_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        prompt_settings_btn.setToolTip(_("Настройки набора промптов", "Prompt set settings"))
+        prompt_settings_btn.clicked.connect(lambda: self._jump_to_settings("characters"))
+        _combo_row(active_layout, _("Набор промптов", "Prompt set"), prompt_combo,
+                   trailing=prompt_settings_btn)
 
         model_combo = _session_combo(
             "chat_model_combobox",
-            tooltip=_("Активный API-пресет (модель)", "Active API preset (model)"),
+            tooltip=_("API-пресет, выбранный для активного персонажа", "API preset selected for the active character"),
             change_slot=self._on_chat_model_changed,
+            read_only=True,
         )
-        _combo_row(active_layout, _("Модель", "Model"), model_combo)
+        model_settings_btn = QPushButton()
+        model_settings_btn.setObjectName("SandboxInlineIconBtn")
+        model_settings_btn.setIcon(qta.icon("fa6s.gear", color="#ffd2ec"))
+        model_settings_btn.setFixedSize(28, 28)
+        model_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        model_settings_btn.setToolTip(_("Настройки API-пресетов", "API preset settings"))
+        model_settings_btn.clicked.connect(lambda: self._jump_to_settings("api"))
+        _combo_row(active_layout, _("Модель", "Model"), model_combo,
+                   trailing=model_settings_btn)
         layout.addWidget(active_strip)
         self._panels["active"] = active_strip
 
