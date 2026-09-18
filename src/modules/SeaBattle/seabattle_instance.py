@@ -134,6 +134,10 @@ class SeaBattleGame(GameInterface):
             event_name = event.get("event")
             if event_name == "player_target_selected":
                 self._dispatch_player_target_reaction(event)
+            elif event_name == "mita_target_hit":
+                self._dispatch_mita_target_hit_reaction(event)
+            elif event_name == "manual_mita_turn":
+                self._dispatch_manual_turn_reaction()
             elif event_name == "player_game_over":
                 self._dispatch_game_over_reaction(event)
             elif event_name == "player_placement_completed":
@@ -153,6 +157,30 @@ class SeaBattleGame(GameInterface):
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly one legal MakeMove,<coordinate> command in commands. "
             "Do not wait for the player to ask again."
+        )
+
+    def _dispatch_mita_target_hit_reaction(self, event: Dict[str, Any]):
+        if not self.character.get_variable("playingGame", False):
+            return
+
+        coord = str(event.get("coord") or "an unknown square")
+        result = str(event.get("message") or event.get("result") or "hit")
+        self.request_character_reaction(
+            "[Sea Battle follow-up turn request] Mita hit the player's ship at "
+            f"{coord}. Result: {result}. It is still your turn. "
+            "In this same response, react briefly in character and put exactly one legal "
+            "MakeMove,<coordinate> command in commands. Do not wait for the player "
+            "to ask again."
+        )
+
+    def _dispatch_manual_turn_reaction(self):
+        if not self.character.get_variable("playingGame", False):
+            return
+
+        self.request_character_reaction(
+            "[Sea Battle manual turn request] The player pressed the button asking Mita "
+            "to make her move. It is your turn. In this same response, react briefly in "
+            "character and put exactly one legal MakeMove,<coordinate> command in commands."
         )
 
     def _dispatch_placement_completed_reaction(self):

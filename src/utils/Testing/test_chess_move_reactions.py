@@ -114,6 +114,17 @@ class ChessMoveReactionTests(unittest.TestCase):
 
         self.assertEqual(host.requests, [])
 
+    def test_manual_turn_request_asks_mita_to_move(self):
+        character = _Character()
+        host = _GameHost()
+        game = ChessGame(character, "chess", host=host)
+
+        game._dispatch_manual_turn_reaction()
+
+        self.assertEqual(len(host.requests), 1)
+        self.assertIn("RequestBestChessMove", host.requests[0][1])
+        self.assertNotIn("Do not make a chess move", host.requests[0][1])
+
     @unittest.skipIf(QApplication is None, "PyQt6 is not installed")
     def test_chess_reaction_checkbox_is_checked_by_default(self):
         window = ChessGuiTkinter(_Controller())

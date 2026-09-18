@@ -118,6 +118,43 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_mita_hit_emits_follow_up_reaction_after_state_update(self) -> None:
+        command_queue = queue.Queue()
+        state_queue = queue.Queue()
+        reaction_queue = queue.Queue()
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        try:
+            command_queue.put({"action": "mita_move", "coord": "A1"})
+            order = []
+
+            with patch.object(window.game.engine, "make_move", return_value=("hit", "Попал!")):
+                with patch.object(window.game, "get_full_state", return_value={"phase": "battle"}):
+                    with patch.object(window, "update_view"):
+                        with patch.object(window, "send_state_update", side_effect=lambda: order.append("state")):
+                            with patch.object(window, "_request_mita_hit_reaction", side_effect=lambda *args: order.append("reaction")):
+                                window.process_commands()
+
+            self.assertEqual(order, ["state", "reaction"])
+        finally:
+            window.close()
+
+    def test_manual_turn_button_emits_request_when_automation_is_off(self) -> None:
+        command_queue = queue.Queue()
+        state_queue = queue.Queue()
+        reaction_queue = queue.Queue()
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        try:
+            window.mita_reaction_checkbox.setChecked(False)
+            window.game.engine.game_phase = "battle"
+            window.game.engine.current_player = window.game.mita_id
+            window.update_view()
+
+            self.assertFalse(window.btn_request_mita_turn.isHidden())
+            window.btn_request_mita_turn.click()
+            self.assertEqual(reaction_queue.get_nowait()["event"], "manual_mita_turn")
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

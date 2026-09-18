@@ -69,6 +69,28 @@ class SeaBattleLifecycleReactionTests(unittest.TestCase):
         self.assertIn("MakeMove,<coordinate>", instruction)
         self.assertNotIn("Do not take a Sea Battle turn", instruction)
 
+    def test_mita_hit_requests_a_follow_up_shot(self):
+        character = _Character()
+        host = _GameHost()
+        game = SeaBattleGame(character, host=host)
+
+        game._dispatch_mita_target_hit_reaction({"coord": "B1", "result": "hit"})
+
+        self.assertEqual(len(host.requests), 1)
+        instruction = host.requests[0][1]
+        self.assertIn("It is still your turn", instruction)
+        self.assertIn("MakeMove,<coordinate>", instruction)
+
+    def test_manual_turn_request_asks_mita_to_move(self):
+        character = _Character()
+        host = _GameHost()
+        game = SeaBattleGame(character, host=host)
+
+        game._dispatch_manual_turn_reaction()
+
+        self.assertEqual(len(host.requests), 1)
+        self.assertIn("MakeMove,<coordinate>", host.requests[0][1])
+
     def test_game_over_requests_reaction_without_another_shot(self):
         character = _Character()
         host = _GameHost()

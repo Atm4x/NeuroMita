@@ -440,6 +440,18 @@ class ChessGuiTkinter(QMainWindow):
                 }}
             """)
             control_panel_layout.addWidget(self.mita_reaction_checkbox)
+
+            self.btn_request_mita_turn = self._create_button(
+                control_panel_widget,
+                _("Ходи", "Your move"),
+                self._request_manual_mita_turn,
+            )
+            self.btn_request_mita_turn.setToolTip(
+                _("Предложить Мите сделать ход.", "Ask Mita to make her move.")
+            )
+            self.btn_request_mita_turn.setVisible(False)
+            self.mita_reaction_checkbox.toggled.connect(self._update_manual_turn_button)
+            control_panel_layout.addWidget(self.btn_request_mita_turn)
             
             control_panel_layout.addStretch()
             
@@ -449,6 +461,7 @@ class ChessGuiTkinter(QMainWindow):
             self.btn_new_game_white = None
             self.btn_new_game_black = None
             self.mita_reaction_checkbox = None
+            self.btn_request_mita_turn = None
         
         central_widget.setLayout(main_layout)
         
@@ -563,6 +576,24 @@ class ChessGuiTkinter(QMainWindow):
             self._set_square_fill_color(r_sel, c_sel, ChessGameModelTkStyles.COLOR_HIGHLIGHT_SELECTED)
         for r_pm, c_pm in self.possible_moves_for_selected_gui_coords:
             self._set_square_fill_color(r_pm, c_pm, ChessGameModelTkStyles.COLOR_HIGHLIGHT_POSSIBLE)
+        self._update_manual_turn_button()
+
+    def _update_manual_turn_button(self):
+        if not self.btn_request_mita_turn or not self.game_controller:
+            return
+
+        board = self.game_controller.get_current_board_object_for_gui()
+        player_turn = (
+            self.game_controller.player_is_white_in_gui and board.turn == chess.WHITE
+        ) or (
+            not self.game_controller.player_is_white_in_gui and board.turn == chess.BLACK
+        )
+        self.btn_request_mita_turn.setVisible(
+            not player_turn
+            and not self.mita_reaction_checkbox.isChecked()
+            and not board.is_game_over()
+            and not self.game_controller.engine_is_thinking
+        )
 
     def show_game_over_message_slot(self, message):
         if self.is_closing: return
@@ -692,6 +723,18 @@ class ChessGuiTkinter(QMainWindow):
             })
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess reaction: {format_exception(exc)}")
+
+    def _request_manual_mita_turn(self):
+        if (
+            not self.btn_request_mita_turn
+            or self.mita_reaction_checkbox.isChecked()
+            or not self.reaction_queue
+        ):
+            return
+        try:
+            self.reaction_queue.put({"event": "manual_mita_turn"})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue manual Mita chess turn request: {format_exception(exc)}")
 
     def _request_game_over_reaction(self, outcome):
         if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:

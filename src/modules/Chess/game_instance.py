@@ -153,6 +153,8 @@ class ChessGame(GameInterface):
                 continue
             if event.get("event") == "player_chess_move":
                 self._dispatch_player_move_reaction(event)
+            elif event.get("event") == "manual_mita_turn":
+                self._dispatch_manual_turn_reaction()
             elif event.get("event") == "player_game_over":
                 self._dispatch_game_over_reaction(event)
             elif event.get("event") == "player_game_closed":
@@ -170,6 +172,16 @@ class ChessGame(GameInterface):
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly RequestBestChessMove in commands. Do not wait for the player "
             "to ask again; the recommended legal move will be selected and applied."
+        )
+
+    def _dispatch_manual_turn_reaction(self):
+        if not self.character.get_variable("playingGame", False):
+            return
+
+        self.request_character_reaction(
+            "[Chess manual turn request] The player pressed the button asking Mita to "
+            "make her move. It is your turn. In this same response, react briefly in "
+            "character and put exactly RequestBestChessMove in commands."
         )
 
     def _dispatch_player_close_reaction(self):
