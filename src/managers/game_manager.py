@@ -2,8 +2,7 @@ from typing import Dict, Any, Optional, Type
 from main_logger import logger
 from modules.available_games import get_available_games
 from modules.game_interface import GameInterface
-from core.events import Events
-from core.request_policy import resolve_policy
+from core.chat_api import ChatAPI
 from core.services import use
 from services.contracts import GameLinkService, SettingsService
 
@@ -87,7 +86,7 @@ class GameManager:
             return False
 
         logger.info(f"[{self.character.char_id}] Запуск игры '{game_name}' с параметрами: {params}")
-        self.active_game = game_class(self.character, game_name)
+        self.active_game = game_class(self.character, game_name, host=self)
         self.active_game.start(params)
         return True
 
@@ -105,21 +104,13 @@ class GameManager:
         return started
 
     def _request_manual_start_reaction(self, game_name: str) -> None:
-        """Emit a visible L2 reaction when game requests and reactions allow it."""
+        """Request a visible reaction to a desktop-started mini-game."""
         try:
-            settings = use(SettingsService)
-            # The desktop launch should observe the same mute switch as game
-            # events.  A manual game may still open while requests are muted;
-            # it simply does not generate a Mita response.
-            if bool(settings.get("IGNORE_GAME_REQUESTS", False)):
-                return
-            if not bool(settings.get("REACT_ENABLED", True)):
-                return
-            if not bool(settings.get("REACT_L2_ENABLED", True)):
+            if bool(use(SettingsService).get("IGNORE_GAME_REQUESTS", False)):
                 return
         except Exception as exc:
             logger.debug(
-                f"[{self.character.char_id}] Не удалось проверить настройки реакции на запуск игры: {exc}"
+                f"[{self.character.char_id}] Не удалось проверить настройки запуска игры: {exc}"
             )
             return
 
@@ -128,23 +119,37 @@ class GameManager:
             "seabattle": "Sea Battle",
         }
         game_label = game_labels.get(game_name, game_name or "a mini-game")
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": (
-                    "[Desktop mini-game] The player manually started "
-                    f"{game_label} with you. The game window is already open. "
-                    "React briefly and naturally in character to the invitation. "
-                    "Do not start or end a game in this reply."
-                ),
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
+        ChatAPI.react(
+            character_id=self.character.char_id,
+            instruction=(
+                "[Desktop mini-game] The player manually started "
+                f"{game_label} with you. The game window is already open. "
+                "React briefly and naturally in character to the invitation. "
+                "Do not start or end a game in this reply."
+            ),
+            visible=True,
+            sender="Player",
+        )
+
+    def request_character_reaction(
+        self,
+        game: GameInterface,
+        instruction: str,
+        *,
+        visible: bool = True,
+    ) -> bool:
+        """Application boundary used by a concrete mini-game to request chat activity."""
+        if self.active_game is not game:
+            logger.debug(
+                f"[{self.character.char_id}] Игнорируется реакция от неактивной игры "
+                f"'{getattr(game, 'game_id', 'unknown')}'."
+            )
+            return False
+        return ChatAPI.react(
+            character_id=self.character.char_id,
+            instruction=str(instruction or ""),
+            visible=visible,
+            sender="Player",
         )
 
     def stop_game(self, full_id_str: str):

@@ -897,6 +897,43 @@ class ModelStateService(ABC):
     def schedule_g4f_update(self, version: str = "latest") -> bool: ...
 
 
+class ChatService(ABC):
+    """Application-level semantic entrypoint for character chat turns."""
+
+    @abstractmethod
+    def reply(
+        self,
+        *,
+        character_id: str,
+        message_id: str,
+        user_input: str = "",
+        system_input: str = "",
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def react(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        visible: bool = True,
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def initiate(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        sender: str = "System",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+
 class GenerationActivityService(ABC):
     @abstractmethod
     def active_generation_count(self) -> int: ...

@@ -22,6 +22,7 @@ from services.contracts import (
     CharacterRegistry,
     ChatGenerationRequest,
     ChatGenerationResult,
+    ChatService,
     GenerationService,
     GenerationActivityService,
     PlayerMessageSource,
@@ -201,7 +202,7 @@ class StructuredJsonStreamFilter:
         return out
 
 
-class ChatController(GenerationActivityService):
+class ChatController(ChatService, GenerationActivityService):
     def __init__(self, settings):
         self.settings = settings
         self.event_bus = get_event_bus()
@@ -230,6 +231,124 @@ class ChatController(GenerationActivityService):
     def active_generation_count(self) -> int:
         with self._inflight_lock:
             return len(self._active_generations)
+
+    def reply(
+        self,
+        *,
+        character_id: str,
+        message_id: str,
+        user_input: str = "",
+        system_input: str = "",
+        sender: str = "Player",
+        participants: list[str] | None = None,
+    ) -> bool:
+        target_message_id = str(message_id or "").strip()
+        if not target_message_id:
+            raise ValueError("ChatAPI.reply requires a non-empty message_id")
+        return self._submit_semantic_turn(
+            character_id=character_id,
+            user_input=user_input,
+            system_input=system_input,
+            event_type="chat",
+            sender=sender,
+            participants=participants,
+            origin_message_id=target_message_id,
+            policy=resolve_policy(model_event_type="chat"),
+        )
+
+    def react(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        visible: bool = True,
+        sender: str = "Player",
+        participants: list[str] | None = None,
+    ) -> bool:
+        instruction = str(instruction or "").strip()
+        if not instruction:
+            raise ValueError("ChatAPI.react requires a non-empty instruction")
+        if not bool(self.settings.get("REACT_ENABLED", True)):
+            return False
+
+        react_level = 2 if visible else 1
+        level_key = "REACT_L2_ENABLED" if visible else "REACT_L1_ENABLED"
+        level_default = visible
+        if not bool(self.settings.get(level_key, level_default)):
+            return False
+
+        return self._submit_semantic_turn(
+            character_id=character_id,
+            system_input=instruction,
+            event_type="react",
+            sender=sender,
+            participants=participants,
+            policy=resolve_policy(model_event_type="react", react_level=react_level),
+        )
+
+    def initiate(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        sender: str = "System",
+        participants: list[str] | None = None,
+    ) -> bool:
+        return self._submit_semantic_turn(
+            character_id=character_id,
+            system_input=str(instruction or ""),
+            event_type="chat",
+            sender=sender,
+            participants=participants,
+            policy=resolve_policy(model_event_type="chat"),
+        )
+
+    def _submit_semantic_turn(
+        self,
+        *,
+        character_id: str,
+        user_input: str = "",
+        system_input: str = "",
+        event_type: str,
+        sender: str,
+        participants: list[str] | None,
+        origin_message_id: str | None = None,
+        policy: RequestPolicy,
+    ) -> bool:
+        data = {
+            "character_id": str(character_id or ""),
+            "user_input": str(user_input or ""),
+            "system_input": str(system_input or ""),
+            "event_type": str(event_type or "chat"),
+            "sender": str(sender or "Player"),
+            "participants": list(participants or []),
+            "origin_message_id": origin_message_id,
+            "policy": policy.to_dict(),
+        }
+        trace_id = self._ensure_perf_trace(data)
+        self._submit_request(
+            user_input=data["user_input"],
+            system_input=data["system_input"],
+            image_data=[],
+            image_source="",
+            task_uid=None,
+            event_type=data["event_type"],
+            character_id=data["character_id"],
+            sender=data["sender"],
+            participants=self._normalize_participants(data["participants"]),
+            req_id=None,
+            origin_message_id=origin_message_id,
+            policy=data["policy"],
+            images_shown=False,
+            game_state=None,
+            dialogue=None,
+            dialogue_source=None,
+            player_message_source=PlayerMessageSource.NONE,
+            previous_player_message_source=PlayerMessageSource.NONE,
+            gm_instruction_override=None,
+            trace_id=trace_id,
+        )
+        return True
 
     def _register_generation(self, operation_id: str, token: CancellationToken) -> None:
         with self._inflight_lock:

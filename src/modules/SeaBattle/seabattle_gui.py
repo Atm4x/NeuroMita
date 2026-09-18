@@ -307,6 +307,7 @@ class SeaBattleWindow(QWidget):
             try:
                 cmd = self.command_queue.get_nowait()
                 action = cmd.get("action")
+                game_over_reaction = None
 
                 if action == "stop_gui_process":
                     self._programmatic_close = True
@@ -340,12 +341,19 @@ class SeaBattleWindow(QWidget):
                     try:
                         x, y = from_alg(cmd.get("coord"))
                         result, message = self.game.engine.make_move(self.game.mita_id, x, y)
-                        self.game.last_error = None if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"} else f"Ход Миты не принят: {message}"
+                        move_accepted = result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}
+                        self.game.last_error = None if move_accepted else f"Ход Миты не принят: {message}"
+                        if move_accepted:
+                            final_state = self.game.get_full_state()
+                            if final_state["phase"] == "game_over":
+                                game_over_reaction = (final_state.get("winner"), final_state.get("player_id"))
                     except Exception as e:
                         self.game.last_error = f"Ошибка хода Миты: {format_exception(e)}"
 
                 self.update_view()
                 self.send_state_update()
+                if game_over_reaction is not None:
+                    self._request_game_over_reaction(*game_over_reaction)
 
             except multiprocessing.queues.Empty:
                 break
@@ -380,9 +388,6 @@ class SeaBattleWindow(QWidget):
                 placement_completed = not self.game.get_full_state()['player_ships_to_place']
                 self.update_view()
                 self.send_state_update()
-                final_state = self.game.get_full_state()
-                if action == "mita_move" and final_state["phase"] == "game_over":
-                    self._request_game_over_reaction(final_state.get("winner"), final_state.get("player_id"))
                 if placement_completed:
                     self._request_placement_completed_reaction()
             else:

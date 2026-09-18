@@ -4,20 +4,15 @@ import re
 import threading
 import multiprocessing
 import queue
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Type
+from typing import Dict, Any, Optional
 from main_logger import logger
 from modules.game_interface import GameInterface
-from core.events import Events
-from core.request_policy import resolve_policy
-from core.services import use
-from services.contracts import SettingsService
 
 class ChessGame(GameInterface):
     """Реализация игры в шахматы."""
 
-    def __init__(self, character, game_id: str):
-        super().__init__(character, game_id)
+    def __init__(self, character, game_id: str, host=None):
+        super().__init__(character, game_id, host=host)
         self.gui_thread: Optional[threading.Thread] = None
         self.command_queue: Optional[multiprocessing.Queue] = None
         self.state_queue: Optional[multiprocessing.Queue] = None
@@ -164,88 +159,30 @@ class ChessGame(GameInterface):
                 self._dispatch_player_close_reaction()
 
     def _dispatch_player_move_reaction(self, event: Dict[str, Any]):
-        try:
-            settings = use(SettingsService)
-            if not bool(settings.get("REACT_ENABLED", True)) or not bool(settings.get("REACT_L2_ENABLED", True)):
-                return
-        except Exception as exc:
-            logger.debug(f"[{self.character.char_id}] Не удалось проверить настройки реакций шахмат: {format_exception(exc)}")
-            return
-
         if not self.character.get_variable("playingGame", False):
             return
 
         san_move = str(event.get("san") or event.get("uci") or "a move")
         uci_move = str(event.get("uci") or "")
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": (
-                    "[Chess automatic turn request] The player made the move "
-                    f"{san_move}" + (f" ({uci_move})" if uci_move else "") + ". "
-                    "It is now your turn. In this same response, react briefly in character "
-                    "and put exactly RequestBestChessMove in commands. Do not wait for the player "
-                    "to ask again; the recommended legal move will be selected and applied."
-                ),
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
+        self.request_character_reaction(
+            "[Chess automatic turn request] The player made the move "
+            f"{san_move}" + (f" ({uci_move})" if uci_move else "") + ". "
+            "It is now your turn. In this same response, react briefly in character "
+            "and put exactly RequestBestChessMove in commands. Do not wait for the player "
+            "to ask again; the recommended legal move will be selected and applied."
         )
 
     def _dispatch_player_close_reaction(self):
-        """React when the player deliberately closes the chess window."""
-        try:
-            settings = use(SettingsService)
-            if not bool(settings.get("REACT_ENABLED", True)) or not bool(settings.get("REACT_L2_ENABLED", True)):
-                return
-        except Exception as exc:
-            logger.debug(f"[{self.character.char_id}] Не удалось проверить настройки реакции на выход из шахмат: {format_exception(exc)}")
-            return
-
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": (
-                    "[Chess] The player closed the chess game window. "
-                    "React briefly and naturally in character to the end of this match."
-                ),
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
+        self.request_character_reaction(
+            "[Chess] The player closed the chess game window. "
+            "React briefly and naturally in character to the end of this match."
         )
 
     def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
-        try:
-            settings = use(SettingsService)
-            if not bool(settings.get("REACT_ENABLED", True)) or not bool(settings.get("REACT_L2_ENABLED", True)):
-                return
-        except Exception as exc:
-            logger.debug(f"[{self.character.char_id}] Не удалось проверить настройки реакции на конец шахмат: {format_exception(exc)}")
-            return
-
         outcome = str(event.get("outcome") or "The chess game has ended.")
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": f"[Chess] The game has ended: {outcome}. React briefly and naturally in character; do not make a chess move.",
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
+        self.request_character_reaction(
+            f"[Chess] The game has ended: {outcome}. "
+            "React briefly and naturally in character; do not make a chess move."
         )
 
 

@@ -6,7 +6,6 @@ import queue
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,25 +13,20 @@ PROJECT_SRC = Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from PyQt6.QtWidgets import QApplication
+try:
+    from PyQt6.QtWidgets import QApplication
+    from modules.Chess.chess_board import ChessGuiTkinter
+except ImportError:
+    QApplication = None
+    ChessGuiTkinter = None
 
-from modules.Chess.chess_board import ChessGuiTkinter
 from modules.Chess.game_instance import ChessGame
-
-
-class _EventBus:
-    def __init__(self):
-        self.events = []
-
-    def emit(self, name, payload):
-        self.events.append((name, payload))
 
 
 class _Character:
     char_id = "Mita"
 
     def __init__(self):
-        self.event_bus = _EventBus()
         self.variables = {"playingGame": True}
 
     def get_variable(self, key, default=None):
@@ -42,9 +36,13 @@ class _Character:
         self.variables[key] = value
 
 
-class _Settings:
-    def get(self, key, default=None):
-        return {"REACT_ENABLED": True, "REACT_L2_ENABLED": True}.get(key, default)
+class _GameHost:
+    def __init__(self):
+        self.requests = []
+
+    def request_character_reaction(self, game, instruction, *, visible=True):
+        self.requests.append((game, instruction, visible))
+        return True
 
 
 class _Controller:
@@ -67,47 +65,56 @@ class _DslInterpreter:
 class ChessMoveReactionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
+        cls.app = QApplication.instance() or QApplication([]) if QApplication is not None else None
 
-    def test_player_move_emits_l2_reaction(self):
+    def test_player_move_requests_reaction_from_game_host(self):
         character = _Character()
-        game = ChessGame(character, "chess")
+        host = _GameHost()
+        game = ChessGame(character, "chess", host=host)
 
-        with patch("modules.Chess.game_instance.use", return_value=_Settings()):
-            game._dispatch_player_move_reaction({"uci": "e2e4", "san": "e4"})
+        game._dispatch_player_move_reaction({"uci": "e2e4", "san": "e4"})
 
-        self.assertEqual(len(character.event_bus.events), 1)
-        _event, payload = character.event_bus.events[0]
-        self.assertEqual(payload["event_type"], "react")
-        self.assertEqual(payload["policy"]["react_level"], 2)
-        self.assertIn("e4", payload["system_input"])
-        self.assertIn("RequestBestChessMove", payload["system_input"])
-        self.assertNotIn("Do not make a chess move", payload["system_input"])
+        self.assertEqual(len(host.requests), 1)
+        requested_game, instruction, visible = host.requests[0]
+        self.assertIs(requested_game, game)
+        self.assertTrue(visible)
+        self.assertIn("e4", instruction)
+        self.assertIn("RequestBestChessMove", instruction)
+        self.assertNotIn("Do not make a chess move", instruction)
 
-    def test_player_closing_chess_emits_l2_reaction(self):
+    def test_player_closing_chess_requests_reaction_from_game_host(self):
         character = _Character()
-        game = ChessGame(character, "chess")
+        host = _GameHost()
+        game = ChessGame(character, "chess", host=host)
 
-        with patch("modules.Chess.game_instance.use", return_value=_Settings()):
-            game._dispatch_player_close_reaction()
+        game._dispatch_player_close_reaction()
 
-        self.assertEqual(len(character.event_bus.events), 1)
-        _event, payload = character.event_bus.events[0]
-        self.assertEqual(payload["event_type"], "react")
-        self.assertIn("closed the chess game window", payload["system_input"])
+        self.assertEqual(len(host.requests), 1)
+        self.assertIn("closed the chess game window", host.requests[0][1])
 
-    def test_game_over_emits_reaction_without_a_chess_move(self):
+    def test_game_over_requests_reaction_without_a_chess_move(self):
         character = _Character()
-        game = ChessGame(character, "chess")
+        host = _GameHost()
+        game = ChessGame(character, "chess", host=host)
 
-        with patch("modules.Chess.game_instance.use", return_value=_Settings()):
-            game._dispatch_game_over_reaction({"outcome": "Checkmate."})
+        game._dispatch_game_over_reaction({"outcome": "Checkmate."})
 
-        self.assertEqual(len(character.event_bus.events), 1)
-        _event, payload = character.event_bus.events[0]
-        self.assertIn("game has ended", payload["system_input"])
-        self.assertIn("do not make a chess move", payload["system_input"])
+        self.assertEqual(len(host.requests), 1)
+        instruction = host.requests[0][1]
+        self.assertIn("game has ended", instruction)
+        self.assertIn("do not make a chess move", instruction)
 
+    def test_player_move_is_not_forwarded_when_game_is_not_active(self):
+        character = _Character()
+        character.variables["playingGame"] = False
+        host = _GameHost()
+        game = ChessGame(character, "chess", host=host)
+
+        game._dispatch_player_move_reaction({"uci": "e2e4", "san": "e4"})
+
+        self.assertEqual(host.requests, [])
+
+    @unittest.skipIf(QApplication is None, "PyQt6 is not installed")
     def test_chess_reaction_checkbox_is_checked_by_default(self):
         window = ChessGuiTkinter(_Controller())
         try:

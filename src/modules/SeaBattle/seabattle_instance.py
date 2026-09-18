@@ -7,17 +7,13 @@ import queue
 import threading
 from typing import Dict, Any, Optional
 
-from core.events import Events
-from core.request_policy import resolve_policy
-from core.services import use
 from main_logger import logger
 from modules.game_interface import GameInterface
-from services.contracts import SettingsService
 
 class SeaBattleGame(GameInterface):
 
-    def __init__(self, character, game_id: str = "seabattle"):
-        super().__init__(character, game_id)
+    def __init__(self, character, game_id: str = "seabattle", host=None):
+        super().__init__(character, game_id, host=host)
         self.gui_process: Optional[multiprocessing.Process] = None
         self.command_queue: Optional[multiprocessing.Queue] = None
         self.state_queue: Optional[multiprocessing.Queue] = None
@@ -146,55 +142,21 @@ class SeaBattleGame(GameInterface):
                 self._dispatch_player_close_reaction()
 
     def _dispatch_player_target_reaction(self, event: Dict[str, Any]):
-        """Request a visible Mita reaction after a valid player shot.
-
-        This mirrors the existing L2 ``react`` policy, so the global reactions
-        switches remain the source of truth.  The game-level checkbox only
-        decides whether the GUI sends this event for the current match.
-        """
-        try:
-            settings = use(SettingsService)
-            if not bool(settings.get("REACT_ENABLED", True)):
-                return
-            if not bool(settings.get("REACT_L2_ENABLED", True)):
-                return
-        except Exception as exc:
-            logger.debug(
-                f"[{self.character.char_id}] Не удалось проверить настройки реакций: "
-                f"{format_exception(exc)}"
-            )
-            return
-
         if not self.character.get_variable("playingGame", False):
             return
 
         coord = str(event.get("coord") or "неизвестную клетку")
         result = str(event.get("message") or event.get("result") or "сделал ход")
-        system_input = (
+        self.request_character_reaction(
             "[Sea Battle automatic turn request] The player fired at "
             f"{coord}. Result: {result}. "
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly one legal MakeMove,<coordinate> command in commands. "
             "Do not wait for the player to ask again."
         )
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": system_input,
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
-        )
 
     def _dispatch_placement_completed_reaction(self):
-        if not self._reactions_enabled():
-            return
-        self._emit_reaction(
+        self.request_character_reaction(
             "[Sea Battle] The player has finished placing all ships. "
             "In this same response, react briefly in character and complete your own placement: "
             "put PlaceShipsRandomly in commands when you still have ships to place. "
@@ -204,42 +166,15 @@ class SeaBattleGame(GameInterface):
     def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
         winner = event.get("winner")
         outcome = "The player won" if winner == event.get("player_id") else "Mita won"
-        self._emit_reaction(
-            f"[Sea Battle] The game has ended: {outcome}. React briefly and naturally in character; do not take another shot."
+        self.request_character_reaction(
+            f"[Sea Battle] The game has ended: {outcome}. "
+            "React briefly and naturally in character; do not take another shot."
         )
 
     def _dispatch_player_close_reaction(self):
-        if not self._reactions_enabled():
-            return
-        self._emit_reaction(
+        self.request_character_reaction(
             "[Sea Battle] The player closed the Sea Battle game window. "
             "React briefly and naturally in character to the end of this match."
-        )
-
-    def _reactions_enabled(self) -> bool:
-        try:
-            settings = use(SettingsService)
-            return bool(settings.get("REACT_ENABLED", True)) and bool(settings.get("REACT_L2_ENABLED", True))
-        except Exception as exc:
-            logger.debug(
-                f"[{self.character.char_id}] Не удалось проверить настройки реакций: "
-                f"{format_exception(exc)}"
-            )
-            return False
-
-    def _emit_reaction(self, system_input: str):
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": system_input,
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
         )
 
     def process_llm_tags(self, response: str) -> str:
