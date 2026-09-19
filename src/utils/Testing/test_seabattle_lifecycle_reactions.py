@@ -122,6 +122,25 @@ class SeaBattleLifecycleReactionTests(unittest.TestCase):
         self.assertEqual(game.get_state_prompt(), "game state")
         self.assertEqual(character.dsl_interpreter.paths, ["_CommonPrompts/seabattle.system"])
 
+    def test_runtime_state_reuses_last_boards_when_queue_has_no_new_snapshot(self):
+        character = _Character()
+        character.dsl_interpreter = _DslInterpreter()
+        game = SeaBattleGame(character)
+        game.state_queue = queue.Queue()
+        game._last_state = {
+            "phase": "battle",
+            "is_player_turn": False,
+            "mita_id": "mita",
+            "mita_my_board_str": "my board",
+            "mita_opponent_view_str": "opponent board",
+            "mita_ships_to_place": [],
+            "hunt_info": {},
+            "shot_history_str": "",
+        }
+
+        self.assertEqual(game.get_state_prompt(), "game state")
+        self.assertEqual(character.dsl_interpreter.paths, ["_CommonPrompts/seabattle.system"])
+
     def test_closing_window_requests_reaction_from_game_host(self):
         character = _Character()
         host = _GameHost()

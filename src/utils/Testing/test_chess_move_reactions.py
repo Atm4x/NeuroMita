@@ -158,6 +158,29 @@ class ChessMoveReactionTests(unittest.TestCase):
         self.assertEqual(game.get_state_prompt(), "game state")
         self.assertEqual(character.dsl_interpreter.paths, ["_CommonPrompts/chess.system"])
 
+    def test_runtime_state_reuses_last_board_when_queue_has_no_new_snapshot(self):
+        character = _Character()
+        character.dsl_interpreter = _DslInterpreter()
+        game = ChessGame(character, "chess")
+        game.state_queue = queue.Queue()
+        game._last_state_data = {
+            "player_is_white_in_gui": True,
+            "turn": "black",
+            "current_elo": 1500,
+            "last_move_san": "e4",
+            "fen": "test-fen",
+            "board_ascii": None,
+            "is_game_over": False,
+            "outcome_message": "Playing",
+            "legal_moves_uci": ["e7e5"],
+            "legal_moves_short": ["e7e5"],
+            "is_auto": False,
+            "is_cheat": False,
+        }
+
+        self.assertEqual(game.get_state_prompt(), "game state")
+        self.assertEqual(character.dsl_interpreter.paths, ["_CommonPrompts/chess.system"])
+
 
 if __name__ == "__main__":
     unittest.main()

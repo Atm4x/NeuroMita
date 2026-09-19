@@ -19,6 +19,9 @@ class ChessGame(GameInterface):
         self.reaction_queue: Optional[multiprocessing.Queue] = None
         self._reaction_listener: Optional[threading.Thread] = None
         self._reaction_stop_event = threading.Event()
+        # A game reaction can arrive before the next queue feeder flushes.
+        # Preserve the most recent complete board for the following prompt.
+        self._last_state_data: Optional[Dict[str, Any]] = None
         self.current_elo: Optional[int] = None
         self.is_auto: bool = False
         self.is_cheat: bool = False
@@ -46,6 +49,7 @@ class ChessGame(GameInterface):
             self.command_queue = multiprocessing.Queue()
             self.state_queue = multiprocessing.Queue()
             self.reaction_queue = multiprocessing.Queue()
+            self._last_state_data = None
             self._reaction_stop_event.clear()
 
             logger.info(f"[{self.character.char_id}] Запуск шахматного GUI. ELO: {self.current_elo}, auto={self.is_auto}, cheat={self.is_cheat}")
@@ -132,6 +136,7 @@ class ChessGame(GameInterface):
         self.reaction_queue = None
         self._reaction_listener = None
         self.current_elo = None
+        self._last_state_data = None
 
     def _listen_for_player_move_reactions(self):
         """Forward checked GUI move notifications through the standard L2 react path."""
@@ -311,13 +316,17 @@ class ChessGame(GameInterface):
         if not self.state_queue:
             return
         latest = None
-        while not self.state_queue.empty():
+        # multiprocessing.Queue.empty() is unreliable between processes.
+        while True:
             try:
                 latest = self.state_queue.get_nowait()
+            except queue.Empty:
+                break
             except Exception:
                 break
         if not latest or not isinstance(latest, dict):
             return
+        self._last_state_data = latest
 
         # Проверяем закрытие окна / сбой процесса
         ev = str(latest.get("event") or "").strip().lower()
@@ -342,11 +351,29 @@ class ChessGame(GameInterface):
             return None
 
         latest_state_data: Optional[Dict[str, Any]] = None
-        while not self.state_queue.empty():
+        # Drain by attempting reads, not by trusting Queue.empty().
+        while True:
             try:
                 latest_state_data = self.state_queue.get_nowait()
+            except queue.Empty:
+                break
             except Exception:
                 break
+
+        # On the first game-triggered message, briefly wait for the GUI's
+        # initial board.  Subsequent messages reuse a known board until a
+        # newer snapshot arrives.
+        if latest_state_data is None and self._last_state_data is None:
+            try:
+                latest_state_data = self.state_queue.get(timeout=0.25)
+            except queue.Empty:
+                pass
+            except Exception:
+                pass
+        if isinstance(latest_state_data, dict):
+            self._last_state_data = latest_state_data
+        elif self._last_state_data is not None:
+            latest_state_data = self._last_state_data
 
         if latest_state_data and isinstance(latest_state_data, dict):
             ev = str(latest_state_data.get("event") or "").strip().lower()
@@ -364,7 +391,10 @@ class ChessGame(GameInterface):
 
         if not latest_state_data:
             self._send_command({"action": "get_state"})
-            return "Шахматная игра активна, но нет данных от модуля. Запрашиваю текущее состояние."
+            return (
+                "Шахматная игра уже запущена и её окно открыто. "
+                "Доска ещё синхронизируется с игровым модулем; не считай игру незапущенной."
+            )
 
         player_gui_is_white = latest_state_data.get('player_is_white_in_gui', True)
         current_board_turn = latest_state_data.get('turn', 'N/A')

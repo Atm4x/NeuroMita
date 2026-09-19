@@ -20,6 +20,8 @@ class SeaBattleGame(GameInterface):
         self.reaction_queue: Optional[multiprocessing.Queue] = None
         self._reaction_listener: Optional[threading.Thread] = None
         self._reaction_stop_event = threading.Event()
+        # Preserve a complete GUI snapshot across queue-feeder races.
+        self._last_state: Optional[Dict[str, Any]] = None
 
     def start(self, params: Dict[str, Any]):
         if self.gui_process and self.gui_process.is_alive():
@@ -35,6 +37,7 @@ class SeaBattleGame(GameInterface):
             self.command_queue = multiprocessing.Queue()
             self.state_queue = multiprocessing.Queue()
             self.reaction_queue = multiprocessing.Queue()
+            self._last_state = None
             self._reaction_stop_event.clear()
 
             logger.info(f"[{self.character.char_id}] Запуск GUI для 'Морского боя'.")
@@ -109,6 +112,7 @@ class SeaBattleGame(GameInterface):
         self.state_queue = None
         self.reaction_queue = None
         self._reaction_listener = None
+        self._last_state = None
 
     def _listen_for_player_target_reactions(self):
         """Forward explicit player shots from the GUI to the normal L2 react path."""
@@ -278,11 +282,26 @@ class SeaBattleGame(GameInterface):
             return None
 
         latest_state: Optional[Dict[str, Any]] = None
-        while not self.state_queue.empty():
+        # multiprocessing.Queue.empty() is unreliable between processes.
+        while True:
             try:
                 latest_state = self.state_queue.get_nowait()
+            except queue.Empty:
+                break
             except Exception:
                 break
+
+        if latest_state is None and self._last_state is None:
+            try:
+                latest_state = self.state_queue.get(timeout=0.25)
+            except queue.Empty:
+                pass
+            except Exception:
+                pass
+        if isinstance(latest_state, dict):
+            self._last_state = latest_state
+        elif self._last_state is not None:
+            latest_state = self._last_state
 
         if latest_state and isinstance(latest_state, dict):
             ev = str(latest_state.get("event") or "").strip().lower()
@@ -296,7 +315,10 @@ class SeaBattleGame(GameInterface):
 
         if not latest_state:
             self._send_command({"action": "get_state"})
-            return "Игра 'Морской бой' активна. Ожидание данных от игрового модуля..."
+            return (
+                "Игра 'Морской бой' уже запущена и её окно открыто. "
+                "Доски ещё синхронизируются с игровым модулем; не считай игру незапущенной."
+            )
 
         mita_id = latest_state.get('mita_id')
 
