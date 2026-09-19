@@ -413,7 +413,7 @@ def _build_routing(self, layout):
         "Controls upstream provider selection for OpenRouter only.",
     )
     or_note.setWordWrap(True)
-    or_note.setStyleSheet(f"color: {THEME["muted"]}; font-size: 11px;")
+    or_note.setStyleSheet(f"color: {THEME['muted']}; font-size: 11px;")
     self.openrouter_routing_section.add_widget(or_note)
 
     self.or_enable_cb = tr_set(QCheckBox(), "Включить provider routing", "Enable provider routing")
@@ -478,7 +478,7 @@ def _build_routing(self, layout):
     self.openrouter_routing_section.add_widget(or_flags_row)
 
     or_max_price_label = tr_set(QLabel(), "Max price ($)", "Max price ($)")
-    or_max_price_label.setStyleSheet(f"color: {THEME["muted"]}; font-size: 11px;")
+    or_max_price_label.setStyleSheet(f"color: {THEME['muted']}; font-size: 11px;")
     self.openrouter_routing_section.add_widget(or_max_price_label)
 
     or_max_price_row = QWidget()
