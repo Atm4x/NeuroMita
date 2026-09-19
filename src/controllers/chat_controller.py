@@ -211,7 +211,7 @@ class ChatController(ChatService, GenerationActivityService):
         # Реестр охватывает UI, игру и фоновые запросы, включая ожидающие очередь.
         # Токен нужен не только для статуса, но и для отмены конкретного HTTP-стрима.
         self._inflight_lock = threading.Lock()
-        self._active_generations: dict[str, CancellationToken] = {}
+        self._active_generations: dict[str, tuple[CancellationToken, str]] = {}
         self._player_message_source_lock = threading.Lock()
         self._last_player_message_source = PlayerMessageSource.NONE
 
@@ -228,8 +228,14 @@ class ChatController(ChatService, GenerationActivityService):
         with self._inflight_lock:
             return bool(self._active_generations)
 
-    def active_generation_count(self) -> int:
+    def active_generation_count(self, character_id: str | None = None) -> int:
         with self._inflight_lock:
+            if character_id is not None:
+                normalized_id = str(character_id or "")
+                return sum(
+                    1 for _token, active_character_id in self._active_generations.values()
+                    if active_character_id == normalized_id
+                )
             return len(self._active_generations)
 
     def reply(
@@ -350,27 +356,41 @@ class ChatController(ChatService, GenerationActivityService):
         )
         return True
 
-    def _register_generation(self, operation_id: str, token: CancellationToken) -> None:
+    def _register_generation(self, operation_id: str, token: CancellationToken, character_id: str) -> None:
         with self._inflight_lock:
-            self._active_generations[operation_id] = token
+            normalized_id = str(character_id or "")
+            self._active_generations[operation_id] = (token, normalized_id)
             active_count = len(self._active_generations)
-        self._emit_generation_activity(active_count)
+            character_active_count = sum(
+                1 for _token, active_character_id in self._active_generations.values()
+                if active_character_id == normalized_id
+            )
+        self._emit_generation_activity(active_count, normalized_id, character_active_count)
 
     def _finish_generation(self, operation_id: str) -> None:
         with self._inflight_lock:
-            self._active_generations.pop(operation_id, None)
+            _token, character_id = self._active_generations.pop(operation_id, (None, ""))
             active_count = len(self._active_generations)
-        self._emit_generation_activity(active_count)
+            character_active_count = sum(
+                1 for _token, active_character_id in self._active_generations.values()
+                if active_character_id == character_id
+            )
+        self._emit_generation_activity(active_count, character_id, character_active_count)
 
-    def _emit_generation_activity(self, active_count: int) -> None:
+    def _emit_generation_activity(self, active_count: int, character_id: str = "", character_active_count: int = 0) -> None:
         self.event_bus.emit(
             Events.Chat.GENERATION_ACTIVITY_CHANGED,
-            {"active_count": active_count, "generating": active_count > 0},
+            {
+                "active_count": active_count,
+                "generating": active_count > 0,
+                "character_id": character_id,
+                "character_active_count": character_active_count,
+            },
         )
 
     def _on_cancel_active_generations(self, event: Event) -> int:
         with self._inflight_lock:
-            tokens = tuple(self._active_generations.values())
+            tokens = tuple(token for token, _character_id in self._active_generations.values())
         for token in tokens:
             token.cancel("Cancelled by user")
         return len(tokens)
@@ -1043,7 +1063,7 @@ class ChatController(ChatService, GenerationActivityService):
         cancellation = CancellationToken()
         kwargs["operation_id"] = operation_id
         kwargs["cancellation"] = cancellation
-        self._register_generation(operation_id, cancellation)
+        self._register_generation(operation_id, cancellation, str(kwargs.get("character_id") or ""))
         perf_mark(trace_id, "generation.enqueued")
         try:
             executors().try_submit(Pools.GENERATION, self._run_request, **kwargs)
@@ -1167,6 +1187,9 @@ class ChatController(ChatService, GenerationActivityService):
             result["memory_update"] = structured_data.get("memory_update", [])
             result["memory_delete"] = structured_data.get("memory_delete", [])
             result["memory_merge"] = structured_data.get("memory_merge", [])
+            result["reminder_add"] = structured_data.get("reminder_add", [])
+            result["reminder_delete"] = structured_data.get("reminder_delete", [])
+            result["timer_add"] = structured_data.get("timer_add", [])
             result["structured_parse_level"] = structured_parse_level
             result["control_plane_trusted"] = bool(control_plane_trusted)
         return result

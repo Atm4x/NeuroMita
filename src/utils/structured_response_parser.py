@@ -364,7 +364,7 @@ def _schema_aware_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> 
 
     # 2. Исправление null в списках (добавили entities и relations)
     for field in ("memory_add", "memory_update", "memory_delete", "memory_merge",
-                  "segments", "reminder_add", "reminder_delete", "entities", "relations"):
+                  "segments", "reminder_add", "reminder_delete", "timer_add", "entities", "relations"):
         if data.get(field) is None:
             data[field] = []
 
@@ -436,7 +436,7 @@ def _schema_aware_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> 
 
             # Добавили entities и relations в список на "поднятие"
             for field in ("memory_add", "memory_update", "memory_delete", "memory_merge",
-                          "reminder_add", "reminder_delete", "entities", "relations"):
+                          "reminder_add", "reminder_delete", "timer_add", "entities", "relations"):
                 if not data.get(field) and seg0.get(field):
                     data[field] = seg0.pop(field)
 
@@ -668,6 +668,7 @@ def structured_response_to_result_dict(response: StructuredResponse) -> dict:
         "memory_merge": list(response.memory_merge or []),
         "reminder_add": list(response.reminder_add or []),
         "reminder_delete": list(response.reminder_delete or []),
+        "timer_add": list(response.timer_add or []),
         "tool_call": tool_call_dict,
         "secret_exposed": response.secret_exposed,
         "custom_fields": custom_fields_out,

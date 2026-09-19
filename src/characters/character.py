@@ -744,7 +744,7 @@ class Character:
                 logger.error(f"[{self.char_id}] Structured: error merging {src_ids}→#{tgt_id}: {format_exception(e)}")
 
     def _apply_structured_reminder_ops(self, structured: StructuredResponse):
-        """Apply reminder add/delete operations from a StructuredResponse."""
+        """Apply persisted reminders and autonomous timers from structured output."""
         for entry in (structured.reminder_add or []):
             entry = (entry or "").strip()
             if not entry:
@@ -758,6 +758,19 @@ class Character:
                 logger.info(f"[{self.char_id}] Structured: added reminder due={due_iso.strip()}: {text.strip()[:50]}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error adding reminder: {format_exception(e)}")
+
+        for entry in (structured.timer_add or []):
+            entry = (entry or "").strip()
+            if "|" not in entry:
+                if entry:
+                    logger.warning(f"[{self.char_id}] Structured: timer_add bad format (missing '|'): {entry!r}")
+                continue
+            delay_text, instruction = entry.split("|", 1)
+            try:
+                self.reminder_system.add_timer(instruction.strip(), float(delay_text.strip()))
+                logger.info(f"[{self.char_id}] Structured: added timer after {delay_text.strip()} sec: {instruction.strip()[:50]}")
+            except Exception as e:
+                logger.error(f"[{self.char_id}] Structured: error adding timer: {format_exception(e)}")
 
         for delete_str in (structured.reminder_delete or []):
             delete_str = (delete_str or "").strip()
