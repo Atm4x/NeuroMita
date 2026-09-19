@@ -1824,7 +1824,8 @@ class ModelController(GenerationService, ModelStateService):
                 return structured_result
 
             inline_graph_json: Optional[str] = None
-            if (bool(self.settings.get("GRAPH_EXTRACTION_ENABLED", False))
+            if (bool(self.settings.get("RAG_ENABLED", False))
+                    and bool(self.settings.get("GRAPH_EXTRACTION_ENABLED", False))
                     and bool(self.settings.get("GRAPH_EXTRACTION_INLINE", False))):
                 visible_raw, inline_graph_json = _strip_graph_tag(visible_raw)
 
@@ -2316,7 +2317,8 @@ class ModelController(GenerationService, ModelStateService):
 
         # Build inline_graph_json from structured entities/relations (if graph extraction enabled)
         inline_graph_json: Optional[str] = None
-        if (bool(self.settings.get("GRAPH_EXTRACTION_ENABLED", False))
+        if (bool(self.settings.get("RAG_ENABLED", False))
+                and bool(self.settings.get("GRAPH_EXTRACTION_ENABLED", False))
                 and (structured.entities or structured.relations)):
             try:
                 import json as _json

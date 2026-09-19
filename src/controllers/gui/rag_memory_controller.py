@@ -138,6 +138,11 @@ def _reindex_embeddings(gui) -> None:
 
 def _extract_entities(gui, *, mode: str = "all", skip_existing: bool = True) -> None:
     """Run entity extraction. mode='current'|'all'. skip_existing skips already-processed messages."""
+    if not bool(use(SettingsService).get("RAG_ENABLED", False)):
+        QMessageBox.warning(gui, _("RAG выключен", "RAG disabled"),
+                            _("Граф знаний доступен только при включённом RAG.",
+                              "The knowledge graph is only available when RAG is enabled."))
+        return
     from managers.database_manager import DatabaseManager
     from managers.rag.graph.graph_store import GraphStore
     from managers.rag.graph.entity_extractor import parse_extraction_response, store_extraction
@@ -1051,8 +1056,10 @@ def _build_rag_core_config(self) -> list:
 
         {'label': _('Включить RAG (требует перезагрузки)', 'Enable RAG (requires restart)'),
          'key': 'RAG_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
-         'tooltip': _('Включает систему RAG. Если выключено, модель эмбеддингов не загружается.',
-                      'Enables the RAG system. If disabled, the embedding model is not loaded.')},
+         'tooltip': _('Включает систему RAG. Если выключено, модель эмбеддингов не загружается, '
+                      'а также полностью отключается граф знаний (экстракция и запись).',
+                      'Enables the RAG system. If disabled, the embedding model is not loaded '
+                      'and the knowledge graph (extraction and writes) is fully disabled.')},
         {'label': _('Искать в памяти', 'Search in memory'),
          'key': 'RAG_SEARCH_MEMORY', 'type': 'checkbutton', 'default_checkbutton': True,
          'depends_on': 'RAG_ENABLED'},
@@ -1129,18 +1136,21 @@ def _build_graph_config(self, hc_provider_names) -> list:
 
         {'label': _('Включить экстракцию сущностей', 'Enable entity extraction'),
          'key': 'GRAPH_EXTRACTION_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
-         'tooltip': _('Извлекать сущности и связи из диалога через LLM-провайдер и сохранять в граф.',
-                      'Extract entities and relations from dialogue via LLM provider and store in graph.')},
+         'depends_on': 'RAG_ENABLED',
+         'tooltip': _('Извлекать сущности и связи из диалога через LLM-провайдер и сохранять в граф. '
+                      'Работает только при включённом RAG.',
+                      'Extract entities and relations from dialogue via LLM provider and store in graph. '
+                      'Only works when RAG is enabled.')},
         {'label': _('Inline-режим (основная модель, без доп. запроса)', 'Inline mode (main model, no extra call)'),
          'key': 'GRAPH_EXTRACTION_INLINE', 'type': 'checkbutton', 'default_checkbutton': True,
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Основная модель сама пишет <graph>JSON</graph> в ответе — отдельный API-вызов не нужен. '
                       'Если выключено, используется отдельный провайдер ниже.',
                       'Main model embeds <graph>JSON</graph> in its response — no extra API call. '
                       'If disabled, a separate provider call is used instead.')},
         {'label': _('Реал-тайм экстракция (после каждого ответа)', 'Real-time extraction (after each reply)'),
          'key': 'GRAPH_EXTRACTION_REALTIME', 'type': 'checkbutton', 'default_checkbutton': False,
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Автоматически извлекать сущности после каждого ответа модели. '
                       'Если выключено — только ручная batch-экстракция кнопками ниже. '
                       'По умолчанию выключено, чтобы не конкурировать с основной моделью за LLM.',
@@ -1150,27 +1160,27 @@ def _build_graph_config(self, hc_provider_names) -> list:
         {'label': _('Провайдер для экстракции графа', 'Provider for graph extraction'),
          'key': 'GRAPH_PROVIDER', 'type': 'combobox',
          'options': hc_provider_names, 'default': _('Текущий', 'Current'),
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Провайдер для экстракции (используется только если inline-режим выключен). '
                       'Текущий = та же модель, но отдельным запросом после ответа.',
                       'Provider for extraction (only used when inline mode is off). '
                       'Current = same model, but as a separate request after the response.')},
         {'label': _('Искать в графе знаний при RAG', 'Search knowledge graph in RAG'),
          'key': 'RAG_SEARCH_GRAPH', 'type': 'checkbutton', 'default_checkbutton': False,
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Включает поиск в графе сущностей при RAG-запросе.',
                       'Enables entity graph search during RAG queries.')},
         {'label': _('Минимум результатов из графа', 'Min graph results'),
          'key': 'RAG_GRAPH_MIN_RESULTS', 'type': 'entry', 'default': 0,
-         'validation': self.validate_positive_integer_or_zero,
-         'depends_on': 'RAG_SEARCH_GRAPH',
+'validation': self.validate_positive_integer_or_zero,
+          'depends_on': ['RAG_SEARCH_GRAPH', 'RAG_ENABLED'],
          'tooltip': _('Минимальное количество граф-трипл в выдаче RAG (0 = без гарантий). '
                       'Гарантирует присутствие знаний из графа даже если они проигрывают по score.',
                       'Minimum number of graph triples guaranteed in RAG output (0 = no guarantee). '
                       'Ensures graph knowledge appears even if outscored by history/memories.')},
         {'label': _('Авто-очистка графа (GC) после экстракции', 'Auto-clean graph (GC) after extraction'),
          'key': 'GRAPH_GC_AUTO', 'type': 'checkbutton', 'default_checkbutton': False,
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Автоматически запускать сборщик мусора графа после каждой экстракции сущностей. '
                       'Удаляет мусор, дубли, объединяет синонимы.',
                       'Automatically run entity graph GC after each extraction. '
@@ -1178,7 +1188,7 @@ def _build_graph_config(self, hc_provider_names) -> list:
         {'label': _('Параллельных воркеров (batch-экстракция)', 'Parallel workers (batch extraction)'),
          'key': 'GRAPH_EXTRACTION_WORKERS', 'type': 'entry', 'default': 1,
          'validation': self.validate_positive_integer,
-         'depends_on': 'GRAPH_EXTRACTION_ENABLED',
+         'depends_on': ['GRAPH_EXTRACTION_ENABLED', 'RAG_ENABLED'],
          'tooltip': _('Сколько потоков одновременно отправляют запросы при batch-извлечении сущностей. '
                       '1 = последовательно (по умолчанию). '
                       'Увеличивай если LM Studio настроен на Parallel Requests > 1 и есть запас VRAM.',

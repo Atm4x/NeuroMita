@@ -415,8 +415,9 @@ class MainController:
         feature_manager.register(
             FeatureSpec(
                 name="graph",
-                setting_keys=("GRAPH_EXTRACTION_ENABLED",),
-                enabled=enabled("GRAPH_EXTRACTION_ENABLED"),
+                setting_keys=("RAG_ENABLED", "GRAPH_EXTRACTION_ENABLED"),
+                enabled=lambda settings: bool(settings.get("RAG_ENABLED", False))
+                and bool(settings.get("GRAPH_EXTRACTION_ENABLED", False)),
                 factory=self._create_graph_controller,
                 priority=75,
             )

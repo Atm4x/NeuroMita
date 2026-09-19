@@ -268,7 +268,7 @@ When a physical event reaches you (for example in [Unity Runtime Events]), react
 Tag [SYSTEM INFO] means system information, not player speech.
 Tag [SPEAKER] means you are in a multi-speaker dialogue."""
 
-IF GRAPH_EXTRACTION_ENABLED == True THEN
+IF GRAPH_EXTRACTION_ENABLED == True AND RAG_ENABLED == True THEN
     SET LOCAL result = p_header + p_toc + p_schema_open + p_graph_schema_fields + p_graph_rules + p_graph_example + p_footer
 ELSE
     SET LOCAL result = p_header + p_toc + p_schema_open + p_schema_fields + p_rules + p_example + p_footer

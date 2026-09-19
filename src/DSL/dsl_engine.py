@@ -639,7 +639,14 @@ class DslInterpreter:
                         entity1, relation, entity2 = parts
                         mem_sys = getattr(self.character, "memory_system", None)
                         rag = getattr(mem_sys, "rag", None) if mem_sys else None
-                        if rag and entity1 and entity2 and relation:
+                        # Граф — часть RAG: без RAG_ENABLED запись сущностей/связей запрещена.
+                        rag_enabled = True
+                        try:
+                            from managers.settings_manager import SettingsManager
+                            rag_enabled = bool(SettingsManager.get("RAG_ENABLED", False))
+                        except Exception:
+                            pass
+                        if rag and rag_enabled and entity1 and entity2 and relation:
                             try:
                                 from managers.rag.graph.graph_store import GraphStore
                                 gs = GraphStore(rag.db, rag.character_id)
