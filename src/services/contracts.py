@@ -430,6 +430,13 @@ class RuntimeCapabilitiesService(ABC):
 # История
 # ---------------------------------------------------------------------------
 
+# Персистентные «часы игрока»: время последнего настоящего присутствия игрока
+# (текст / действие в игре / движение). Хранится в variables персонажа и НЕ
+# обнуляется автономными ходами (idle/react Миты, реплики других персонажей).
+PLAYER_LAST_ACTIVITY_VAR = "PLAYER_LAST_ACTIVITY_TS"
+PLAYER_LAST_ACTIVITY_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 @dataclass(frozen=True)
 class PreparedHistory:
     messages: List[Dict[str, Any]]
@@ -441,6 +448,10 @@ class PreparedHistory:
     # строго как role/content, поэтому таймстемп едет отдельным полем —
     # иначе «сколько прошло с прошлого раза» посчитать не из чего.
     last_message_at: Optional[datetime] = None
+    # Время последней активности самого игрока (не Миты и не автособытий).
+    # Именно оно показывает реальную длину отсутствия, даже если сообщение
+    # игрока давно ушло из окна истории или перекрыто idle/react-ходами.
+    last_player_message_at: Optional[datetime] = None
 
 
 class HistoryService(ABC):

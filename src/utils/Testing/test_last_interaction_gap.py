@@ -14,6 +14,7 @@ if str(PROJECT_SRC) not in sys.path:
 
 from controllers.history_controller import HistoryController
 from controllers.prompt_controller import PromptController
+from services.contracts import PLAYER_LAST_ACTIVITY_VAR
 
 
 class _StubHistoryManager:
@@ -113,6 +114,68 @@ class LastMessageTimeTests(_HistoryControllerFixture):
         prepared = self._prepare([{"role": "user", "content": "привет"}])
         self.assertIsNone(prepared.last_message_at)
 
+    def test_player_clock_ignores_assistant_messages(self):
+        """Часы игрока не должны сдвигаться ответами Миты."""
+        prepared = self._prepare([
+            {"role": "user", "content": "привет", "time": "01.02.2026 10:00:00"},
+            {"role": "assistant", "content": "ага", "time": "01.02.2026 10:00:05"},
+            {"role": "assistant", "content": "ну?", "time": "01.02.2026 10:05:00"},
+        ])
+        self.assertEqual(
+            prepared.last_message_at,
+            datetime.datetime(2026, 2, 1, 10, 5, 0),
+        )
+        self.assertEqual(
+            prepared.last_player_message_at,
+            datetime.datetime(2026, 2, 1, 10, 0, 0),
+        )
+
+    def test_player_clock_ignores_other_speakers(self):
+        """Реплики других Мита хранятся как role=user, но игроком не являются."""
+        prepared = self._prepare([
+            {"role": "user", "content": "привет", "time": "01.02.2026 10:00:00"},
+            {"role": "user", "content": "ответ Кинд", "sender": "Kind", "time": "01.02.2026 10:20:00"},
+        ])
+        self.assertEqual(
+            prepared.last_player_message_at,
+            datetime.datetime(2026, 2, 1, 10, 0, 0),
+        )
+
+    def test_player_clock_is_seeded_into_variable(self):
+        character = _StubCharacter([
+            {"role": "user", "content": "привет", "time": "01.02.2026 10:00:00"},
+        ])
+        prepared = self._make_controller().prepare_for_prompt(
+            character=character,
+            memory_limit=10,
+            is_game_master=False,
+            save_missed_history=False,
+            image_quality={},
+        )
+        del prepared
+        self.assertEqual(
+            character.vars.get(PLAYER_LAST_ACTIVITY_VAR),
+            "2026-02-01 10:00:00",
+        )
+
+    def test_newer_stored_player_clock_wins_over_window(self):
+        """Игровое действие (react) сдвинуло часы, хотя в окне только старое сообщение."""
+        character = _StubCharacter([
+            {"role": "user", "content": "привет", "time": "01.02.2026 10:00:00"},
+        ])
+        character.set_variable(PLAYER_LAST_ACTIVITY_VAR, "01.02.2026 18:00:00")
+        prepared = self._make_controller().prepare_for_prompt(
+            character=character,
+            memory_limit=10,
+            is_game_master=False,
+            save_missed_history=False,
+            image_quality={},
+        )
+        self.assertEqual(
+            prepared.last_player_message_at,
+            datetime.datetime(2026, 2, 1, 18, 0, 0),
+        )
+
 
 class HistoryGapMarkerTests(_HistoryControllerFixture):
     """Отметки долгих пауз между репликами внутри окна истории."""
@@ -204,6 +267,24 @@ class HistoryGapMarkerTests(_HistoryControllerFixture):
         ])
         self.assertEqual("[Gap: 3 days] [Собеседник: Ghost] привет", self._text(out[1]))
 
+    def test_gap_marker_before_player_action_event(self):
+        """react-событие про действие игрока хранится как role=system, но маркер нужен."""
+        out = self._sanitize([
+            {"role": "assistant", "content": "ответ", "time": "01.02.2026 10:00:00"},
+            {"role": "system", "time": "03.02.2026 12:00:00", "content":
+                "React naturally to this game event:\n[Generic] Player make backflip"},
+        ])
+        self.assertTrue(self._text(out[1]).startswith("[Gap: 2 days] "))
+
+    def test_no_gap_marker_before_idle_event(self):
+        """Молчание/AFK — это отсутствие, а не действие игрока: маркера нет."""
+        out = self._sanitize([
+            {"role": "assistant", "content": "ответ", "time": "01.02.2026 10:00:00"},
+            {"role": "system", "time": "03.02.2026 12:00:00", "content":
+                "The player has been silent for 180 seconds. React naturally to this silence."},
+        ])
+        self.assertFalse(self._text(out[1]).startswith("[Gap:"))
+
 
 class LastInteractionLineTests(unittest.TestCase):
     def _controller(self, settings: dict | None = None) -> PromptController:
@@ -214,32 +295,120 @@ class LastInteractionLineTests(unittest.TestCase):
 
     def _line(self, settings: dict | None = None, **delta) -> str:
         then = datetime.datetime.now() - datetime.timedelta(**delta)
-        return self._controller(settings)._format_last_interaction_line(then)
+        return self._controller(settings)._format_player_activity_line(then)
 
     def test_seconds_gap_is_reported(self):
         """Порог живёт только в истории: активный контекст пишет и секунды."""
-        self.assertEqual("Time since last message: 40 seconds", self._line(seconds=40))
+        self.assertEqual("Time since Player's last message: 40 seconds", self._line(seconds=40))
 
     def test_short_pause_is_reported_in_minutes(self):
-        self.assertEqual("Time since last message: 2 minutes", self._line(minutes=2))
+        self.assertEqual("Time since Player's last message: 2 minutes", self._line(minutes=2))
 
     def test_minutes_gap(self):
-        self.assertEqual("Time since last message: 25 minutes", self._line(minutes=25))
+        self.assertEqual("Time since Player's last message: 25 minutes", self._line(minutes=25))
 
     def test_hours_gap(self):
-        self.assertEqual("Time since last message: 3 hours", self._line(hours=3, minutes=5))
+        self.assertEqual("Time since Player's last message: 3 hours", self._line(hours=3, minutes=5))
 
     def test_days_gap_uses_singular_for_one(self):
-        self.assertEqual("Time since last message: 1 day", self._line(days=1, hours=2))
+        self.assertEqual("Time since Player's last message: 1 day", self._line(days=1, hours=2))
 
     def test_missing_timestamp_has_no_line(self):
-        self.assertEqual("", self._controller()._format_last_interaction_line(None))
+        self.assertEqual("", self._controller()._format_player_activity_line(None))
 
     def test_line_can_be_switched_off(self):
         self.assertEqual("", self._line({"CURRENT_STATE_GAP_ENABLED": False}, days=5))
 
     def test_singular_second(self):
-        self.assertEqual("Time since last message: 1 second", self._line(seconds=1))
+        self.assertEqual("Time since Player's last message: 1 second", self._line(seconds=1))
+
+    def test_event_and_legacy_lines(self):
+        c = self._controller()
+        then = datetime.datetime.now() - datetime.timedelta(days=9)
+        self.assertEqual("Time since last event: 9 days", c._format_last_event_line(then))
+        self.assertEqual("Time since last message: 9 days", c._format_last_message_line(then))
+
+
+class PresenceTurnTests(unittest.TestCase):
+    def _controller(self, settings: dict | None = None) -> PromptController:
+        controller = PromptController.__new__(PromptController)
+        cfg = dict(settings or {})
+        controller._get_setting = lambda key, default=None: cfg.get(key, default)
+        return controller
+
+    def _presence(self, controller, **kwargs):
+        base = dict(event_type="chat", sender="Crazy", user_input="", system_input="", game_state={})
+        base.update(kwargs)
+        return controller._is_player_presence_turn(**base)
+
+    def test_typed_player_is_presence(self):
+        self.assertTrue(self._presence(self._controller(), user_input="привет", sender="Player"))
+
+    def test_idle_is_not_presence(self):
+        self.assertFalse(self._presence(
+            self._controller(),
+            event_type="idle_timeout",
+            system_input="The player has been silent for 180 seconds.",
+        ))
+
+    def test_player_action_react_is_presence(self):
+        self.assertTrue(self._presence(
+            self._controller(),
+            event_type="react",
+            system_input="React naturally to this game event:\n[Generic] Player make backflip",
+        ))
+
+    def test_world_react_is_not_presence(self):
+        self.assertFalse(self._presence(
+            self._controller(),
+            event_type="react",
+            system_input="React naturally to this game event:\n[Generic] The lamp flickered",
+        ))
+
+    def test_runtime_movement_is_presence(self):
+        self.assertTrue(self._presence(
+            self._controller(),
+            event_type="system_info_flush",
+            game_state={"runtime_events": ["Player moved about 8 m nearby."]},
+        ))
+
+    def test_idle_with_runtime_events_is_not_presence(self):
+        """idle_timeout может тащить накопленные события — возвратом он не считается."""
+        self.assertFalse(self._presence(
+            self._controller(),
+            event_type="idle_timeout",
+            game_state={"runtime_events": ["Player moved about 8 m nearby."]},
+        ))
+
+
+class ReturnReactionTests(unittest.TestCase):
+    def _controller(self, settings: dict | None = None) -> PromptController:
+        controller = PromptController.__new__(PromptController)
+        cfg = dict(settings or {})
+        controller._get_setting = lambda key, default=None: cfg.get(key, default)
+        return controller
+
+    def test_event_turn_gets_return_instruction(self):
+        controller = self._controller()
+        then = datetime.datetime.now() - datetime.timedelta(days=40)
+        text = controller._format_return_reaction_instruction(then, is_event_turn=True)
+        self.assertIn("exceptionally long absence", text)
+        self.assertIn("two segments", text)
+
+    def test_event_turn_can_be_disabled(self):
+        controller = self._controller({"RETURN_REACTION_ON_EVENTS": False})
+        then = datetime.datetime.now() - datetime.timedelta(days=9)
+        self.assertEqual("", controller._format_return_reaction_instruction(then, is_event_turn=True))
+
+    def test_event_turn_respects_min_gap(self):
+        controller = self._controller({"RETURN_REACTION_MIN_GAP_MINUTES": 600})
+        then = datetime.datetime.now() - datetime.timedelta(minutes=120)
+        self.assertEqual("", controller._format_return_reaction_instruction(then, is_event_turn=True))
+
+    def test_typed_turn_still_reacts(self):
+        controller = self._controller()
+        then = datetime.datetime.now() - datetime.timedelta(hours=2)
+        self.assertIn("noticeable pause", controller._format_return_reaction_instruction(then))
 
 
 if __name__ == "__main__":

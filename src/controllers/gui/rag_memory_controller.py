@@ -924,6 +924,31 @@ def _build_time_awareness_config(self) -> list:
              'Add a "time since last message" line to the [Current State] block. The character '
              'cannot infer this on her own — she only sees the current time. No threshold here: '
              'even a few seconds are reported, since the block changes every turn anyway.')},
+        {'label': _('От чего считать паузу', 'Pause measured from'),
+         'key': 'CURRENT_STATE_GAP_SOURCE', 'type': 'combobox', 'default': 'player',
+         'options': ['player', 'any'],
+         'tooltip': _(
+             'player — пауза считается от последней настоящей активности игрока (текст, действие '
+             'в игре, движение); автономные ответы Миты и игровые автособытия её не обнуляют. '
+             'any — по любому последнему сообщению истории (старое поведение).',
+             'player — the pause is measured from the Player\'s last real activity (text, in-game '
+             'action, movement); Mita\'s autonomous replies and game events do not reset it. '
+             'any — from any last message in history (legacy behaviour).')},
+        {'label': _('Реагировать на возврат в игре (без текста)', 'React to in-game return (no text)'),
+         'key': 'RETURN_REACTION_ON_EVENTS', 'type': 'checkbutton', 'default_checkbutton': True,
+         'tooltip': _(
+             'Если игрок вернулся после долгой паузы и сразу сделал что-то в игре (взял пульт, '
+             'кувырок и т.п.), Мита сначала отметит возвращение, а уже потом отреагирует на '
+             'действие. Иначе первый ход после отсутствия тратится только на игрушку.',
+             'If the Player returns after a long pause and immediately does something in-game, '
+             'Mita acknowledges the return first and the action second. Otherwise the first turn '
+             'after the absence is spent entirely on the game object.')},
+        {'label': _('Мин. пауза для реакции на возврат (мин)', 'Min pause to react to return (min)'),
+         'key': 'RETURN_REACTION_MIN_GAP_MINUTES', 'type': 'entry', 'default': 30,
+         'validation': self.validate_positive_integer,
+         'tooltip': _(
+             'Паузы короче этого не считаются отсутствием. По умолчанию 30 минут, как раньше.',
+             'Shorter pauses are not treated as an absence. Default 30 minutes, as before.')},
         {'label': _('Отмечать паузы внутри истории', 'Mark pauses inside history'),
          'key': 'HISTORY_TIME_GAP_MARKERS', 'type': 'checkbutton', 'default_checkbutton': True,
          'tooltip': _(

@@ -27,6 +27,8 @@ from services.contracts import (
     ApiPresetService,
     GenerationService,
     HistoryService,
+    PLAYER_LAST_ACTIVITY_FORMAT,
+    PLAYER_LAST_ACTIVITY_VAR,
     PreparedHistory,
     SettingsService,
     UtilityGenerationRequest,
@@ -209,6 +211,10 @@ class HistoryController(HistoryService):
 
         # Таймстемп снимаем до санитизации: она оставляет только role/content.
         last_message_at = self._last_message_time(history_limited)
+        last_player_message_at = self._resolve_last_player_activity(
+            character,
+            history_limited,
+        )
 
         # ключевая часть: подготовка для LLM (без лишних полей + с префиксами speaker/target)
         history_for_llm = self._sanitize_history_for_llm(character, history_limited)
@@ -218,6 +224,7 @@ class HistoryController(HistoryService):
             summary=history_summary,
             action_context=action_context,
             last_message_at=last_message_at,
+            last_player_message_at=last_player_message_at,
         )
 
     def _action_memory_enabled(self) -> bool:
@@ -359,6 +366,81 @@ class HistoryController(HistoryService):
             if at:
                 return at
         return None
+
+    @classmethod
+    def _last_player_message_time(
+        cls,
+        messages: List[Dict[str, Any]],
+    ) -> Optional[datetime.datetime]:
+        """Время последней реплики именно игрока (не Миты и не автособытий).
+
+        ``sender`` и ``speaker`` читаются оба: свежее сообщение игрока приходит
+        с ``sender``, сохранённое в БД — с ``speaker``.
+        """
+        for msg in reversed(messages or []):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "") != "user":
+                continue
+            who = str(msg.get("speaker") or msg.get("sender") or "Player")
+            if who != "Player":
+                continue
+            at = cls._message_time(msg)
+            if at:
+                return at
+        return None
+
+    @classmethod
+    def _parse_activity_timestamp(cls, raw: Any) -> Optional[datetime.datetime]:
+        """Читает персистентные часы игрока: ISO-строка, история или epoch-секунды."""
+        if isinstance(raw, datetime.datetime):
+            return raw
+        if raw is None or raw == "":
+            return None
+        text = str(raw).strip()
+        for fmt in (PLAYER_LAST_ACTIVITY_FORMAT,) + cls._HISTORY_TIME_FORMATS:
+            try:
+                return datetime.datetime.strptime(text, fmt)
+            except Exception:
+                continue
+        try:
+            return datetime.datetime.fromtimestamp(float(text))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+
+    def _resolve_last_player_activity(
+        self,
+        character,
+        messages: List[Dict[str, Any]],
+    ) -> Optional[datetime.datetime]:
+        """Реальная последняя активность игрока для оценки длины отсутствия.
+
+        Приоритет — персистентная переменная (переживает окно истории, сжатие и
+        рестарт). Если её нет или она старше реплики игрока в окне, берём окно и
+        засеваем/освежаем переменную. Значение из окна не должно перебивать более
+        свежее значение переменной, обновлённое игровым действием (react).
+        """
+        stored = None
+        try:
+            stored = self._parse_activity_timestamp(
+                character.get_variable(PLAYER_LAST_ACTIVITY_VAR, None)
+            )
+        except Exception:
+            stored = None
+
+        from_window = self._last_player_message_time(messages)
+
+        candidate = stored
+        if from_window is not None and (candidate is None or from_window > candidate):
+            candidate = from_window
+            try:
+                character.set_variable(
+                    PLAYER_LAST_ACTIVITY_VAR,
+                    from_window.strftime(PLAYER_LAST_ACTIVITY_FORMAT),
+                )
+            except Exception:
+                pass
+        return candidate
 
     def _decorate_messages_with_character_info(
         self,
@@ -1782,6 +1864,29 @@ class HistoryController(HistoryService):
             return ""
         return f"[Gap: {value} {unit}{'s' if value != 1 else ''}] "
 
+    @staticmethod
+    def _is_player_presence_event_content(content: Any) -> bool:
+        """Системное игровое событие про присутствие/действие игрока.
+
+        Такие события (напр. «[Generic] Player make backflip») приходят с role
+        'system', но по смыслу это реплика со стороны игрока: перед ними уместен
+        маркер паузы, как перед сообщением игрока. Молчание/AFK исключаем — это
+        признак отсутствия, а не присутствия.
+        """
+        try:
+            text = MessageContentCodec.to_prompt_text(content).lower()
+        except Exception:
+            text = str(content or "").lower()
+        if not text:
+            return False
+        lowered = text
+        for absence in ("silent", "afk", "idle", "away", "inactive"):
+            if absence in lowered:
+                return False
+        return "player" in lowered and (
+            "react naturally" in lowered or "[generic]" in lowered
+        )
+
     def _sanitize_history_for_llm(self, character, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Возвращает историю в формате, безопасном для провайдеров:
@@ -1820,9 +1925,14 @@ class HistoryController(HistoryService):
 
             # Маркер только перед репликой игрока/событием: в сообщениях Миты
             # служебный тег учил бы модель писать такие теги в своём ответе.
+            # Игровые react-события хранятся как role 'system', но по смыслу это
+            # действие игрока — им маркер паузы тоже нужен.
+            marker_eligible = role in ("user", "event") or (
+                role == "system" and self._is_player_presence_event_content(content)
+            )
             gap_marker = ""
             current_at = self._message_time(m)
-            if gap_threshold and previous_at and current_at and role in ("user", "event"):
+            if gap_threshold and previous_at and current_at and marker_eligible:
                 gap_seconds = (current_at - previous_at).total_seconds()
                 if gap_seconds >= gap_threshold:
                     gap_marker = self._format_time_gap(gap_seconds)

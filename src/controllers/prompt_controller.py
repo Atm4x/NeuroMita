@@ -12,6 +12,8 @@ from services.contracts import (
     AppVarsService,
     CharacterEnvironmentContextService,
     HistoryService,
+    PLAYER_LAST_ACTIVITY_FORMAT,
+    PLAYER_LAST_ACTIVITY_VAR,
     PlayerMessageSource,
     PromptBuildRequest,
     PromptBuildResult,
@@ -56,6 +58,13 @@ class PromptController(PromptBuilderService):
 
     def _get_setting(self, key: str, default=None):
         return use(SettingsService).get(key, default)
+
+    def _get_setting_safe(self, key: str, default=None):
+        """Как _get_setting, но переживает отсутствие SettingsService (тесты/ранний старт)."""
+        try:
+            return self._get_setting(key, default)
+        except Exception:
+            return default
 
     # Human-readable groupings of unity-only effect fields, used to tell the
     # model which in-world effects are unavailable when the game is not linked.
@@ -586,20 +595,58 @@ class PromptController(PromptBuilderService):
             value, unit = int(secs // (365 * 86400)), "year"
         return f"{value} {unit}{'s' if value != 1 else ''}"
 
-    def _format_last_interaction_line(self, last_message_at: datetime.datetime | None) -> str:
-        """Cheap authoritative "time since last talk" signal for [Current State]."""
+    def _format_player_activity_line(
+        self,
+        last_player_message_at: datetime.datetime | None,
+    ) -> str:
+        """Сколько прошло с последней настоящей активности игрока.
+
+        Именно этот сигнал задаёт длину отсутствия: автономные ходы Миты и
+        игровые автособытия его не обнуляют.
+        """
+        secs = self._seconds_since_last_message(last_player_message_at)
+        if secs is None:
+            return ""
+        return f"Time since Player's last message: {self._format_elapsed_duration(secs)}"
+
+    def _format_last_event_line(self, last_message_at: datetime.datetime | None) -> str:
+        """Сколько прошло с любого последнего сообщения истории/события."""
+        secs = self._seconds_since_last_message(last_message_at)
+        if secs is None:
+            return ""
+        return f"Time since last event: {self._format_elapsed_duration(secs)}"
+
+    def _format_last_message_line(self, last_message_at: datetime.datetime | None) -> str:
+        """Легаси-сигнал по любому последнему сообщению (CURRENT_STATE_GAP_SOURCE=any)."""
         secs = self._seconds_since_last_message(last_message_at)
         if secs is None:
             return ""
         return f"Time since last message: {self._format_elapsed_duration(secs)}"
 
+    def _return_reaction_min_gap_seconds(self) -> float:
+        try:
+            minutes = float(self._get_setting_safe("RETURN_REACTION_MIN_GAP_MINUTES", 30) or 0)
+        except (TypeError, ValueError):
+            minutes = 30.0
+        return max(0.0, minutes * 60.0)
+
     def _format_return_reaction_instruction(
         self,
-        last_message_at: datetime.datetime | None,
+        last_player_message_at: datetime.datetime | None,
+        *,
+        is_event_turn: bool = False,
     ) -> str:
-        """Turn a meaningful pause into behavior guidance for a Player-authored turn."""
-        secs = self._seconds_since_last_message(last_message_at)
-        if secs is None or secs < 30 * 60:
+        """Turn a meaningful pause into behavior guidance for a returning Player.
+
+        Фраза выдаётся и на игровых react-событиях (возврат без текста), если
+        включено RETURN_REACTION_ON_EVENTS. Разрыв считается по часам игрока.
+        """
+        secs = self._seconds_since_last_message(last_player_message_at)
+        if secs is None:
+            return ""
+        if is_event_turn and not bool(self._get_setting_safe("RETURN_REACTION_ON_EVENTS", True)):
+            return ""
+        if secs < self._return_reaction_min_gap_seconds():
             return ""
 
         common = (
@@ -608,6 +655,12 @@ class PromptController(PromptBuilderService):
             "If the Player previously said they were leaving, sleeping, busy, or coming back later, "
             "do not accuse them of disappearing without warning."
         )
+        if is_event_turn:
+            common += (
+                " The Player came back and acted in-game instead of typing: the return itself is the "
+                "main beat, the game action is secondary. When both deserve words, use two segments: "
+                "first the return, then the action. Do not let the game object or action overshadow the absence."
+            )
         if secs < 6 * 3600:
             return "Return behavior: this was a noticeable pause. You may briefly acknowledge that the Player was away if it feels natural; do not overstate it. " + common
         if secs < 24 * 3600:
@@ -615,6 +668,73 @@ class PromptController(PromptBuilderService):
         if secs < 30 * 86400:
             return "Return behavior: this was a significant absence. Acknowledge the Player's return as part of this reply and react to the absence according to your character. If the preceding conversation does not explain the absence, react naturally to the unexplained departure. " + common
         return "Return behavior: this was an exceptionally long absence. Make the Player's return itself a clear part of your reaction, scaled to your personality and relationship. If the preceding conversation does not explain the absence, react naturally to the unexplained departure. " + common
+
+    # Типы ходов, которые означают отсутствие, а не присутствие игрока.
+    _ABSENCE_EVENT_TYPES = ("idle", "idle_timeout", "timer", "reminder")
+    _PRESENCE_ABSENCE_MARKERS = ("silent", "afk", "idle", "away", "inactive")
+
+    @classmethod
+    def _react_text_is_player_action(cls, text: str) -> bool:
+        """Игровое react-событие описывает действие игрока, а не окружающего мира."""
+        lowered = str(text or "").lower()
+        if not lowered:
+            return False
+        if any(marker in lowered for marker in cls._PRESENCE_ABSENCE_MARKERS):
+            return False
+        return "player" in lowered
+
+    @classmethod
+    def _runtime_events_show_player_presence(cls, game_state: Dict[str, Any]) -> bool:
+        events = (game_state or {}).get("runtime_events")
+        if isinstance(events, str):
+            events = [events]
+        if not isinstance(events, (list, tuple)):
+            return False
+        for raw in events:
+            try:
+                lowered = str(raw or "").lower()
+            except Exception:
+                continue
+            if "player" in lowered and not any(
+                marker in lowered for marker in cls._PRESENCE_ABSENCE_MARKERS
+            ):
+                return True
+        return False
+
+    def _is_player_presence_turn(
+        self,
+        *,
+        event_type: str,
+        sender: str,
+        user_input: str,
+        system_input: str,
+        game_state: Dict[str, Any],
+    ) -> bool:
+        """Настоящее ли присутствие/действие игрока этот ход.
+
+        Текст игрока, его игровое действие (react) и его перемещение — да.
+        AFK/молчание (idle_timeout), ходы других персонажей и таймеры — нет.
+        """
+        if str(event_type or "") in self._ABSENCE_EVENT_TYPES:
+            return False
+        if user_input and sender == "Player":
+            return True
+        if str(event_type or "") == "react" and self._react_text_is_player_action(system_input):
+            return True
+        if self._runtime_events_show_player_presence(game_state):
+            return True
+        return False
+
+    def _note_player_activity(self, character, when: datetime.datetime | None = None) -> None:
+        """Сдвинуть персистентные часы игрока вперёд. Ошибки не критичны."""
+        moment = when or datetime.datetime.now()
+        try:
+            character.set_variable(
+                PLAYER_LAST_ACTIVITY_VAR,
+                moment.strftime(PLAYER_LAST_ACTIVITY_FORMAT),
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _is_volatile_system_block(block: Any) -> bool:
@@ -945,6 +1065,7 @@ class PromptController(PromptBuilderService):
         history_summary: str = ""
         action_context: str = ""
         last_message_at: datetime.datetime | None = None
+        last_player_message_at: datetime.datetime | None = None
         if policy.use_history_in_prompt:
             prepared = use(HistoryService).prepare_for_prompt(
                 character=character,
@@ -958,6 +1079,7 @@ class PromptController(PromptBuilderService):
             if bool(capabilities.get("action_memory", False)):
                 action_context = str(getattr(prepared, "action_context", "") or "")
             last_message_at = prepared.last_message_at
+            last_player_message_at = getattr(prepared, "last_player_message_at", None)
 
         for s in dsl_system_infos:
             if isinstance(s, str):
@@ -1078,13 +1200,45 @@ class PromptController(PromptBuilderService):
             f"Time: {current_time.strftime('%H:%M:%S')}",
             f"Day of week: {current_time.strftime('%A')}",
         ]
-        last_interaction_line = self._format_last_interaction_line(last_message_at)
-        if last_interaction_line:
-            current_state_lines.append(last_interaction_line)
-        if user_input and sender == "Player":
-            return_instruction = self._format_return_reaction_instruction(last_message_at)
+        player_clock_at = last_player_message_at or last_message_at
+        if player_clock_at or last_message_at:
+            gap_source = str(self._get_setting("CURRENT_STATE_GAP_SOURCE", "player") or "player").strip().lower()
+            if gap_source == "any":
+                last_message_line = self._format_last_message_line(last_message_at)
+                if last_message_line:
+                    current_state_lines.append(last_message_line)
+            else:
+                player_activity_line = self._format_player_activity_line(player_clock_at)
+                if player_activity_line:
+                    current_state_lines.append(player_activity_line)
+                last_event_line = self._format_last_event_line(last_message_at)
+                if last_event_line:
+                    current_state_lines.append(last_event_line)
+
+        is_presence_turn = bool(not is_game_master) and self._is_player_presence_turn(
+            event_type=event_type,
+            sender=sender,
+            user_input=user_input,
+            system_input=system_input,
+            game_state=game_state,
+        )
+        if is_presence_turn:
+            is_typed_player = bool(user_input and sender == "Player")
+            return_instruction = self._format_return_reaction_instruction(
+                player_clock_at,
+                is_event_turn=not is_typed_player,
+            )
             if return_instruction:
                 current_state_lines.append(return_instruction)
+            # Ход игрока всегда сдвигает часы. Игровое действие — только если мы
+            # вообще считаем его присутствием (RETURN_REACTION_ON_EVENTS): при
+            # выключенном флаге следующий текстовый возврат должен увидеть паузу.
+            if policy.use_history_in_prompt:
+                advance_clock = is_typed_player or bool(
+                    self._get_setting_safe("RETURN_REACTION_ON_EVENTS", True)
+                )
+                if advance_clock:
+                    self._note_player_activity(character, current_time)
         messages.append({
             "role": "system",
             "content": "\n".join(current_state_lines),
