@@ -2106,23 +2106,47 @@ class ModelController(GenerationService, ModelStateService):
         except StructuredResponseParseError as e:
             logger.error(
                 f"[ModelController] Failed to parse structured response for {char_id}: {format_exception(e)}. "
-                f"Falling back to legacy processing."
+                "Rejecting the response instead of forwarding raw JSON."
             )
-            # Fallback to legacy tag-based processing
-            with character_lock(char_id):
-                with perf_span(trace_id, "generation.nlp_postprocess"):
-                    processed = char.process_response_nlp_commands(
-                        visible_raw, self.settings.get("SAVE_MISSED_MEMORY", False)
-                    )
-                if hasattr(char, "flush_variables"):
-                    char.flush_variables()
-                voice_profile = None
-                if hasattr(char, "to_voice_profile"):
-                    try:
-                        voice_profile = char.to_voice_profile()
-                    except Exception:
-                        voice_profile = None
             usage_cost_fallback = pricing_info.estimate_usage_cost(usage) if pricing_info else None
+            usage_snapshot = self._build_usage_snapshot(
+                usage,
+                model=response_model,
+                provider=response_provider,
+                cost_fallback=usage_cost_fallback,
+                cost_fallback_currency=getattr(pricing_info, "currency", None),
+                cost_fallback_source=getattr(pricing_info, "source", None),
+            )
+            if policy.write_to_history:
+                try:
+                    with perf_span(trace_id, "generation.history_write", outcome="rejected_structured_response"):
+                        history_write = self.event_writer.write_turn(
+                            responder_character_id=char_id,
+                            sender=sender,
+                            participants=participants,
+                            user_input=user_input,
+                            image_data=image_data,
+                            image_source=image_source,
+                            image_descriptions=image_descriptions,
+                            req_id=req_id,
+                            origin_message_id=origin_message_id,
+                            assistant_text=visible_raw,
+                            assistant_target="Player",
+                            event_type=event_type,
+                            task_uid=task_uid,
+                            thinking=think_text or None,
+                            llm_usage=usage_snapshot,
+                            sample_id=sample_id,
+                            assistant_is_deleted=True,
+                            dialogue=dialogue,
+                        )
+                        self._publish_history_commit(history_write, character_id=char_id)
+                except Exception as history_error:
+                    logger.warning(
+                        "[ModelController] Failed to retain rejected structured response: "
+                        f"{format_exception(history_error)}",
+                        exc_info=True,
+                    )
             self._store_last_usage(
                 usage,
                 model=response_model,
@@ -2132,14 +2156,20 @@ class ModelController(GenerationService, ModelStateService):
                 cost_fallback_source=getattr(pricing_info, "source", None),
             )
 
-            self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
             return ChatGenerationResult(
-                text=processed,
+                text="",
                 character_id=char_id,
-                voice_profile=voice_profile,
-                think=think_text or None,
+                voice_profile=None,
                 sample_id=sample_id or "",
-                structured_parse_level="legacy_fallback",
+                error="Model response did not match the required response format",
+                error_details={
+                    "code": "structured_response_parse_failed",
+                    # Do not include the parser exception here: it may embed a
+                    # fragment of the raw provider payload, and task errors are
+                    # delivered to Unity.
+                    "message": "The model response could not be parsed as the required structured format.",
+                },
+                structured_parse_level="rejected",
                 control_plane_trusted=False,
             )
 

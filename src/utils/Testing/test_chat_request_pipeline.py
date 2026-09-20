@@ -151,6 +151,21 @@ class _ThinkingGeneration(GenerationService):
         raise AssertionError("не используется")
 
 
+class _RejectedStructuredGeneration(GenerationService):
+    def generate_chat(self, request: ChatGenerationRequest):
+        return ChatGenerationResult(
+            text="",
+            character_id="Crazy",
+            voice_profile={"character_id": "Crazy", "silero_command": "/set_person Crazy"},
+            error="Model response did not match the required response format",
+            error_details={"code": "structured_response_parse_failed"},
+            structured_parse_level="rejected",
+        )
+
+    def generate_utility(self, request):
+        raise AssertionError("не используется")
+
+
 class ChatRequestPipelineTests(unittest.TestCase):
     def setUp(self):
         services().register(CharacterRegistry, _StubRegistry(), replace=True)
@@ -364,6 +379,37 @@ class ChatRequestPipelineTests(unittest.TestCase):
 
         plain_result = ChatController._build_task_result("hello", None)
         self.assertEqual(plain_result["response_protocol_version"], 3)
+
+    def test_rejected_structured_response_reports_failure_without_voiceover(self):
+        services().register(GenerationService, _RejectedStructuredGeneration(), replace=True)
+        self.controller.settings = _StubSettings({"USE_VOICEOVER": True})
+        task_updates: list[dict] = []
+        failures: list[dict] = []
+        voices: list[dict] = []
+        subscriptions = [
+            self.bus.subscribe(Events.Task.UPDATE_TASK_STATUS, lambda event: task_updates.append(event.data or {}), weak=False),
+            self.bus.subscribe(Events.Model.ON_FAILED_RESPONSE, lambda event: failures.append(event.data or {}), weak=False),
+            self.bus.subscribe(Events.Audio.VOICEOVER_REQUESTED, lambda event: voices.append(event.data or {}), weak=False),
+        ]
+        try:
+            result = self.controller._run_request("hello", character_id="Crazy", task_uid="bad-json-task")
+            self.bus.flush(2)
+        finally:
+            for subscription in subscriptions:
+                subscription.close()
+
+        self.assertIsNone(result)
+        self.assertEqual(voices, [])
+        self.assertTrue(any(
+            update.get("uid") == "bad-json-task"
+            and update.get("status") == TaskStatus.FAILED_ON_GENERATION
+            and "required response format" in str(update.get("error") or "")
+            for update in task_updates
+        ))
+        self.assertTrue(any(
+            "required response format" in str(failure.get("error") or "")
+            for failure in failures
+        ))
 
     def test_non_stream_request_does_not_create_presentation_coalescer(self):
         services().register(GenerationService, _ImmediateGeneration(), replace=True)
