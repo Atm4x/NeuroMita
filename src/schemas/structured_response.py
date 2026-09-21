@@ -330,6 +330,22 @@ class WorkingState(BaseModel):
     next_steps: List[str] = Field(default_factory=list, description="Immediate likely follow-ups, not a long plan")
 
 
+class TimerAdd(BaseModel):
+    """A deferred autonomous turn requested by the current character reply."""
+
+    delay_seconds: float = Field(
+        gt=0,
+        description="Positive delay before the autonomous turn starts.",
+    )
+    instruction: str = Field(
+        min_length=1,
+        description=(
+            "Instruction for your future autonomous turn. Describe what you should do, "
+            "not exact words to repeat. Address your future self implicitly with an imperative."
+        ),
+    )
+
+
 class StructuredResponse(BaseModel):
     """Top-level structured response from the LLM."""
 
@@ -382,9 +398,9 @@ class StructuredResponse(BaseModel):
         default=None,
         description="Reminder IDs to delete. Format: 'N' (number). Example: '3'."
     )
-    timer_add: Optional[List[str]] = Field(
+    timer_add: Optional[List[TimerAdd]] = Field(
         default=None,
-        description="Autonomous timers. Format: 'delay_seconds|instruction'. After the delay, the instruction starts a new LLM turn. Example: '10|Try generating the answer again'."
+        description="Autonomous timers. Each entry schedules a future LLM turn after delay_seconds using instruction as the character's deferred intention."
     )
 
     entities: Optional[List[str]] = Field(

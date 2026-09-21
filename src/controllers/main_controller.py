@@ -385,8 +385,9 @@ class MainController:
         feature_manager.register(
             FeatureSpec(
                 name="reminders",
-                setting_keys=("REMINDERS_ENABLED",),
-                enabled=lambda settings: bool(settings.get("REMINDERS_ENABLED", True)),
+                setting_keys=("REMINDERS_ENABLED", "TIMERS_ENABLED"),
+                enabled=lambda settings: bool(settings.get("REMINDERS_ENABLED", True))
+                or bool(settings.get("TIMERS_ENABLED", True)),
                 factory=self._create_reminder_controller,
                 priority=65,
             )

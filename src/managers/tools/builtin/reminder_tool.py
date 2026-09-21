@@ -91,11 +91,12 @@ class ReminderTool(Tool):
 
     name = "reminder"
     description = (
-        "Manage reminders. "
+        "Manage reminders and autonomous timers. "
+        "timer — schedule your own autonomous future turn after delay_seconds. Use it proactively for "
+        "countdowns, short pauses, games, delayed reactions, checks, and scenes that should continue without Player input; "
         "list — show all pending reminders; "
         "add — add a reminder (requires text and due date/time); "
-        "delete — remove a reminder by its number N; "
-        "timer — after delay_seconds, autonomously start a new LLM turn with instruction. "
+        "delete — remove a reminder by its number N. "
         "Due examples: 'через 10 секунд', 'через 2 часа', 'in 30 seconds', '2024-12-01T10:00:00'."
     )
     parameters = {
@@ -104,7 +105,7 @@ class ReminderTool(Tool):
             "action": {
                 "type": "string",
                 "enum": ["list", "add", "delete", "timer"],
-                "description": "Action to perform.",
+                "description": "Action to perform. Prefer timer for short autonomous continuation; use add for ordinary reminders.",
             },
             "text": {
                 "type": "string",
@@ -125,18 +126,23 @@ class ReminderTool(Tool):
             "delay_seconds": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "description": "Delay before timer fires (required for 'timer').",
+                "description": "Positive delay before the autonomous turn fires (required for 'timer').",
             },
             "instruction": {
                 "type": "string",
-                "description": "System instruction for the autonomous turn (required for 'timer').",
+                "description": (
+                    "Instruction for your future autonomous turn (required for 'timer'). "
+                    "Describe what you should do, not exact words to repeat. Address your future self "
+                    "implicitly with an imperative; current conversation and state will be available then."
+                ),
             },
         },
         "required": ["action"],
     }
 
-    def __init__(self):
+    def __init__(self, settings=None):
         self._char_id: Optional[str] = None
+        self.settings = settings
 
     def set_char_id(self, char_id: str) -> None:
         self._char_id = char_id
@@ -162,6 +168,8 @@ class ReminderTool(Tool):
             return result if result else "Нет активных напоминаний."
 
         elif action == "add":
+            if not self._enabled("REMINDERS_ENABLED", True):
+                return "[reminder] Напоминания отключены в настройках."
             if not text:
                 return "[reminder] Для добавления укажи текст напоминания (параметр text)."
             if not due:
@@ -180,6 +188,8 @@ class ReminderTool(Tool):
                 return f"[reminder] Ошибка при добавлении: {format_exception(e)}"
 
         elif action == "timer":
+            if not self._enabled("TIMERS_ENABLED", True):
+                return "[timer] Автономные таймеры отключены в настройках."
             if not instruction:
                 return "[timer] Для таймера укажи instruction для следующего хода."
             if delay_seconds is None:
@@ -203,3 +213,12 @@ class ReminderTool(Tool):
 
         else:
             return f"[reminder] Неизвестное действие '{action}'. Используй: list, add, delete."
+
+    def _enabled(self, key: str, default: bool) -> bool:
+        settings = self.settings
+        if settings is None:
+            return default
+        try:
+            return bool(settings.get(key, default))
+        except Exception:
+            return default

@@ -70,6 +70,7 @@ class DefaultAppVarsService(AppVarsService):
         "BEAT_SYNC_ENABLED",
         "BEAT_SYNC_STREAMING",
         "REMINDERS_ENABLED",
+        "TIMERS_ENABLED",
         "RAG_ENABLED",
         "GRAPH_EXTRACTION_ENABLED",
         "MITA_CAMERA_ENABLED",
@@ -77,6 +78,11 @@ class DefaultAppVarsService(AppVarsService):
         "MITA_CAMERA_ON_DEMAND",
         "MITA_CAMERA_USE_FILE_TRANSFER",
     )
+
+    _BOOL_DEFAULTS = {
+        "REMINDERS_ENABLED": True,
+        "TIMERS_ENABLED": True,
+    }
 
     # Значения, зашитые независимо от settings.json.
     _FORCED = {
@@ -90,7 +96,8 @@ class DefaultAppVarsService(AppVarsService):
 
     def snapshot(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
-            key: bool(self._settings.get(key, False)) for key in self._BOOL_KEYS
+            key: bool(self._settings.get(key, self._BOOL_DEFAULTS.get(key, False)))
+            for key in self._BOOL_KEYS
         }
         out.update(self._FORCED)
         out["GAME_CONNECTED"] = bool(self._game_link.is_connected())

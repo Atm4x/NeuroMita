@@ -145,6 +145,35 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         )
         self.assertEqual(outcome.response.working_state.situation, [])
 
+    def test_timer_add_requires_json_objects_and_preserves_deferred_intention(self) -> None:
+        outcome = parse_structured_response_with_meta(
+            json.dumps(
+                {
+                    "segments": [{"text": "Прячься, я считаю."}],
+                    "timer_add": [
+                        {
+                            "delay_seconds": 10,
+                            "instruction": "Закончи отсчёт и сообщи Player, что идёшь искать.",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+        timer = outcome.response.timer_add[0]
+        self.assertTrue(outcome.control_plane_trusted)
+        self.assertEqual(timer.delay_seconds, 10)
+        self.assertEqual(timer.instruction, "Закончи отсчёт и сообщи Player, что идёшь искать.")
+
+    def test_legacy_timer_string_is_rejected(self) -> None:
+        payload = {
+            "segments": [{"text": "Прячься."}],
+            "timer_add": ["10|Закончи отсчёт"],
+        }
+        with self.assertRaisesRegex(Exception, "timer_add"):
+            parse_structured_response(json.dumps(payload, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()

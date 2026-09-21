@@ -174,7 +174,11 @@ class ReminderBlock(QFrame):
                 lbl.setStyleSheet(f"color: {CLR_REMIND_TEXT}; font-size: {font_sm}pt; background: transparent; border: none; padding-left: 4px;")
                 layout.addWidget(lbl)
         for entry in timer_add:
-            lbl = QLabel(f"⏳ {entry}", self)
+            if isinstance(entry, dict):
+                text = f"{entry.get('delay_seconds', '?')} sec: {entry.get('instruction', '')}"
+            else:
+                text = str(entry)
+            lbl = QLabel(f"⏳ {text}", self)
             lbl.setWordWrap(True)
             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lbl.setStyleSheet(f"color: {CLR_REMIND_TEXT}; font-size: {font_sm}pt; background: transparent; border: none; padding-left: 4px;")

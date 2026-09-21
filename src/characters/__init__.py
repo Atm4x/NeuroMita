@@ -17,8 +17,12 @@ class SecretExposedCharacter(Character):
             response = response.replace("<Secret!>", "").strip()
         return response
 
-    def process_structured_response(self, structured, save_as_missed=False):
-        result = super().process_structured_response(structured, save_as_missed)
+    def process_structured_response(self, structured, save_as_missed=False, **kwargs):
+        result = super().process_structured_response(
+            structured,
+            save_as_missed,
+            **kwargs,
+        )
         if structured.secret_exposed and not self.get_variable("secretExposedFirst", False):
             self.set_variable("secretExposed", True)
             logger.info(f"[{self.char_id}] Secret revealed via secret_exposed field in JSON.")

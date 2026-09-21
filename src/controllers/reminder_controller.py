@@ -45,8 +45,12 @@ class ReminderController:
         def check_loop():
             while self.event_bus.is_running and not self._shutdown_event.is_set():
                 try:
-                    if self.settings.get("REMINDERS_ENABLED", True):
-                        self._check_and_fire_reminders()
+                    if self._scheduling_enabled():
+                        enabled_kinds = self._enabled_kinds()
+                        if len(enabled_kinds) == 2:
+                            self._check_and_fire_reminders()
+                        else:
+                            self._check_and_fire_reminders(enabled_kinds=enabled_kinds)
                 except Exception as exc:
                     logger.error(
                         f"[ReminderController] Error in check loop: {format_exception(exc)}",
@@ -103,6 +107,17 @@ class ReminderController:
             return max(0.1, float(self.CHECK_INTERVAL_SEC))
         return seconds
 
+    def _scheduling_enabled(self) -> bool:
+        return bool(self._enabled_kinds())
+
+    def _enabled_kinds(self) -> set[str]:
+        kinds = set()
+        if self.settings.get("REMINDERS_ENABLED", True):
+            kinds.add("reminder")
+        if self.settings.get("TIMERS_ENABLED", True):
+            kinds.add("timer")
+        return kinds
+
     def shutdown(self) -> None:
         self._shutdown_event.set()
         self._wake_event.set()
@@ -130,7 +145,7 @@ class ReminderController:
         character = registry.get(character_id)
         return getattr(character, "reminder_system", None) if character else None
 
-    def _check_and_fire_reminders(self):
+    def _check_and_fire_reminders(self, enabled_kinds: set[str] | None = None):
         registry = use(CharacterRegistry)
         for character_id in registry.all_ids():
             reminder_system = self._reminder_system_for(character_id)
@@ -141,16 +156,18 @@ class ReminderController:
             for reminder in due_reminders:
                 number = reminder.get("N")
                 text = reminder.get("text", "")
+                is_timer = reminder.get("kind") == "timer"
+                kind = "timer" if is_timer else "reminder"
+                if enabled_kinds is not None and kind not in enabled_kinds:
+                    continue
                 if self._is_character_generating(character_id):
                     logger.info(
                         f"[ReminderController] Deferring scheduled item #{number} "
                         f"for '{character_id}' until its current generation finishes."
                     )
                     continue
-                is_timer = reminder.get("kind") == "timer"
-                label = "timer" if is_timer else "reminder"
                 logger.info(
-                    f"[ReminderController] Firing {label} #{number} "
+                    f"[ReminderController] Firing {kind} #{number} "
                     f"for '{character_id}': {text[:60]}"
                 )
                 accepted = self.event_bus.try_emit(
@@ -158,7 +175,7 @@ class ReminderController:
                     {
                         "character_id": character_id,
                         "user_input": "",
-                        "system_input": f"[Timer fired] {text}" if is_timer else f"[Reminder] {text}",
+                        "system_input": f"[TIMER_FIRED]\n{text}" if is_timer else f"[Reminder] {text}",
                         "event_type": "timer" if is_timer else "reminder",
                     },
                 )

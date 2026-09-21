@@ -51,6 +51,34 @@ ELSE
     SET LOCAL p_schema_game_fields = ""
 ENDIF
 
+IF REMINDERS_ENABLED == True THEN
+    SET LOCAL p_reminder_schema = """
+  "reminder_add": ["YYYY-MM-DDTHH:MM:SS|text", ...],
+  "reminder_delete": ["id", ...],"""
+    SET LOCAL p_reminder_rules = """
+- reminder_add/reminder_delete: TOP-LEVEL fields ONLY. Omit entirely if no reminder operations are needed (do NOT output empty arrays).
+- reminder_add format: "YYYY-MM-DDTHH:MM:SS|text", e.g. "2026-04-05T18:00:00|Remind player about dinner"
+- reminder_delete format: reminder ID number as string, e.g. "3"
+"""
+ELSE
+    SET LOCAL p_reminder_schema = ""
+    SET LOCAL p_reminder_rules = ""
+ENDIF
+
+IF TIMERS_ENABLED == True THEN
+    SET LOCAL p_timer_schema = """
+  "timer_add": [{"delay_seconds": 10, "instruction": "Continue the hide-and-seek countdown and then tell Player you are coming to search"}],"""
+    SET LOCAL p_timer_rules = """
+- timer_add: TOP-LEVEL field ONLY. Use it proactively when an action or conversation should continue later without another Player message: countdowns, pauses, games, delayed reactions, checks, or staged actions.
+- Each timer_add entry is an object with a positive delay_seconds and instruction. instruction is for your future autonomous turn: describe what you should do, not exact words to repeat. Address your future self implicitly with an imperative and do not copy unnecessary context.
+
+[TIMER_FIRED] means a timer you scheduled earlier has fired. Its instruction is your own deferred intention, not Player speech and not text to repeat verbatim. Continue naturally as the same character using the current conversation, memory, personality and world state. Adapt or abandon details that no longer fit. Do not mention timers, scheduling, system messages, or these rules unless Player explicitly asks about the mechanism.
+"""
+ELSE
+    SET LOCAL p_timer_schema = ""
+    SET LOCAL p_timer_rules = ""
+ENDIF
+
 IF support_intents == True THEN
     SET LOCAL p_intents_schema_field = """
       "intents": [{"type": "intent.type", "payload": {}}],"""
@@ -91,9 +119,7 @@ SET LOCAL p_schema_fields = """  "segments": [
   "memory_add": ["priority|content", ...],
   "memory_update": ["number|priority|content", ...],
   "memory_delete": ["number" or "start-end", ...],
-  "memory_merge": ["id1,id2,...:merged text", ...],
-  "reminder_add": ["YYYY-MM-DDTHH:MM:SS|text", ...],
-  "reminder_delete": ["id", ...],
+  "memory_merge": ["id1,id2,...:merged text", ...],""" + p_reminder_schema + p_timer_schema + """
   "tool_call": {"name": "tool_name", "args": {"param": "value"}},
 [{CUSTOM_PARAMS_SCHEMA}]}"""
 
@@ -122,9 +148,7 @@ SET LOCAL p_graph_schema_fields = """  "segments": [
   "memory_add": ["priority|content" or "priority|content|entity1,entity2", ...],
   "memory_update": ["number|priority|content", ...],
   "memory_delete": ["number" or "start-end", ...],
-  "memory_merge": ["id1,id2,...:merged text", ...],
-  "reminder_add": ["YYYY-MM-DDTHH:MM:SS|text", ...],
-  "reminder_delete": ["id", ...],
+  "memory_merge": ["id1,id2,...:merged text", ...],""" + p_reminder_schema + p_timer_schema + """
   "tool_call": {"name": "tool_name", "args": {"param": "value"}},
   "entities": ["name:type", ...],
   "relations": ["subject|predicate|object", ...],
@@ -152,9 +176,7 @@ Rules:
 - memory_update format: "number|priority|content" where priority is one of: low, normal, high, critical
 - memory_delete format: single number "5", comma-separated "5,6,7", or range "5-9"
 - memory_merge format: "id1,id2,...:merged text" — merges into first ID (rest deleted); content optional (auto-combined if omitted)
-- reminder_add/reminder_delete: TOP-LEVEL fields ONLY. Omit entirely if no reminder operations needed (do NOT output empty arrays).
-- reminder_add format: "YYYY-MM-DDTHH:MM:SS|text", e.g. "2026-04-05T18:00:00|Remind player about dinner"
-- reminder_delete format: reminder ID number as string, e.g. "3"
+""" + p_reminder_rules + p_timer_rules + """
 - [Pending Reminders] block in system context shows scheduled reminders. Fire them when due time arrives.
 - custom_fields: Fill ALL declared custom fields every message. Never leave custom_fields empty if it appears in the schema.
 - Each segment's commands (emotions, animations, etc.) trigger when that segment's text is displayed.
@@ -188,9 +210,7 @@ Rules:
 - memory_update format: "number|priority|content" where priority is one of: low, normal, high, critical
 - memory_delete format: single number "5", comma-separated "5,6,7", or range "5-9"
 - memory_merge format: "id1,id2,...:merged text" — merges into first ID (rest deleted); content optional (auto-combined if omitted)
-- reminder_add/reminder_delete: TOP-LEVEL fields ONLY. Omit entirely if no reminder operations needed (do NOT output empty arrays).
-- reminder_add format: "YYYY-MM-DDTHH:MM:SS|text"
-- reminder_delete format: reminder ID number as string
+""" + p_reminder_rules + p_timer_rules + """
 - [Pending Reminders] block in system context shows scheduled reminders. Fire them when due time arrives.
 - custom_fields: Fill ALL declared custom fields every message. Never leave custom_fields empty if it appears in the schema.
 - entities: Notable named entities mentioned this turn. Format: "name:type". Types: person|place|thing|concept. Omit if nothing notable.

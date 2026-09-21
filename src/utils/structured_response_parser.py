@@ -668,7 +668,7 @@ def structured_response_to_result_dict(response: StructuredResponse) -> dict:
         "memory_merge": list(response.memory_merge or []),
         "reminder_add": list(response.reminder_add or []),
         "reminder_delete": list(response.reminder_delete or []),
-        "timer_add": list(response.timer_add or []),
+        "timer_add": [timer.model_dump() for timer in (response.timer_add or [])],
         "tool_call": tool_call_dict,
         "secret_exposed": response.secret_exposed,
         "custom_fields": custom_fields_out,

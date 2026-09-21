@@ -66,6 +66,13 @@ class ProjectInfoTests(unittest.TestCase):
         else_block = script[else_idx:endif_idx]
         self.assertNotIn("reasoning", else_block.lower())
 
+    def test_timers_have_a_json_contract_and_cached_fired_protocol(self):
+        script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")
+        self.assertIn("IF TIMERS_ENABLED == True THEN", script)
+        self.assertIn('"timer_add": [{"delay_seconds"', script)
+        self.assertIn("[TIMER_FIRED] means a timer you scheduled earlier has fired.", script)
+        self.assertIn("not text to repeat verbatim", script)
+
     def test_language_island_rules_are_present_and_english_memory_hint_is_gone(self):
         script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")
         self.assertGreaterEqual(script.count("commitments_conflicts, language"), 2)

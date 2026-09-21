@@ -4,12 +4,14 @@ import datetime
 import threading
 
 import controllers.reminder_controller as reminder_module
+import characters.character as character_module
 import managers.reminder_manager as reminder_manager_module
 from core.cancellation import CancellationToken
 from core.events import Event, Events
 from controllers.chat_controller import ChatController
 from managers.reminder_manager import ReminderManager
 from managers.tools.builtin.reminder_tool import ReminderTool, _parse_due
+from schemas.structured_response import StructuredResponse
 from services.contracts import CharacterRegistry, GenerationActivityService
 
 
@@ -81,7 +83,7 @@ def _controller(monkeypatch, reminder_system, activity=None):
         lambda contract: registry if contract is CharacterRegistry else activity,
     )
     controller = reminder_module.ReminderController(
-        {"REMINDERS_ENABLED": False},
+        {"REMINDERS_ENABLED": False, "TIMERS_ENABLED": False},
         character_resources=_Resources(reminder_system),
     )
     return controller, bus
@@ -98,7 +100,7 @@ def test_due_timer_starts_an_autonomous_timer_turn(monkeypatch):
             {
                 "character_id": "Mita",
                 "user_input": "",
-                "system_input": "[Timer fired] Try again",
+                "system_input": "[TIMER_FIRED]\nTry again",
                 "event_type": "timer",
             },
         )
@@ -118,6 +120,17 @@ def test_due_timer_waits_for_its_character_generation(monkeypatch):
         activity.active = 0
         controller._check_and_fire_reminders()
         assert reminders.dismissed == [4]
+    finally:
+        controller.shutdown()
+
+
+def test_timer_is_not_dispatched_when_only_reminders_are_enabled(monkeypatch):
+    reminders = _ReminderSystem({"N": 9, "text": "Continue", "kind": "timer"})
+    controller, bus = _controller(monkeypatch, reminders)
+    try:
+        controller._check_and_fire_reminders(enabled_kinds={"reminder"})
+        assert reminders.dismissed == []
+        assert bus.events == []
     finally:
         controller.shutdown()
 
@@ -172,7 +185,7 @@ def test_saved_timer_wakes_scheduler_without_waiting_for_poll_interval(monkeypat
         lambda contract: registry if contract is CharacterRegistry else activity,
     )
     controller = reminder_module.ReminderController(
-        {"REMINDERS_ENABLED": True},
+        {"REMINDERS_ENABLED": True, "TIMERS_ENABLED": True},
         character_resources=_Resources(reminders),
     )
     try:
@@ -200,6 +213,48 @@ def test_timer_tool_and_relative_seconds_are_supported():
     parsed = _parse_due("через 0.1 секунды")
     assert parsed is not None
     assert 0 < (parsed - datetime.datetime.now()).total_seconds() < 1
+
+
+def test_structured_timer_requires_trusted_output_and_enabled_setting(monkeypatch):
+    class _StructuredReminders:
+        def __init__(self):
+            self.calls = []
+
+        def add_timer(self, instruction, delay_seconds):
+            self.calls.append((instruction, delay_seconds))
+
+    class _StructuredCharacter:
+        char_id = "Mita"
+        _apply_structured_reminder_ops = character_module.Character._apply_structured_reminder_ops
+
+        def __init__(self):
+            self.reminder_system = _StructuredReminders()
+
+    class _Settings:
+        def __init__(self, timers_enabled):
+            self.timers_enabled = timers_enabled
+
+        def get(self, key, default=None):
+            if key == "TIMERS_ENABLED":
+                return self.timers_enabled
+            return default
+
+    response = StructuredResponse(
+        segments=[{"text": "Прячься."}],
+        timer_add=[{"delay_seconds": 10, "instruction": "Закончи отсчёт."}],
+    )
+    char = _StructuredCharacter()
+    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(True))
+    char._apply_structured_reminder_ops(response, allow_timer_add=False)
+    assert char.reminder_system.calls == []
+
+    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(False))
+    char._apply_structured_reminder_ops(response, allow_timer_add=True)
+    assert char.reminder_system.calls == []
+
+    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(True))
+    char._apply_structured_reminder_ops(response, allow_timer_add=True)
+    assert char.reminder_system.calls == [("Закончи отсчёт.", 10.0)]
 
 
 def test_chat_controller_tracks_active_generations_per_character():
