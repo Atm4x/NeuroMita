@@ -50,7 +50,7 @@ def _success(request: dict, response: str, segments: list[dict] | None = None) -
             "status": "SUCCESS",
             "data": {"req_id": request["req_id"]},
             "result": {
-                "response_protocol_version": 3,
+                "response_protocol_version": 4,
                 "response": response,
                 "segments": segments or [{"text": response, "intents": []}],
             },
@@ -299,7 +299,7 @@ def test_session_rejects_missing_response_protocol_version() -> None:
 
     assert len(transport.sent) == 1
     assert events[-1].kind == "error"
-    assert "expected 3" in events[-1].message
+    assert "expected 4" in events[-1].message
 
 
 def test_addressed_turns_take_priority_over_game_master_observation() -> None:

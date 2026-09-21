@@ -35,7 +35,7 @@ except Exception:  # pragma: no cover - schema must import even without logging
 # Python-side version of the structured-response protocol. The model never
 # supplies this value; it is stamped into the outgoing result dict so downstream
 # consumers (Unity, debug dumps) can tell which response contract produced it.
-RESPONSE_PROTOCOL_VERSION = 3
+RESPONSE_PROTOCOL_VERSION = 4
 
 def _to_gemini_schema(schema: dict) -> dict:
     """

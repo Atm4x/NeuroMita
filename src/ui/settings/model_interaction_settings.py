@@ -57,17 +57,6 @@ def setup_model_interaction_controls(
 
         {'type': 'end'},
 
-        {'label': _('Отложенные действия', 'Scheduled actions'), 'type': 'subsection'},
-        {'label': _('Напоминания', 'Reminders'), 'key': 'REMINDERS_ENABLED',
-         'type': 'checkbutton', 'default_checkbutton': True,
-         'tooltip': _('Разрешить сохранённые напоминания, которые запускают новый ход в назначенное время.',
-                      'Allow persisted reminders that start a new turn at their due time.')},
-        {'label': _('Автономные таймеры', 'Autonomous timers'), 'key': 'TIMERS_ENABLED',
-         'type': 'checkbutton', 'default_checkbutton': True,
-         'tooltip': _('Разрешить Мите самой назначать короткий следующий ход: отсчёт, паузу, игру или отложенную реакцию.',
-                      'Allow Mita to schedule her own short next turn for countdowns, pauses, games, or delayed reactions.')},
-        {'type': 'end'},
-
         {'label': _('Инструменты (Tools)', 'Tools'), 'type': 'subsection'},
 
         {'label': _('Вызов инструментов', 'Tools use'),

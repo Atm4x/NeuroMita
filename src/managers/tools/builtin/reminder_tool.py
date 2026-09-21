@@ -104,7 +104,7 @@ class ReminderTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "add", "delete", "timer"],
+                "enum": ["timer", "list", "add", "delete"],
                 "description": "Action to perform. Prefer timer for short autonomous continuation; use add for ordinary reminders.",
             },
             "text": {
@@ -140,9 +140,8 @@ class ReminderTool(Tool):
         "required": ["action"],
     }
 
-    def __init__(self, settings=None):
+    def __init__(self):
         self._char_id: Optional[str] = None
-        self.settings = settings
 
     def set_char_id(self, char_id: str) -> None:
         self._char_id = char_id
@@ -168,8 +167,6 @@ class ReminderTool(Tool):
             return result if result else "Нет активных напоминаний."
 
         elif action == "add":
-            if not self._enabled("REMINDERS_ENABLED", True):
-                return "[reminder] Напоминания отключены в настройках."
             if not text:
                 return "[reminder] Для добавления укажи текст напоминания (параметр text)."
             if not due:
@@ -188,8 +185,6 @@ class ReminderTool(Tool):
                 return f"[reminder] Ошибка при добавлении: {format_exception(e)}"
 
         elif action == "timer":
-            if not self._enabled("TIMERS_ENABLED", True):
-                return "[timer] Автономные таймеры отключены в настройках."
             if not instruction:
                 return "[timer] Для таймера укажи instruction для следующего хода."
             if delay_seconds is None:
@@ -213,12 +208,3 @@ class ReminderTool(Tool):
 
         else:
             return f"[reminder] Неизвестное действие '{action}'. Используй: list, add, delete."
-
-    def _enabled(self, key: str, default: bool) -> bool:
-        settings = self.settings
-        if settings is None:
-            return default
-        try:
-            return bool(settings.get(key, default))
-        except Exception:
-            return default

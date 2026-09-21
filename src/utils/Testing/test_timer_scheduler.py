@@ -83,7 +83,7 @@ def _controller(monkeypatch, reminder_system, activity=None):
         lambda contract: registry if contract is CharacterRegistry else activity,
     )
     controller = reminder_module.ReminderController(
-        {"REMINDERS_ENABLED": False, "TIMERS_ENABLED": False},
+        {"REMINDERS_ENABLED": False},
         character_resources=_Resources(reminder_system),
     )
     return controller, bus
@@ -120,17 +120,6 @@ def test_due_timer_waits_for_its_character_generation(monkeypatch):
         activity.active = 0
         controller._check_and_fire_reminders()
         assert reminders.dismissed == [4]
-    finally:
-        controller.shutdown()
-
-
-def test_timer_is_not_dispatched_when_only_reminders_are_enabled(monkeypatch):
-    reminders = _ReminderSystem({"N": 9, "text": "Continue", "kind": "timer"})
-    controller, bus = _controller(monkeypatch, reminders)
-    try:
-        controller._check_and_fire_reminders(enabled_kinds={"reminder"})
-        assert reminders.dismissed == []
-        assert bus.events == []
     finally:
         controller.shutdown()
 
@@ -185,7 +174,7 @@ def test_saved_timer_wakes_scheduler_without_waiting_for_poll_interval(monkeypat
         lambda contract: registry if contract is CharacterRegistry else activity,
     )
     controller = reminder_module.ReminderController(
-        {"REMINDERS_ENABLED": True, "TIMERS_ENABLED": True},
+        {"REMINDERS_ENABLED": True},
         character_resources=_Resources(reminders),
     )
     try:
@@ -215,13 +204,14 @@ def test_timer_tool_and_relative_seconds_are_supported():
     assert 0 < (parsed - datetime.datetime.now()).total_seconds() < 1
 
 
-def test_structured_timer_requires_trusted_output_and_enabled_setting(monkeypatch):
+def test_structured_timer_adds_autonomous_timer():
     class _StructuredReminders:
         def __init__(self):
             self.calls = []
 
         def add_timer(self, instruction, delay_seconds):
             self.calls.append((instruction, delay_seconds))
+            return 8
 
     class _StructuredCharacter:
         char_id = "Mita"
@@ -230,30 +220,12 @@ def test_structured_timer_requires_trusted_output_and_enabled_setting(monkeypatc
         def __init__(self):
             self.reminder_system = _StructuredReminders()
 
-    class _Settings:
-        def __init__(self, timers_enabled):
-            self.timers_enabled = timers_enabled
-
-        def get(self, key, default=None):
-            if key == "TIMERS_ENABLED":
-                return self.timers_enabled
-            return default
-
     response = StructuredResponse(
         segments=[{"text": "Прячься."}],
         timer_add=[{"delay_seconds": 10, "instruction": "Закончи отсчёт."}],
     )
     char = _StructuredCharacter()
-    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(True))
-    char._apply_structured_reminder_ops(response, allow_timer_add=False)
-    assert char.reminder_system.calls == []
-
-    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(False))
-    char._apply_structured_reminder_ops(response, allow_timer_add=True)
-    assert char.reminder_system.calls == []
-
-    monkeypatch.setattr(character_module, "use", lambda _contract: _Settings(True))
-    char._apply_structured_reminder_ops(response, allow_timer_add=True)
+    char._apply_structured_reminder_ops(response)
     assert char.reminder_system.calls == [("Закончи отсчёт.", 10.0)]
 
 

@@ -131,7 +131,7 @@ class ModelController(GenerationService, ModelStateService):
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
-        self.model.tool_manager.register(ReminderTool(settings=self.settings))
+        self.model.tool_manager.register(ReminderTool())
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()
@@ -2151,7 +2151,6 @@ class ModelController(GenerationService, ModelStateService):
             char.process_structured_response(
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
-                allow_timer_add=parse_outcome.control_plane_trusted,
             )
             if hasattr(char, "flush_variables"):
                 char.flush_variables()

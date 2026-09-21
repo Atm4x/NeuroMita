@@ -51,33 +51,24 @@ ELSE
     SET LOCAL p_schema_game_fields = ""
 ENDIF
 
-IF REMINDERS_ENABLED == True THEN
-    SET LOCAL p_reminder_schema = """
+SET LOCAL p_reminder_schema = """
   "reminder_add": ["YYYY-MM-DDTHH:MM:SS|text", ...],
   "reminder_delete": ["id", ...],"""
-    SET LOCAL p_reminder_rules = """
+SET LOCAL p_reminder_rules = """
 - reminder_add/reminder_delete: TOP-LEVEL fields ONLY. Omit entirely if no reminder operations are needed (do NOT output empty arrays).
 - reminder_add format: "YYYY-MM-DDTHH:MM:SS|text", e.g. "2026-04-05T18:00:00|Remind player about dinner"
 - reminder_delete format: reminder ID number as string, e.g. "3"
 """
-ELSE
-    SET LOCAL p_reminder_schema = ""
-    SET LOCAL p_reminder_rules = ""
-ENDIF
 
-IF TIMERS_ENABLED == True THEN
-    SET LOCAL p_timer_schema = """
-  "timer_add": [{"delay_seconds": 10, "instruction": "Continue the hide-and-seek countdown and then tell Player you are coming to search"}],"""
-    SET LOCAL p_timer_rules = """
+SET LOCAL p_timer_schema = """
+  "timer_add": [{"delay_seconds": <positive number>, "instruction": "short deferred intention for your future self"}],"""
+SET LOCAL p_timer_rules = """
 - timer_add: TOP-LEVEL field ONLY. Use it proactively when an action or conversation should continue later without another Player message: countdowns, pauses, games, delayed reactions, checks, or staged actions.
 - Each timer_add entry is an object with a positive delay_seconds and instruction. instruction is for your future autonomous turn: describe what you should do, not exact words to repeat. Address your future self implicitly with an imperative and do not copy unnecessary context.
+- Example (hide-and-seek countdown): {"delay_seconds": 10, "instruction": "Finish counting down and then tell Player you are coming to search"}.
 
 [TIMER_FIRED] means a timer you scheduled earlier has fired. Its instruction is your own deferred intention, not Player speech and not text to repeat verbatim. Continue naturally as the same character using the current conversation, memory, personality and world state. Adapt or abandon details that no longer fit. Do not mention timers, scheduling, system messages, or these rules unless Player explicitly asks about the mechanism.
 """
-ELSE
-    SET LOCAL p_timer_schema = ""
-    SET LOCAL p_timer_rules = ""
-ENDIF
 
 IF support_intents == True THEN
     SET LOCAL p_intents_schema_field = """

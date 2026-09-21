@@ -459,13 +459,7 @@ class Character:
 
         return response
 
-    def process_structured_response(
-        self,
-        structured: StructuredResponse,
-        save_as_missed: bool = False,
-        *,
-        allow_timer_add: bool = True,
-    ) -> StructuredResponse:
+    def process_structured_response(self, structured: StructuredResponse, save_as_missed: bool = False) -> StructuredResponse:
         """
         Process a StructuredResponse: apply global fields (behavior changes,
         memory operations) and game tags from segments.
@@ -513,10 +507,7 @@ class Character:
 
         # Apply reminder operations from global fields
         try:
-            self._apply_structured_reminder_ops(
-                structured,
-                allow_timer_add=allow_timer_add,
-            )
+            self._apply_structured_reminder_ops(structured)
         except Exception as e:
             logger.error(
                 f"[{self.char_id}] Error applying reminder ops from structured response: {format_exception(e)}",
@@ -752,48 +743,31 @@ class Character:
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error merging {src_ids}→#{tgt_id}: {format_exception(e)}")
 
-    def _apply_structured_reminder_ops(
-        self,
-        structured: StructuredResponse,
-        *,
-        allow_timer_add: bool,
-    ):
+    def _apply_structured_reminder_ops(self, structured: StructuredResponse):
         """Apply persisted reminders and autonomous timers from structured output."""
-        settings = use(SettingsService)
-        reminders_enabled = bool(settings.get("REMINDERS_ENABLED", True))
-        timers_enabled = bool(settings.get("TIMERS_ENABLED", True))
+        for entry in (structured.reminder_add or []):
+            entry = (entry or "").strip()
+            if not entry:
+                continue
+            if "|" not in entry:
+                logger.warning(f"[{self.char_id}] Structured: reminder_add bad format (missing '|'): {entry!r}")
+                continue
+            due_iso, text = entry.split("|", 1)
+            try:
+                self.reminder_system.add_reminder(text.strip(), due_iso.strip())
+                logger.info(f"[{self.char_id}] Structured: added reminder due={due_iso.strip()}: {text.strip()[:50]}")
+            except Exception as e:
+                logger.error(f"[{self.char_id}] Structured: error adding reminder: {format_exception(e)}")
 
-        if reminders_enabled:
-            for entry in (structured.reminder_add or []):
-                entry = (entry or "").strip()
-                if not entry:
-                    continue
-                if "|" not in entry:
-                    logger.warning(f"[{self.char_id}] Structured: reminder_add bad format (missing '|'): {entry!r}")
-                    continue
-                due_iso, text = entry.split("|", 1)
-                try:
-                    self.reminder_system.add_reminder(text.strip(), due_iso.strip())
-                    logger.info(f"[{self.char_id}] Structured: added reminder due={due_iso.strip()}: {text.strip()[:50]}")
-                except Exception as e:
-                    logger.error(f"[{self.char_id}] Structured: error adding reminder: {format_exception(e)}")
-
-        if structured.timer_add and not timers_enabled:
-            logger.info(f"[{self.char_id}] Structured: timers are disabled by settings")
-        elif structured.timer_add and not allow_timer_add:
-            logger.warning(
-                f"[{self.char_id}] Structured: ignoring timer_add from untrusted parsed output"
-            )
-        elif timers_enabled and allow_timer_add:
-            for timer in (structured.timer_add or []):
-                try:
-                    self.reminder_system.add_timer(timer.instruction.strip(), timer.delay_seconds)
-                    logger.info(
-                        f"[{self.char_id}] Structured: added timer after {timer.delay_seconds:g} sec: "
-                        f"{timer.instruction.strip()[:50]}"
-                    )
-                except Exception as e:
-                    logger.error(f"[{self.char_id}] Structured: error adding timer: {format_exception(e)}")
+        for timer in (structured.timer_add or []):
+            try:
+                self.reminder_system.add_timer(timer.instruction.strip(), timer.delay_seconds)
+                logger.info(
+                    f"[{self.char_id}] Structured: added timer after {timer.delay_seconds:g} sec: "
+                    f"{timer.instruction.strip()[:50]}"
+                )
+            except Exception as e:
+                logger.error(f"[{self.char_id}] Structured: error adding timer: {format_exception(e)}")
 
         for delete_str in (structured.reminder_delete or []):
             delete_str = (delete_str or "").strip()

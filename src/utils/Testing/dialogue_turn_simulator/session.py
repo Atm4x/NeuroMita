@@ -32,7 +32,7 @@ class _PendingRequest:
 class UnityLikeDialogueSession:
     """Headless dialogue director that uses the same server contract as Unity."""
 
-    RESPONSE_PROTOCOL_VERSION = 3
+    RESPONSE_PROTOCOL_VERSION = 4
 
     FINAL_STATUSES = {
         "SUCCESS",
