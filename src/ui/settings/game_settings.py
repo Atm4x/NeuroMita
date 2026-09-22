@@ -300,6 +300,7 @@ def setup_game_controls(self, parent, *, beat_view_model) -> None:
             'options': ['Idle events', 'All events'],
             'default': 'Idle events',
             'depends_on': 'IGNORE_GAME_REQUESTS',
+            'hide_when_disabled': True,
             'tooltip': _(
                 'Idle events — блокирует запросы от таймера молчания, All events — блокирует все запросы с внутриигровых событий',
                 'Idle events - blocks idle timer requests, All events - blocks all in-game event requests',
