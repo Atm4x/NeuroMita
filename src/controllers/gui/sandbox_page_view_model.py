@@ -36,6 +36,7 @@ from ui.pages.sandbox_presentation import (
 class SandboxPageViewModel(IntentViewModel[SandboxState]):
     """Owns Sandbox presentation state, refreshes and backend subscriptions."""
 
+    _MODEL_LABEL_MAX_LENGTH = 32
     _MEMORY_SETTING_KEYS = frozenset({"MODEL_MESSAGE_LIMIT", "MEMORY_CAPACITY"})
     _BUDGET_SETTING_KEYS = frozenset({"MAX_MODEL_TOKENS"})
     _STATUS_SETTING_KEYS = frozenset(
@@ -146,6 +147,13 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
         self.refresh_memory()
         self.refresh_budget()
 
+    @classmethod
+    def _model_label(cls, preset_name: str, model_name: str) -> str:
+        label = f"{preset_name} ({model_name})" if model_name else preset_name
+        if len(label) <= cls._MODEL_LABEL_MAX_LENGTH:
+            return label
+        return label[: cls._MODEL_LABEL_MAX_LENGTH - 3].rstrip() + "..."
+
     def refresh_selectors(self) -> None:
         self._update(selectors_loading=True, error=None)
 
@@ -164,7 +172,7 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
                         continue
                     name = str(field("name", "") or "")
                     model = str(field("default_model", "") or "")
-                    label = f"{name} ({model})" if model else name
+                    label = self._model_label(name, model)
                     model_items.append(SandboxModelItem(int(preset_id), label))
             return {
                 "model_items": tuple(model_items),

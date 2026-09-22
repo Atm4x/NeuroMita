@@ -2,9 +2,24 @@ import unittest
 from unittest.mock import patch
 
 from controllers.gui.sandbox_page_controller import SandboxPageController
+from controllers.gui.sandbox_page_view_model import SandboxPageViewModel
 
 
 class SandboxPageControllerTest(unittest.TestCase):
+    def test_model_label_is_bounded_with_ellipsis(self):
+        label = SandboxPageViewModel._model_label(
+            "Пустой пресет 1",
+            "google/gemini-3.5-flash-lite",
+        )
+        self.assertEqual(label, "Пустой пресет 1 (google/gemin...")
+        self.assertEqual(len(label), SandboxPageViewModel._MODEL_LABEL_MAX_LENGTH)
+
+    def test_short_model_label_is_unchanged(self):
+        self.assertEqual(
+            SandboxPageViewModel._model_label("Default", "gpt-4o"),
+            "Default (gpt-4o)",
+        )
+
     def _controller(self, settings_values, current_id=11):
         class Settings:
             def get(self, key, default=None):
