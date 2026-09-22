@@ -936,7 +936,7 @@ class ChatService(ABC):
 
 class GenerationActivityService(ABC):
     @abstractmethod
-    def active_generation_count(self) -> int: ...
+    def active_generation_count(self, character_id: Optional[str] = None) -> int: ...
 
 
 class CaptureService(ABC):

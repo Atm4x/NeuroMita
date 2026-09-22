@@ -624,6 +624,10 @@ class Events:
         SAVE_SNAPSHOT = "chat_save_snapshot"
         LOAD_SNAPSHOT = "chat_load_snapshot"
 
+    class Reminder:
+        """Notifications for persisted reminders and short autonomous timers."""
+        CHANGED = "reminder_changed"
+
     class Dialogue:
         """Ephemeral dialogue runtime facts consumed by the Python UI."""
 

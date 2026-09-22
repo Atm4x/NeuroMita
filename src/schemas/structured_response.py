@@ -382,6 +382,10 @@ class StructuredResponse(BaseModel):
         default=None,
         description="Reminder IDs to delete. Format: 'N' (number). Example: '3'."
     )
+    timer_add: Optional[List[str]] = Field(
+        default=None,
+        description="Autonomous timers. Format: 'delay_seconds|instruction'. After the delay, the instruction starts a new LLM turn. Example: '10|Try generating the answer again'."
+    )
 
     entities: Optional[List[str]] = Field(
         default=None,
