@@ -188,9 +188,21 @@ MANAGED_BACKEND_NAMES = {
 # 1 — включено (по умолчанию), 0 — выключено.
 CLEAN_OUTPUT = env.get("BUILD_CLEAN_OUTPUT", "1") == "1"
 
+# При включённой очистке эти папки остаются в BUILD_OUTPUT_DIR. Флаги
+# независимы: каждая папка сохраняется только при явном значении 1.
+PRESERVE_OUTPUT_DIRS = {
+    name
+    for name, variable in (
+        ("Histories", "BUILD_PRESERVE_HISTORIES"),
+        ("Settings", "BUILD_PRESERVE_SETTINGS"),
+        ("FineTuneData", "BUILD_PRESERVE_FINETUNE_DATA"),
+    )
+    if env.get(variable, "0") == "1"
+}
+
 
 def clean_output_dir() -> None:
-    """Полностью очищает OUTPUT_DIR перед сборкой. С защитой от опасных путей."""
+    """Очищает OUTPUT_DIR перед сборкой, сохраняя явно защищённые папки."""
     out = OUTPUT_DIR.resolve()
 
     # Защита: не даём случайно снести проект, диск целиком или короткий путь.
@@ -203,7 +215,14 @@ def clean_output_dir() -> None:
 
     if out.exists():
         print(f"Очищаю выходную папку: {out}")
-        _rmtree_robust(out)
+        for child in out.iterdir():
+            if child.name in PRESERVE_OUTPUT_DIRS:
+                print(f"  Сохраняю: {child}")
+                continue
+            if child.is_dir() and not child.is_symlink():
+                _rmtree_robust(child)
+            else:
+                _remove_file_if_exists(child)
     out.mkdir(parents=True, exist_ok=True)
 
 
