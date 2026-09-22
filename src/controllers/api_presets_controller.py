@@ -149,7 +149,9 @@ class ApiPresetsController(ApiPresetService):
         except (TypeError, ValueError):
             configured_id = None
 
-        if configured_id in self.presets or configured_id in self.templates:
+        # Templates only describe a provider.  Only user presets carry the
+        # endpoint credentials and are valid active generation targets.
+        if configured_id in self.presets:
             self.current_preset_id = configured_id
             return
 
