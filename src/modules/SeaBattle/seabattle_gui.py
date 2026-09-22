@@ -2,7 +2,7 @@ from core.error_utils import format_exception
 # seabattle_gui.py
 
 import sys
-import multiprocessing
+import queue
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -312,7 +312,7 @@ class SeaBattleWindow(QWidget):
             print(f"GUI Error: Could not put state in queue: {format_exception(e)}")
 
     def process_commands(self):
-        while not self.command_queue.empty():
+        while True:
             try:
                 cmd = self.command_queue.get_nowait()
                 action = cmd.get("action")
@@ -369,7 +369,7 @@ class SeaBattleWindow(QWidget):
                 elif mita_hit_reaction is not None:
                     self._request_mita_hit_reaction(*mita_hit_reaction)
 
-            except multiprocessing.queues.Empty:
+            except queue.Empty:
                 break
             except Exception as e:
                 print(f"GUI Error processing command: {format_exception(e)}")

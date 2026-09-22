@@ -54,6 +54,19 @@ class _Settings:
         return self.enabled if self.enabled is not None else default
 
 
+class _QueueWithoutEmpty:
+    def __init__(self, *items) -> None:
+        self.items = list(items)
+
+    def get_nowait(self):
+        if not self.items:
+            raise queue.Empty
+        return self.items.pop(0)
+
+    def empty(self):
+        raise AssertionError("Queue.empty() must not be used for cross-process polling")
+
+
 @unittest.skipIf(QApplication is None, "PyQt6 is not installed")
 class SeaBattleWindowReactionTests(unittest.TestCase):
     @classmethod
@@ -85,6 +98,16 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
             window.on_opponent_board_click(1, 0, Qt.MouseButton.LeftButton)
             with self.assertRaises(queue.Empty):
                 reaction_queue.get_nowait()
+        finally:
+            window.close()
+
+    def test_process_commands_drains_queue_without_checking_empty(self) -> None:
+        window = SeaBattleWindow(_QueueWithoutEmpty({"action": "get_state"}), queue.Queue(), queue.Queue())
+        try:
+            with patch.object(window, "send_state_update") as send_state_update:
+                window.process_commands()
+
+            send_state_update.assert_called_once_with()
         finally:
             window.close()
 
