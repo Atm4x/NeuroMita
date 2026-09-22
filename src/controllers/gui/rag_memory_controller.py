@@ -710,6 +710,7 @@ def _build_memory_limits_config(self) -> list:
          'key': 'WORKING_STATE_MAX_CHARS', 'type': 'entry', 'default': 2000,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_WORKING_STATE',
+         'hide_when_disabled': True,
          'tooltip': _(
              'Жёсткий максимум для скрытого состояния на одного персонажа. 2000 символов — примерно 300–500 токенов; '
              'при переполнении поздние поля обрезаются.',
@@ -728,6 +729,7 @@ def _build_memory_limits_config(self) -> list:
          'key': 'ACTION_MEMORY_RETAIN_LAST', 'type': 'entry', 'default': 4,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_ACTION_MEMORY',
+         'hide_when_disabled': True,
          'tooltip': _(
              'Сколько последних action requests сохранить отдельным мостом, когда их исходные реплики уже вошли в summary. '
              'У недавних реплик действия остаются приклеенными к самой реплике.',
@@ -737,6 +739,7 @@ def _build_memory_limits_config(self) -> list:
          'key': 'ACTION_MEMORY_EMERGENCY_MAX_RECORDS', 'type': 'entry', 'default': 80,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_ACTION_MEMORY',
+         'hide_when_disabled': True,
          'tooltip': _(
              'Предохранитель на случай отключённого или постоянно падающего сжатия. При достижении сохраняется '
              'самый новый хвост, а в лог пишется предупреждение. В обычном режиме не должен срабатывать.',
@@ -746,6 +749,7 @@ def _build_memory_limits_config(self) -> list:
          'key': 'ACTION_MEMORY_EMERGENCY_MAX_CHARS', 'type': 'entry', 'default': 8000,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_ACTION_MEMORY',
+         'hide_when_disabled': True,
          'tooltip': _(
              'Второй предохранитель для длинных команд и intent payload. Обычное сжатие по-прежнему сохраняет '
              'только хвост после summary; этот лимит нужен лишь чтобы prompt не рос бесконечно.',
