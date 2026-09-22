@@ -268,8 +268,10 @@ class ReminderManager(CharacterScopedService):
                     due_str = due_dt.strftime("%Y-%m-%d %H:%M")
                 except Exception:
                     due_str = reminder.get("due_iso", "?")
+                kind = str(reminder.get("kind") or "reminder")
+                label = "Instruction" if kind == "timer" else "Text"
                 lines.append(
-                    f"N:{reminder['N']}, Due: {due_str}, Text: {reminder['text']}"
+                    f"N:{reminder['N']}, Kind:{kind}, Due: {due_str}, {label}: {reminder['text']}"
                 )
             lines.append(
                 'To set: reminder_add "YYYY-MM-DDTHH:MM:SS|text". '

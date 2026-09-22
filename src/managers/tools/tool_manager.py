@@ -105,8 +105,7 @@ class ToolManager:
         if enabled_names is None:
             selected = self._tools.values()
         else:
-            enabled = set(enabled_names)
-            selected = (tool for name, tool in self._tools.items() if name in enabled)
+            selected = (self._tools[name] for name in enabled_names if name in self._tools)
         return [
             {
                 "name": tool.name,

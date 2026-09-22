@@ -51,7 +51,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["reminder", "calculator", "web_search", "google_search", "web_reader", "memory_search"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -2162,6 +2162,16 @@ class ModelController(GenerationService, ModelStateService):
                 except Exception:
                     voice_profile = None
         # --- Tool call path ---
+        if (
+            structured.tool_call
+            and structured.tool_call.name == "reminder"
+            and str((structured.tool_call.args or {}).get("action", "")).strip().lower() == "timer"
+            and structured.timer_add
+        ):
+            logger.info(
+                "[ModelController] Ignoring reminder.timer because timer_add already schedules the same turn."
+            )
+            structured.tool_call = None
         _active_tools = enabled_tools or []
         _tool_max_depth = int(self.settings.get("TOOL_MAX_DEPTH", 2))
         _tool_allowed = (
@@ -2403,6 +2413,10 @@ class ModelController(GenerationService, ModelStateService):
 
         tool_name = structured.tool_call.name
         tool_args = structured.tool_call.args or {}
+        is_autonomous_timer = (
+            tool_name == "reminder"
+            and str(tool_args.get("action", "")).strip().lower() == "timer"
+        )
 
         # Build first response result dict
         result_dict = structured_response_to_result_dict(structured)
@@ -2491,6 +2505,19 @@ class ModelController(GenerationService, ModelStateService):
             "character_name": "",
             "speaker_name": "",
         }, delivery=EventDelivery.ORDERED)
+
+        if is_autonomous_timer:
+            logger.info("[ModelController] Timer tool completes the current turn without a follow-up generation.")
+            return ChatGenerationResult(
+                text=first_text,
+                character_id=char_id,
+                voice_profile=voice_profile,
+                think=think_text or None,
+                structured=result_dict,
+                message_id=first_assistant_message_id,
+                structured_parse_level="tool_timer",
+                control_plane_trusted=True,
+            )
 
         # Build tool result message(s) for the second LLM call.
         # TOOL_RESULT_MSG_MODE controls which role(s) are used to inject the result:

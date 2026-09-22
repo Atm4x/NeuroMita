@@ -153,6 +153,15 @@ class _Calculator(Tool):
         return str(int(kwargs.get("value", 0)) + 1)
 
 
+class _ReminderTimer(Tool):
+    name = "reminder"
+    description = "timer"
+    parameters = {}
+
+    def run(self, **_kwargs):
+        return "timer scheduled"
+
+
 class _ToolModel:
     def __init__(self):
         self.tool_manager = ToolManager()
@@ -456,6 +465,59 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
             places=6,
         )
         self.assertEqual(len([span for span in snapshot["spans"] if span["name"] == "tool.call"]), 1)
+
+    def test_timer_tool_completes_without_followup_generation(self):
+        harness = _ModelHarness()
+        harness.model.tool_manager.register(_ReminderTimer())
+        structured = StructuredResponse(
+            segments=[ResponseSegment(text="Counting")],
+            tool_call=ToolCall(
+                name="reminder",
+                args={"action": "timer", "delay_seconds": 10, "instruction": "Continue"},
+            ),
+        )
+
+        result = ModelController._handle_tool_call(
+            harness,
+            structured=structured,
+            visible_raw='{"segments":[{"text":"Counting"}]}',
+            think_text="",
+            usage=None,
+            response_model="model",
+            response_provider="provider",
+            pricing_info=None,
+            char=object(),
+            char_id="Crazy",
+            char_name="Crazy",
+            origin_message_id=None,
+            capabilities={},
+            policy=RequestPolicy(write_to_history=False),
+            sender="Player",
+            participants=[],
+            user_input="count",
+            image_data=[],
+            image_source="",
+            req_id=None,
+            task_uid=None,
+            event_type="chat",
+            combined_messages=[],
+            preset_id=None,
+            enabled_tools=["reminder"],
+            tool_depth=0,
+        )
+
+        self.assertEqual(result.text, "Counting")
+        self.assertEqual(result.structured_parse_level, "tool_timer")
+        self.assertEqual(len(harness.model.responses), 1)
+
+    def test_enabled_tool_schema_uses_requested_priority(self):
+        manager = ToolManager()
+        manager.register(_Calculator())
+        manager.register(_ReminderTimer())
+
+        schema = manager._filtered_schema(["reminder", "calculator"])
+
+        self.assertEqual([entry["name"] for entry in schema], ["reminder", "calculator"])
 
     def test_app_window_keeps_legacy_fourth_positional_argument(self):
         class _ShellActions:

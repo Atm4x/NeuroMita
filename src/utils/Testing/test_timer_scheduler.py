@@ -148,6 +148,8 @@ def test_reminder_manager_persists_timer_kind_and_precise_deadline(monkeypatch, 
     reloaded = ReminderManager("Mita")
     assert reloaded.reminders == [saved]
     assert reloaded.get_next_due_at() == datetime.datetime.fromisoformat(saved["due_iso"])
+    assert "Kind:timer" in reloaded.get_reminders_formatted()
+    assert "Instruction: Check result" in reloaded.get_reminders_formatted()
 
 
 def test_saved_timer_wakes_scheduler_without_waiting_for_poll_interval(monkeypatch, tmp_path):
