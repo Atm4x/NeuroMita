@@ -11,8 +11,16 @@ from typing import Any, Optional
 
 import httpx
 from core.networking import NetworkRequestError
+from core.sensitive import mask_sensitive
 
-from utils import _, mask_sensitive
+
+def _(ru: str, en: str = "") -> str:
+    try:
+        from localization import translate
+
+        return translate(ru, en)
+    except Exception:
+        return ru
 
 
 _RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}

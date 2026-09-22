@@ -11,26 +11,44 @@ from handlers.llm_providers.message_transforms import apply_transforms
 from handlers.llm_providers.http_transport import LLMHttpClient
 
 
-_PROVIDER_TYPES = (
-    ("handlers.llm_providers.openai_provider", "OpenAIProvider"),
-    ("handlers.llm_providers.gemini_provider", "GeminiProvider"),
-    ("handlers.llm_providers.common_provider", "CommonProvider"),
-    ("handlers.llm_providers.g4f_provider", "G4FProvider"),
-)
+_PROVIDER_TYPES = {
+    "openai": ("handlers.llm_providers.openai_provider", "OpenAIProvider"),
+    "gemini": ("handlers.llm_providers.gemini_provider", "GeminiProvider"),
+    "common": ("handlers.llm_providers.common_provider", "CommonProvider"),
+    "g4f": ("handlers.llm_providers.g4f_provider", "G4FProvider"),
+}
 
 
 class ProviderManager:
-    def __init__(self):
+    def __init__(
+        self,
+        provider_names: tuple[str, ...] | None = None,
+        *,
+        lazy: bool = False,
+    ):
         self._providers: List[BaseProvider] = []
         self._unavailable: dict[str, str] = {}
         self.http_transport = LLMHttpClient(enable_http2=True)
-        self._register_providers()
+        self._provider_names = provider_names
+        self._lazy = bool(lazy)
+        if not self._lazy:
+            self._register_providers(provider_names)
 
-    def _register_providers(self):
+    @property
+    def provider_names(self) -> tuple[str, ...]:
+        return tuple(str(provider.name) for provider in self._providers)
+
+    def _register_providers(self, provider_names: tuple[str, ...] | None = None):
         providers: list[BaseProvider] = []
         unavailable: dict[str, str] = {}
 
-        for module_name, class_name in _PROVIDER_TYPES:
+        selected = tuple(_PROVIDER_TYPES) if provider_names is None else tuple(provider_names)
+        for name in selected:
+            target = _PROVIDER_TYPES.get(name)
+            if target is None:
+                unavailable[str(name)] = "Unknown provider"
+                continue
+            module_name, class_name = target
             try:
                 provider_type = getattr(import_module(module_name), class_name)
                 providers.append(provider_type(http_transport=self.http_transport))
@@ -52,6 +70,20 @@ class ProviderManager:
         for provider in self._providers:
             if getattr(provider, "name", None) == name:
                 return provider
+        if self._lazy:
+            target = _PROVIDER_TYPES.get(str(name))
+            if target is None or (self._provider_names is not None and name not in self._provider_names):
+                return None
+            module_name, class_name = target
+            try:
+                provider_type = getattr(import_module(module_name), class_name)
+                provider = provider_type(http_transport=self.http_transport)
+                self._providers.append(provider)
+                self._providers.sort(key=lambda item: item.priority)
+                return provider
+            except Exception as exc:
+                self._unavailable[class_name] = format_exception(exc)
+                logger.warning("LLM provider %s unavailable: %s", class_name, format_exception(exc))
         return None
 
     def _enforce_capabilities(self, req: LLMRequest) -> None:

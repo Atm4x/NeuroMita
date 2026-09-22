@@ -10,8 +10,8 @@ from .schema import SchemaError, SettingsSchema
 class ModelSettingsService:
     """Resolve definitions and values; transports receive only a compiled object."""
 
-    def __init__(self, repository: SchemaRepository | None = None):
-        self.repository = repository if repository is not None else SchemaRepository()
+    def __init__(self, repository: SchemaRepository | None = None, *, persist_defaults: bool = True):
+        self.repository = repository if repository is not None else SchemaRepository(persist_defaults=persist_defaults)
 
     def default_id(self, dialect: str, suggested: str = "") -> str:
         identifier = suggested or {"gemini_generate_content": "google-level", "g4f": "g4f"}.get(dialect, "openai-compatible")

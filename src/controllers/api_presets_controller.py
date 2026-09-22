@@ -13,7 +13,6 @@ from core.services import use
 from services.contracts import ApiPresetService, ProtocolBuilderService, SettingsService
 from main_logger import logger
 
-from utils import _
 import threading
 from core.task_supervisor import task_supervisor
 import httpx
@@ -106,7 +105,14 @@ class ApiPresetsController(ApiPresetService):
         "tokens_per_second": 0.5,
     }
 
-    def __init__(self, http_transport: LLMHttpClient | None = None, *, model_settings_service=None, legacy_generation_settings=None):
+    def __init__(
+        self,
+        http_transport: LLMHttpClient | None = None,
+        *,
+        model_settings_service=None,
+        legacy_generation_settings=None,
+        migrate_legacy_settings: bool = True,
+    ):
         self.model_settings_service = model_settings_service or ModelSettingsService()
         self.event_bus = get_event_bus()
         self._close_lock = threading.Lock()
@@ -130,7 +136,8 @@ class ApiPresetsController(ApiPresetService):
         self._load_data()
         self._subscribe_to_events()
 
-        self._migrate_old_api_keys()
+        if migrate_legacy_settings:
+            self._migrate_old_api_keys()
         self._ensure_default_preset()
         self._migrate_model_settings(legacy_generation_settings)
 
@@ -1201,6 +1208,8 @@ class ApiPresetsController(ApiPresetService):
 
         if not p_tpl or not p_tpl.test_url:
             logger.warning(f"No test_url for preset {preset_id} and base {base_id}")
+            from utils import _
+
             self.event_bus.emit(Events.ApiPresets.TEST_FAILED, {
                 "id": preset_id,
                 "error": "no_test_url",

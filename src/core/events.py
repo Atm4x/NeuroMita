@@ -106,9 +106,10 @@ class EventSubscription:
 class EventBus:
     """Non-blocking fact bus with isolated critical and ordered channels."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, dispatcher_lanes: int = 4) -> None:
         self._subscribers: Dict[str, List[Any]] = {}
         self._lock = threading.RLock()
+        self._dispatcher_lanes = max(1, int(dispatcher_lanes))
         self._running = True
         self._open_dispatchers()
         self._dropped = 0
@@ -116,7 +117,7 @@ class EventBus:
     def _open_dispatchers(self) -> None:
         self._critical = SerialDispatcher(
             "event-critical",
-            lanes=4,
+            lanes=self._dispatcher_lanes,
             capacity_per_lane=4096,
         )
         self._commands = SerialDispatcher(
@@ -126,7 +127,7 @@ class EventBus:
         )
         self._ordered = SerialDispatcher(
             "event-ordered",
-            lanes=8,
+            lanes=self._dispatcher_lanes,
             capacity_per_lane=4096,
         )
 
@@ -418,11 +419,11 @@ _event_bus_shutdown = False
 _event_bus_lifecycle_lock = threading.RLock()
 
 
-def get_event_bus() -> EventBus:
+def get_event_bus(*, dispatcher_lanes: int = 4) -> EventBus:
     global _global_event_bus
     with _event_bus_lifecycle_lock:
         if _global_event_bus is None:
-            _global_event_bus = EventBus()
+            _global_event_bus = EventBus(dispatcher_lanes=dispatcher_lanes)
             if _event_bus_shutdown:
                 _global_event_bus.shutdown()
         return _global_event_bus

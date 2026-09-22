@@ -16,10 +16,10 @@ from services.settings_service import SettingsManagerService
 class SettingsController:
     """Владелец SettingsManager. Регистрирует SettingsService."""
 
-    def __init__(self, config_path):
+    def __init__(self, config_path, *, dispatcher_lanes: int = 4):
         self.config_path = config_path
         self.event_bus = get_event_bus()
-        self.settings = SettingsManager(self.config_path)
+        self.settings = SettingsManager(self.config_path, dispatcher_lanes=dispatcher_lanes)
 
         self.settings_service = services().register(
             SettingsService, SettingsManagerService(self.settings), replace=True

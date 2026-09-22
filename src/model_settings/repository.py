@@ -15,8 +15,9 @@ from .schema import SchemaError, SettingsSchema
 class SchemaRepository:
     """Versioned JSON catalog; bundled resources also work inside a zipapp."""
 
-    def __init__(self, directory: Path | None = None):
+    def __init__(self, directory: Path | None = None, *, persist_defaults: bool = True):
         self.directory = directory if directory is not None else settings_path("APIModelSchemas")
+        self.persist_defaults = bool(persist_defaults)
         self._lock = RLock()
         self._signature = None
         self._cached = {}
@@ -24,7 +25,6 @@ class SchemaRepository:
 
     def catalog(self) -> dict[str, SettingsSchema]:
         with self._lock:
-            self.directory.mkdir(parents=True, exist_ok=True)
             if self._defaults is None:
                 bundled = files("model_settings").joinpath("defaults")
                 self._defaults = {}
@@ -33,9 +33,9 @@ class SchemaRepository:
                         schema = SettingsSchema.from_dict(json.loads(resource.read_text(encoding="utf-8")))
                         self._defaults[schema.data["id"]] = schema
                         destination = self.directory / resource.name
-                        if not destination.exists():
+                        if self.persist_defaults and not destination.exists():
                             self._write(destination, schema.data)
-            paths = sorted(self.directory.glob("*.json"))
+            paths = sorted(self.directory.glob("*.json")) if self.directory.exists() else []
             signature = tuple((path.name, path.stat().st_mtime_ns, path.stat().st_size) for path in paths)
             if signature == self._signature:
                 return deepcopy(self._cached)

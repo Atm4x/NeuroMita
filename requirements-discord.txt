@@ -1,0 +1,8 @@
+# Minimal shared LLM runtime and Discord adapter. Keep this list separate
+# from requirements.txt: VPS deployments must not install desktop/audio/ML packages.
+discord.py>=2.4,<3
+httpx==0.27.0
+h2>=4.1,<5
+pydantic==2.10.6
+colorlog==6.9.0
+psutil>=6,<8

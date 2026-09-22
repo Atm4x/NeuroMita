@@ -61,6 +61,15 @@ def test_timeout_policy_separates_network_phases_and_scales_large_uploads():
     assert large.write <= 180.0
 
 
+def test_provider_errors_share_safe_sensitive_value_masking():
+    from handlers.llm_providers.errors import mask_sensitive
+
+    assert mask_sensitive("https://api.test/?api_key=abc&access_token=xyz") == (
+        "https://api.test/?api_key=***&access_token=***"
+    )
+    assert mask_sensitive("Authorization: Bearer secret-token") == "Authorization: Bearer ***"
+
+
 def test_localhost_uses_fast_connect_timeout_without_reducing_stream_read_budget():
     req = _request("http://127.0.0.1:11434/v1/chat/completions")
     req.extra["http_read_timeout_seconds"] = 300

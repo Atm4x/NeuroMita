@@ -33,7 +33,7 @@ class SettingsManager:
     _fallback_mtime: float | None = None
     _fallback_lock = threading.RLock()
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, *, dispatcher_lanes: int = 4):
         self.config_path = os.path.abspath(config_path)
         self._save_queue: "queue.Queue[object]" = queue.Queue(maxsize=1)
         self._stop_lock = threading.Lock()
@@ -41,7 +41,11 @@ class SettingsManager:
 
         loaded = self._read_settings_file()
         contour_migration = migrate_update_contour(loaded, config_path=self.config_path)
-        self.registry = SettingsRegistry(loaded, on_mutated=self._schedule_save)
+        self.registry = SettingsRegistry(
+            loaded,
+            on_mutated=self._schedule_save,
+            dispatcher_lanes=dispatcher_lanes,
+        )
         self.settings = self.registry
         SettingsManager.instance = self
 

@@ -55,6 +55,7 @@ class SettingsRegistry(MutableMapping[str, Any]):
         initial: dict[str, Any] | None = None,
         *,
         on_mutated: Callable[[], None] | None = None,
+        dispatcher_lanes: int = 4,
     ) -> None:
         self._lock = threading.RLock()
         self._values: dict[str, Any] = dict(initial or {})
@@ -67,7 +68,7 @@ class SettingsRegistry(MutableMapping[str, Any]):
         self._on_mutated = on_mutated
         self._dispatcher = SerialDispatcher(
             f"settings-observers-{id(self):x}",
-            lanes=4,
+            lanes=max(1, int(dispatcher_lanes)),
             capacity_per_lane=0,
         )
         self._pending_listener_changes: dict[int, deque[SettingChange]] = {}

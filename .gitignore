@@ -1,6 +1,10 @@
 *.pyz
 __pycache__
 /.idea
+/.venv-discord/
+
+# Discord Lite credentials, configuration, and conversation storage.
+/DiscordData/
 build_VinerX.py
 build.env
 .req_hash

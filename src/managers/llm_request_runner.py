@@ -19,7 +19,6 @@ from handlers.llm_providers.errors import (
     build_provider_error,
     coerce_provider_error,
 )
-from utils import _, save_combined_messages
 
 from managers.api_preset_resolver import ApiPresetResolver, PresetSettings
 from handlers.llm_providers.base import LLMResponse, StreamCallback
@@ -48,6 +47,9 @@ class LLMRequestRunner:
         settings: Any,
         preset_resolver: ApiPresetResolver,
         event_bus: Any,
+        *,
+        provider_names: tuple[str, ...] | None = None,
+        lazy_providers: bool = False,
     ):
         self.settings = settings
         self.preset_resolver = preset_resolver
@@ -56,7 +58,10 @@ class LLMRequestRunner:
         self._shutdown_event = threading.Event()
         self.last_error = None
         self._abort_chain = False
-        self.provider_manager = ProviderManager()
+        self.provider_manager = ProviderManager(
+            provider_names=provider_names,
+            lazy=lazy_providers,
+        )
 
     @property
     def last_error(self) -> Optional[LLMProviderError]:
@@ -201,6 +206,8 @@ class LLMRequestRunner:
 
             if self._debug_dumps_enabled():
                 try:
+                    from utils import save_combined_messages
+
                     _base = os.environ.get("NEUROMITA_BASE_DIR", "")
                     _log_path = os.path.join(_base, "SavedMessages", "last_attempt_log") if _base else "SavedMessages/last_attempt_log"
                     executors().try_submit(Pools.DEBUG_DUMP, save_combined_messages, list(messages), _log_path)
@@ -341,6 +348,8 @@ class LLMRequestRunner:
                 )
                 self._abort_chain = not retryable_before_response
                 logger.debug("%s %s", preset_tag, last_error_message)
+                from utils import _
+
                 self.last_error = LLMProviderError(
                     provider=getattr(req, "provider_name", "unknown"),
                     friendly_message=_("Ошибка сети - Сервер не ответил вовремя.", "Network error - The server did not respond in time."),

@@ -37,17 +37,7 @@ except Exception:
 from utils.gpu_utils import check_gpu_provider
 
 
-_SENSITIVE_PARAM_RE = re.compile(r'((?:api[_-]?)?key|access_token|token)=([^&\s#"\']+)', re.IGNORECASE)
-_BEARER_RE = re.compile(r'(Bearer\s+)([A-Za-z0-9._\-]+)', re.IGNORECASE)
-
-
-def mask_sensitive(text):
-    if not text:
-        return text
-    s = str(text)
-    s = _SENSITIVE_PARAM_RE.sub(lambda m: f"{m.group(1)}=***", s)
-    s = _BEARER_RE.sub(lambda m: f"{m.group(1)}***", s)
-    return s
+from core.sensitive import mask_sensitive
 
 
 # =============================== Базовые утилиты ===============================
