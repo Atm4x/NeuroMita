@@ -1729,7 +1729,7 @@ class SandboxPage(QWidget):
         model_settings_btn.setFixedSize(28, 28)
         model_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         model_settings_btn.setToolTip(_("Выбрать модель для персонажа", "Choose the character's model"))
-        model_settings_btn.clicked.connect(lambda: self._jump_to_settings("characters"))
+        model_settings_btn.clicked.connect(lambda: self._jump_to_settings("api"))
         _combo_row(active_layout, _("Модель", "Model"), model_combo,
                    trailing=model_settings_btn)
         layout.addWidget(active_strip)

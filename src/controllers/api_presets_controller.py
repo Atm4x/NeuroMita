@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from core.app_paths import settings_path
 from core.events import get_event_bus, Events, Event
 from core.services import use
-from services.contracts import ApiPresetService, ProtocolBuilderService
+from services.contracts import ApiPresetService, ProtocolBuilderService, SettingsService
 from main_logger import logger
 
 from utils import _
@@ -131,7 +131,35 @@ class ApiPresetsController(ApiPresetService):
         self._subscribe_to_events()
 
         self._migrate_old_api_keys()
+        self._ensure_default_preset()
         self._migrate_model_settings(legacy_generation_settings)
+
+    def _ensure_default_preset(self) -> None:
+        """Keep the persisted active preset valid when presets are available."""
+        try:
+            settings = use(SettingsService)
+        except Exception:
+            settings = None
+        if settings is None:
+            return
+
+        configured = settings.get("LAST_API_PRESET_ID", None)
+        try:
+            configured_id = int(configured)
+        except (TypeError, ValueError):
+            configured_id = None
+
+        if configured_id in self.presets or configured_id in self.templates:
+            self.current_preset_id = configured_id
+            return
+
+        for preset_id in self.presets_order:
+            if preset_id in self.presets:
+                settings.update("LAST_API_PRESET_ID", int(preset_id))
+                settings.save_settings()
+                self.current_preset_id = int(preset_id)
+                logger.info("Selected the first configured API preset as default: %s", preset_id)
+                return
 
     def _migrate_model_settings(self, legacy_settings=None):
         changed = False

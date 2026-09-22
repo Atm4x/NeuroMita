@@ -196,8 +196,16 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         self.event_bus.subscribe(Events.ApiPresets.PRESET_SAVED, self._on_preset_catalog_changed, weak=False)
         self.event_bus.subscribe(Events.ApiPresets.PRESET_DELETED, self._on_preset_catalog_changed, weak=False)
 
-    def _on_preset_catalog_changed(self, _event) -> None:
+    def _on_preset_catalog_changed(self, event) -> None:
         self._settings_data.clear(API_PROVIDER_NAMES)
+        if getattr(event, "name", None) == Events.ApiPresets.PRESET_SAVED:
+            try:
+                saved_id = int((event.data or {}).get("id"))
+            except (TypeError, ValueError):
+                saved_id = None
+            if saved_id is not None:
+                self._pending_select_id = saved_id
+                self._selection_retry_count = 0
         self.reload_presets_async()
 
     def close(self) -> None:
