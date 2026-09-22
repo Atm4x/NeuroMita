@@ -310,6 +310,7 @@ def build_api_settings_ui(self, parent_layout):
     configuration_scroll.setWidget(configuration_body)
     _build_protocol(self, content)
     _build_routing(self, content)
+    _build_fallbacks(self, content)
     content.addStretch(1)
     _build_retained_state(self, root)
     scroll.setWidget(connection_body)
@@ -374,13 +375,25 @@ def _build_protocol(self, layout):
 
 
 def _build_retained_state(self, parent):
-    self.fallback_editor = FallbackChainEditor(parent)
-    self.fallback_editor.hide()
     for name in ("remove_preset_btn", "rename_preset_btn", "copy_preset_btn", "move_up_btn", "move_down_btn"):
         button = QPushButton(parent)
         button.hide()
         button.setEnabled(False)
         setattr(self, name, button)
+
+
+def _build_fallbacks(self, layout):
+    self.fallback_providers_section = CollapsibleSection(
+        _("Резервные провайдеры", "Fallback providers"),
+        icon_name="fa5s.random",
+        subtitle=_(
+            "Используются по очереди, если основной провайдер не ответил",
+            "Used in order when the primary provider does not respond",
+        ),
+    )
+    self.fallback_editor = FallbackChainEditor(self.fallback_providers_section)
+    self.fallback_providers_section.add_widget(self.fallback_editor)
+    layout.addWidget(self.fallback_providers_section)
 
 
 def _build_completer(self):
