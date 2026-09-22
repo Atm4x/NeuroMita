@@ -162,6 +162,11 @@ class _ReminderTimer(Tool):
         return "timer scheduled"
 
 
+class _FailingReminderTimer(_ReminderTimer):
+    def run(self, **_kwargs):
+        return "[timer] Некорректный delay_seconds: invalid"
+
+
 class _ToolModel:
     def __init__(self):
         self.tool_manager = ToolManager()
@@ -173,6 +178,9 @@ class _ToolModel:
 
 
 class _ModelHarness:
+    _tool_result_is_error = staticmethod(ModelController._tool_result_is_error)
+    _finalize_structured_response = ModelController._finalize_structured_response
+
     def __init__(self):
         self.settings = _Settings()
         self.event_bus = _Bus()
@@ -183,6 +191,9 @@ class _ModelHarness:
 
     def _split_response_thinking(self, response):
         return response.text, ""
+
+    def _store_last_usage(self, *_args, **_kwargs):
+        return None
 
     def _process_structured_output(self, **_kwargs):
         return ChatGenerationResult(text="done", character_id="Crazy")
@@ -504,11 +515,67 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
             preset_id=None,
             enabled_tools=["reminder"],
             tool_depth=0,
+            structured_parse_level="simple_repair",
+            control_plane_trusted=False,
         )
 
         self.assertEqual(result.text, "Counting")
-        self.assertEqual(result.structured_parse_level, "tool_timer")
+        self.assertEqual(result.structured_parse_level, "simple_repair")
+        self.assertFalse(result.control_plane_trusted)
         self.assertEqual(len(harness.model.responses), 1)
+        self.assertTrue(any(name == Events.History.MESSAGE_COMPLETED for name, _ in harness.event_bus.events))
+
+    def test_failed_timer_tool_uses_normal_followup_generation(self):
+        harness = _ModelHarness()
+        harness.model.tool_manager.register(_FailingReminderTimer())
+        structured = StructuredResponse(
+            segments=[ResponseSegment(text="Counting")],
+            tool_call=ToolCall(name="reminder", args={"action": "timer"}),
+        )
+
+        result = ModelController._handle_tool_call(
+            harness,
+            structured=structured,
+            visible_raw='{"segments":[{"text":"Counting"}]}',
+            think_text="",
+            usage=None,
+            response_model="model",
+            response_provider="provider",
+            pricing_info=None,
+            char=object(),
+            char_id="Crazy",
+            char_name="Crazy",
+            origin_message_id=None,
+            capabilities={},
+            policy=RequestPolicy(write_to_history=False),
+            sender="Player",
+            participants=[],
+            user_input="count",
+            image_data=[],
+            image_source="",
+            req_id=None,
+            task_uid=None,
+            event_type="chat",
+            combined_messages=[],
+            preset_id=None,
+            enabled_tools=["reminder"],
+            tool_depth=0,
+        )
+
+        self.assertEqual(result.text, "done")
+        self.assertEqual(harness.model.responses, [])
+
+    def test_timer_add_takes_precedence_over_timer_tool(self):
+        structured = StructuredResponse(
+            segments=[ResponseSegment(text="Counting")],
+            timer_add=[{"delay_seconds": 5, "instruction": "Continue"}],
+            tool_call=ToolCall(
+                name="reminder",
+                args={"action": "timer", "delay_seconds": 30, "instruction": "Later"},
+            ),
+        )
+
+        self.assertTrue(ModelController._timer_add_takes_precedence(structured))
 
     def test_enabled_tool_schema_uses_requested_priority(self):
         manager = ToolManager()

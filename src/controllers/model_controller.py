@@ -2162,14 +2162,9 @@ class ModelController(GenerationService, ModelStateService):
                 except Exception:
                     voice_profile = None
         # --- Tool call path ---
-        if (
-            structured.tool_call
-            and structured.tool_call.name == "reminder"
-            and str((structured.tool_call.args or {}).get("action", "")).strip().lower() == "timer"
-            and structured.timer_add
-        ):
+        if self._timer_add_takes_precedence(structured):
             logger.info(
-                "[ModelController] Ignoring reminder.timer because timer_add already schedules the same turn."
+                "[ModelController] timer_add takes precedence over reminder.timer in the same response."
             )
             structured.tool_call = None
         _active_tools = enabled_tools or []
@@ -2218,6 +2213,9 @@ class ModelController(GenerationService, ModelStateService):
                 image_descriptions=image_descriptions,
                 voice_profile=voice_profile,
                 dialogue=dialogue,
+                created_memory_ids=created_memory_ids,
+                structured_parse_level=parse_outcome.parse_level,
+                control_plane_trusted=parse_outcome.control_plane_trusted,
             )
 
         # A tool-call response is only an intermediate turn. Commit its working
@@ -2260,6 +2258,69 @@ class ModelController(GenerationService, ModelStateService):
         result_dict["_raw_json"] = visible_raw
         final_text = result_dict["response"]
 
+        return self._finalize_structured_response(
+            structured=structured,
+            result_dict=result_dict,
+            final_text=final_text,
+            usage=usage,
+            response_model=response_model,
+            response_provider=response_provider,
+            pricing_info=pricing_info,
+            char=char,
+            char_id=char_id,
+            origin_message_id=origin_message_id,
+            policy=policy,
+            sender=sender,
+            participants=participants,
+            user_input=user_input,
+            image_data=image_data,
+            image_source=image_source,
+            image_descriptions=image_descriptions,
+            req_id=req_id,
+            task_uid=task_uid,
+            trace_id=trace_id,
+            event_type=event_type,
+            think_text=think_text,
+            sample_id=sample_id,
+            dialogue=dialogue,
+            voice_profile=voice_profile,
+            created_memory_ids=created_memory_ids,
+            structured_parse_level=parse_outcome.parse_level,
+            control_plane_trusted=parse_outcome.control_plane_trusted,
+        )
+
+    def _finalize_structured_response(
+        self,
+        *,
+        structured,
+        result_dict: dict,
+        final_text: str,
+        usage: Optional[LLMUsage],
+        response_model: str,
+        response_provider: str,
+        pricing_info,
+        char,
+        char_id: str,
+        origin_message_id: str | None,
+        policy,
+        sender: str,
+        participants: list,
+        user_input: str,
+        image_data: list,
+        image_source: str,
+        image_descriptions: dict[str, str] | None,
+        req_id: str | None,
+        task_uid: str | None,
+        trace_id: str | None,
+        event_type: str,
+        think_text: str,
+        sample_id: str | None,
+        dialogue: Any,
+        voice_profile,
+        created_memory_ids: list,
+        structured_parse_level: str,
+        control_plane_trusted: bool,
+    ) -> ChatGenerationResult:
         if bool(self.settings.get("REPLACE_IMAGES_WITH_PLACEHOLDERS", False)):
             final_text = re.sub(
                 r'https?://\S+\.(?:png|jpg|jpeg|gif|bmp)|data:image/\S+;base64,\S+',
@@ -2276,20 +2337,17 @@ class ModelController(GenerationService, ModelStateService):
             cost_fallback_currency=getattr(pricing_info, "currency", None),
             cost_fallback_source=getattr(pricing_info, "source", None),
         )
-
-        # Extract image_description from structured response (inline description for structured mode)
-        _structured_image_descriptions: dict[str, str] | None = dict(image_descriptions or {}) or None
+        structured_image_descriptions: dict[str, str] | None = dict(image_descriptions or {}) or None
         if getattr(structured, "image_description", None):
-            _detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
-            if _structured_image_descriptions is None:
-                _structured_image_descriptions = {}
-            _structured_image_descriptions[_detail] = structured.image_description.strip()
-            logger.debug(f"[ModelController][{char_id}] Structured image_description captured ({_detail}).")
+            detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
+            if structured_image_descriptions is None:
+                structured_image_descriptions = {}
+            structured_image_descriptions[detail] = structured.image_description.strip()
 
         assistant_message_id = ""
         if policy.write_to_history:
-            history_dict = {k: v for k, v in result_dict.items()
-                            if not k.startswith("_") or k == "_raw_json"}
+            history_dict = {key: value for key, value in result_dict.items()
+                            if not key.startswith("_") or key == "_raw_json"}
             with perf_span(trace_id, "generation.history_write"):
                 history_write = self.event_writer.write_turn(
                     responder_character_id=char_id,
@@ -2298,7 +2356,7 @@ class ModelController(GenerationService, ModelStateService):
                     user_input=user_input,
                     image_data=image_data,
                     image_source=image_source,
-                    image_descriptions=_structured_image_descriptions,
+                    image_descriptions=structured_image_descriptions,
                     req_id=req_id,
                     origin_message_id=origin_message_id,
                     assistant_text=final_text,
@@ -2322,25 +2380,21 @@ class ModelController(GenerationService, ModelStateService):
             cost_fallback_currency=getattr(pricing_info, "currency", None),
             cost_fallback_source=getattr(pricing_info, "source", None),
         )
-
         self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
 
-        # Build inline_graph_json from structured entities/relations (if graph extraction enabled)
         inline_graph_json: Optional[str] = None
         if (bool(self.settings.get("RAG_ENABLED", False))
                 and bool(self.settings.get("GRAPH_EXTRACTION_ENABLED", False))
                 and (structured.entities or structured.relations)):
             try:
                 import json as _json
-                graph_payload = {
+                inline_graph_json = _json.dumps({
                     "entities": list(structured.entities) if structured.entities else [],
                     "relations": list(structured.relations) if structured.relations else [],
-                }
-                inline_graph_json = _json.dumps(graph_payload, ensure_ascii=False)
-            except Exception as _ge:
-                logger.warning(f"[ModelController] Failed to build graph JSON from structured entities/relations: {format_exception(_ge)}")
+                }, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning("[ModelController] Failed to build graph JSON: %s", format_exception(exc))
 
-        # Notify graph extraction (and any future subscribers).
         self.event_bus.emit(Events.History.MESSAGE_COMPLETED, {
             "character_id": char_id,
             "character_ref": char,
@@ -2351,7 +2405,6 @@ class ModelController(GenerationService, ModelStateService):
             "memories_already_tagged": True,
             "from_structured_output": True,
         })
-
         return ChatGenerationResult(
             text=final_text,
             character_id=char_id,
@@ -2360,13 +2413,28 @@ class ModelController(GenerationService, ModelStateService):
             structured=result_dict,
             message_id=assistant_message_id,
             sample_id=sample_id or "",
-            structured_parse_level=parse_outcome.parse_level,
-            control_plane_trusted=parse_outcome.control_plane_trusted,
+            structured_parse_level=structured_parse_level,
+            control_plane_trusted=control_plane_trusted,
         )
 
     # ---------------------------------------------------------------------
     # Tool call handler (structured output tools)
     # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _tool_result_is_error(tool_result: Any) -> bool:
+        result = str(tool_result or "").lstrip().lower()
+        return result.startswith(("[tool error", "[timer]", "[reminder] ошибка", "[reminder] error"))
+
+    @staticmethod
+    def _timer_add_takes_precedence(structured) -> bool:
+        tool_call = getattr(structured, "tool_call", None)
+        return bool(
+            getattr(structured, "timer_add", None)
+            and tool_call
+            and tool_call.name == "reminder"
+            and str((tool_call.args or {}).get("action", "")).strip().lower() == "timer"
+        )
 
     def _handle_tool_call(
         self,
@@ -2401,6 +2469,9 @@ class ModelController(GenerationService, ModelStateService):
         image_descriptions: dict[str, str] | None = None,
         voice_profile=None,
         dialogue: Any = None,
+        created_memory_ids: list | None = None,
+        structured_parse_level: str = "",
+        control_plane_trusted: bool = False,
     ) -> Optional[ChatGenerationResult]:
         """
         Handle a tool_call from a structured response:
@@ -2439,7 +2510,7 @@ class ModelController(GenerationService, ModelStateService):
         )
 
         first_assistant_message_id = ""
-        if policy.write_to_history:
+        if policy.write_to_history and not is_autonomous_timer:
             history_write = self.event_writer.write_turn(
                 responder_character_id=char_id,
                 sender=sender,
@@ -2464,7 +2535,8 @@ class ModelController(GenerationService, ModelStateService):
             self._publish_history_commit(history_write, character_id=char_id)
 
         # Emit first response to UI (shows "I'll check that" message)
-        self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
+        if not is_autonomous_timer:
+            self.event_bus.emit(Events.Model.ON_SUCCESSFUL_RESPONSE)
         self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
             "role": "assistant",
             "response": first_text if first_text else "...",
@@ -2506,17 +2578,37 @@ class ModelController(GenerationService, ModelStateService):
             "speaker_name": "",
         }, delivery=EventDelivery.ORDERED)
 
-        if is_autonomous_timer:
-            logger.info("[ModelController] Timer tool completes the current turn without a follow-up generation.")
-            return ChatGenerationResult(
-                text=first_text,
-                character_id=char_id,
+        if is_autonomous_timer and not self._tool_result_is_error(tool_result):
+            logger.info("[ModelController] Timer tool completed; finalizing the current structured turn.")
+            return self._finalize_structured_response(
+                structured=structured,
+                result_dict=result_dict,
+                final_text=first_text,
+                usage=usage,
+                response_model=response_model,
+                response_provider=response_provider,
+                pricing_info=pricing_info,
+                char=char,
+                char_id=char_id,
+                origin_message_id=origin_message_id,
+                policy=policy,
+                sender=sender,
+                participants=participants,
+                user_input=user_input,
+                image_data=image_data,
+                image_source=image_source,
+                image_descriptions=image_descriptions,
+                req_id=req_id,
+                task_uid=task_uid,
+                trace_id=trace_id,
+                event_type=event_type,
+                think_text=think_text,
+                sample_id=sample_id,
+                dialogue=dialogue,
                 voice_profile=voice_profile,
-                think=think_text or None,
-                structured=result_dict,
-                message_id=first_assistant_message_id,
-                structured_parse_level="tool_timer",
-                control_plane_trusted=True,
+                created_memory_ids=list(created_memory_ids or []),
+                structured_parse_level=structured_parse_level,
+                control_plane_trusted=control_plane_trusted,
             )
 
         # Build tool result message(s) for the second LLM call.
