@@ -81,6 +81,24 @@ def parse_structured_response_with_meta(
             f"Expected JSON object at top level, got {type(data).__name__}"
         )
 
+    # Compatibility fallback for older or unconstrained model output. Keep this
+    # out of StructuredResponse so providers never advertise top-level commands.
+    response_commands = data.pop("commands", None)
+    segments = data.get("segments")
+    if response_commands and isinstance(segments, list) and segments:
+        if not any(
+            isinstance(segment, dict) and segment.get("commands")
+            for segment in segments
+        ) and isinstance(segments[0], dict):
+            commands = (
+                response_commands
+                if isinstance(response_commands, list)
+                else [response_commands]
+            )
+            segments = list(segments)
+            segments[0] = {**segments[0], "commands": commands}
+            data["segments"] = segments
+
     if parse_level != "direct":
         logger.warning(f"[StructuredResponseParser] JSON repaired via: {parse_level}")
 
