@@ -408,6 +408,10 @@ class ChessGame(GameInterface):
         self.character.set_variable("GAME_CHESS_IS_AUTO", latest_state_data.get('is_auto', self.is_auto))
         self.character.set_variable("GAME_CHESS_IS_CHEAT", latest_state_data.get('is_cheat', self.is_cheat))
         self.character.set_variable("GAME_STATE_LAST_MOVE_SAN", latest_state_data.get('last_move_san', 'Нет (начало игры)'))
+        self.character.set_variable(
+            "GAME_STATE_RECENT_MOVE_HISTORY",
+            "\n".join(latest_state_data.get("recent_move_history", [])) or "Нет ходов",
+        )
         self.character.set_variable("GAME_STATE_IS_LLM_LAST_MOVER", last_mover_color == llm_actual_color)
         self.character.set_variable("GAME_STATE_FEN", latest_state_data.get('fen', 'N/A'))
         self.character.set_variable("GAME_STATE_BOARD_ASCII", latest_state_data.get('board_ascii', None))

@@ -13,6 +13,7 @@ ENDIF
 SET prompt_text = prompt_text + f"[Sides] You: {GAME_STATE_LLM_COLOR_TEXT}; player: {GAME_STATE_PLAYER_COLOR_TEXT}.\n"
 SET prompt_text = prompt_text + "[Voice] Do not mention Maia or the game engine unless the player explicitly asks about it.\n"
 SET prompt_text = prompt_text + f"[Last move] {GAME_STATE_LAST_MOVE_SAN}.\n"
+SET prompt_text = prompt_text + "[Recent move history: up to 8 moves per side, oldest first]\n" + GAME_STATE_RECENT_MOVE_HISTORY + "\n"
 
 IF GAME_STATE_BOARD_ASCII != None THEN
     SET prompt_text = prompt_text + "[Board]\n```\n" + GAME_STATE_BOARD_ASCII + "\n```\n"

@@ -596,6 +596,7 @@ class ChessGameController:
             "is_auto": self.is_auto,
             "is_cheat": self.is_cheat,
             "last_move_san": current_last_move_san if current_last_move_san else "N/A",
+            "recent_move_history": self.board_logic.get_recent_move_history(8),
             "timestamp": time.time()
         }
         if error: state_data["error"] = format_exception(error)
