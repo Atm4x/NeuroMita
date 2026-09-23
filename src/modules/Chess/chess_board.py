@@ -598,11 +598,21 @@ class ChessGuiTkinter(QMainWindow):
     def show_game_over_message_slot(self, message):
         if self.is_closing: return
         self.update_status_bar_slot(message)
-        self._request_game_over_reaction(message)
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle(_("Игра окончена", "Game over"))
         msg_box.setText(message)
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        player_lost = self._did_player_lose()
+        if player_lost:
+            new_game_button = msg_box.addButton(
+                _("Новая игра", "New game"), QMessageBox.ButtonRole.AcceptRole
+            )
+            close_button = msg_box.addButton(
+                _("Закрыть", "Close"), QMessageBox.ButtonRole.RejectRole
+            )
+            msg_box.setDefaultButton(close_button)
+            msg_box.setEscapeButton(close_button)
+        else:
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg_box.setStyleSheet(f"""
             QMessageBox {{ background-color: {ChessGameModelTkStyles.COLOR_PANEL_BG}; }}
             QMessageBox QLabel {{
@@ -623,6 +633,27 @@ class ChessGuiTkinter(QMainWindow):
             QPushButton:hover {{ background-color: {ChessGameModelTkStyles.COLOR_BUTTON_HOVER_BG}; }}
         """)
         msg_box.exec()
+        if player_lost:
+            if msg_box.clickedButton() is new_game_button:
+                self.game_controller.new_game()
+                self._request_game_over_reaction(message, "restart")
+            else:
+                self._request_game_over_reaction(message, "close")
+                self.is_closing = True
+                self.close()
+        else:
+            self._request_game_over_reaction(message)
+
+    def _did_player_lose(self):
+        if not self.game_controller:
+            return False
+        board = self.game_controller.get_current_board_object_for_gui()
+        player_color = (
+            chess.WHITE
+            if self.game_controller.get_player_color_is_white_for_gui()
+            else chess.BLACK
+        )
+        return board.is_checkmate() and board.turn == player_color
 
     def update_status_bar_slot(self, message):
         if self.is_closing: return
@@ -736,11 +767,14 @@ class ChessGuiTkinter(QMainWindow):
         except Exception as exc:
             print(f"GUI Error: Could not queue manual Mita chess turn request: {format_exception(exc)}")
 
-    def _request_game_over_reaction(self, outcome):
+    def _request_game_over_reaction(self, outcome, choice=None):
         if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_over", "outcome": str(outcome or "")})
+            event = {"event": "player_game_over", "outcome": str(outcome or "")}
+            if choice:
+                event["choice"] = choice
+            self.reaction_queue.put(event)
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess game-over reaction: {format_exception(exc)}")
 

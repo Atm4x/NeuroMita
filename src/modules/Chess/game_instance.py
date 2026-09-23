@@ -197,9 +197,26 @@ class ChessGame(GameInterface):
 
     def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
         outcome = str(event.get("outcome") or "The chess game has ended.")
+        choice = event.get("choice")
+        if choice == "restart":
+            instruction = (
+                f"[Chess] The player lost: {outcome}. They chose to start a new game. "
+                "React briefly in character to the defeat and their rematch choice. "
+                "The new game has started and the player moves first; do not make a move."
+            )
+        elif choice == "close":
+            instruction = (
+                f"[Chess] The player lost: {outcome}. They chose to close the game. "
+                "React briefly in character to the defeat and their decision to stop; "
+                "do not make a chess move."
+            )
+        else:
+            instruction = (
+                f"[Chess] The game has ended: {outcome}. "
+                "React briefly and naturally in character; do not make a chess move."
+            )
         self.request_character_reaction(
-            f"[Chess] The game has ended: {outcome}. "
-            "React briefly and naturally in character; do not make a chess move."
+            instruction
         )
 
 
