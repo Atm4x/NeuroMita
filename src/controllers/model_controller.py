@@ -86,6 +86,41 @@ def _render_tools_for_prompt(schema: list) -> str:
 _GRAPH_TAG_RE = re.compile(r"<graph>([\s\S]*?)</graph>", re.IGNORECASE)
 
 
+def _structured_parse_user_message(code: str) -> str:
+    messages = {
+        "structured_response_empty": _(
+            "Модель вернула пустой ответ.", "The model returned an empty response."
+        ),
+        "structured_json_truncated": _(
+            "Ответ модели оборвался: structured JSON не завершён.",
+            "The model response was truncated: structured JSON is incomplete.",
+        ),
+        "structured_json_invalid": _(
+            "Модель вернула повреждённый JSON, который не удалось разобрать.",
+            "The model returned malformed JSON that could not be parsed.",
+        ),
+        "structured_json_root_type": _(
+            "Модель вернула JSON неправильного формата.",
+            "The model returned JSON with an unexpected top-level type.",
+        ),
+        "structured_schema_validation_failed": _(
+            "Ответ модели является JSON, но не соответствует ожидаемой схеме NeuroMita.",
+            "The model response is valid JSON but does not match the expected NeuroMita schema.",
+        ),
+        "structured_missing_segments": _(
+            "В structured-ответе модели отсутствуют сегменты реплики.",
+            "The model's structured response has no reply segments.",
+        ),
+    }
+    return messages.get(
+        code,
+        _(
+            "Не удалось обработать structured-ответ модели.",
+            "The model's structured response could not be processed.",
+        ),
+    )
+
+
 def _strip_graph_tag(text: str) -> tuple[str, Optional[str]]:
     """Remove <graph>...</graph> from response, return (clean_text, json_str|None)."""
     m = _GRAPH_TAG_RE.search(text)
@@ -2156,19 +2191,23 @@ class ModelController(GenerationService, ModelStateService):
                 cost_fallback_source=getattr(pricing_info, "source", None),
             )
 
+            safe_message = _structured_parse_user_message(e.code)
+            error_details = {
+                "kind": "structured_response_error",
+                "code": e.code,
+                "stage": e.stage,
+                "message": safe_message,
+            }
+            if e.field:
+                error_details["field"] = e.field
+
             return ChatGenerationResult(
                 text="",
                 character_id=char_id,
                 voice_profile=None,
                 sample_id=sample_id or "",
-                error="Model response did not match the required response format",
-                error_details={
-                    "code": "structured_response_parse_failed",
-                    # Do not include the parser exception here: it may embed a
-                    # fragment of the raw provider payload, and task errors are
-                    # delivered to Unity.
-                    "message": "The model response could not be parsed as the required structured format.",
-                },
+                error=safe_message,
+                error_details=error_details,
                 structured_parse_level="rejected",
                 control_plane_trusted=False,
             )

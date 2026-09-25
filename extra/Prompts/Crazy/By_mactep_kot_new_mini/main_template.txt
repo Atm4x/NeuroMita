@@ -13,5 +13,6 @@ behavior_state=custom
 [<Context/mita_history.txt>]
 [<States/hello.txt>]
 [<../../Common/TimeAwareness.txt>]
+[<../../Common/Dialogue.txt>]
 [<../../Common/Security.txt>]
 [<../../Common/games.txt>]

@@ -16,7 +16,24 @@ from schemas.structured_response import (
 
 
 class StructuredResponseParseError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "structured_response_parse_failed",
+        stage: str = "parse",
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.field = field
+
+    def to_safe_payload(self) -> dict[str, str]:
+        payload = {"code": self.code, "stage": self.stage}
+        if self.field:
+            payload["field"] = self.field
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +62,9 @@ def parse_structured_response_with_meta(
     model_cls: Type[StructuredResponse] = StructuredResponse,
 ) -> StructuredParseOutcome:
     if not raw_text or not isinstance(raw_text, str):
-        raise StructuredResponseParseError("Empty or non-string response")
+        raise StructuredResponseParseError(
+            "Empty or non-string response", code="structured_response_empty", stage="input"
+        )
 
     cleaned, extraction_kind = _extract_json_string(raw_text)
 
@@ -62,8 +81,10 @@ def parse_structured_response_with_meta(
     if data is None:
         data, parse_level = _try_json_repair_lib(cleaned)
 
+    truncation_repair_attempted = False
     if data is None:
         closed = _close_truncated_json(cleaned)
+        truncation_repair_attempted = closed != cleaned
         data, parse_level = _try_json_loads(closed, level="truncation_close")
 
     if data is None:
@@ -73,12 +94,16 @@ def parse_structured_response_with_meta(
     if data is None:
         raise StructuredResponseParseError(
             f"All JSON repair attempts failed. "
-            f"First 300 chars: {cleaned[:300]}"
+            f"First 300 chars: {cleaned[:300]}",
+            code=("structured_json_truncated" if truncation_repair_attempted else "structured_json_invalid"),
+            stage="parse",
         )
 
     if not isinstance(data, dict):
         raise StructuredResponseParseError(
-            f"Expected JSON object at top level, got {type(data).__name__}"
+            f"Expected JSON object at top level, got {type(data).__name__}",
+            code="structured_json_root_type",
+            stage="parse",
         )
 
     # Compatibility fallback for older or unconstrained model output. Keep this
@@ -151,7 +176,9 @@ def parse_structured_response_with_meta(
             )
 
         raise StructuredResponseParseError(
-            "StructuredResponse has no segments (segments list is empty)"
+            "StructuredResponse has no segments (segments list is empty)",
+            code="structured_missing_segments",
+            stage="semantic",
         )
 
     logger.debug(
@@ -287,7 +314,9 @@ def _validate_with_coerce(data: dict, *, model_cls: Type[StructuredResponse]) ->
         except Exception as second_error:
             raise StructuredResponseParseError(
                 f"JSON does not match StructuredResponse schema "
-                f"(even after coercion): {format_exception(second_error)}"
+                f"(even after coercion): {format_exception(second_error)}",
+                code="structured_schema_validation_failed",
+                stage="schema",
             ) from first_error
 
 

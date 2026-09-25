@@ -870,11 +870,14 @@ class ChatController(ChatService, GenerationActivityService):
                 trace_status = "error"
                 trace_error_stage = "generation.empty_response"
                 if eff_policy.echo_to_ui:
-                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                    failed_event = {
                         "error": generation_error,
                         "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
                         "character_id": str(character_id or ""),
-                    })
+                    }
+                    if error_details:
+                        failed_event["error_details"] = error_details
+                    self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, failed_event)
                 return None
 
             effective_character_name = self._resolve_character_name(effective_character_id)

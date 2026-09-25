@@ -39,22 +39,24 @@ class ProjectInfoTests(unittest.TestCase):
         self.assertNotIn("code 23", wk)
         self.assertNotIn("код 23", wk)
 
-    def test_intents_are_gated_by_prompt_set_metadata(self):
+    def test_intents_support_is_not_a_required_prompt_set_declaration(self):
         script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")
         self.assertIn("IF support_intents == True THEN", script)
-
         prompt_sets = [
             path for path in PROMPTS.rglob("main_template.txt")
             if "Legacy" not in path.parts and "System" not in path.parts
         ]
         self.assertTrue(prompt_sets)
-        for path in prompt_sets:
-            text = path.read_text(encoding="utf-8")
-            self.assertRegex(
-                text,
-                r"(?im)^\s*support_intents\s*=\s*(?:true|false)\s*$",
-                f"prompt set must explicitly declare intent support: {path}",
-            )
+
+    def test_custom_clothing_prompt_uses_catalog_ids_and_typed_recolor(self):
+        prompt_root = PROMPTS / "Crazy" / "By_mactep_kot_new_mini"
+        behavior = (prompt_root / "Main" / "common_behavior.txt").read_text(encoding="utf-8")
+        response = (prompt_root / "Structural" / "response_structure.txt").read_text(encoding="utf-8")
+        self.assertIn("точные ID из блока Available Outfits", behavior)
+        self.assertIn("appearance.clothes.recolor", behavior)
+        self.assertIn("appearance.clothes.reset", behavior)
+        self.assertNotIn("ClothesColor", behavior)
+        self.assertNotIn("SchoolVariant1", response)
 
     def test_reasoning_gated_in_text_schema(self):
         script = (PROMPTS / "Structural" / "response_format_json.script").read_text(encoding="utf-8")

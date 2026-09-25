@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, List, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 
 from core.safe_eval import SafeEvalError, UnknownNameError, safe_eval_expression
@@ -192,7 +192,10 @@ class DslInterpreter:
         self._context_infos: List[str] = []
 
     def get_prompt_feature(self, name: str, default: Any = None) -> Any:
-        return self._prompt_features.get(str(name or "").strip().lower(), default)
+        normalized_name = str(name or "").strip().lower()
+        if normalized_name == "support_intents" and default is None:
+            default = True
+        return self._prompt_features.get(normalized_name, default)
 
     def get_context_infos(self) -> List[str]:
         """Volatile context blocks collected via ADD_CONTEXT_INFO this build."""
@@ -848,7 +851,12 @@ class DslInterpreter:
             content = content[1:]
         return content
 
-    def process_main_template(self, rel_path_main_template: str) -> tuple[List[str], List[str]]:
+    def process_main_template(
+        self,
+        rel_path_main_template: str,
+        *,
+        feature_overrides: Optional[Dict[str, Any]] = None,
+    ) -> tuple[List[str], List[str]]:
         blocks: List[str] = []
         sys_msgs: List[str] = []
         resolved_main_template_id: str = ""
@@ -883,6 +891,10 @@ class DslInterpreter:
                     self._prompt_features[feature_name.lower()] = (low == "true")
                 else:
                     self._prompt_features[feature_name.lower()] = low
+
+            self._prompt_features.setdefault("support_intents", True)
+            for feature_name, value in (feature_overrides or {}).items():
+                self._prompt_features[str(feature_name).strip().lower()] = value
 
             # Top-level includes may carry a placement marker: `[<@ path>]` routes
             # the whole file into the volatile active context (next to the request),

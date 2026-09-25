@@ -13,10 +13,42 @@ if str(PROJECT_SRC) not in sys.path:
 from utils.structured_response_parser import (
     parse_structured_response,
     parse_structured_response_with_meta,
+    StructuredResponseParseError,
 )
 
 
 class StructuredResponseParserCoerceTests(unittest.TestCase):
+    def test_empty_response_has_machine_readable_error(self) -> None:
+        with self.assertRaises(StructuredResponseParseError) as caught:
+            parse_structured_response("")
+        self.assertEqual(caught.exception.code, "structured_response_empty")
+        self.assertEqual(caught.exception.stage, "input")
+
+    def test_top_level_array_has_root_type_error(self) -> None:
+        with self.assertRaises(StructuredResponseParseError) as caught:
+            parse_structured_response("[]")
+        self.assertEqual(caught.exception.code, "structured_json_root_type")
+
+    def test_schema_validation_error_has_safe_field(self) -> None:
+        with self.assertRaises(StructuredResponseParseError) as caught:
+            parse_structured_response(json.dumps({"segments": [{"text": "ok"}], "attitude_change": {"secret": 1}}))
+        self.assertEqual(caught.exception.code, "structured_schema_validation_failed")
+        self.assertEqual(caught.exception.stage, "schema")
+        self.assertNotIn("input", caught.exception.to_safe_payload())
+
+    def test_missing_segments_has_machine_readable_error(self) -> None:
+        with self.assertRaises(StructuredResponseParseError) as caught:
+            parse_structured_response(json.dumps({"segments": []}))
+        self.assertEqual(caught.exception.code, "structured_missing_segments")
+
+    def test_invalid_json_does_not_put_raw_text_in_safe_payload(self) -> None:
+        marker = "SUPER_SECRET_RAW_MODEL_TEXT_123"
+        with self.assertRaises(StructuredResponseParseError) as caught:
+            parse_structured_response("{" + marker)
+        safe_payload = caught.exception.to_safe_payload()
+        self.assertEqual(caught.exception.code, "structured_json_truncated")
+        self.assertNotIn(marker, str(safe_payload))
+
     def test_scalar_segment_fields_are_coerced_to_lists(self) -> None:
         payload = {
             "segments": [

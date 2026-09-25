@@ -714,7 +714,7 @@ class PromptBuildResult:
     messages: List[Dict[str, Any]]
     history_messages: List[Dict[str, Any]]
     user_message: Optional[Dict[str, Any]]
-    support_intents: bool = False
+    support_intents: bool = True
 
 
 class PromptBuilderService(ABC):

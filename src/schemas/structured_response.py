@@ -224,10 +224,9 @@ class ToolCall(BaseModel):
 class SegmentIntent(BaseModel):
     """A structured intent Unity can consume (inventory, interactions, ...).
 
-    The field is exposed to the model only when the selected DSL main template
-    declares ``support_intents=True`` and a connected Unity runtime can execute
-    it. The parser still accepts and forwards valid intent objects for protocol
-    compatibility.
+    The field is available by default when a connected Unity runtime can execute
+    it. Prompt sets may explicitly disable it; L1 reactions always omit intents.
+    The parser accepts and forwards valid intent objects for protocol compatibility.
     """
 
     type: str = Field(..., description="Intent type identifier, e.g. 'inventory.collect'")
