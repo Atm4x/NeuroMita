@@ -36,7 +36,25 @@ REASONING_EFFORT_LEVELS = ("low", "medium", "high")
 def _next_response_format_fallback(payload: Dict[str, Any], error_message: str):
     """Return the next narrower response-format attempt for compatible APIs."""
     message = str(error_message or "").lower()
-    if "response_format" not in message and "json_schema" not in message and "json_object" not in message:
+    explicit_format_error = any(
+        signal in message
+        for signal in (
+            "response_format",
+            "response_schema",
+            "json_schema",
+            "json_object",
+        )
+    )
+    unsupported_terms = ("unsupported", "not supported", "does not support", "not allowed")
+    schema_error = (
+        any(signal in message for signal in ("schema", "properties", "structured"))
+        and any(term in message for term in unsupported_terms)
+    )
+    generation_schema_error = (
+        "generation_config" in message
+        and any(signal in message for signal in ("schema", "properties"))
+    )
+    if not (explicit_format_error or schema_error or generation_schema_error):
         return None
 
     response_format = payload.get("response_format")

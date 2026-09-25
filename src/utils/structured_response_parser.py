@@ -31,7 +31,12 @@ class StructuredParseOutcome:
 
     @property
     def repaired(self) -> bool:
-        return self.parse_level != "direct" or self.schema_coerced
+        return (
+            self.parse_level != "direct"
+            or self.schema_coerced
+            or bool(self.fallback_kind)
+            or self.extraction_kind not in {"raw_json", "markdown_json_fence"}
+        )
 
     @property
     def control_plane_trusted(self) -> bool:
@@ -64,6 +69,10 @@ def parse_structured_response_with_meta(
         data, parse_level = _try_json_loads(escaped, level="inner_quote_escape")
 
     if data is None:
+        closed = _close_truncated_json(cleaned)
+        data, parse_level = _try_json_loads(closed, level="truncation_close")
+
+    if data is None:
         tail_cleaned = _drop_incomplete_json_tail(cleaned)
         if tail_cleaned != cleaned:
             data, parse_level = _try_json_loads(
@@ -73,10 +82,6 @@ def parse_structured_response_with_meta(
 
     if data is None:
         data, parse_level = _try_json_repair_lib(cleaned)
-
-    if data is None:
-        closed = _close_truncated_json(cleaned)
-        data, parse_level = _try_json_loads(closed, level="truncation_close")
 
     if data is None:
         data, parse_level = _try_json_repair_lib(_close_truncated_json(cleaned),
@@ -677,11 +682,34 @@ def _extract_json_string(text: str) -> tuple[str, str]:
         text = text[brace_start:]
 
     if not text.endswith("}"):
-        brace_end = text.rfind("}")
-        if brace_end != -1:
-            if text[brace_end + 1:].strip():
-                extraction_kind = "embedded_json"
-            text = text[:brace_end + 1]
+        stack = []
+        in_string = False
+        escaped = False
+        matching = {"}": "{", "]": "["}
+        for char in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char in "{[":
+                stack.append(char)
+            elif char in "}]" and stack and stack[-1] == matching[char]:
+                stack.pop()
+
+        if stack:
+            extraction_kind = "truncated_json"
+        else:
+            brace_end = text.rfind("}")
+            if brace_end != -1:
+                if text[brace_end + 1:].strip():
+                    extraction_kind = "embedded_json"
+                text = text[:brace_end + 1]
 
     return text, extraction_kind
 

@@ -59,6 +59,18 @@ class OpenAISchemaCompatibilityTests(unittest.TestCase):
             {"type": "json_object"},
         )
 
+    def test_gemini_response_schema_error_triggers_json_object_fallback(self) -> None:
+        payload = {"response_format": {"type": "json_schema"}}
+        error = (
+            "generation_config.response_schema.properties[segments].items "
+            "is not supported by this Gemini model"
+        )
+
+        self.assertEqual(
+            _next_response_format_fallback(payload, error),
+            {"type": "json_object"},
+        )
+
     def test_json_object_rejection_removes_response_format(self) -> None:
         payload = {"response_format": {"type": "json_object"}}
 
@@ -74,6 +86,9 @@ class OpenAISchemaCompatibilityTests(unittest.TestCase):
         payload = {"response_format": {"type": "json_schema"}}
 
         self.assertIsNone(_next_response_format_fallback(payload, "invalid temperature"))
+        self.assertIsNone(
+            _next_response_format_fallback(payload, "database schema migration failed")
+        )
 
 
 if __name__ == "__main__":

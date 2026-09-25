@@ -63,6 +63,37 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         self.assertTrue(outcome.repaired)
         self.assertTrue(any("repaired" in line.lower() for line in captured.output))
 
+    def test_missing_outer_brace_preserves_completed_segment_actions(self) -> None:
+        raw = (
+            '{"segments":[{"text":"Иду","commands":["light:on"],'
+            '"intents":[{"type":"light.enable","payload":{"id":"desk"}}]}]'
+        )
+
+        outcome = parse_structured_response_with_meta(raw)
+
+        self.assertEqual(outcome.response.segments[0].text, "Иду")
+        self.assertEqual(outcome.response.segments[0].commands, ["light:on"])
+        self.assertEqual(outcome.response.segments[0].intents[0].type, "light.enable")
+        self.assertTrue(outcome.repaired)
+
+    def test_unterminated_text_is_closed_without_becoming_null(self) -> None:
+        raw = '{"segments":[{"text":"Привет'
+
+        outcome = parse_structured_response_with_meta(raw)
+
+        self.assertEqual(outcome.response.segments[0].text, "Привет")
+        self.assertTrue(outcome.repaired)
+
+    def test_truncated_outer_object_keeps_fields_after_nested_object(self) -> None:
+        raw = '{"segments":[{"text":"Привет"}],"attitude_change":0'
+
+        outcome = parse_structured_response_with_meta(raw)
+
+        self.assertEqual(outcome.response.segments[0].text, "Привет")
+        self.assertEqual(outcome.response.attitude_change, 0)
+        self.assertEqual(outcome.extraction_kind, "truncated_json")
+        self.assertTrue(outcome.repaired)
+
     def test_truncated_first_numeric_field_becomes_empty_object(self) -> None:
         raw = '{"boredom_change":-'
 
@@ -92,6 +123,7 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         )
         self.assertEqual(outcome.extraction_kind, "embedded_json")
         self.assertFalse(outcome.control_plane_trusted)
+        self.assertTrue(outcome.repaired)
 
     def test_schema_coercion_is_untrusted_for_control_plane(self) -> None:
         outcome = parse_structured_response_with_meta(
