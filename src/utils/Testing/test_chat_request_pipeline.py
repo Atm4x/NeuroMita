@@ -158,7 +158,13 @@ class _RejectedStructuredGeneration(GenerationService):
             character_id="Crazy",
             voice_profile={"character_id": "Crazy", "silero_command": "/set_person Crazy"},
             error="Model response did not match the required response format",
-            error_details={"code": "structured_response_parse_failed"},
+            error_details={
+                "kind": "structured_response_error",
+                "code": "structured_schema_validation_failed",
+                "stage": "schema",
+                "message": "Ответ модели не соответствует ожидаемой схеме.",
+                "field": "segments.0.emotions",
+            },
             structured_parse_level="rejected",
         )
 
@@ -410,6 +416,8 @@ class ChatRequestPipelineTests(unittest.TestCase):
             "required response format" in str(failure.get("error") or "")
             for failure in failures
         ))
+        failure = next(item for item in failures if item.get("error_details"))
+        self.assertEqual(failure["error_details"]["code"], "structured_schema_validation_failed")
 
     def test_non_stream_request_does_not_create_presentation_coalescer(self):
         services().register(GenerationService, _ImmediateGeneration(), replace=True)
