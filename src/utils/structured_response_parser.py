@@ -30,6 +30,10 @@ class StructuredParseOutcome:
     extraction_kind: str = "raw_json"
 
     @property
+    def repaired(self) -> bool:
+        return self.parse_level != "direct" or self.schema_coerced
+
+    @property
     def control_plane_trusted(self) -> bool:
         return (
             self.parse_level == "direct"
@@ -58,6 +62,14 @@ def parse_structured_response_with_meta(
     if data is None:
         escaped = _escape_inner_quotes(cleaned)
         data, parse_level = _try_json_loads(escaped, level="inner_quote_escape")
+
+    if data is None:
+        tail_cleaned = _drop_incomplete_json_tail(cleaned)
+        if tail_cleaned != cleaned:
+            data, parse_level = _try_json_loads(
+                _close_truncated_json(tail_cleaned),
+                level="truncated_tail_discard+truncation_close",
+            )
 
     if data is None:
         data, parse_level = _try_json_repair_lib(cleaned)
@@ -99,10 +111,17 @@ def parse_structured_response_with_meta(
             segments[0] = {**segments[0], "commands": commands}
             data["segments"] = segments
 
-    if parse_level != "direct":
-        logger.warning(f"[StructuredResponseParser] JSON repaired via: {parse_level}")
-
     response, schema_coerced = _validate_with_coerce(data, model_cls=model_cls)
+    if parse_level != "direct" or schema_coerced:
+        changes = []
+        if parse_level != "direct":
+            changes.append(f"JSON via {parse_level}")
+        if schema_coerced:
+            changes.append("schema coercion")
+        logger.warning(
+            "[StructuredResponseParser] Response repaired: %s",
+            ", ".join(changes),
+        )
 
     # Control-plane schemas such as GameMasterResponse intentionally do not
     # contain character reply segments. They still use this parser so the
@@ -275,6 +294,62 @@ def _close_truncated_json(text: str) -> str:
         suffix += '"'
     suffix += ''.join(reversed(stack))
     return text + suffix
+
+
+def _drop_incomplete_json_tail(text: str) -> str:
+    """Drop a malformed final object member or array item before closing JSON."""
+    stack: list[dict[str, int | str | None]] = []
+    in_string = False
+    escaped = False
+    string_start = -1
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            string_start = index
+        elif char == "{":
+            stack.append({"close": "}", "open": index, "comma": None})
+        elif char == "[":
+            stack.append({"close": "]", "open": index, "comma": None})
+        elif char in "}]":
+            if stack and stack[-1]["close"] == char:
+                stack.pop()
+        elif char == "," and stack:
+            stack[-1]["comma"] = index
+
+    if in_string and string_start >= 0:
+        partial_value = text[string_start + 1:]
+        incomplete_unicode = re.search(r"\\u[0-9a-fA-F]{0,3}$", partial_value)
+        if incomplete_unicode:
+            return text[:string_start + 1 + incomplete_unicode.start()] + '"'
+
+    if not stack:
+        return text
+
+    frame = stack[-1]
+    comma = frame["comma"]
+    if isinstance(comma, int):
+        return text[:comma]
+
+    opening = frame["open"]
+    if not isinstance(opening, int):
+        return text
+    if in_string and string_start > opening:
+        prefix = text[opening + 1:string_start]
+        if frame["close"] == "}" and ":" in prefix:
+            key, _ = prefix.rsplit(":", 1)
+            if key.strip():
+                return text[:opening + 1] + key.rstrip() + ": null"
+    return text[:opening + 1] + str(frame["close"])
 
 
 def _validate_with_coerce(data: dict, *, model_cls: Type[StructuredResponse]) -> tuple[StructuredResponse, bool]:

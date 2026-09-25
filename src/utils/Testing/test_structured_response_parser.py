@@ -14,6 +14,7 @@ from utils.structured_response_parser import (
     parse_structured_response,
     parse_structured_response_with_meta,
 )
+from schemas.game_master_response import GameMasterResponse
 
 
 class StructuredResponseParserCoerceTests(unittest.TestCase):
@@ -50,6 +51,33 @@ class StructuredResponseParserCoerceTests(unittest.TestCase):
         self.assertEqual(outcome.parse_level, "direct")
         self.assertFalse(outcome.schema_coerced)
         self.assertTrue(outcome.control_plane_trusted)
+        self.assertFalse(outcome.repaired)
+
+    def test_truncated_invalid_numeric_tail_is_discarded_and_reported(self) -> None:
+        raw = '{"segments":[{"text":"Привет"}],"boredom_change":-'
+
+        with self.assertLogs("main_logger", level="WARNING") as captured:
+            outcome = parse_structured_response_with_meta(raw)
+
+        self.assertEqual(outcome.response.segments[0].text, "Привет")
+        self.assertTrue(outcome.repaired)
+        self.assertTrue(any("repaired" in line.lower() for line in captured.output))
+
+    def test_truncated_first_numeric_field_becomes_empty_object(self) -> None:
+        raw = '{"boredom_change":-'
+
+        outcome = parse_structured_response_with_meta(raw, model_cls=GameMasterResponse)
+
+        self.assertEqual(outcome.response.actions, [])
+        self.assertTrue(outcome.repaired)
+
+    def test_truncated_unicode_escape_discards_only_incomplete_field(self) -> None:
+        raw = r'{"segments":[{"text":"Привет \u041'
+
+        outcome = parse_structured_response_with_meta(raw)
+
+        self.assertEqual(outcome.response.segments[0].text, "Привет ")
+        self.assertTrue(outcome.repaired)
 
     def test_markdown_json_fence_is_trusted(self) -> None:
         outcome = parse_structured_response_with_meta(
