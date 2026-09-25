@@ -457,7 +457,15 @@ class PromptController(PromptBuilderService):
                 chosen_template = character.main_template_path_relative
 
         try:
-            blocks, dsl_system_infos = character.dsl_interpreter.process_main_template(chosen_template)
+            feature_overrides = (
+                {"support_intents": False}
+                if getattr(policy, "react_level", None) == 1
+                else None
+            )
+            blocks, dsl_system_infos = character.dsl_interpreter.process_main_template(
+                chosen_template,
+                feature_overrides=feature_overrides,
+            )
             get_ctx_infos = getattr(character.dsl_interpreter, "get_context_infos", None)
             context_infos = list(get_ctx_infos()) if callable(get_ctx_infos) else []
         except Exception as e:
@@ -752,6 +760,18 @@ class PromptController(PromptBuilderService):
             ),
         }
 
+    @staticmethod
+    def _resolve_support_intents(dsl_interpreter: Any, policy: Any) -> bool:
+        get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
+        support_intents = bool(
+            get_prompt_feature("support_intents", True)
+            if callable(get_prompt_feature)
+            else True
+        )
+        if getattr(policy, "react_level", None) == 1:
+            return False
+        return support_intents
+
     _GAME_MASTER_EVENT_RE = re.compile(
         r"\[GAME_MASTER\](?:\[MANDATORY\])?\s*:\s*GameMaster said:\s*(?P<text>[^\r\n]+)",
         re.IGNORECASE,
@@ -892,11 +912,7 @@ class PromptController(PromptBuilderService):
         )
         dsl_interpreter = getattr(character, "dsl_interpreter", None)
         get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
-        support_intents = bool(
-            get_prompt_feature("support_intents", False)
-            if callable(get_prompt_feature)
-            else False
-        )
+        support_intents = self._resolve_support_intents(dsl_interpreter, policy)
 
         # Unity-контекст (world state / capabilities / rules / events) впрыскиваем
         # только когда игра реально подключена. Снимок game_state персистентен и
