@@ -37,6 +37,42 @@ except Exception:  # pragma: no cover - schema must import even without logging
 # consumers (Unity, debug dumps) can tell which response contract produced it.
 RESPONSE_PROTOCOL_VERSION = 3
 
+
+def _inline_json_schema_refs(schema: dict) -> dict:
+    """Resolve local JSON Schema definitions into a provider-ready schema."""
+    import copy
+
+    definitions = schema.get("$defs", {})
+
+    def expand(node: Any, active_refs: frozenset[str] = frozenset()) -> Any:
+        if isinstance(node, list):
+            return [expand(item, active_refs) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        result = {}
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref[len("#/$defs/"):]
+            definition = definitions.get(name)
+            if isinstance(definition, dict) and name not in active_refs:
+                result.update(expand(copy.deepcopy(definition), active_refs | {name}))
+            elif isinstance(definition, dict):
+                return {}
+
+        for key, value in node.items():
+            if key in {"$ref", "$defs"}:
+                continue
+            if key.startswith("$"):
+                result[key] = copy.deepcopy(value)
+            elif isinstance(value, (dict, list)):
+                result[key] = expand(value, active_refs)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+
+    return expand(copy.deepcopy(schema))
+
 def _to_gemini_schema(schema: dict) -> dict:
     """
     Convert a Pydantic-generated JSON Schema to a Gemini-compatible responseSchema.
@@ -474,15 +510,45 @@ class StructuredResponse(BaseModel):
                 }
             }
         """
-        schema = cls.model_json_schema()
+        schema = _inline_json_schema_refs(cls.model_json_schema())
         if custom_params and "properties" in schema and "custom_fields" in schema["properties"]:
-            _type_map = {"float": "number", "double": "number", "int": "integer",
-                         "bool": "boolean", "str": "string", "string": "string"}
-            cf_props = {}
-            for p in custom_params:
-                key = p.get("change_command") or p["name"]
-                cf_props[key] = {"type": _type_map.get(p.get("type", "string"), "string")}
-            schema["properties"]["custom_fields"]["properties"] = cf_props
+            type_map = {"float": "number", "double": "number", "int": "integer",
+                        "bool": "boolean", "str": "string", "string": "string"}
+            custom_schema = schema["properties"]["custom_fields"]
+            custom_object = next(
+                (branch for branch in custom_schema.get("anyOf", [])
+                 if isinstance(branch, dict) and branch.get("type") == "object"),
+                custom_schema,
+            )
+            custom_properties = {}
+            required_custom = []
+            for param in custom_params:
+                if not isinstance(param, dict):
+                    continue
+                key = str(param.get("change_command") or param.get("name") or "").strip()
+                if not key:
+                    continue
+                field_schema = custom_properties.get(key, {})
+                field_schema["type"] = type_map.get(str(param.get("type", "string")).lower(), "string")
+                custom_properties[key] = field_schema
+                if param.get("required", True):
+                    required_custom.append(key)
+            for param in custom_params:
+                if not isinstance(param, dict):
+                    continue
+                key = str(param.get("change_command") or param.get("name") or "").strip()
+                if key not in custom_properties:
+                    continue
+                field_schema = custom_properties[key]
+                if param.get("description"):
+                    field_schema["description"] = str(param["description"])
+                for source, target in (("change_min", "minimum"), ("change_max", "maximum")):
+                    if param.get(source) is not None:
+                        field_schema[target] = param[source]
+            custom_object["properties"] = custom_properties
+            custom_object["additionalProperties"] = False
+            if required_custom:
+                custom_object["required"] = required_custom
         if exclude_fields:
             _remove_schema_properties(schema, exclude_fields)
         if exclude_segment_fields:

@@ -33,6 +33,25 @@ from handlers.llm_providers.streaming import StreamAccumulator, iter_sse_data, t
 REASONING_EFFORT_LEVELS = ("low", "medium", "high")
 
 
+def _next_response_format_fallback(payload: Dict[str, Any], error_message: str):
+    """Return the next narrower response-format attempt for compatible APIs."""
+    message = str(error_message or "").lower()
+    if "response_format" not in message and "json_schema" not in message and "json_object" not in message:
+        return None
+
+    response_format = payload.get("response_format")
+    if not isinstance(response_format, dict):
+        return None
+    mode = response_format.get("type")
+    if mode == "json_schema":
+        return {"type": "json_object"}
+    if mode == "json_object":
+        return {}
+    if isinstance(response_format.get("json_schema"), dict):
+        return {"type": "json_object"}
+    return None
+
+
 class OpenAIHTTPProviderBase(BaseProvider):
     supports_tools_native = True
     supports_streaming = True
@@ -307,21 +326,31 @@ class OpenAIHTTPProviderBase(BaseProvider):
         if resp.status_code == 400 and self._supports_structured_output(req):
             if req.stream:
                 resp.read()
-            rf_mode = (req.capabilities or {}).get("structured_output_mode", "json_schema")
-            if rf_mode != "json_object" and "response_format" in payload:
+            initial_mode = (req.capabilities or {}).get("structured_output_mode", "json_schema")
+            fallback_count = 1 if initial_mode == "json_object" else 0
+            while resp.status_code == 400 and fallback_count < 2 and "response_format" in payload:
+                if req.stream:
+                    resp.read()
                 try:
                     err_body = resp.json()
                 except Exception:
                     err_body = {}
                 err_msg = str(err_body)
-                if "response_format" in err_msg or "json_schema" in err_msg or "json_object" in err_msg:
-                    logger.warning(
-                        f"[{self.name}] json_schema rejected by provider, retrying with json_object. "
-                        f"Error: {err_msg[:200]}"
-                    )
-                    payload["response_format"] = {"type": "json_object"}
-                    resp.close()
-                    resp = self._request(request_url, req, payload)
+                next_format = _next_response_format_fallback(payload, err_msg)
+                if next_format is None:
+                    break
+                label = next_format.get("type", "no response_format")
+                logger.warning(
+                    f"[{self.name}] response_format rejected by provider, retrying with {label}. "
+                    f"Error: {err_msg[:200]}"
+                )
+                if next_format:
+                    payload["response_format"] = next_format
+                else:
+                    payload.pop("response_format", None)
+                resp.close()
+                resp = self._request(request_url, req, payload)
+                fallback_count += 1
 
         if resp.status_code != 200:
             if req.stream:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import sys
 import threading
 from pathlib import Path
@@ -576,6 +577,84 @@ def test_openai_sdk_adapter_reuses_httpx_pool_and_disables_hidden_retries():
     assert first.max_retries == 0
     assert second.max_retries == 0
     assert first._client is second._client
+    provider.close()
+    transport.close()
+
+
+def test_common_provider_falls_back_from_schema_to_json_object_then_plain_json():
+    attempts = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        attempts.append(payload)
+        if "response_format" in payload:
+            mode = payload["response_format"]["type"]
+            return httpx.Response(
+                400,
+                json={"error": {"message": f"{mode} response_format unsupported"}},
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok":true}'}}]},
+        )
+
+    transport = LLMHttpClient(
+        enable_http2=False,
+        client_factory=lambda _service_id, _http2: httpx.Client(
+            transport=httpx.MockTransport(respond)
+        ),
+    )
+    provider = CommonProvider(http_transport=transport)
+    req = _request()
+    req.capabilities = {
+        "structured_output": True,
+        "native_structured_output": True,
+        "structured_output_mode": "json_schema",
+    }
+
+    response = provider.generate(req)
+
+    assert response.text == '{"ok":true}'
+    assert len(attempts) == 3
+    assert attempts[0]["response_format"]["type"] == "json_schema"
+    assert attempts[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in attempts[2]
+    provider.close()
+    transport.close()
+
+
+def test_common_provider_stops_at_plain_json_when_each_format_is_rejected():
+    attempts = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        attempts.append(payload)
+        return httpx.Response(
+            400,
+            json={"error": {"message": "response_format json_object unsupported"}},
+        )
+
+    transport = LLMHttpClient(
+        enable_http2=False,
+        client_factory=lambda _service_id, _http2: httpx.Client(
+            transport=httpx.MockTransport(respond)
+        ),
+    )
+    provider = CommonProvider(http_transport=transport)
+    req = _request()
+    req.capabilities = {
+        "structured_output": True,
+        "native_structured_output": True,
+        "structured_output_mode": "json_schema",
+    }
+
+    with pytest.raises(LLMProviderError):
+        provider.generate(req)
+
+    assert len(attempts) == 3
+    assert attempts[0]["response_format"]["type"] == "json_schema"
+    assert attempts[1]["response_format"]["type"] == "json_object"
+    assert "response_format" not in attempts[2]
     provider.close()
     transport.close()
 
