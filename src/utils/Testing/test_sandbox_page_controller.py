@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from controllers.gui.sandbox_page_controller import SandboxPageController
@@ -6,6 +7,25 @@ from controllers.gui.sandbox_page_view_model import SandboxPageViewModel
 
 
 class SandboxPageControllerTest(unittest.TestCase):
+    def test_structured_failure_includes_message_code_and_field(self):
+        receiver = SimpleNamespace(_finish_model_request=lambda ok, error: setattr(receiver, "result", (ok, error)))
+        event = SimpleNamespace(data={
+            "error": "Ответ не соответствует схеме.",
+            "error_details": {
+                "kind": "structured_response_error",
+                "code": "structured_schema_validation_failed",
+                "message": "Ответ не соответствует схеме.",
+                "field": "segments.0.emotions",
+            },
+        })
+
+        SandboxPageViewModel._on_model_failed(receiver, event)
+
+        self.assertFalse(receiver.result[0])
+        self.assertIn("Ответ не соответствует схеме.", receiver.result[1])
+        self.assertIn("[structured_schema_validation_failed]", receiver.result[1])
+        self.assertIn("Field: segments.0.emotions", receiver.result[1])
+
     def test_model_label_is_bounded_with_ellipsis(self):
         label = SandboxPageViewModel._model_label(
             "Пустой пресет 1",
