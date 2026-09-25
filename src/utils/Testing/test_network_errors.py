@@ -31,10 +31,18 @@ class NetworkErrorClassificationTests(unittest.TestCase):
         self.assertFalse(result.retryable)
 
     def test_generic_ssl_error_is_non_retryable_handshake_error(self) -> None:
-        result = classify_network_error("test", self._connect_error(ssl.SSLError("handshake failed")))
+        result = classify_network_error("test", self._connect_error(ssl.SSLError("WRONG_VERSION_NUMBER")))
 
         self.assertEqual(result.code, "network.tls.handshake")
         self.assertFalse(result.retryable)
+        self.assertIn("WRONG_VERSION_NUMBER", result.detail)
+
+    def test_tls_detail_redacts_secret_parameters(self) -> None:
+        cause = ssl.SSLError("handshake failed for key=secret-value")
+        result = classify_network_error("test", self._connect_error(cause))
+
+        self.assertIn("key=<redacted>", result.detail)
+        self.assertNotIn("secret-value", result.detail)
 
     def test_dns_connect_error_remains_retryable(self) -> None:
         result = classify_network_error("test", self._connect_error(socket.gaierror("getaddrinfo failed")))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 import ssl
 from dataclasses import dataclass
@@ -124,7 +125,7 @@ def classify_network_error(
             method=resolved_method,
             url=str(resolved_url) if resolved_url else None,
             retryable=False,
-            detail=detail,
+            detail=_tls_error_detail(tls_error),
         )
 
     if isinstance(exc, httpx.HTTPStatusError):
@@ -239,6 +240,22 @@ def _find_tls_error(exc: BaseException) -> BaseException | None:
         if any(marker in str(cause).lower() for marker in _CERTIFICATE_ERROR_MARKERS):
             return cause
     return None
+
+
+def _tls_error_detail(exc: BaseException) -> str:
+    text = str(exc)
+    lowered = text.lower()
+    for marker in _CERTIFICATE_ERROR_MARKERS:
+        if marker in lowered:
+            return marker
+
+    detail = _compact_detail(exc)
+    secret_keys = "|".join(re.escape(key) for key in _SECRET_QUERY_KEYS)
+    return re.sub(
+        rf"(?i)\b({secret_keys})(=|%3d)([^&\s,]+)",
+        r"\1\2<redacted>",
+        detail,
+    )[:500]
 
 
 def _compact_detail(exc: BaseException) -> str:

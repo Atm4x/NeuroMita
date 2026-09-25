@@ -81,10 +81,8 @@ def parse_structured_response_with_meta(
     if data is None:
         data, parse_level = _try_json_repair_lib(cleaned)
 
-    truncation_repair_attempted = False
     if data is None:
         closed = _close_truncated_json(cleaned)
-        truncation_repair_attempted = closed != cleaned
         data, parse_level = _try_json_loads(closed, level="truncation_close")
 
     if data is None:
@@ -92,10 +90,11 @@ def parse_structured_response_with_meta(
                                                  level="truncation_close+json_repair")
 
     if data is None:
+        likely_truncated = _is_likely_truncated_json(cleaned)
         raise StructuredResponseParseError(
             f"All JSON repair attempts failed. "
             f"First 300 chars: {cleaned[:300]}",
-            code=("structured_json_truncated" if truncation_repair_attempted else "structured_json_invalid"),
+            code=("structured_json_truncated" if likely_truncated else "structured_json_invalid"),
             stage="parse",
         )
 
@@ -208,6 +207,22 @@ def _try_json_loads(text: str, level: str = "direct") -> tuple[Optional[dict], s
         return None, ""
 
 
+def _is_likely_truncated_json(text: str) -> bool:
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        if exc.msg.startswith("Unterminated string"):
+            return True
+        return exc.pos >= len(text) and exc.msg in {
+            "Expecting value",
+            "Expecting ',' delimiter",
+            "Expecting property name enclosed in double quotes",
+        }
+    except ValueError:
+        return False
+    return False
+
+
 def _try_json_repair_lib(text: str, level: str = "json_repair") -> tuple[Optional[dict], str]:
     try:
         from json_repair import repair_json  # type: ignore
@@ -312,12 +327,58 @@ def _validate_with_coerce(data: dict, *, model_cls: Type[StructuredResponse]) ->
             data = _schema_aware_coerce(data, model_cls=model_cls)
             return model_cls.model_validate(data), True
         except Exception as second_error:
+            field = _safe_validation_field(second_error, model_cls)
             raise StructuredResponseParseError(
                 f"JSON does not match StructuredResponse schema "
                 f"(even after coercion): {format_exception(second_error)}",
                 code="structured_schema_validation_failed",
                 stage="schema",
+                field=field,
             ) from first_error
+
+
+def _safe_validation_field(error: Exception, model_cls: Type[StructuredResponse]) -> str | None:
+    errors_method = getattr(error, "errors", None)
+    if not callable(errors_method):
+        return None
+
+    allowed_names: set[str] = set()
+    pending = [model_cls]
+    visited: set[type] = set()
+    while pending:
+        current_model = pending.pop()
+        if current_model in visited:
+            continue
+        visited.add(current_model)
+        for name, field_info in getattr(current_model, "model_fields", {}).items():
+            allowed_names.add(str(name))
+            annotation = getattr(field_info, "annotation", None)
+            candidates = [annotation, *get_args(annotation)] if annotation is not None else []
+            for candidate in candidates:
+                origin = get_origin(candidate)
+                nested = get_args(candidate) if origin is not None else (candidate,)
+                pending.extend(
+                    item for item in nested
+                    if isinstance(item, type) and hasattr(item, "model_fields")
+                )
+
+    try:
+        validation_errors = errors_method(include_input=False)
+    except TypeError:
+        return None
+    except Exception:
+        return None
+
+    for validation_error in validation_errors:
+        location = validation_error.get("loc", ())
+        safe_parts = [
+            str(part) if isinstance(part, int) else part
+            for part in location
+            if isinstance(part, int) or (isinstance(part, str) and part in allowed_names)
+        ]
+        if safe_parts:
+            return ".".join(safe_parts)
+    return None
 
 
 def _extract_custom_field_names(model_cls: Type[StructuredResponse]) -> set[str]:
