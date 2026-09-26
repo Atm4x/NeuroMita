@@ -612,14 +612,18 @@ class ServerController:
             client_id = str(task.data.get("client_id") or "")
             if client_id and self.server:
                 delivery = self.server.schedule_send_task_update(client_id, task)
-                if retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
+                if retry_message_id and task.status in (
+                    TaskStatus.SUCCESS,
+                    TaskStatus.FAILED_ON_VOICEOVER,
+                    TaskStatus.VOICING,
+                ):
                     if delivery is not None:
                         delivery.add_done_callback(
                             lambda result, char=character_id, mid=retry_message_id, uid=task_uid, status=task.status:
                                 executors().submit(
                                     Pools.IO,
                                     self._finalize_unity_retry_delivery
-                                    if status == TaskStatus.SUCCESS
+                                    if status in (TaskStatus.SUCCESS, TaskStatus.FAILED_ON_VOICEOVER)
                                     else self._finalize_unity_voiceover_delivery,
                                     char,
                                     mid,
@@ -636,7 +640,11 @@ class ServerController:
                             str(getattr(task, "uid", "") or ""),
                             "Ответ готов, но не удалось отправить его в игру.",
                         )
-            elif retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
+            elif retry_message_id and task.status in (
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILED_ON_VOICEOVER,
+                TaskStatus.VOICING,
+            ):
                 executors().submit(
                     Pools.IO,
                     self._mark_unity_retry_delivery_failed,
@@ -646,7 +654,11 @@ class ServerController:
                     "Игровое подключение недоступно для доставки ответа.",
                 )
         except Exception as exc:
-            if retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
+            if retry_message_id and task.status in (
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILED_ON_VOICEOVER,
+                TaskStatus.VOICING,
+            ):
                 executors().submit(
                     Pools.IO,
                     self._mark_unity_retry_delivery_failed,
