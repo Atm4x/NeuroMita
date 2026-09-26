@@ -16,12 +16,12 @@ ThreadPoolExecutor(1) на каждый HTTP-вызов LLM, ad-hoc threading.Th
 from __future__ import annotations
 
 import threading
-from contextvars import copy_context
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
 from core.daemon_executor import DaemonExecutor
+from core.trace_context import current_trace_id, trace_scope
 
 
 class Pools:
@@ -114,10 +114,11 @@ class _BoundedPool:
         return self._submit_reserved(fn, args, kwargs)
 
     def _submit_reserved(self, fn: Callable, args: tuple, kwargs: dict) -> Future:
-        context = copy_context()
+        trace_id = current_trace_id()
 
         def invoke():
-            return context.run(fn, *args, **kwargs)
+            with trace_scope(trace_id):
+                return fn(*args, **kwargs)
 
         def _release(_f: Future) -> None:
             with self._lock:
