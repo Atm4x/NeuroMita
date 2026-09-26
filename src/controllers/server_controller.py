@@ -548,6 +548,46 @@ class ServerController:
 
         retry_message_id = str(task.data.get("unity_retry_message_id") or "")
         character_id = str(task.data.get("character") or "")
+        task_uid = str(getattr(task, "uid", "") or "")
+        task_result = getattr(task, "result", None)
+        if retry_message_id and task.status in (TaskStatus.VOICING, TaskStatus.SUCCESS):
+            next_status = (
+                "generated_pending_voiceover"
+                if task.status == TaskStatus.VOICING
+                else "generated_pending_delivery"
+            )
+            if not UnityRetryStore.transition(
+                character_id,
+                retry_message_id,
+                expected_statuses={
+                    "generating",
+                    "delivery_retrying",
+                    "generated_pending_voiceover",
+                    "generated_pending_delivery",
+                },
+                status=next_status,
+                task_uid=task_uid,
+                result=task_result if isinstance(task_result, dict) else {},
+            ):
+                logger.error("Could not persist generated Unity answer %s", retry_message_id)
+        elif retry_message_id and task.status == TaskStatus.FAILED_ON_VOICEOVER:
+            voiceover_error = str(
+                getattr(task, "error", "")
+                or "Не удалось озвучить ответ; сохранённый текст можно отправить в игру."
+            )
+            if not UnityRetryStore.mark_voiceover_failed(
+                character_id,
+                retry_message_id,
+                task_uid,
+                voiceover_error,
+            ):
+                logger.error("Could not retain generated answer after voiceover failure %s", retry_message_id)
+            else:
+                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                    "error": voiceover_error,
+                    "message_id": retry_message_id,
+                    "character_id": character_id,
+                })
         if retry_message_id and task.status in (
             TaskStatus.FAILED_ON_GENERATION,
             TaskStatus.FAILED,
@@ -559,7 +599,7 @@ class ServerController:
                 UnityRetryStore.finish_failed_attempt,
                 character_id,
                 retry_message_id,
-                str(getattr(task, "uid", "") or ""),
+                task_uid,
                 str(getattr(task, "error", "") or "Не удалось получить ответ."),
             )
 
@@ -567,16 +607,18 @@ class ServerController:
             client_id = str(task.data.get("client_id") or "")
             if client_id and self.server:
                 delivery = self.server.schedule_send_task_update(client_id, task)
-                if retry_message_id and task.status == TaskStatus.SUCCESS:
+                if retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
                     if delivery is not None:
                         delivery.add_done_callback(
-                            lambda result, char=character_id, mid=retry_message_id:
+                            lambda result, char=character_id, mid=retry_message_id, uid=task_uid, status=task.status:
                                 executors().submit(
                                     Pools.IO,
-                                    self._finalize_unity_retry_delivery,
+                                    self._finalize_unity_retry_delivery
+                                    if status == TaskStatus.SUCCESS
+                                    else self._finalize_unity_voiceover_delivery,
                                     char,
                                     mid,
-                                    str(getattr(task, "uid", "") or ""),
+                                    uid,
                                     result,
                                 )
                         )
@@ -589,7 +631,7 @@ class ServerController:
                             str(getattr(task, "uid", "") or ""),
                             "Ответ готов, но не удалось отправить его в игру.",
                         )
-            elif retry_message_id and task.status == TaskStatus.SUCCESS:
+            elif retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
                 executors().submit(
                     Pools.IO,
                     self._mark_unity_retry_delivery_failed,
@@ -599,7 +641,7 @@ class ServerController:
                     "Игровое подключение недоступно для доставки ответа.",
                 )
         except Exception as exc:
-            if retry_message_id and task.status == TaskStatus.SUCCESS:
+            if retry_message_id and task.status in (TaskStatus.SUCCESS, TaskStatus.VOICING):
                 executors().submit(
                     Pools.IO,
                     self._mark_unity_retry_delivery_failed,
@@ -630,6 +672,25 @@ class ServerController:
                 "Ответ готов, но не удалось отправить его в игру.",
             )
 
+    def _finalize_unity_voiceover_delivery(
+        self,
+        character_id: str,
+        message_id: str,
+        task_uid: str,
+        delivery: Future,
+    ) -> None:
+        try:
+            sent = bool(delivery.result())
+        except Exception:
+            sent = False
+        if not sent:
+            self._mark_unity_retry_delivery_failed(
+                character_id,
+                message_id,
+                task_uid,
+                "Не удалось доставить ответ в игру.",
+            )
+
     def _mark_unity_retry_delivery_failed(
         self,
         character_id: str,
@@ -637,12 +698,14 @@ class ServerController:
         task_uid: str,
         error: str,
     ) -> None:
-        UnityRetryStore.finish_failed_attempt(
+        if not UnityRetryStore.mark_delivery_failed(
             character_id,
             message_id,
             task_uid,
             error,
-        )
+        ):
+            logger.error("Could not retain Unity result for later delivery %s", message_id)
+            return
         self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
             "error": error,
             "message_id": message_id,

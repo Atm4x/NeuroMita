@@ -25,16 +25,22 @@ survive application restarts.
    including the message identity, character, text, relevant prompt/context,
    policy, dialogue/game state, participants, and any images needed to reproduce
    the original request.
-2. If generation fails or the application exits before completion, restore the
-   pending request on the Sandbox chat surface with a retry action on its
-   incoming message.
+2. Track explicit states: `generating`, `needs_generation`,
+   `generated_pending_voiceover`, `generated_pending_delivery`, and
+   `delivery_retrying`. On startup, recover only records from an earlier
+   process session. Interrupted generation becomes `needs_generation`; an
+   already generated result remains available for delivery without another LLM
+   call.
 3. On explicit retry, require an active game connection, create a fresh task
    bound to the current primary game client, and submit the preserved request
    through the existing generation path. Do not reuse the old task UID or
    connection ID.
-4. Keep the pending record while the retry is running or fails. Remove it only
-   after the replacement task reaches successful completion and the result is
-   available through the normal Unity task-update channel.
+4. Keep the pending record while the retry is running or fails. Persist the
+   complete generated task result before attempting transport. If socket
+   delivery fails after generation, retry by creating a fresh Unity task with
+   the saved result; do not invoke the model, rewrite history, or reapply
+   structured side effects. Remove the record after the task update is written
+   and drained successfully by the socket.
 5. Do not automatically replay requests on startup or reconnect. Retrying is
    user initiated to avoid unexpected duplicate game actions.
 
@@ -97,3 +103,6 @@ survive application restarts.
   then-current primary game client.
 - After process restart, records left in the in-progress state return to the
   retryable state. The user must explicitly start the attempt again.
+- A `send_json` success means the local socket write drained; the current
+  protocol has no Unity acknowledgement. This supports retry on observed socket
+  failure, but cannot guarantee exactly-once application by Unity.

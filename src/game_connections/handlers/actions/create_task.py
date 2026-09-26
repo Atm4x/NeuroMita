@@ -189,7 +189,7 @@ async def _dispatch_task(
 
     unity_retry_message_id = ""
     if (
-        str(event_type or "").strip().lower() == "chat"
+        str(model_event_type or "").strip().lower() == "chat"
         and str(player_message_source or "").strip().lower() == PlayerMessageSource.GAME.value
         and str(user_input or "").strip()
         and req_id
@@ -201,7 +201,6 @@ async def _dispatch_task(
 
     if task:
         server.client_tasks[ctx.client_id].add(task.uid)
-        await server.send_task_update(ctx.client_id, task)
         chat_event = {
             "user_input": user_input,
             "system_input": system_input,
@@ -237,7 +236,7 @@ async def _dispatch_task(
                     "image_data": list(images or []),
                     "images_shown": False,
                     "image_source": image_source,
-                    "event_type": event_type,
+                    "event_type": model_event_type,
                     "character_id": character_id,
                     "sender": sender,
                     "participants": list(participants or []),
@@ -264,6 +263,7 @@ async def _dispatch_task(
                     "Unity request %s will run without a persistent retry record",
                     unity_retry_message_id,
                 )
+        await server.send_task_update(ctx.client_id, task)
         event_bus.emit(Events.Chat.SEND_MESSAGE, chat_event)
     else:
         await server._send_aborted_update(

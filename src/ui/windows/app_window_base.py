@@ -666,6 +666,12 @@ class AppWindowBase(QMainWindow):
             if isinstance(entry, dict)
         }
         for record in records:
+            if str(record.get("status") or "") not in {
+                "needs_generation",
+                "generated_pending_delivery",
+                "unretryable",
+            }:
+                continue
             message_id = str(record.get("message_id") or "")
             if not message_id:
                 continue

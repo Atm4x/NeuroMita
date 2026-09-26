@@ -225,6 +225,7 @@ class ChatController(ChatService, GenerationActivityService):
         # генерация упала и ход не попал в историю (write_turn не вызывался).
         self._last_ui_request: dict | None = None
         self._ui_requests_by_message_id: dict[str, dict] = {}
+        UnityRetryStore.recover_interrupted_attempts()
         self._subscribe_to_events()
 
     @property
@@ -1126,16 +1127,33 @@ class ChatController(ChatService, GenerationActivityService):
         data = event.data or {}
         image_data = data.get("image_data", [])
         trace_id = self._ensure_perf_trace(data)
-        player_message_source, previous_player_message_source = (
-            self._resolve_player_message_source_transition(
-                data.get("player_message_source")
+        if "previous_player_message_source" in data:
+            player_message_source = parse_player_message_source(data.get("player_message_source"))
+            previous_player_message_source = parse_player_message_source(
+                data.get("previous_player_message_source")
             )
-        )
+        else:
+            player_message_source, previous_player_message_source = (
+                self._resolve_player_message_source_transition(
+                    data.get("player_message_source")
+                )
+            )
 
         # Запоминаем ручную отправку пользователя (без task_uid — это не игровой/
         # телеграм-ход), чтобы кнопка «отправить снова» на упавшем пузыре могла
         # повторить ровно тот же запрос. Копия — чтобы вызывающий не менял её потом.
         req_id = str(data.get("req_id") or "").strip()
+        retry_message_id = str(data.get("unity_retry_message_id") or "")
+        if retry_message_id:
+            current_source = player_message_source.value
+            previous_source = previous_player_message_source.value
+            if not UnityRetryStore.update_request_context(
+                str(self._normalize_character_id(data) or ""),
+                retry_message_id,
+                player_message_source=current_source,
+                previous_player_message_source=previous_source,
+            ):
+                logger.error("Could not persist Unity retry source context %s", retry_message_id)
         if (
             req_id
             and not data.get("task_uid")
@@ -1364,43 +1382,44 @@ class ChatController(ChatService, GenerationActivityService):
         self.event_bus.emit(Events.Chat.SEND_MESSAGE, dict(request))
 
     def _retry_unity_request(self, character_id: str, message_id: str) -> None:
-        claimed = UnityRetryStore.claim(character_id, message_id)
-        if claimed is None:
-            existing = UnityRetryStore.get(character_id, message_id)
-            if existing is None:
-                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": "Исходные данные Unity-запроса не сохранены или устарели; повтор невозможен.",
-                    "message_id": message_id,
-                    "character_id": character_id,
-                })
-            elif existing.get("status") != "retrying":
-                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                    "error": "Не удалось сохранить состояние повтора. Попробуйте ещё раз.",
-                    "message_id": message_id,
-                    "character_id": character_id,
-                })
-            return
-
+        task = None
+        claimed = None
         try:
+            claimed = UnityRetryStore.claim(character_id, message_id)
+            if claimed is None:
+                existing = UnityRetryStore.get(character_id, message_id)
+                if existing is None:
+                    self._show_unity_retry_error(
+                        "Данные Unity-запроса не сохранены или устарели; повтор невозможен.",
+                        message_id,
+                        character_id,
+                    )
+                elif existing.get("status") == "unretryable":
+                    self._show_unity_retry_error(
+                        str(existing.get("error") or "Повреждены данные исходного запроса."),
+                        message_id,
+                        character_id,
+                    )
+                elif existing.get("status") in UnityRetryStore.RETRYABLE_STATUSES:
+                    self._show_unity_retry_error(
+                        "Не удалось сохранить состояние повтора. Попробуйте ещё раз.",
+                        message_id,
+                        character_id,
+                    )
+                return
+
+            prior_status = str(claimed.get("claimed_from_status") or "needs_generation")
             owner = str(use(GameLinkService).player_turn_owner() or "")
-        except Exception:
-            owner = ""
-        if not owner:
-            UnityRetryStore.update(
-                character_id,
-                message_id,
-                status="pending",
-                error="Подключите игру, чтобы повторить запрос.",
-                active_task_uid="",
-            )
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": "Подключите игру, чтобы повторить запрос.",
-                "message_id": message_id,
-                "character_id": character_id,
-            })
-            return
+            if not owner:
+                self._release_unity_retry_claim(
+                    character_id,
+                    message_id,
+                    prior_status,
+                    "Подключите игру, чтобы повторить запрос.",
+                )
+                self._show_unity_retry_error("Подключите игру, чтобы повторить запрос.", message_id, character_id)
+                return
 
-        try:
             stored_task_data = dict(claimed.get("task_data") or {})
             stored_task_data["client_id"] = owner
             stored_task_data["unity_retry_message_id"] = message_id
@@ -1410,6 +1429,15 @@ class ChatController(ChatService, GenerationActivityService):
                 raise RuntimeError("Не удалось создать игровую задачу для повтора")
             if not UnityRetryStore.set_active_task(character_id, message_id, task.uid):
                 raise RuntimeError("Не удалось связать повтор с новой игровой задачей")
+
+            if prior_status == "generated_pending_delivery":
+                result = claimed.get("result")
+                if not isinstance(result, dict):
+                    raise RuntimeError("Сохранённый ответ повреждён; повторная генерация отключена")
+                if use(TaskService).update_task_status(task.uid, TaskStatus.SUCCESS, result=result) is None:
+                    raise RuntimeError("Не удалось создать задачу доставки сохранённого ответа")
+                return
+
             self.event_bus.emit(Events.Server.SEND_TASK_UPDATE, {"task": task})
 
             request = dict(claimed.get("request") or {})
@@ -1417,25 +1445,59 @@ class ChatController(ChatService, GenerationActivityService):
             request["client_id"] = owner
             request["unity_retry_message_id"] = message_id
             request["images_shown"] = True
+            request["event_type"] = "chat"
             self.event_bus.emit(Events.GUI.CLEAR_CHAT_MESSAGE_ERROR, {
                 "message_id": message_id,
                 "character_id": character_id,
             })
             self.event_bus.emit(Events.Chat.SEND_MESSAGE, request)
         except Exception as exc:
-            UnityRetryStore.update(
+            if task is not None and getattr(task, "uid", None):
+                try:
+                    use(TaskService).update_task_status(
+                        task.uid,
+                        TaskStatus.ABORTED,
+                        error=str(exc),
+                    )
+                except Exception:
+                    logger.exception("Failed to abort orphan Unity retry task %s", task.uid)
+            self._release_unity_retry_claim(
                 character_id,
                 message_id,
-                status="pending",
-                error=str(exc),
-                active_task_uid="",
+                str((claimed or {}).get("claimed_from_status") or "needs_generation"),
+                str(exc),
             )
             logger.exception("Failed to retry Unity request %s", message_id)
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": str(exc),
-                "message_id": message_id,
-                "character_id": character_id,
-            })
+            self._show_unity_retry_error(str(exc), message_id, character_id)
+
+    @staticmethod
+    def _release_unity_retry_claim(
+        character_id: str,
+        message_id: str,
+        prior_status: str,
+        error: str,
+    ) -> None:
+        released_status = (
+            "generated_pending_delivery"
+            if prior_status == "generated_pending_delivery"
+            else "needs_generation"
+        )
+        if not UnityRetryStore.transition(
+            character_id,
+            message_id,
+            expected_statuses={"generating", "delivery_retrying"},
+            status=released_status,
+            error=error,
+            task_uid="",
+        ):
+            logger.error("Could not release Unity retry claim %s", message_id)
+
+    def _show_unity_retry_error(self, error: str, message_id: str, character_id: str) -> None:
+        self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+            "error": error,
+            "message_id": message_id,
+            "character_id": character_id,
+        })
 
     def _on_regenerate(self, event: Event):
         data = event.data or {}
