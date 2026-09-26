@@ -24,6 +24,7 @@ class UnityRetryStore:
     RETRYABLE_STATUSES = {"needs_generation", "generated_pending_delivery"}
     _lock = threading.RLock()
     _delivered_in_process: set[tuple[str, str]] = set()
+    _unreadable_paths: set[str] = set()
     _session_id = uuid.uuid4().hex
 
     @classmethod
@@ -52,11 +53,23 @@ class UnityRetryStore:
             return [item for item in payload["records"] if isinstance(item, dict)]
         except Exception as exc:
             logger.warning("Unable to load Unity retry outbox %s: %s", path, exc)
+            quarantine = path.with_name(
+                f"{path.name}.corrupt-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+            )
+            try:
+                os.replace(path, quarantine)
+                logger.error("Quarantined corrupt Unity retry outbox at %s", quarantine)
+            except OSError:
+                cls._unreadable_paths.add(str(path))
+                logger.exception("Could not quarantine Unity retry outbox %s", path)
             return []
 
     @classmethod
     def _write(cls, character_id: str, records: list[dict[str, Any]]) -> bool:
         path = cls._path(character_id)
+        if str(path) in cls._unreadable_paths:
+            logger.error("Refusing to overwrite unreadable Unity retry outbox %s", path)
+            return False
         temp_path = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +155,16 @@ class UnityRetryStore:
                 item.pop("request", None)
                 item.pop("task_data", None)
                 changed = True
+            if str(item.get("status") or "") in {
+                "generated_pending_voiceover",
+                "generated_pending_delivery",
+            }:
+                result = item.get("result")
+                response = result.get("response") if isinstance(result, dict) else None
+                if not isinstance(response, str) or not response.strip():
+                    item["status"] = "unretryable"
+                    item["error"] = "Сохранённый Unity-ответ повреждён или не содержит текста; повтор отключён."
+                    changed = True
         return records, changed
 
     @classmethod
