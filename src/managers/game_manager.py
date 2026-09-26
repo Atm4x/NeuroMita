@@ -5,6 +5,7 @@ from modules.game_interface import GameInterface
 from core.chat_api import ChatAPI
 from core.services import use
 from services.contracts import GameLinkService, SettingsService
+from managers.mini_game_session_registry import mini_game_sessions
 
 
 class GameManager:
@@ -86,8 +87,27 @@ class GameManager:
             return False
 
         logger.info(f"[{self.character.char_id}] Запуск игры '{game_name}' с параметрами: {params}")
-        self.active_game = game_class(self.character, game_name, host=self)
-        self.active_game.start(params)
+        game = game_class(self.character, game_name, host=self)
+        self.active_game = game
+        game.start(params)
+        if self.active_game is not game:
+            mini_game_sessions().stop(self.character.char_id, game_name)
+            return False
+        get_variable = getattr(self.character, "get_variable", None)
+        if callable(get_variable) and not get_variable("playingGame", False):
+            mini_game_sessions().stop(self.character.char_id, game_name)
+            if self.active_game is game:
+                self.active_game = None
+            return False
+        mini_game_sessions().start(
+            owner_character_id=self.character.char_id,
+            owner_name=str(
+                getattr(self.character, "display_name", "")
+                or getattr(self.character, "name", "")
+                or self.character.char_id
+            ),
+            game_id=game_name,
+        )
         return True
 
     def start_game_from_player(self, full_id_str: str) -> bool:

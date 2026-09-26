@@ -4,13 +4,18 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_SRC = Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from services.game_link_service import DisconnectedGameLinkService, ServerGameLinkService
-from ui.settings.game_settings import _select_manual_game_character
+from ui.settings.game_settings import (
+    _manual_game_button_text,
+    _select_manual_game_character,
+    _set_sandbox_current_character,
+)
 
 
 class _Character:
@@ -68,6 +73,27 @@ class GameLinkTargetTests(unittest.TestCase):
         target = _select_manual_game_character(launcher, unity, lambda *_: None)
 
         self.assertIsNone(target)
+
+    def test_button_identifies_sandbox_and_unity_targets(self):
+        self.assertEqual(
+            _manual_game_button_text("chess", "Crazy", "Kind"),
+            "Шахматы: Crazy / Unity: Kind",
+        )
+        self.assertEqual(
+            _manual_game_button_text("seabattle", "Crazy"),
+            "Морской бой с Crazy",
+        )
+
+    def test_explicit_unity_target_switches_sandbox_by_character_event(self):
+        from core.events import Events
+
+        with patch("ui.settings.game_settings.get_event_bus") as get_bus:
+            _set_sandbox_current_character("Kind")
+
+        get_bus.return_value.emit.assert_called_once_with(
+            Events.Character.SET_CURRENT,
+            {"character_id": "Kind"},
+        )
 
 
 if __name__ == "__main__":

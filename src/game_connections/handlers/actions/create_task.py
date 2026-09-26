@@ -17,6 +17,13 @@ from game_connections.shared_image_transfer import collect_context_images
 logger = logging.getLogger(__name__)
 
 
+def should_update_unity_dialogue_target(event_type: str, speaker) -> bool:
+    return (
+        str(event_type or "").strip().lower() == "answer"
+        and getattr(speaker, "kind", None) is DialogueActorKind.PLAYER
+    )
+
+
 def _collect_context_images(context: dict) -> List:
     """Backward-compatible shim kept for existing call sites."""
     return list(collect_context_images(context))
@@ -312,7 +319,13 @@ class CreateTaskAction:
         persistent_game_state = dict(game_state_payload)
         persistent_game_state.pop("runtime_events", None)
         persistent_game_state["character_id"] = str(character_id or "")
-        use(GameLinkService).set_unity_target_character_id(character_id)
+        if should_update_unity_dialogue_target(event_type, resolved_speaker):
+            target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
+            if target_changed:
+                event_bus.emit(
+                    Events.Server.GAME_DIALOGUE_TARGET_CHANGED,
+                    {"character_id": str(character_id or "")},
+                )
         event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
 
         if server._should_block_event(event_type):

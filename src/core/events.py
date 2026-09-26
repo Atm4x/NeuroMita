@@ -736,6 +736,7 @@ class Events:
         ECHO_CHAT_MESSAGE_REQUESTED = "echo_chat_message_requested"
         SEND_ASR_TEXT = "send_asr_text"
         CLIENT_DISCONNECTED = "server_client_disconnected"
+        GAME_DIALOGUE_TARGET_CHANGED = "game_dialogue_target_changed"
         ASR_TEXT_UNDELIVERED = "asr_text_undelivered"
 
     class Telegram:

@@ -67,18 +67,14 @@ def extract_shared_world_info(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
         return {}
     shared: dict[str, Any] = {}
-    for key in ("roomPlayer",):
-        value = snapshot.get(key)
-        if isinstance(value, int) and not isinstance(value, bool):
-            shared[key] = value
-    distance = snapshot.get("distance")
-    if isinstance(distance, (int, float)) and not isinstance(distance, bool):
-        shared["distance"] = float(distance)
-    for key in ("worldPlayer", "worldMita"):
-        value = snapshot.get(key)
-        if isinstance(value, str) and value.strip():
-            shared[key] = value.strip()
+    room_player = snapshot.get("roomPlayer")
+    if isinstance(room_player, int) and not isinstance(room_player, bool):
+        shared["roomPlayer"] = room_player
+    world_player = snapshot.get("worldPlayer")
+    if isinstance(world_player, str) and world_player.strip():
+        shared["worldPlayer"] = world_player.strip()
     return shared
+
 
 def _render_tools_for_prompt(schema: list) -> str:
     """Format tool JSON schema list into a human-readable prompt block."""
@@ -1019,7 +1015,7 @@ class ModelController(GenerationService, ModelStateService):
                 is_game_master=(cid == "GameMaster"),
                 separate_prompts=bool(self.settings.get("SEPARATE_PROMPTS", True)),
                 capabilities=capabilities,
-                game_state=self._get_game_state_for_character(char_id),
+                game_state=self._get_game_state_for_character(cid),
             )
             with character_lock(cid):
                 built = use(PromptBuilderService).build(prompt_request)

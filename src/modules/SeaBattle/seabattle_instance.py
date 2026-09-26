@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 
 from main_logger import logger
 from modules.game_interface import GameInterface
+from managers.mini_game_session_registry import mini_game_sessions
 
 class SeaBattleGame(GameInterface):
 
@@ -85,6 +86,7 @@ class SeaBattleGame(GameInterface):
 
     def cleanup(self):
         logger.debug(f"[{self.character.char_id}] Очистка ресурсов 'Морского боя'.")
+        mini_game_sessions().stop(self.character.char_id, self.game_id)
         self._reaction_stop_event.set()
         listener = self._reaction_listener
         if listener and listener.is_alive() and listener is not threading.current_thread():
@@ -155,6 +157,23 @@ class SeaBattleGame(GameInterface):
 
         coord = str(event.get("coord") or "неизвестную клетку")
         result = str(event.get("message") or event.get("result") or "сделал ход")
+        public_coord = (
+            coord.upper()
+            if re.fullmatch(r"[A-J](?:10|[1-9])", coord.upper())
+            else "an unknown square"
+        )
+        public_result = (
+            "hit"
+            if "hit" in result.casefold()
+            else "miss"
+            if "miss" in result.casefold()
+            else "shot"
+        )
+        mini_game_sessions().update_public_event(
+            self.character.char_id,
+            self.game_id,
+            f"The player fired at {public_coord}: {public_result}.",
+        )
         self.request_character_reaction(
             "[Sea Battle automatic turn request] The player fired at "
             f"{coord}. Result: {result}. "

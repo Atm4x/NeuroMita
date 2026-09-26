@@ -54,9 +54,13 @@ class ServerGameLinkService(GameLinkService):
         with self._lock:
             return self._unity_target_character_id
 
-    def set_unity_target_character_id(self, character_id: str) -> None:
+    def set_unity_target_character_id(self, character_id: str) -> bool:
+        normalized = str(character_id or "").strip()
         with self._lock:
-            self._unity_target_character_id = str(character_id or "").strip()
+            if self._unity_target_character_id == normalized:
+                return False
+            self._unity_target_character_id = normalized
+            return True
 
     def is_connected(self) -> bool:
         with self._lock:

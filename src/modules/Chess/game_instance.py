@@ -7,6 +7,7 @@ import queue
 from typing import Dict, Any, Optional
 from main_logger import logger
 from modules.game_interface import GameInterface
+from managers.mini_game_session_registry import mini_game_sessions
 
 class ChessGame(GameInterface):
     """Реализация игры в шахматы."""
@@ -109,6 +110,7 @@ class ChessGame(GameInterface):
 
     def cleanup(self):
         logger.debug(f"[{self.character.char_id}] Очистка ресурсов шахмат.")
+        mini_game_sessions().stop(self.character.char_id, self.game_id)
         self._reaction_stop_event.set()
         listener = self._reaction_listener
         if listener and listener.is_alive() and listener is not threading.current_thread():
@@ -171,6 +173,11 @@ class ChessGame(GameInterface):
 
         san_move = str(event.get("san") or event.get("uci") or "a move")
         uci_move = str(event.get("uci") or "")
+        mini_game_sessions().update_public_event(
+            self.character.char_id,
+            self.game_id,
+            f"The player made the chess move {san_move}.",
+        )
         self.request_character_reaction(
             "[Chess automatic turn request] The player made the move "
             f"{san_move}" + (f" ({uci_move})" if uci_move else "") + ". "

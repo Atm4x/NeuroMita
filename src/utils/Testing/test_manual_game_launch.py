@@ -11,6 +11,7 @@ if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from managers.game_manager import GameManager
+from managers.mini_game_session_registry import mini_game_sessions
 
 
 class _Character:
@@ -29,6 +30,72 @@ class _Settings:
 
 
 class ManualGameLaunchTests(unittest.TestCase):
+    def test_successful_game_start_registers_public_owner(self):
+        class _TrackedCharacter(_Character):
+            char_id = "Kind"
+            display_name = "Good Mita"
+
+            def __init__(self):
+                super().__init__()
+                self.variables = {"playingGame": False}
+
+            def set_variable(self, key, value):
+                self.variables[key] = value
+
+            def get_variable(self, key, default=None):
+                return self.variables.get(key, default)
+
+        class _Game:
+            def __init__(self, character, game_id, host=None):
+                self.character = character
+                self.game_id = game_id
+                self.host = host
+
+            def start(self, _params):
+                self.character.set_variable("playingGame", True)
+
+        character = _TrackedCharacter()
+        manager = GameManager(character)
+        manager.available_games = {"chess": _Game}
+        mini_game_sessions().stop("Kind")
+        with patch.object(manager, "_is_game_launch_allowed", return_value=True):
+            self.assertTrue(manager.start_game("chess"))
+
+        session = mini_game_sessions().snapshot()[0]
+        self.assertEqual(session.owner_character_id, "Kind")
+        self.assertEqual(session.game_id, "chess")
+        self.assertEqual(session.owner_name, "Good Mita")
+        mini_game_sessions().stop("Kind")
+
+    def test_failed_game_start_does_not_register_public_owner(self):
+        class _TrackedCharacter(_Character):
+            char_id = "Kind"
+
+            def __init__(self):
+                super().__init__()
+                self.variables = {"playingGame": False}
+
+            def get_variable(self, key, default=None):
+                return self.variables.get(key, default)
+
+        class _Game:
+            def __init__(self, character, game_id, host=None):
+                self.character = character
+                self.game_id = game_id
+
+            def start(self, _params):
+                return None
+
+        character = _TrackedCharacter()
+        manager = GameManager(character)
+        manager.available_games = {"chess": _Game}
+        mini_game_sessions().stop("Kind")
+        with patch.object(manager, "_is_game_launch_allowed", return_value=True):
+            self.assertFalse(manager.start_game("chess"))
+
+        self.assertIsNone(manager.active_game)
+        self.assertEqual(mini_game_sessions().snapshot(), ())
+
     def test_launch_uses_chat_api_when_game_requests_are_accepted(self) -> None:
         character = _Character()
         manager = GameManager(character)

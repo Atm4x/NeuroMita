@@ -25,6 +25,7 @@ from utils.prompt_builder import build_system_prompts
 from core.request_policy import RequestPolicy
 from services.runtime_capabilities import runtime_capabilities
 from domain.world_character_relations import get_world_character_context
+from managers.mini_game_session_registry import mini_game_sessions
 
 _TYPE_MAP = {"float": "number", "double": "number", "int": "integer",
              "bool": "boolean", "str": "string", "string": "string"}
@@ -695,13 +696,8 @@ class PromptController(PromptBuilderService):
         if "worldPlayer" in info:
             value = cls._neutralize_world_state_tags(str(info["worldPlayer"])[:160])
             lines.append(f"Player world: {value}")
-        if "worldMita" in info:
-            value = cls._neutralize_world_state_tags(str(info["worldMita"])[:160])
-            lines.append(f"Unity character world: {value}")
         if "roomPlayer" in info:
             lines.append(f"Player room id: {info['roomPlayer']}")
-        if "distance" in info:
-            lines.append(f"Distance between player and Unity character: {info['distance']}")
         return {
             "role": "event",
             "content": (
@@ -710,6 +706,37 @@ class PromptController(PromptBuilderService):
                 + "\n".join(lines)
                 + "\n[/Shared Unity World Info]"
             ),
+        }
+
+    @classmethod
+    def _build_shared_minigame_context(cls, current_character_id: str) -> Optional[Dict[str, str]]:
+        sessions = mini_game_sessions().snapshot()
+        other_sessions = [
+            session
+            for session in sessions
+            if session.owner_character_id != str(current_character_id or "")
+        ]
+        if not other_sessions:
+            return None
+
+        lines = [
+            "This is read-only background information about mini-games involving the player.",
+            "You are not a participant in these matches.",
+            "Do not issue Chess or Sea Battle commands based on this information.",
+        ]
+        for session in other_sessions:
+            game_name = "Chess" if session.game_id == "chess" else "Sea Battle"
+            owner_name = cls._neutralize_world_state_tags(session.owner_name[:120])
+            public_event = cls._neutralize_world_state_tags(session.last_public_event[:240])
+            lines.append(
+                f"The player is currently playing {game_name} with {owner_name}. "
+                f"Latest public event: {public_event}"
+            )
+        return {
+            "role": "event",
+            "content": "[Shared Mini-game Context]\n"
+            + "\n\n".join(lines)
+            + "\n[/Shared Mini-game Context]",
         }
 
     @classmethod
@@ -1079,6 +1106,9 @@ class PromptController(PromptBuilderService):
             }
         if game_state_prompt_content:
             messages.append({"role": "system", "content": game_state_prompt_content})
+        shared_minigame_context = self._build_shared_minigame_context(char_id)
+        if shared_minigame_context is not None:
+            messages.append(shared_minigame_context)
 
         non_player_participants = [p for p in participants if p and p != "Player"]
         if dialogue is None and len(non_player_participants) >= 2:

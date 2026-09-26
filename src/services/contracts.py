@@ -413,9 +413,9 @@ class GameLinkService(ABC):
         """Last character addressed by a Unity request, if known."""
         return ""
 
-    def set_unity_target_character_id(self, character_id: str) -> None:
-        """Record or clear the last character addressed by Unity."""
-        return None
+    def set_unity_target_character_id(self, character_id: str) -> bool:
+        """Record or clear the target; return whether it changed."""
+        return False
 
 
 @dataclass(frozen=True, slots=True)
