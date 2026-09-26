@@ -4,6 +4,7 @@ from core.error_utils import format_exception
 import queue
 import threading
 import time
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -17,6 +18,7 @@ class _DispatchItem:
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
     description: str
+    context: Context
 
 
 class SerialDispatcher:
@@ -70,6 +72,7 @@ class SerialDispatcher:
             args=args,
             kwargs=kwargs,
             description=str(description or getattr(callback, "__qualname__", str(callback))),
+            context=copy_context(),
         )
         try:
             lane.put_nowait(item)
@@ -143,7 +146,7 @@ class SerialDispatcher:
                 self._queued = max(0, self._queued - 1)
                 self._active += 1
             try:
-                item.callback(*item.args, **item.kwargs)
+                item.context.run(item.callback, *item.args, **item.kwargs)
             except BaseException as exc:
                 logger.error(
                     f"Serial task '{item.description}' failed in '{self._name}': {format_exception(exc)}",

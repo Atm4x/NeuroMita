@@ -1,5 +1,6 @@
 from __future__ import annotations
 from core.error_utils import format_exception
+from core.trace_context import trace_scope
 
 import threading
 import time
@@ -319,13 +320,15 @@ class EventBus:
             self._safe_call(callback, event)
 
     def _safe_call(self, callback: Callable[..., Any], event: Event) -> None:
-        try:
-            callback(event)
-        except Exception as exc:
-            logger.error(
-                f"Event subscriber failed for '{event.name}': {format_exception(exc)}",
-                exc_info=True,
-            )
+        data = event.data if isinstance(event.data, dict) else {}
+        with trace_scope(data.get("trace_id")):
+            try:
+                callback(event)
+            except Exception as exc:
+                logger.error(
+                    f"Event subscriber failed for '{event.name}': {format_exception(exc)}",
+                    exc_info=True,
+                )
 
     def _get_active_subscribers(self, event_name: str) -> List[Callable[..., Any]]:
         subscribers = self._subscribers.get(event_name)

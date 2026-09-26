@@ -18,6 +18,7 @@ from core.services import use
 from managers.task_manager import TaskStatus
 from core.request_policy import RequestPolicy, resolve_policy
 from core.performance_trace import get_trace, perf_mark, perf_mark_once, performance_traces
+from core.trace_context import trace_scope
 from services.contracts import (
     CharacterRegistry,
     ChatGenerationRequest,
@@ -1062,30 +1063,31 @@ class ChatController(ChatService, GenerationActivityService):
         """Ставит запрос в пул генераций. Переполнение — явный отказ, а не рост очереди."""
         task_uid = kwargs.get("task_uid")
         trace_id = kwargs.get("trace_id")
-        operation_id = str(trace_id or uuid.uuid4().hex)
-        cancellation = CancellationToken()
-        kwargs["operation_id"] = operation_id
-        kwargs["cancellation"] = cancellation
-        self._register_generation(operation_id, cancellation, str(kwargs.get("character_id") or ""))
-        perf_mark(trace_id, "generation.enqueued")
-        try:
-            executors().try_submit(Pools.GENERATION, self._run_request, **kwargs)
-        except PoolSaturated:
-            self._finish_generation(operation_id)
-            performance_traces().finish(trace_id, "rejected", error_stage="generation.pool", error_type="PoolSaturated")
-            logger.warning("Очередь генераций переполнена — запрос отклонён.")
-            if task_uid:
-                self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
-                    "uid": task_uid,
-                    "status": TaskStatus.FAILED_ON_GENERATION,
-                    "error": "Generation queue is full",
+        with trace_scope(trace_id):
+            operation_id = str(trace_id or uuid.uuid4().hex)
+            cancellation = CancellationToken()
+            kwargs["operation_id"] = operation_id
+            kwargs["cancellation"] = cancellation
+            self._register_generation(operation_id, cancellation, str(kwargs.get("character_id") or ""))
+            perf_mark(trace_id, "generation.enqueued")
+            try:
+                executors().try_submit(Pools.GENERATION, self._run_request, **kwargs)
+            except PoolSaturated:
+                self._finish_generation(operation_id)
+                performance_traces().finish(trace_id, "rejected", error_stage="generation.pool", error_type="PoolSaturated")
+                logger.warning("Очередь генераций переполнена — запрос отклонён.")
+                if task_uid:
+                    self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
+                        "uid": task_uid,
+                        "status": TaskStatus.FAILED_ON_GENERATION,
+                        "error": "Generation queue is full",
+                    })
+                req_id = str(kwargs.get("req_id") or "").strip()
+                self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+                    "error": "Слишком много запросов одновременно. Подождите ответа.",
+                    "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
+                    "character_id": str(kwargs.get("character_id") or ""),
                 })
-            req_id = str(kwargs.get("req_id") or "").strip()
-            self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
-                "error": "Слишком много запросов одновременно. Подождите ответа.",
-                "message_id": ConversationMessageIds.incoming(req_id) if req_id else "",
-                "character_id": str(kwargs.get("character_id") or ""),
-            })
 
     def _ensure_perf_trace(self, data: dict) -> str:
         trace_id = str(data.get("trace_id") or "").strip() or None

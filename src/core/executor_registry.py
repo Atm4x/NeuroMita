@@ -16,6 +16,7 @@ ThreadPoolExecutor(1) на каждый HTTP-вызов LLM, ad-hoc threading.Th
 from __future__ import annotations
 
 import threading
+from contextvars import copy_context
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
@@ -113,13 +114,18 @@ class _BoundedPool:
         return self._submit_reserved(fn, args, kwargs)
 
     def _submit_reserved(self, fn: Callable, args: tuple, kwargs: dict) -> Future:
+        context = copy_context()
+
+        def invoke():
+            return context.run(fn, *args, **kwargs)
+
         def _release(_f: Future) -> None:
             with self._lock:
                 if self._reservations.pop(_f, None):
                     self._inflight -= 1
 
         try:
-            future = self._executor.submit(fn, *args, **kwargs)
+            future = self._executor.submit(invoke)
         except BaseException:
             with self._lock:
                 self._inflight -= 1

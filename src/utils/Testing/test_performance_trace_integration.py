@@ -21,6 +21,7 @@ from controllers.speech_controller import SpeechController
 from core.events import Event, Events
 from core.executors import PoolSaturated, Pools
 from core.performance_trace import performance_traces
+from core.trace_context import current_trace_id
 from core.request_policy import RequestPolicy
 from core.services import services
 from handlers.llm_providers.base import LLMRequest, LLMResponse
@@ -93,11 +94,13 @@ class _Bus:
 class _Generation(GenerationService):
     def __init__(self, result=None, error=None):
         self.request = None
+        self.observed_trace_id = None
         self.result = result
         self.error = error
 
     def generate_chat(self, request: ChatGenerationRequest):
         self.request = request
+        self.observed_trace_id = current_trace_id()
         if self.error is not None:
             raise self.error
         return self.result or ChatGenerationResult(text="ok", character_id="Crazy")
@@ -120,6 +123,9 @@ class _VoiceService(LocalVoiceService):
         return True
 
     def initialize_model(self, model_id):
+        return True
+
+    def reinitialize_model(self, model_id):
         return True
 
     def triton_status(self, *, refresh=False):
@@ -256,6 +262,7 @@ class PerformanceTraceIntegrationTests(unittest.TestCase):
             )
 
         self.assertEqual(generation.request.trace_id, trace.trace_id)
+        self.assertEqual(generation.observed_trace_id, trace.trace_id)
         snapshot = performance_traces().snapshot(trace.trace_id)
         self.assertEqual(snapshot["status"], "ok")
         self.assertIn("response.generated", [mark["name"] for mark in snapshot["marks"]])
