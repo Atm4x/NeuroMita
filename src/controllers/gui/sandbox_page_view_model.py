@@ -385,11 +385,23 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
     def _on_model_failed(self, event: Any) -> None:
         data = getattr(event, "data", None) or {}
         provider_error = data.get("provider_error")
+        error_details = data.get("error_details")
         message = (
             provider_error.get("message")
             if isinstance(provider_error, dict)
             else None
+        ) or (
+            error_details.get("message")
+            if isinstance(error_details, dict)
+            else None
         ) or data.get("error") or ""
+        if isinstance(error_details, dict) and error_details.get("kind") == "structured_response_error":
+            code = str(error_details.get("code") or "")
+            field = str(error_details.get("field") or "")
+            if code:
+                message = f"{message} [{code}]"
+            if field:
+                message = f"{message}\nField: {field}"
         self._finish_model_request(False, str(message))
 
     def _finish_model_request(self, ok: bool, error: str) -> None:
