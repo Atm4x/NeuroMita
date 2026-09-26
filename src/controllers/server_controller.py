@@ -3,15 +3,18 @@ from core.error_utils import format_exception
 import ipaddress
 import os
 import threading
+from concurrent.futures import Future
 from typing import Dict, Any, Optional, Tuple
 from collections import deque
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from core.services import use
+from core.executors import Pools, executors
 from domain.dialogue_identity import DialogueActorKind
 from services.contracts import CharacterRegistry, SettingsService
 
 from managers.task_manager import TaskStatus
+from managers.unity_retry_store import UnityRetryStore
 from game_connections.shared_image_transfer import ensure_shared_transfer_dirs
 
 
@@ -543,12 +546,108 @@ class ServerController:
         except Exception:
             pass
 
+        retry_message_id = str(task.data.get("unity_retry_message_id") or "")
+        character_id = str(task.data.get("character") or "")
+        if retry_message_id and task.status in (
+            TaskStatus.FAILED_ON_GENERATION,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+            TaskStatus.ABORTED,
+        ):
+            executors().submit(
+                Pools.IO,
+                UnityRetryStore.finish_failed_attempt,
+                character_id,
+                retry_message_id,
+                str(getattr(task, "uid", "") or ""),
+                str(getattr(task, "error", "") or "Не удалось получить ответ."),
+            )
+
         try:
             client_id = str(task.data.get("client_id") or "")
             if client_id and self.server:
-                self.server.schedule_send_task_update(client_id, task)
+                delivery = self.server.schedule_send_task_update(client_id, task)
+                if retry_message_id and task.status == TaskStatus.SUCCESS:
+                    if delivery is not None:
+                        delivery.add_done_callback(
+                            lambda result, char=character_id, mid=retry_message_id:
+                                executors().submit(
+                                    Pools.IO,
+                                    self._finalize_unity_retry_delivery,
+                                    char,
+                                    mid,
+                                    str(getattr(task, "uid", "") or ""),
+                                    result,
+                                )
+                        )
+                    else:
+                        executors().submit(
+                            Pools.IO,
+                            self._mark_unity_retry_delivery_failed,
+                            character_id,
+                            retry_message_id,
+                            str(getattr(task, "uid", "") or ""),
+                            "Ответ готов, но не удалось отправить его в игру.",
+                        )
+            elif retry_message_id and task.status == TaskStatus.SUCCESS:
+                executors().submit(
+                    Pools.IO,
+                    self._mark_unity_retry_delivery_failed,
+                    character_id,
+                    retry_message_id,
+                    str(getattr(task, "uid", "") or ""),
+                    "Игровое подключение недоступно для доставки ответа.",
+                )
+        except Exception as exc:
+            if retry_message_id and task.status == TaskStatus.SUCCESS:
+                executors().submit(
+                    Pools.IO,
+                    self._mark_unity_retry_delivery_failed,
+                    character_id,
+                    retry_message_id,
+                    str(getattr(task, "uid", "") or ""),
+                    str(exc) or "Не удалось отправить ответ в игру.",
+                )
+
+    def _finalize_unity_retry_delivery(
+        self,
+        character_id: str,
+        message_id: str,
+        task_uid: str,
+        delivery: Future,
+    ) -> None:
+        try:
+            sent = bool(delivery.result())
         except Exception:
-            pass
+            sent = False
+        if sent:
+            UnityRetryStore.complete_delivery(character_id, message_id, task_uid)
+        else:
+            self._mark_unity_retry_delivery_failed(
+                character_id,
+                message_id,
+                task_uid,
+                "Ответ готов, но не удалось отправить его в игру.",
+            )
+
+    def _mark_unity_retry_delivery_failed(
+        self,
+        character_id: str,
+        message_id: str,
+        task_uid: str,
+        error: str,
+    ) -> None:
+        UnityRetryStore.finish_failed_attempt(
+            character_id,
+            message_id,
+            task_uid,
+            error,
+        )
+        self.event_bus.emit(Events.Model.ON_FAILED_RESPONSE, {
+            "error": error,
+            "message_id": message_id,
+            "character_id": character_id,
+        })
 
     def _on_send_task_update(self, event: Event):
         task = (event.data or {}).get('task')

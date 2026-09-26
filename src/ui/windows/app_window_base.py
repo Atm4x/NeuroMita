@@ -1,6 +1,7 @@
 from core.error_utils import format_exception
 
 import base64
+import datetime
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -27,6 +28,8 @@ from PyQt6.QtWidgets import (
 import ui.gui_templates as gui_templates
 from localization.live import tr_set
 from main_logger import logger
+from managers.unity_retry_store import UnityRetryStore
+from controllers.gui.async_runner import run_async
 from ui.chat import message_renderer
 from ui.chat.chat_delegate import ChatMessageDelegate
 from ui.chat.render_context import ChatRenderContext
@@ -583,6 +586,7 @@ class AppWindowBase(QMainWindow):
             ui_images=entry.get("_ui_images") or [],
             sample_id=sample_id,
             context_snapshot_id=context_snapshot_id,
+            delivery_error=str(entry.get("delivery_error") or ""),
         )
 
     def _on_history_loaded(self, data: dict):
@@ -592,8 +596,22 @@ class AppWindowBase(QMainWindow):
             return
 
         payload = dict(data or {})
-        messages = payload.get("messages", []) or []
         response_character_id = str(payload.get("character_id") or "")
+        if response_character_id and not payload.get("_unity_retries_loaded"):
+            payload["_unity_retries_loaded"] = True
+            run_async(
+                self,
+                lambda: self._merge_unity_retry_records(
+                    payload,
+                    UnityRetryStore.list_for_character(response_character_id),
+                ),
+                self._on_history_loaded,
+                lambda _exc, data=payload: self._on_history_loaded(data),
+                name=f"unity-retry-history:{response_character_id}",
+                policy="latest",
+            )
+            return
+        messages = payload.get("messages", []) or []
         request_id = str(payload.get("request_id") or self._history_load_request_id or "")
         current_character_id = str(self._shell_actions.current_character_id() or "")
         plan = self._chat_presentation.plan_history_projection(
@@ -637,6 +655,55 @@ class AppWindowBase(QMainWindow):
                 self._history_load_request_id = ""
             chat_window.setUpdatesEnabled(True)
             chat_window.update()
+
+    @staticmethod
+    def _merge_unity_retry_records(payload: dict, records: list[dict]) -> dict:
+        merged = dict(payload)
+        messages = list(merged.get("messages", []) or [])
+        known_ids = {
+            str(entry.get("message_id") or "")
+            for entry in messages
+            if isinstance(entry, dict)
+        }
+        for record in records:
+            message_id = str(record.get("message_id") or "")
+            if not message_id:
+                continue
+            if message_id in known_ids:
+                for entry in messages:
+                    if isinstance(entry, dict) and str(entry.get("message_id") or "") == message_id:
+                        entry["delivery_error"] = str(record.get("error") or "")
+                continue
+            request = record.get("request") if isinstance(record.get("request"), dict) else {}
+            text = str(record.get("text") or request.get("user_input") or "")
+            ui_images = [
+                {
+                    "url": "data:image/jpeg;base64,"
+                    + base64.b64encode(bytes(image)).decode("ascii")
+                }
+                for image in (request.get("image_data") or [])
+                if isinstance(image, (bytes, bytearray))
+            ]
+            if not text and ui_images:
+                text = "Изображение из Unity"
+            created_at = float(record.get("created_at") or 0)
+            message_time = (
+                datetime.datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S")
+                if created_at
+                else ""
+            )
+            messages.append({
+                "role": "user",
+                "content": text,
+                "time": message_time,
+                "message_id": message_id,
+                "delivery_error": str(record.get("error") or ""),
+                "_ui_images": ui_images,
+            })
+            known_ids.add(message_id)
+        messages.sort(key=lambda item: str(item.get("time") or ""))
+        merged["messages"] = messages
+        return merged
 
     def validate_number_0_60(self, new_value):
         if not new_value.isdigit():
