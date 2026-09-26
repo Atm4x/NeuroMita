@@ -17,6 +17,7 @@ from core.request_policy import RequestPolicy
 from services.contracts import (
     PlayerMessageSource,
     PreparedHistory,
+    PromptBuildResult,
     PromptBuildRequest,
     parse_dialogue_turn_context,
 )
@@ -29,6 +30,24 @@ class PromptSystemStateTests(unittest.TestCase):
 
         def get_variable(self, _name, default=None):
             return default
+
+    class _PromptFeatures:
+        def __init__(self, features=None):
+            self.features = features or {}
+
+        def get_prompt_feature(self, name, default=None):
+            return self.features.get(name, default)
+
+    def test_intents_are_default_except_for_l1_react(self):
+        resolve = PromptController._resolve_support_intents
+        self.assertTrue(resolve(self._PromptFeatures(), RequestPolicy()))
+        self.assertFalse(resolve(self._PromptFeatures({"support_intents": False}), RequestPolicy()))
+        self.assertFalse(resolve(self._PromptFeatures(), RequestPolicy(react_level=1)))
+        self.assertTrue(resolve(self._PromptFeatures(), RequestPolicy(react_level=2)))
+
+    def test_prompt_build_result_defaults_to_intents_enabled(self):
+        result = PromptBuildResult(messages=[], history_messages=[], user_message=None)
+        self.assertTrue(result.support_intents)
 
     def test_dialogue_context_parser_keeps_auto_turn_state(self):
         context = parse_dialogue_turn_context({

@@ -68,6 +68,24 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
         self.assertIn("chronological order", rendered)
         self.assertNotIn("performed", rendered.lower())
 
+    def test_action_projection_normalizes_legacy_clothing_commands(self):
+        records = requested_actions_from_structured({
+            "segments": [{
+                "commands": [
+                    "clothes:VampClothes,vamp_nebula_turquoise",
+                    "ClothesColor,All,250,250,250",
+                    "ClothesColor,Skirt,0,255,127",
+                    "ClothesColor,reset",
+                ],
+            }],
+        })
+        self.assertEqual(records, [
+            "outfit: VampClothes, vamp_nebula_turquoise",
+            "appearance recolor: All rgb(250,250,250)",
+            "appearance recolor: Skirt rgb(0,255,127)",
+            "appearance recolor: reset",
+        ])
+
     def test_action_emergency_cap_preserves_newest_suffix(self):
         records, capped = cap_requested_actions(
             ["animation: Dance_01", "animation: Dance_02", "animation: Dance_03"],

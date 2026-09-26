@@ -21,6 +21,39 @@ _SEGMENT_ACTION_FIELDS = (
 )
 
 
+def _normalize_legacy_clothing_command(text: str) -> tuple[bool, str]:
+    lowered = text.lower()
+    if lowered.startswith("clothes:"):
+        selection = text.split(":", 1)[1].strip()
+        outfit, separator, variant = selection.partition(",")
+        outfit = " ".join(outfit.split())
+        variant = " ".join(variant.split())
+        if not outfit:
+            return True, ""
+        record = f"outfit: {outfit}"
+        if separator and variant:
+            record += f", {variant}"
+        return True, record
+
+    if not lowered.startswith("clothescolor"):
+        return False, ""
+
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) == 2 and parts[1].lower() == "reset":
+        return True, "appearance recolor: reset"
+    if len(parts) != 5:
+        return True, ""
+
+    part = " ".join(parts[1].split())
+    try:
+        rgb = tuple(int(channel) for channel in parts[2:])
+    except (TypeError, ValueError):
+        return True, ""
+    if not part or any(channel < 0 or channel > 255 for channel in rgb):
+        return True, ""
+    return True, f"appearance recolor: {part} rgb({rgb[0]},{rgb[1]},{rgb[2]})"
+
+
 def requested_actions_from_structured(structured_data: Any) -> list[str]:
     """Return stable, compact action records from persisted ``structured_data``.
 
@@ -40,6 +73,12 @@ def requested_actions_from_structured(structured_data: Any) -> list[str]:
             for value in values:
                 text = " ".join(str(value or "").split()).strip()
                 if text:
+                    if label == "command":
+                        is_clothing_command, normalized = _normalize_legacy_clothing_command(text)
+                        if is_clothing_command:
+                            if normalized:
+                                result.append(normalized)
+                            continue
                     result.append(f"{label}: {text}")
         for field, label in (("start_game", "start_game"), ("end_game", "end_game")):
             value = " ".join(str(segment.get(field) or "").split()).strip()
