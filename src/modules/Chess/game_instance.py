@@ -158,6 +158,9 @@ class ChessGame(GameInterface):
 
             if not isinstance(event, dict):
                 continue
+            if event.get("event") == "game_closed":
+                self.cleanup()
+                return
             if event.get("event") == "player_chess_move":
                 self._dispatch_player_move_reaction(event)
             elif event.get("event") == "manual_mita_turn":

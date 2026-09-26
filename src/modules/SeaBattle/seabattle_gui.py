@@ -192,6 +192,11 @@ class SeaBattleWindow(QWidget):
         if not self._programmatic_close:
             self._request_game_closed_reaction()
         try:
+            if self.reaction_queue:
+                self.reaction_queue.put({"event": "game_closed"})
+        except Exception:
+            pass
+        try:
             if self.state_queue:
                 self.state_queue.put({
                     "event": "gui_closed",
@@ -558,13 +563,25 @@ class SeaBattleWindow(QWidget):
         return messages.get(result, str(fallback or ""))
 
 def run_seabattle_gui_process(command_queue, state_queue, reaction_queue=None):
-    set_app_user_model_id()
-    app = QApplication(sys.argv)
-    app.setWindowIcon(application_icon())
-    install_dark_titlebar_sync(app, True)
-    app.setStyleSheet(get_stylesheet() + SEABATTLE_QSS)
-    window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
-    window.show()
-    apply_dark_titlebar(window, True)
-    window.send_state_update()
-    sys.exit(app.exec())
+    try:
+        set_app_user_model_id()
+        app = QApplication(sys.argv)
+        app.setWindowIcon(application_icon())
+        install_dark_titlebar_sync(app, True)
+        app.setStyleSheet(get_stylesheet() + SEABATTLE_QSS)
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        window.show()
+        apply_dark_titlebar(window, True)
+        window.send_state_update()
+        sys.exit(app.exec())
+    finally:
+        try:
+            if state_queue:
+                state_queue.put({"event": "gui_closed", "reason": "process_exit"})
+        except Exception:
+            pass
+        try:
+            if reaction_queue:
+                reaction_queue.put({"event": "game_closed"})
+        except Exception:
+            pass

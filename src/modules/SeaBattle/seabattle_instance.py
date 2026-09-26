@@ -138,6 +138,9 @@ class SeaBattleGame(GameInterface):
             if not isinstance(event, dict):
                 continue
             event_name = event.get("event")
+            if event_name == "game_closed":
+                self.cleanup()
+                return
             if event_name == "player_target_selected":
                 self._dispatch_player_target_reaction(event)
             elif event_name == "mita_target_hit":
@@ -156,7 +159,8 @@ class SeaBattleGame(GameInterface):
             return
 
         coord = str(event.get("coord") or "неизвестную клетку")
-        result = str(event.get("message") or event.get("result") or "сделал ход")
+        result_code = str(event.get("result") or "").casefold()
+        result_message = str(event.get("message") or result_code or "сделал ход")
         public_coord = (
             coord.upper()
             if re.fullmatch(r"[A-J](?:10|[1-9])", coord.upper())
@@ -164,9 +168,9 @@ class SeaBattleGame(GameInterface):
         )
         public_result = (
             "hit"
-            if "hit" in result.casefold()
+            if result_code in {"hit", "sunk"}
             else "miss"
-            if "miss" in result.casefold()
+            if result_code == "miss"
             else "shot"
         )
         mini_game_sessions().update_public_event(
@@ -176,7 +180,7 @@ class SeaBattleGame(GameInterface):
         )
         self.request_character_reaction(
             "[Sea Battle automatic turn request] The player fired at "
-            f"{coord}. Result: {result}. "
+            f"{coord}. Result: {result_message}. "
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly one legal MakeMove,<coordinate> command in commands. "
             "Do not wait for the player to ask again."

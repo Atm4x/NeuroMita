@@ -843,13 +843,16 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
     def _send_gui_closed(reason: str):
         if close_event_sent["sent"]:
             return
-        if not state_q:
-            close_event_sent["sent"] = True
-            return
-        try:
-            state_q.put({"event": "gui_closed", "reason": str(reason or "")})
-        except Exception:
-            pass
+        if state_q:
+            try:
+                state_q.put({"event": "gui_closed", "reason": str(reason or "")})
+            except Exception:
+                pass
+        if reaction_queue:
+            try:
+                reaction_queue.put({"event": "game_closed"})
+            except Exception:
+                pass
         close_event_sent["sent"] = True
 
     def _proxy_update_status(message):
