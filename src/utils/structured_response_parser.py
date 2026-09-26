@@ -93,7 +93,8 @@ def parse_structured_response_with_meta(
 
     if data is None:
         tail_cleaned = _drop_incomplete_json_tail(cleaned)
-        if tail_cleaned != cleaned:
+        has_root_member = re.match(r'\s*\{\s*"(?:[^"\\]|\\.)*"\s*:', cleaned)
+        if tail_cleaned != cleaned and (tail_cleaned.strip() != "{}" or has_root_member):
             data, parse_level = _try_json_loads(
                 _close_truncated_json(tail_cleaned),
                 level="truncated_tail_discard+truncation_close",
@@ -105,6 +106,11 @@ def parse_structured_response_with_meta(
     if data is None:
         data, parse_level = _try_json_repair_lib(_close_truncated_json(cleaned),
                                                  level="truncation_close+json_repair")
+
+    if data == {} and cleaned.strip() != "{}":
+        has_root_member = re.match(r'\s*\{\s*"(?:[^"\\]|\\.)*"\s*:', cleaned)
+        if not has_root_member:
+            data, parse_level = None, ""
 
     if data is None:
         likely_truncated = _is_likely_truncated_json(cleaned)

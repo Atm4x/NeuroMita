@@ -286,7 +286,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
                 segment_excl = set(caps.get("structured_segment_exclude_fields") or ())
                 # intents is an internal Unity channel — hidden from the model
                 # unless PromptController has enabled intents for this request.
-                if not caps.get("schema_intents", False):
+                if not caps.get("schema_intents", True):
                     segment_excl.add("intents")
                 payload["response_format"] = model_cls.openai_response_format(
                     exclude_fields=excl or None,

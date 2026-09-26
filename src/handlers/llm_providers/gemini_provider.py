@@ -359,7 +359,7 @@ class GeminiProvider(BaseProvider):
                     excl.add("reasoning")
                 excl.update(str(name) for name in caps.get("structured_exclude_fields") or () if str(name).strip())
                 segment_excl = set(caps.get("structured_segment_exclude_fields") or ())
-                if not caps.get("schema_intents", False):
+                if not caps.get("schema_intents", True):
                     segment_excl.add("intents")
                 schema = model_cls.gemini_schema_dict(
                     exclude_fields=excl or None,
