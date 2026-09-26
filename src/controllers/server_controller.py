@@ -567,9 +567,14 @@ class ServerController:
                 },
                 status=next_status,
                 task_uid=task_uid,
+                expected_task_uid=task_uid,
                 result=task_result if isinstance(task_result, dict) else {},
             ):
                 logger.error("Could not persist generated Unity answer %s", retry_message_id)
+                if UnityRetryStore.is_superseded_attempt(
+                    character_id, retry_message_id, task_uid
+                ):
+                    return
         elif retry_message_id and task.status == TaskStatus.FAILED_ON_VOICEOVER:
             voiceover_error = str(
                 getattr(task, "error", "")
@@ -663,7 +668,8 @@ class ServerController:
         except Exception:
             sent = False
         if sent:
-            UnityRetryStore.complete_delivery(character_id, message_id, task_uid)
+            if not UnityRetryStore.complete_delivery(character_id, message_id, task_uid):
+                logger.error("Could not finalize Unity delivery %s", message_id)
         else:
             self._mark_unity_retry_delivery_failed(
                 character_id,

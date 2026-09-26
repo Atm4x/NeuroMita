@@ -57,16 +57,17 @@ class UnityRetryStore:
     @classmethod
     def _write(cls, character_id: str, records: list[dict[str, Any]]) -> bool:
         path = cls._path(character_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(
-            {"version": cls.VERSION, "records": records},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        if len(content.encode("utf-8")) > cls.MAX_BYTES:
-            return False
-        fd, temp_path = tempfile.mkstemp(prefix=".unity-retry-", suffix=".tmp", dir=path.parent)
+        temp_path = None
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = json.dumps(
+                {"version": cls.VERSION, "records": records},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if len(content.encode("utf-8")) > cls.MAX_BYTES:
+                return False
+            fd, temp_path = tempfile.mkstemp(prefix=".unity-retry-", suffix=".tmp", dir=path.parent)
             with os.fdopen(fd, "w", encoding="utf-8") as target:
                 target.write(content)
                 target.flush()
@@ -74,11 +75,13 @@ class UnityRetryStore:
             os.replace(temp_path, path)
             return True
         except Exception:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
+            logger.exception("Unable to persist Unity retry outbox %s", path)
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            return False
 
     @classmethod
     def _prune(cls, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -226,6 +229,15 @@ class UnityRetryStore:
         )
 
     @classmethod
+    def is_superseded_attempt(cls, character_id: str, message_id: str, task_uid: str) -> bool:
+        record = cls.get(character_id, message_id)
+        return bool(
+            record is not None
+            and str(record.get("active_task_uid") or "")
+            and str(record.get("active_task_uid") or "") != str(task_uid or "")
+        )
+
+    @classmethod
     def update(cls, character_id: str, message_id: str, **changes: Any) -> bool:
         with cls._lock:
             records, _ = cls._read_records_locked(character_id)
@@ -277,6 +289,7 @@ class UnityRetryStore:
         status: str,
         error: str = "",
         task_uid: str | None = None,
+        expected_task_uid: str | None = None,
         result: dict[str, Any] | None = None,
     ) -> bool:
         with cls._lock:
@@ -285,6 +298,11 @@ class UnityRetryStore:
                 if str(item.get("message_id") or "") != str(message_id or ""):
                     continue
                 if str(item.get("status") or "") not in expected_statuses:
+                    return False
+                if (
+                    expected_task_uid is not None
+                    and str(item.get("active_task_uid") or "") != str(expected_task_uid or "")
+                ):
                     return False
                 item["status"] = str(status)
                 item["error"] = str(error or "")
@@ -404,6 +422,7 @@ class UnityRetryStore:
             status="generated_pending_delivery",
             error=error or "Не удалось озвучить ответ; сохранённый текст можно отправить в игру.",
             task_uid=task_uid,
+            expected_task_uid=task_uid,
         )
 
     @classmethod
