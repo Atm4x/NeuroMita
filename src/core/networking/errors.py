@@ -250,16 +250,20 @@ def _tls_error_detail(exc: BaseException) -> str:
             return marker
 
     detail = _compact_detail(exc)
+    return _redact_sensitive_text(detail)[:500]
+
+
+def _redact_sensitive_text(text: str) -> str:
     secret_keys = "|".join(re.escape(key) for key in _SECRET_QUERY_KEYS)
     return re.sub(
         rf"(?i)\b({secret_keys})(=|%3d)([^&\s,]+)",
         r"\1\2<redacted>",
-        detail,
-    )[:500]
+        text,
+    )
 
 
 def _compact_detail(exc: BaseException) -> str:
-    return " ".join(str(exc or "").split())[:500]
+    return _redact_sensitive_text(" ".join(str(exc or "").split()))[:500]
 
 
 def _timeout_phase(exc: httpx.TimeoutException) -> str:

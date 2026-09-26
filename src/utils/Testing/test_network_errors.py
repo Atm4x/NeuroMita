@@ -64,6 +64,21 @@ class NetworkErrorClassificationTests(unittest.TestCase):
         self.assertNotIn("secret-value", result.url or "")
         self.assertIn("redacted", result.url or "")
 
+    def test_http_status_detail_redacts_secret_query_parameter(self) -> None:
+        request = httpx.Request("GET", "https://example.test/?key=secret-value&mode=full")
+        response = httpx.Response(401, request=request)
+        error = httpx.HTTPStatusError(
+            f"Client error '401 Unauthorized' for url '{request.url}'",
+            request=request,
+            response=response,
+        )
+
+        result = classify_network_error("test", error)
+
+        self.assertNotIn("secret-value", result.url or "")
+        self.assertNotIn("secret-value", result.detail)
+        self.assertIn("key=<redacted>", result.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
