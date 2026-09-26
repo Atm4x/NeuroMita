@@ -61,6 +61,25 @@ _DEFAULT_TOOL_ENABLED = {
     "reminder": True,
 }
 
+
+def extract_shared_world_info(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Project only passive, scalar world facts safe to share between characters."""
+    if not isinstance(snapshot, dict):
+        return {}
+    shared: dict[str, Any] = {}
+    for key in ("roomPlayer",):
+        value = snapshot.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            shared[key] = value
+    distance = snapshot.get("distance")
+    if isinstance(distance, (int, float)) and not isinstance(distance, bool):
+        shared["distance"] = float(distance)
+    for key in ("worldPlayer", "worldMita"):
+        value = snapshot.get(key)
+        if isinstance(value, str) and value.strip():
+            shared[key] = value.strip()
+    return shared
+
 def _render_tools_for_prompt(schema: list) -> str:
     """Format tool JSON schema list into a human-readable prompt block."""
     if not schema:
@@ -173,7 +192,9 @@ class ModelController(GenerationService, ModelStateService):
         self._base_prompt_cache: dict[tuple[str, str], list[dict]] = {}
         self._last_token_stats: dict[str, Any] = {}
 
-        self.game_state = GameState()
+        self._game_states_by_character_id: dict[str, GameState] = {}
+        self._shared_world_info: dict[str, Any] = {}
+        self._game_states_lock = threading.RLock()
         self._temporary_system_infos: dict[str, list[dict]] = {}
         self._temporary_system_infos_lock = threading.Lock()
 
@@ -282,7 +303,29 @@ class ModelController(GenerationService, ModelStateService):
     # ---------------------------------------------------------------------
 
     def _on_set_game_data(self, event: Event):
-        self.game_state.update_from_event_data(event.data or {})
+        data = event.data or {}
+        if not isinstance(data, dict):
+            return
+        character_id = str(data.get("character_id") or "").strip()
+        if not character_id:
+            character_id = str(self._get_current_character_id() or "").strip()
+        if not character_id:
+            return
+        state_data = {key: value for key, value in data.items() if key != "character_id"}
+        with self._game_states_lock:
+            state = self._game_states_by_character_id.setdefault(character_id, GameState())
+            state.update_from_event_data(state_data)
+            self._shared_world_info = extract_shared_world_info(state_data)
+
+    def _get_game_state_for_character(self, character_id: str) -> dict[str, Any]:
+        with self._game_states_lock:
+            state = self._game_states_by_character_id.get(str(character_id or ""))
+            if state is None:
+                result = GameState().to_prompt_dict()
+            else:
+                result = state.to_prompt_dict()
+            result["shared_world_info"] = dict(self._shared_world_info)
+            return result
 
     def _on_add_temporary_system_info(self, event: Event):
         data = event.data or {}
@@ -322,7 +365,9 @@ class ModelController(GenerationService, ModelStateService):
                 self._temporary_system_infos.pop(character_id, None)
 
     def _on_get_game_state(self, event: Event):
-        return self.game_state.to_prompt_dict()
+        data = event.data if isinstance(event.data, dict) else {}
+        character_id = str(data.get("character_id") or self._get_current_character_id() or "")
+        return self._get_game_state_for_character(character_id)
 
     def _remote_only_structured_segment_fields(self) -> list[str]:
         capabilities = runtime_capabilities(settings=self.settings)
@@ -974,7 +1019,7 @@ class ModelController(GenerationService, ModelStateService):
                 is_game_master=(cid == "GameMaster"),
                 separate_prompts=bool(self.settings.get("SEPARATE_PROMPTS", True)),
                 capabilities=capabilities,
-                game_state=self.game_state.to_prompt_dict(),
+                game_state=self._get_game_state_for_character(char_id),
             )
             with character_lock(cid):
                 built = use(PromptBuilderService).build(prompt_request)
@@ -1429,7 +1474,7 @@ class ModelController(GenerationService, ModelStateService):
         game_state = (
             copy.deepcopy(request.game_state)
             if request.game_state
-            else self.game_state.to_prompt_dict()
+            else self._get_game_state_for_character(char_id)
         )
 
         # World lore is character-specific. Resolve it on this request's

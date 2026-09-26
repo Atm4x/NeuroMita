@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from core.events import Events
 from core.services import use
-from services.contracts import CharacterRegistry, PlayerMessageSource, SettingsService, TaskService
+from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
@@ -311,6 +311,8 @@ class CreateTaskAction:
         # into the persistent fallback state used by non-Unity requests.
         persistent_game_state = dict(game_state_payload)
         persistent_game_state.pop("runtime_events", None)
+        persistent_game_state["character_id"] = str(character_id or "")
+        use(GameLinkService).set_unity_target_character_id(character_id)
         event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
 
         if server._should_block_event(event_type):

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QWidget,
@@ -26,7 +27,7 @@ from ui.gui_templates import create_settings_section
 from ui.settings.dialogue_settings import add_dialogue_settings_section
 from ui.settings.settings_access import get_setting
 from core.services import use
-from services.contracts import CharacterRegistry
+from services.contracts import CharacterRegistry, GameLinkService
 from utils import getTranslationVariant as _
 from localization.live import tr_set
 
@@ -34,20 +35,77 @@ from localization.live import tr_set
 _BEAT_BACKEND_OPTIONS = ("auto", "beat_this", "librosa", "dsp_fallback")
 
 
+def _select_manual_game_character(launcher_character, unity_character, choose_target):
+    """Resolve the explicit owner for a desktop-launched mini-game."""
+    if unity_character is None or str(unity_character.char_id) == str(launcher_character.char_id):
+        return launcher_character
+
+    def _label(character):
+        name = str(getattr(character, "display_name", "") or character.char_id)
+        return f"{name} ({character.char_id})"
+
+    choices = [_label(unity_character), _label(launcher_character)]
+    selected = choose_target(choices, choices[0])
+    if selected == choices[0]:
+        return unity_character
+    if selected == choices[1]:
+        return launcher_character
+    return None
+
+
+def _resolve_manual_game_target(gui, launcher_character):
+    """Offer the current Unity target when it differs from the launcher selection."""
+    try:
+        game_link = use(GameLinkService)
+        if not game_link.is_connected():
+            return launcher_character
+        unity_id = game_link.unity_target_character_id()
+        unity_character = use(CharacterRegistry).get(unity_id) if unity_id else None
+    except Exception:
+        unity_character = None
+
+    def _choose(choices, preferred):
+        selected, accepted = QInputDialog.getItem(
+            gui,
+            _("Персонаж для игры", "Choose a character for the game"),
+            _("Unity сейчас обращается к этому персонажу. С кем начать игру?", "Unity is currently addressing this character. Who should play?"),
+            choices,
+            choices.index(preferred),
+            False,
+        )
+        return selected if accepted else None
+
+    return _select_manual_game_character(launcher_character, unity_character, _choose)
+
+
 def _start_manual_game(gui, game_id: str) -> None:
-    """Open a mini-game for the current character from the settings panel."""
+    """Open a mini-game for an explicitly resolved character."""
     try:
         character = use(CharacterRegistry).current()
     except Exception:
         character = None
 
-    if character is None or not hasattr(character, "game_manager"):
+    if character is None:
         QMessageBox.warning(
             gui,
             _("Игра недоступна", "Game unavailable"),
             _(
                 "Мита ещё не загружена. Дождитесь готовности приложения и повторите.",
                 "Mita is not loaded yet. Wait for the application to finish starting and try again.",
+            ),
+        )
+        return
+
+    character = _resolve_manual_game_target(gui, character)
+    if character is None:
+        return
+    if not hasattr(character, "game_manager"):
+        QMessageBox.warning(
+            gui,
+            _("Игра недоступна", "Game unavailable"),
+            _(
+                "Выбранный персонаж ещё не загружен. Выберите текущего персонажа лаунчера и повторите.",
+                "The selected character is not loaded yet. Choose the launcher's current character and try again.",
             ),
         )
         return

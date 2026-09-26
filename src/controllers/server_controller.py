@@ -331,6 +331,8 @@ class ServerController:
         else:
             self.ConnectedToGame = bool(client_connected)
         self.game_link.set_connected(self.ConnectedToGame)
+        if not self.ConnectedToGame:
+            self.game_link.set_unity_target_character_id("")
 
         self.event_bus.emit(Events.GUI.UPDATE_STATUS_COLORS)
 
