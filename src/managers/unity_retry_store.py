@@ -253,12 +253,16 @@ class UnityRetryStore:
 
     @classmethod
     def is_superseded_attempt(cls, character_id: str, message_id: str, task_uid: str) -> bool:
-        record = cls.get(character_id, message_id)
-        return bool(
-            record is not None
-            and str(record.get("active_task_uid") or "")
-            and str(record.get("active_task_uid") or "") != str(task_uid or "")
-        )
+        key = (str(character_id or ""), str(message_id or ""))
+        with cls._lock:
+            if key in cls._delivered_in_process:
+                return True
+            record = cls.get(character_id, message_id)
+            return bool(
+                record is not None
+                and str(record.get("active_task_uid") or "")
+                and str(record.get("active_task_uid") or "") != str(task_uid or "")
+            )
 
     @classmethod
     def update(cls, character_id: str, message_id: str, **changes: Any) -> bool:
