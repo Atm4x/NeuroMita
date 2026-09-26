@@ -347,6 +347,9 @@ class UnityRetryStore:
     def claim(cls, character_id: str, message_id: str) -> dict[str, Any] | None:
         """Atomically claim only an explicitly retryable record."""
         with cls._lock:
+            key = (str(character_id or ""), str(message_id or ""))
+            if key in cls._delivered_in_process:
+                return None
             records, _ = cls._read_records_locked(character_id)
             for item in records:
                 if str(item.get("message_id") or "") != str(message_id or ""):

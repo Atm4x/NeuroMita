@@ -1429,6 +1429,10 @@ class ChatController(ChatService, GenerationActivityService):
                 raise RuntimeError("Не удалось создать игровую задачу для повтора")
             if not UnityRetryStore.set_active_task(character_id, message_id, task.uid):
                 raise RuntimeError("Не удалось связать повтор с новой игровой задачей")
+            self.event_bus.emit(Events.GUI.CLEAR_CHAT_MESSAGE_ERROR, {
+                "message_id": message_id,
+                "character_id": character_id,
+            })
 
             if prior_status == "generated_pending_delivery":
                 result = claimed.get("result")
@@ -1446,10 +1450,6 @@ class ChatController(ChatService, GenerationActivityService):
             request["unity_retry_message_id"] = message_id
             request["images_shown"] = True
             request["event_type"] = "chat"
-            self.event_bus.emit(Events.GUI.CLEAR_CHAT_MESSAGE_ERROR, {
-                "message_id": message_id,
-                "character_id": character_id,
-            })
             self.event_bus.emit(Events.Chat.SEND_MESSAGE, request)
         except Exception as exc:
             if task is not None and getattr(task, "uid", None):
