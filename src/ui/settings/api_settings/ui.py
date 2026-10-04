@@ -13,6 +13,7 @@ import qtawesome as qta
 from utils import _
 from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
+from styles.completion_popup import get_completion_popup_stylesheet
 from .model_settings_form import ModelSettingsForm
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
@@ -438,12 +439,16 @@ def _build_fallbacks(self, layout):
 
 
 def _build_completer(self):
-    self.api_model_completer = QCompleter()
-    self.api_model_list_model = QStringListModel()
+    self.api_model_completer = QCompleter(self.api_model_row.edit)
+    self.api_model_list_model = QStringListModel(self.api_model_completer)
     self.api_model_completer.setModel(self.api_model_list_model)
     self.api_model_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
     self.api_model_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
     self.api_model_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    popup = self.api_model_completer.popup()
+    popup.setObjectName("CompletionPopup")
+    popup.setStyleSheet(get_completion_popup_stylesheet())
+    self.api_model_completer.setMaxVisibleItems(8)
     self.api_model_row.edit.setCompleter(self.api_model_completer)
 
     def show_completer(event):
