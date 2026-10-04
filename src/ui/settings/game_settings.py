@@ -195,14 +195,13 @@ def _bind_manual_game_launch_buttons(gui) -> None:
             or sandbox_id
             or "?"
         )
-        unity_character = _unity_target_character()
-        unity_name = str(
-            getattr(unity_character, "display_name", "")
-            or getattr(unity_character, "char_id", "")
-            or ""
-        )
+        unity_name = ""
         try:
-            unity_connected = bool(use(GameLinkService).is_connected())
+            game_link = use(GameLinkService)
+            unity_connected = bool(game_link.is_connected())
+            unity_id = game_link.unity_target_character_id() if unity_connected else ""
+            if unity_id:
+                unity_name = str(registry.display_name_of(unity_id) or unity_id)
         except Exception:
             unity_connected = False
         allow_toggle = getattr(gui, "ALLOW_GAMES_WHEN_CONNECTED", None)

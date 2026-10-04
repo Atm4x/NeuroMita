@@ -339,6 +339,7 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
         "Выберите установленную модель и способ её загрузки.",
         "Choose an installed model and when to load it.",
     )
+    self.local_settings_frame.setProperty("requiresLocalVoice", True)
     local_layout = self.local_settings_frame.body
 
     local_model_row = SettingsBodyWidget()
@@ -437,6 +438,7 @@ def build_voiceover_settings_ui(self, parent_layout, *, actions):
         "Готовность выбранной модели к синтезу.",
         "Readiness of the selected model for synthesis.",
     )
+    self.local_status_frame.setProperty("requiresLocalVoice", True)
     self.local_status_frame.body.addWidget(status_row)
     self.local_status_frame.body.addWidget(self.local_model_action_btn)
     self.local_status_frame.body.addWidget(
