@@ -476,18 +476,7 @@ def setup_updates_settings_controls(
 
     # Update contour (read-only; the contour is the single source of truth)
     target = _current_update_target()
-    readonly_value_style = (
-        "QLabel { background-color: rgba(16,13,25,0.76); "
-        "border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-    )
-    combo_style = (
-        "QComboBox { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QComboBox:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
-        "QComboBox::drop-down { border: none; width: 26px; }"
-        "QComboBox QAbstractItemView { background-color: rgba(15,16,31,0.96); border: 1px solid rgba(183, 75, 125,0.24); color: #f3edf6; selection-background-color: rgba(183, 75, 125,0.30); }"
-    )
+    readonly_value_style = "QLabel { background: transparent; border: none; padding: 0; }"
 
     contour_row = QWidget()
     contour_row.setObjectName("UpdatesContourRow")
@@ -540,7 +529,6 @@ def setup_updates_settings_controls(
     mode_layout.addWidget(mode_lbl)
 
     mode_combo = TRQComboBox()
-    mode_combo.setStyleSheet(combo_style)
     # data: "diff"/"full"; подписи переводятся вживую.
     mode_combo.add_tr_item("Дифф (только изменённые файлы)", "Diff (changed files only)", value="diff")
     mode_combo.add_tr_item("Полная перезапись", "Full replace", value="full")
@@ -638,11 +626,6 @@ def setup_updates_settings_controls(
     tester_layout.addWidget(tester_lbl)
 
     tester_entry = QLineEdit()
-    tester_entry.setStyleSheet(
-        "QLineEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QLineEdit:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
-    )
     tester_entry.setEchoMode(QLineEdit.EchoMode.Password)
     tr_set(tester_entry, "пароль для тестовых архивов", "password for test archives", "setPlaceholderText")
     tester_entry.setText(self.settings.get("TESTER_CODE", ""))
@@ -674,11 +657,6 @@ def setup_updates_settings_controls(
     unity_layout.addWidget(unity_lbl)
 
     unity_entry = QLineEdit()
-    unity_entry.setStyleSheet(
-        "QLineEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-        "QLineEdit:focus { border: 1px solid rgba(183, 75, 125,0.24); }"
-    )
     tr_set(unity_entry, "по умолчанию: NeuroMita-Unity", "default: NeuroMita-Unity", "setPlaceholderText")
     unity_entry.setText(self.settings.get("UNITY_INSTALL_DIR", ""))
     unity_layout.addWidget(unity_entry)
@@ -809,8 +787,5 @@ def setup_updates_settings_controls(
     release_info.setReadOnly(True)
     release_info.setMinimumHeight(180)
     tr_set(release_info, "Сначала нажми «Проверить».", "Press 'Check' first.", "setPlaceholderText")
-    release_info.setStyleSheet(
-        "QTextEdit { background-color: rgba(16,13,25,0.76); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; "
-        "color: #f3edf6; padding: 7px 10px; }"
-    )
+    release_info.setStyleSheet("QTextEdit { background: transparent; border: none; padding: 0; }")
     parent.addWidget(release_info)

@@ -150,10 +150,6 @@ def setup_data_settings_controls(self, parent, *, view_model):
     limit_spin.setSuffix(_(" записей", " records"))
     tr_set(limit_spin, "Сколько последних записей хранить. Старые удаляются автоматически.",
         "How many most-recent records to keep. Older ones are pruned automatically.", "setToolTip")
-    limit_spin.setStyleSheet(
-        "QSpinBox { background: transparent; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; "
-        "color: #f3edf6; font-size: 11px; padding: 5px 8px; }"
-    )
     limit_row.addWidget(limit_spin)
 
     unlimited_chk = tr_set(QCheckBox(), "Без лимита", "Unlimited")
@@ -208,10 +204,6 @@ def setup_data_settings_controls(self, parent, *, view_model):
 
     path_edit = QLineEdit(_get_current_data_dir(self))
     path_edit.setReadOnly(True)
-    path_edit.setStyleSheet(
-        "QLineEdit { background: transparent; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; "
-        "color: #bca9bb; font-size: 11px; padding: 6px 10px; }"
-    )
     path_row.addWidget(path_edit, stretch=1)
 
     browse_btn = tr_set(QPushButton(), "Обзор...", "Browse...")
