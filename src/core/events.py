@@ -585,6 +585,7 @@ class Events:
         VOICEOVER_UI_READY = "voiceover_ui_ready"
         VOICEOVER_REFRESH = "voiceover_refresh"
         VOICEOVER_MODEL_SELECTED = "voiceover_model_selected"
+        VOICEOVER_MODEL_INITIALIZE = "voiceover_model_initialize"
         VOICEOVER_MODEL_REINITIALIZE = "voiceover_model_reinitialize"
 
     class Model:

@@ -63,6 +63,9 @@ class VoiceoverGuiController(BaseController):
             Events.GUI.VOICEOVER_MODEL_SELECTED, self._on_model_selected, weak=False
         )
         eb.subscribe(
+            Events.GUI.VOICEOVER_MODEL_INITIALIZE, self._on_model_initialize, weak=False
+        )
+        eb.subscribe(
             Events.GUI.VOICEOVER_MODEL_REINITIALIZE,
             self._on_model_reinitialize,
             weak=False,
@@ -476,6 +479,12 @@ class VoiceoverGuiController(BaseController):
 
     # ---------- Local models ----------
     def _on_model_selected(self, event: Event):
+        self._handle_model_action(event, initialize=False)
+
+    def _on_model_initialize(self, event: Event):
+        self._handle_model_action(event, initialize=True)
+
+    def _handle_model_action(self, event: Event, *, initialize: bool):
         model_id = str((event.data or {}).get("model_id") or "").strip()
         if not model_id:
             self._ui(lambda: self._sync_everything(allow_autoload=False))
@@ -502,7 +511,7 @@ class VoiceoverGuiController(BaseController):
 
             self._save_setting("NM_CURRENT_VOICEOVER", model_id)
             self._set_combobox_by_model_id(model_id)
-            self._select_or_init_model_async(model_id)
+            self._prepare_local_model_async(model_id, initialize=initialize)
 
         self._ui(apply)
 
@@ -533,7 +542,7 @@ class VoiceoverGuiController(BaseController):
 
         self._ui(apply)
 
-    def _select_or_init_model_async(self, model_id: str):
+    def _prepare_local_model_async(self, model_id: str, *, initialize: bool = False):
         if not model_id:
             return
 
@@ -613,7 +622,7 @@ class VoiceoverGuiController(BaseController):
                     )
                 return
 
-            if not self._begin_model_loading(current_id):
+            if not initialize or not self._begin_model_loading(current_id):
                 self._sync_local_model_status_from_snapshot(state)
                 self._emit_voice_icon_state_from_snapshot(state)
                 return
