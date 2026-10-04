@@ -538,6 +538,11 @@ class _ViewModelFactory:
             parent=parent,
         )
 
+    def gallery_page(self, host: Any, *, parent: Any = None):
+        from controllers.gui.gallery_page_view_model import GalleryPageViewModel
+
+        return GalleryPageViewModel(settings=self._presentation.settings, parent=parent)
+
     def ai_hub_settings(self, host: Any, *, parent: Any = None):
         from controllers.gui.ai_hub_settings_view_model import (
             AIHubSettingsViewModel,
