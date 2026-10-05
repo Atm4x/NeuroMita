@@ -640,7 +640,17 @@ class SpeechController(SpeechService):
     def _on_capture_progress(self, event: Event) -> None:
         data = event.data or {}
         context = data.get("capture_context")
-        if not isinstance(context, dict) or not SpeechRecognition._input_gate.valid(context):
+        if not isinstance(context, dict):
+            return
+        if data.get("phase") == "cancelled":
+            if context.get("target") == "game" and context.get("input_mode") in ("radio", "ptt"):
+                self.events_bus.emit(Events.Server.SEND_ASR_CAPTURE_STATE, {
+                    **data, "client_id": context["session_id"],
+                    "press_generation": context["press_generation"],
+                })
+            self._game_transcripts().discard_invalid(SpeechRecognition._input_gate.valid)
+            return
+        if not SpeechRecognition._input_gate.valid(context):
             return
         if context.get("target") == "game" and context.get("input_mode") in ("radio", "ptt"):
             transcripts = self._game_transcripts()
@@ -805,6 +815,7 @@ class SpeechController(SpeechService):
 
     def _sync_input_gate(self, *, reset=False):
         gate = SpeechRecognition._input_gate
+        previous = gate.snapshot()
         if reset:
             gate.reset()
         input_mode = normalize_input_mode(self.settings.get("ASR_INPUT_MODE", "radio"))
@@ -817,6 +828,17 @@ class SpeechController(SpeechService):
                 self._speaking_window.blocked_until() if mute_while_speaking else 0.0
             ),
         )
+        current = gate.snapshot()
+        if (previous["target"] == "game" and previous["session_id"]
+                and (previous["epoch"] != current["epoch"]
+                     or previous["session_id"] != current["session_id"])):
+            error = ("microphone_test" if getattr(self, "_microphone_tests", set()) else
+                     "microphone_disabled" if not current["enabled"] else
+                     "speech_blocked" if not current["permitted"] else "capture_reset")
+            self.events_bus.emit(Events.Server.SEND_ASR_CAPTURE_STATE, {
+                "client_id": previous["session_id"], "phase": "session_cancelled",
+                "through_generation": previous["generation"], "error": error,
+            })
         self._game_transcripts().discard_invalid(gate.valid)
         SpeechRecognition.publish_input_gate()
 
@@ -841,6 +863,11 @@ class SpeechController(SpeechService):
         session_id = data.get("session_id", "")
         # Re-check after EventBus delivery: ownership may have changed since dispatch.
         if session_id != self._player_turn_owner():
+            self.events_bus.emit(Events.Server.SEND_ASR_CAPTURE_STATE, {
+                "client_id": session_id, "phase": "ack", "active": False,
+                "command_generation": data.get("generation"), "accepted": False,
+                "error": "input_not_owned",
+            })
             return
         gate = SpeechRecognition._input_gate
         command = gate.radio if gate.snapshot()["input_mode"] == "radio" else gate.ptt
@@ -859,7 +886,10 @@ class SpeechController(SpeechService):
             "client_id": session_id, "phase": "ack", "active": active,
             "command_generation": data.get("generation"), "accepted": accepted,
             "error": ("capture_not_ready" if not ready else
-                      "speech_blocked" if not state["permitted"] else "capture_busy")
+                      "microphone_test" if getattr(self, "_microphone_tests", set()) else
+                      "microphone_disabled" if not state["enabled"] else
+                      "speech_blocked" if not state["permitted"] else
+                      "capture_requires_release" if state["needs_release"] else "capture_busy")
                      if data.get("active") and not active else "",
         })
 
@@ -931,7 +961,9 @@ class SpeechController(SpeechService):
                           if isinstance(capture_context, dict) and capture_context.get("input_mode") == "ptt"
                           else self._player_turn_owner())
         if turn_owner:
-            if isinstance(capture_context, dict) and capture_context.get("capture_tracking"):
+            if (isinstance(capture_context, dict)
+                    and capture_context.get("input_mode") in ("radio", "ptt")
+                    and capture_context.get("capture_tracking")):
                 transcripts = self._game_transcripts()
                 transcripts.discard_invalid(SpeechRecognition._input_gate.valid)
                 self._send_game_capture_text(transcripts.append(capture_context, text))

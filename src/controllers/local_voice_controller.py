@@ -1,3 +1,4 @@
+from core.voice_failure import VoiceFailureCode, VoiceSynthesisError
 from core.error_utils import format_exception
 import os
 import uuid
@@ -445,9 +446,11 @@ class LocalVoiceController(LocalVoiceService):
 
         if not initialized:
             if not as_bool(self._get_setting("LOCAL_VOICE_INIT_ON_REQUEST", False)):
-                raise RuntimeError(
+                raise VoiceSynthesisError(
                     f"Local voice model '{model_id}' is not initialized. "
-                    "Initialize it explicitly in the voice model settings before synthesis."
+                    "Initialize it explicitly in the voice model settings before synthesis.",
+                    code=VoiceFailureCode.MODEL_NOT_INITIALIZED,
+                    model_id=model_id,
                 )
 
             # Cache проверяется повторно под lock: два первых запроса не должны
