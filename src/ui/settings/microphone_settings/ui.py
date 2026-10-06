@@ -21,6 +21,7 @@ from styles.theme import get_theme
 from handlers.asr_input_gate import normalize_input_mode
 from ui.settings.microphone_settings.widgets import (
     MicrophoneDeviceComboBox,
+    AudioBackendComboBox,
     MicrophoneLevelMeter,
     ResponsiveColumns,
     MicrophoneSwitch,
@@ -180,6 +181,13 @@ def build_microphone_settings_ui(self, parent_layout):
     self.asr_models_empty_status.hide()
     eng.addWidget(self.asr_models_empty_status, 1)
 
+    self.mic_backend_combobox = AudioBackendComboBox()
+    self.mic_backend_combobox.setObjectName("ASRToolbarInput")
+    self.mic_backend_combobox.setFixedHeight(38)
+    self.mic_backend_combobox.setMinimumContentsLength(10)
+    self.mic_backend_combobox.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
     self.mic_combobox = MicrophoneDeviceComboBox()
     self.mic_refresh_button = _refresh(
         "Обновить список микрофонов", "Refresh microphone list"
@@ -243,9 +251,10 @@ def build_microphone_settings_ui(self, parent_layout):
             [
                 _top_field("Модель распознавания", "Recognition model", engine),
                 _top_field("Устройство ввода", "Input device", mic),
+                _top_field("Аудиобэкенд", "Audio backend", self.mic_backend_combobox),
             ],
             breakpoint=760,
-            weights=[3, 4],
+            weights=[3, 4, 1],
         )
     )
     layout.addWidget(strip)

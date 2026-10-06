@@ -120,6 +120,26 @@ def test_reused_device_index_is_rejected_without_opening_streams():
     monitor.close()
 
 
+def test_endpoint_selection_resolves_current_index_before_monitoring(monkeypatch):
+    backend = AudioBackend(input_name="Renamed microphone")
+    resolver = Mock(
+        return_value=ASRInputDevice(
+            39, "Renamed microphone", "WASAPI", uid="endpoint-A"
+        )
+    )
+    monkeypatch.setattr(
+        "services.microphone_monitor.resolve_asr_input_device", resolver
+    )
+    monitor = MicrophoneMonitor(backend)
+    try:
+        monitor.start(ASRInputDevice(24, "Old name", "WASAPI", uid="endpoint-A"))
+        wait_for(lambda: backend.played is not None)
+        assert backend.streams[0].options["device"] == 39
+        assert resolver.call_args.kwargs["requested_uid"] == "endpoint-A"
+    finally:
+        monitor.close()
+
+
 def test_resampling_is_continuous_across_reads_and_queue_is_bounded():
     buffer = MonitorBuffer(48000, 44100)
     samples = np.linspace(-0.5, 0.5, 2000, dtype=np.float32)

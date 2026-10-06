@@ -1882,6 +1882,9 @@ def _emit_stage(
 
 
 def _copy_preserved_unity_data(source: Path, stage: Path) -> None:
+    gallery = source / "Gallery"
+    if gallery.is_dir():
+        shutil.copytree(gallery, stage / "Gallery", dirs_exist_ok=True)
     user_data = source / "user_data"
     if not user_data.is_dir():
         return

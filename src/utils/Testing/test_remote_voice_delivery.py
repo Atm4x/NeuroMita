@@ -80,5 +80,5 @@ def test_api_error_is_attached_to_task_without_playback():
     assert controller._update_task_failed_voiceover.call_args.args[0] == "task"
     assert (
         "API ключ не принят"
-        in controller._update_task_failed_voiceover.call_args.args[1]
+        in str(controller._update_task_failed_voiceover.call_args.args[1])
     )

@@ -285,7 +285,7 @@ class DefaultRemoteVoiceService(RemoteVoiceService):
                     self.configuration().presets
                 ):
                     self._verified.add(preset)
-            logger.info(
+            logger.debug(
                 "[RemoteVoice] Synthesis complete; provider=%s; elapsed=%.2fs",
                 template.id,
                 time.monotonic() - started,

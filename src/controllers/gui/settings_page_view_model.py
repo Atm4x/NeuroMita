@@ -55,7 +55,7 @@ class SettingsPageViewModel(IntentViewModel[SettingsPageState]):
             started = time.perf_counter()
             if self._prepare_section is not None:
                 self._prepare_section(category)
-            logger.info(
+            logger.debug(
                 "[Settings UI] %s imports (worker): %.1f ms",
                 category,
                 (time.perf_counter() - started) * 1000,
@@ -69,7 +69,7 @@ class SettingsPageViewModel(IntentViewModel[SettingsPageState]):
                     if self._app.startup_error:
                         raise RuntimeError(self._app.startup_error)
                     time.sleep(0.04)
-                logger.info(
+                logger.debug(
                     "[Settings UI] %s GUI readiness (worker): %.1f ms",
                     category,
                     (time.perf_counter() - gui_wait_started) * 1000,
@@ -95,7 +95,7 @@ class SettingsPageViewModel(IntentViewModel[SettingsPageState]):
                     raise RuntimeError(
                         f"Runtime feature '{feature_name}' did not become ready"
                     )
-            logger.info(
+            logger.debug(
                 "[Settings UI] %s preparation (worker): %.1f ms",
                 category,
                 (time.perf_counter() - started) * 1000,
@@ -115,7 +115,7 @@ class SettingsPageViewModel(IntentViewModel[SettingsPageState]):
                 # created while this callback is running on the Qt thread.
                 if gui_feature:
                     self._app.ensure_optional_gui(gui_feature)
-                logger.info(
+                logger.debug(
                     "[Settings UI] %s controllers (Qt): %.1f ms",
                     category,
                     (time.perf_counter() - started) * 1000,
@@ -158,13 +158,13 @@ class SettingsPageViewModel(IntentViewModel[SettingsPageState]):
                     raise RuntimeError(
                         f"Runtime feature '{feature_name}' did not become ready"
                     )
-                logger.info(
+                logger.debug(
                     "[Settings UI] %s feature %s (worker): %.1f ms",
                     category,
                     feature_name,
                     (time.perf_counter() - feature_started) * 1000,
                 )
-            logger.info(
+            logger.debug(
                 "[Settings UI] %s deferred features (worker): %.1f ms",
                 category,
                 (time.perf_counter() - started) * 1000,

@@ -12,6 +12,7 @@ class MicrophoneMonitorController(QObject):
         super().__init__(workspace)
         self.combo, self.button, self.label, self.meter = combo, button, label, meter
         self.monitor = monitor or MicrophoneMonitor()
+        self._device_available = True
         self._timer = QTimer(self)
         self._timer.setInterval(40)
         self._timer.timeout.connect(self._render)
@@ -30,10 +31,20 @@ class MicrophoneMonitorController(QObject):
             self.stop()
         return super().eventFilter(watched, event)
 
+    def set_device_available(self, available):
+        self._device_available = bool(available)
+        if not available:
+            self.stop()
+        self._render()
+
     def _toggle(self, checked):
         if checked:
             device = self.combo.currentData()
-            if not isinstance(device, ASRInputDevice) or not self.combo.isEnabled():
+            if (
+                not self._device_available
+                or not isinstance(device, ASRInputDevice)
+                or not self.combo.isEnabled()
+            ):
                 self.stop()
                 return
             if not self.monitor.start(device):
@@ -59,6 +70,7 @@ class MicrophoneMonitorController(QObject):
             self.button.setChecked(active)
         self.button.setEnabled(
             not stopping
+            and self._device_available
             and self.combo.isEnabled()
             and isinstance(self.combo.currentData(), ASRInputDevice)
         )
@@ -77,11 +89,11 @@ class MicrophoneMonitorController(QObject):
                 if state.phase == "starting"
                 else _("Вы слушаете", "Listening to")
             )
-            text = f"{prefix}: {state.device.name} · ID {state.device.index}"
+            text = f"{prefix}: {state.device.label} · ID {state.device.index}"
         else:
             device = self.combo.currentData()
             text = (
-                f'{_("Микрофон", "Microphone")}: {device.name} · ID {device.index}'
+                f'{_("Микрофон", "Microphone")}: {device.label} · ID {device.index}'
                 if isinstance(device, ASRInputDevice)
                 else _("Выберите микрофон для проверки", "Select a microphone to test")
             )

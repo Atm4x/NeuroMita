@@ -1,4 +1,5 @@
 from __future__ import annotations
+from infrastructure.audio.windows_endpoint_identity import EndpointIdentityRead
 
 from types import SimpleNamespace
 
@@ -139,7 +140,9 @@ def test_windows_default_aliases_are_not_shown_as_extra_microphones():
 
     devices = list_asr_input_devices(sounddevice)
 
-    assert [device.option_text for device in devices] == ["FIFINE Microphone (3)"]
+    assert [f"{device.name} ({device.index})" for device in devices] == [
+        "FIFINE Microphone (3)"
+    ]
 
 
 def test_refresh_rescans_portaudio_after_microphone_hot_plug():
@@ -181,7 +184,7 @@ def test_distinct_microphones_remain_distinct():
 
     devices = list_asr_input_devices(sounddevice)
 
-    assert [device.option_text for device in devices] == [
+    assert [f"{device.name} ({device.index})" for device in devices] == [
         "Desk microphone (0)",
         "Headset microphone (1)",
     ]
@@ -201,7 +204,7 @@ def test_two_physical_microphones_with_the_same_name_remain_selectable():
 
     devices = list_asr_input_devices(sounddevice)
 
-    assert [device.option_text for device in devices] == [
+    assert [f"{device.name} ({device.index})" for device in devices] == [
         "USB Microphone (2)",
         "USB Microphone (3)",
     ]
@@ -248,3 +251,152 @@ def test_saved_name_wins_over_an_index_reused_by_another_device():
 
     assert resolved is not None
     assert resolved.index == 1
+
+
+def test_mme_display_uses_full_wasapi_name_without_changing_device_identity():
+    full_name = "Microphone (FIFINE K670 Microphone)"
+    short_name = full_name[:31]
+    sounddevice = _FakeSoundDevice(
+        [_device(short_name, 0), _device(full_name, 1)],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000)},
+    )
+    (device,) = list_asr_input_devices(sounddevice)
+    assert device.name == short_name
+    assert device.label == full_name
+    assert device.index == 0
+    assert f"{device.name} ({device.index})" == f"{short_name} (0)"
+    assert (
+        resolve_asr_input_device(
+            sounddevice, requested_index=0, requested_name=short_name
+        )
+        == device
+    )
+
+
+def test_mme_display_does_not_guess_between_similar_full_names():
+    prefix = "Microphone (FIFINE K670 Microph"
+    sounddevice = _FakeSoundDevice(
+        [
+            _device(prefix, 0),
+            _device(prefix + "one A)", 1),
+            _device(prefix + "one B)", 1),
+        ],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000)},
+    )
+    (device,) = list_asr_input_devices(sounddevice)
+    assert device.label == prefix
+    assert device.display_name is None
+
+
+def test_endpoint_id_survives_rename_and_portaudio_reordering(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(tuple(sd.identities.items())),
+    )
+    original = _FakeSoundDevice(
+        [_device("Old microphone", 0), _device("Other", 0)],
+        [{"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000)},
+    )
+    original.identities = {0: "endpoint-A", 1: "endpoint-B"}
+    selected = resolve_asr_input_device(
+        original, requested_index=0, requested_name="Old microphone"
+    )
+    assert selected.uid == "endpoint-A"
+    changed = _FakeSoundDevice(
+        [_device("Old microphone", 0), _device("Renamed microphone", 0)],
+        [{"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000)},
+    )
+    changed.identities = {0: "endpoint-B", 1: "endpoint-A"}
+    resolved = resolve_asr_input_device(
+        changed,
+        requested_index=0,
+        requested_name="Old microphone",
+        requested_uid=selected.uid,
+    )
+    assert resolved.index == 1
+    assert resolved.name == "Renamed microphone"
+
+
+def test_missing_endpoint_never_falls_back_to_reused_index_or_name(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(tuple({0: "other-endpoint"}.items())),
+    )
+    backend = _FakeSoundDevice(
+        [_device("Same name", 0)],
+        [{"name": "Windows WASAPI"}],
+        supported={(0, 16000)},
+    )
+    assert (
+        resolve_asr_input_device(
+            backend,
+            requested_index=0,
+            requested_name="Same name",
+            requested_uid="missing-endpoint",
+        )
+        is None
+    )
+
+
+def test_legacy_truncated_name_migrates_to_same_endpoint_and_duplicates_collapse(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(tuple({1: "endpoint-A"}.items())),
+    )
+    full_name = "Microphone (FIFINE K670 Microphone)"
+    backend = _FakeSoundDevice(
+        [_device(full_name[:31], 0), _device(full_name, 1)],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 48000)},
+    )
+    devices = list_asr_input_devices(backend)
+    assert len(devices) == 1
+    assert devices[0].uid == "endpoint-A"
+    assert devices[0].index == 1
+    assert (
+        resolve_asr_input_device(
+            backend,
+            requested_index=0,
+            requested_name=full_name[:31],
+        )
+        == devices[0]
+    )
+
+
+def test_identical_names_with_different_endpoint_ids_are_not_collapsed(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(tuple({0: "A", 1: "B"}.items())),
+    )
+    backend = _FakeSoundDevice(
+        [_device("Same name", 0), _device("Same name", 0)],
+        [{"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000)},
+    )
+    assert [device.uid for device in list_asr_input_devices(backend)] == ["A", "B"]
+
+
+def test_numeric_legacy_selection_maps_alias_index_to_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(tuple({2: "A", 3: "B"}.items())),
+    )
+    backend = _FakeSoundDevice(
+        [
+            _device("First", 0),
+            _device("Second", 0),
+            _device("First", 1),
+            _device("Second", 1),
+        ],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000), (2, 48000), (3, 48000)},
+    )
+    resolved = resolve_asr_input_device(backend, requested_index=1, requested_name=None)
+    assert resolved.uid == "B"
+    assert resolved.index == 3

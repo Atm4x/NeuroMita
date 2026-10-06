@@ -697,7 +697,7 @@ class SettingsPage(QWidget):
             self._clear_layout(page.body_layout)
             self._page_actions.build_settings_section(category, page.body_layout)
 
-            logger.info(
+            logger.debug(
                 "[Settings UI] %s widgets and bindings (Qt): %.1f ms",
                 category,
                 (time.perf_counter() - started) * 1000,
@@ -708,7 +708,7 @@ class SettingsPage(QWidget):
             self._prepare_settings_subsections(page)
             self._loaded_sections.add(category)
             self._render_feature_state(self._view_model.state)
-            logger.info(
+            logger.debug(
                 "[Settings UI] %s section layout (Qt): %.1f ms",
                 category,
                 (time.perf_counter() - finishing) * 1000,
