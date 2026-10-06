@@ -1,6 +1,40 @@
 from __future__ import annotations
 
 SETTINGS_PAGE_QSS = r"""
+QWidget#VoiceoverSettingsWorkspace, QWidget#VoiceoverSettingsWorkspace QWidget {
+    font-family: "Segoe UI"; letter-spacing: 0px;
+}
+QWidget#RemoteVoiceWorkspace QPlainTextEdit {
+    background: {control_bg}; color: {text}; border: 1px solid {panel_border};
+    border-radius: 8px; padding: 8px;
+}
+QWidget#RemoteVoiceWorkspace QLabel#RemoteVoiceHint {
+    color: {muted}; font-weight: 400; font-size: 12px;
+}
+QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoiceIconButton,
+QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoiceSave {
+    background: transparent; border: 1px solid {panel_border}; color: {text};
+    border-radius: 8px;
+}
+QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoicePreview {
+    background: {accent}; border: 1px solid {accent_border}; color: {text};
+    border-radius: 8px;
+}
+QWidget#RemoteVoiceWorkspace QPushButton:hover { border-color: {accent}; }
+QWidget#RemoteVoiceWorkspace QPushButton:disabled {
+    background: {btn_disabled_bg}; color: {btn_disabled_fg}; border-color: {panel_border};
+}
+QWidget#RemoteVoiceWorkspace QLabel#RemoteVoiceTitle {
+    font-size: 14px; font-weight: 600; color: {text};
+}
+QWidget#CharacterVoiceEditor { background: transparent; }
+QWidget#CharacterVoiceEditor QLineEdit { border-radius: 10px; }
+QWidget#CharacterVoiceEditor QPushButton#RemoteVoiceIconButton { border-radius: 12px; }
+QToolButton#CharacterVoiceScrollButton {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 10px;
+}
+QToolButton#CharacterVoiceScrollButton:hover { background: {chip_hover}; }
+QToolButton#CharacterVoiceScrollButton:disabled { background: transparent; border: none; }
 QWidget#CharacterSettingsWorkspace, QWidget#CharacterSettingsWorkspace QLabel,
 QWidget#CharacterSettingsWorkspace QLineEdit, QWidget#CharacterSettingsWorkspace QComboBox,
 QWidget#CharacterSettingsWorkspace QPushButton, QWidget#CharacterSettingsWorkspace QListWidget,
