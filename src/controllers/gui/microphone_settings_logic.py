@@ -1,5 +1,6 @@
 from core.error_utils import format_exception
-from core.audio_input import ASRInputDevice
+from domain.audio_input import ASRInputDevice
+from infrastructure.settings.microphone_preferences import read_microphone_selection
 from utils import getTranslationVariant as _
 from main_logger import logger
 from core.events import get_event_bus, Events
@@ -97,9 +98,7 @@ def on_mic_selected(gui, device=None):
     if not isinstance(device, ASRInputDevice):
         return
     bus = get_event_bus()
-    bus.emit(
-        Events.Speech.SET_MICROPHONE, {"name": device.name, "device_id": device.index}
-    )
+    bus.emit(Events.Speech.SET_MICROPHONE, device.selection)
     if gui.settings.get("MIC_ACTIVE", False):
         bus.emit(Events.Speech.RESTART_SPEECH_RECOGNITION, {"device_id": device.index})
 
@@ -107,11 +106,7 @@ def on_mic_selected(gui, device=None):
 def load_mic_settings(gui):
     try:
         bus = get_event_bus()
-        device_id = gui.settings.get("NM_MICROPHONE_ID", 0)
-        device_name = gui.settings.get("NM_MICROPHONE_NAME", "")
-        bus.emit(
-            Events.Speech.SET_MICROPHONE, {"name": device_name, "device_id": device_id}
-        )
+        bus.emit(Events.Speech.SET_MICROPHONE, read_microphone_selection(gui.settings))
 
         if gui.settings.get("MIC_ACTIVE", False) and hasattr(
             gui, "mic_active_checkbox"

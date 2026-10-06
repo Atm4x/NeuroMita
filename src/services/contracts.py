@@ -23,7 +23,7 @@ from core.remote_voice import (
     RemoteVoiceStatus,
     RemoteVoiceTemplate,
 )
-from core.audio_input import ASRInputDevice
+from domain.audio_input import ASRInputDevice, AudioInputCatalog
 
 # ---------------------------------------------------------------------------
 # Настройки
@@ -1152,6 +1152,13 @@ class SpeechService(ABC):
         self,
         callback: Callable[[List[ASRInputDevice], BaseException | None], None],
     ) -> None: ...
+
+    def microphone_catalog_async(self, callback) -> None:
+        self.microphone_list_async(
+            lambda devices, error=None: callback(
+                AudioInputCatalog(tuple(devices or ())), error
+            )
+        )
 
     @abstractmethod
     def asr_models_glossary_async(

@@ -13,11 +13,17 @@ from PyQt6.QtWidgets import (
     QCheckBox,
 )
 
-from core.audio_input import ASRInputDevice
+from domain.audio_input import ASRInputDevice
 from styles.theme import get_theme
 from PyQt6.QtWidgets import QFrame, QLabel, QHBoxLayout
 import qtawesome as qta
 import math
+from utils import _
+
+
+class AudioBackendComboBox(QComboBox):
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class RecognitionStatusLabel(QLabel):
@@ -138,7 +144,7 @@ class MicrophoneDeviceDelegate(QStyledItemDelegate):
         painter.drawText(
             rect.adjusted(0, 0, 0, -detail_height),
             Qt.TextFlag.TextWordWrap,
-            device.name,
+            device.label,
         )
         painter.setPen(
             QColor(
@@ -150,7 +156,12 @@ class MicrophoneDeviceDelegate(QStyledItemDelegate):
         painter.drawText(
             rect.adjusted(0, rect.height() - detail_height, 0, 0),
             Qt.AlignmentFlag.AlignVCenter,
-            f"{device.host_api} · ID {device.index}",
+            f"{device.host_api} · PortAudio {device.index}"
+            + (
+                " · " + _("Совместимый режим", "Compatibility mode")
+                if not device.uid
+                else ""
+            ),
         )
         painter.restore()
 
@@ -161,7 +172,7 @@ class MicrophoneDeviceDelegate(QStyledItemDelegate):
         width = max(220, self.parent().view().width() - 32)
         metrics = QFontMetrics(option.font)
         height = metrics.boundingRect(
-            0, 0, width, 1000, Qt.TextFlag.TextWordWrap, device.name
+            0, 0, width, 1000, Qt.TextFlag.TextWordWrap, device.label
         ).height()
         return QSize(width, height + metrics.height() + 24)
 

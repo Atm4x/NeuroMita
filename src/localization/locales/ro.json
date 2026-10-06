@@ -2617,5 +2617,11 @@
   "Не удалось прочитать фото": "Fotografia nu a putut fi citită",
   "Снято": "Fotografiată",
   "Дата файла": "Data fișierului",
-  "Фотографии из игры": "Fotografii din joc"
+  "Фотографии из игры": "Fotografii din joc",
+  "Совместимый режим": "Mod de compatibilitate",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "ID persistent indisponibil — selectare după nume și index.",
+  "Не удалось проверить привязку микрофона": "Asocierea microfonului nu a putut fi verificată",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "ID-ul Windows al microfonului nu a putut fi citit. Asocierea este păstrată; reîmprospătează lista dispozitivelor.",
+  "Аудиобэкенд": "Backend audio",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Backendul audio selectat nu este disponibil pentru acest microfon. Alegeți alt backend sau Automat."
 }

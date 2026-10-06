@@ -6,9 +6,13 @@ from uuid import uuid4
 
 import numpy as np
 
-from core.audio_input import ASRInputDevice
+from domain.audio_input import ASRInputDevice
 from core.events import Events, get_event_bus
-from handlers.asr_audio_devices import normalize_device_name, portaudio_stream_scope
+from handlers.asr_audio_devices import (
+    normalize_device_name,
+    portaudio_stream_scope,
+    resolve_asr_input_device,
+)
 from main_logger import logger
 
 
@@ -118,10 +122,20 @@ class MicrophoneMonitor:
             else:
                 backend = self._backend
             with portaudio_stream_scope():
+                if device.uid:
+                    device = resolve_asr_input_device(
+                        backend,
+                        requested_index=device.index,
+                        requested_name=None,
+                        requested_uid=device.uid,
+                        requested_backend=device.host_api,
+                    )
+                    if device is None:
+                        raise RuntimeError("Selected input device is unavailable")
                 info = backend.query_devices(device.index, "input")
-                if normalize_device_name(info["name"]) != normalize_device_name(
-                    device.name
-                ):
+                if not device.uid and normalize_device_name(
+                    info["name"]
+                ) != normalize_device_name(device.name):
                     raise RuntimeError(
                         "Selected input index now belongs to another device"
                     )

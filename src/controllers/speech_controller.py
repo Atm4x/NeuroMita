@@ -6,16 +6,21 @@ import threading
 import uuid
 from itertools import count
 from difflib import SequenceMatcher
-import sounddevice as sd
 
 from handlers.asr_handler import SpeechRecognition
 from handlers.asr_input_gate import normalize_input_mode
 from handlers.asr_capture_progress import GameCaptureTranscripts
-from handlers.asr_audio_devices import (
-    ASR_CAPTURE_SAMPLE_RATE,
-    list_asr_input_devices,
-    resolve_asr_input_device,
+from infrastructure.settings.microphone_preferences import (
+    MICROPHONE_SETTING_KEYS,
+    read_microphone_selection,
 )
+from infrastructure.audio.selection_wire import selection_from_event
+from services.microphone_selection import MicrophoneSelectionService
+from services.audio_input_contracts import (
+    MicrophoneIdentityUnavailable,
+    MicrophoneBackendUnavailable,
+)
+from handlers.asr_audio_devices import ASR_CAPTURE_SAMPLE_RATE
 from main_logger import logger
 from core.events import get_event_bus, Events, Event
 from core.performance_trace import perf_mark, perf_mark_once, performance_traces
@@ -36,23 +41,35 @@ from utils import getTranslationVariant as _
 
 
 class SpeechController(SpeechService):
-    _SETTING_KEYS = frozenset({
-        "MIC_ACTIVE", "RECOGNIZER_TYPE", "SILENCE_THRESHOLD",
-        "VAD_THRESHOLD", "SILENCE_DURATION", "VAD_SILENCE_TIMEOUT_SEC",
-        "VOSK_SAMPLE_RATE", "CHUNK_SIZE", "VAD_PRE_BUFFER_DURATION_SEC",
-        "MAX_SPEECH_DURATION_SEC", "MIN_SPEECH_DURATION_SEC",
-        "NM_MICROPHONE_ID", "NM_MICROPHONE_NAME",
-        "ASR_INPUT_MODE", "MIC_MUTE_WHILE_SPEAKING",
-    })
+    _SETTING_KEYS = frozenset(
+        {
+            "MIC_ACTIVE",
+            "RECOGNIZER_TYPE",
+            "SILENCE_THRESHOLD",
+            "VAD_THRESHOLD",
+            "SILENCE_DURATION",
+            "VAD_SILENCE_TIMEOUT_SEC",
+            "VOSK_SAMPLE_RATE",
+            "CHUNK_SIZE",
+            "VAD_PRE_BUFFER_DURATION_SEC",
+            "MAX_SPEECH_DURATION_SEC",
+            "MIN_SPEECH_DURATION_SEC",
+            *MICROPHONE_SETTING_KEYS,
+            "ASR_INPUT_MODE",
+            "MIC_MUTE_WHILE_SPEAKING",
+        }
+    )
 
     # Хвост после конца реплики: гасим затухание звука и задержку VAD,
     # который выдаёт текст уже после паузы.
     _MUTE_TAIL_SEC = 0.4
 
-    def __init__(self):
+    def __init__(self, *, microphones: MicrophoneSelectionService):
+        self._microphone_service_instance = microphones
         self.settings = use(SettingsService)
         self.device_id = 0
         self.selected_microphone = ""
+        self.microphone_uid = None
         self.mic_recognition_active = False
         self.asr_is_ready = False
         self.instant_send = False
@@ -227,6 +244,7 @@ class SpeechController(SpeechService):
         supplied = (event.data or {}).get('settings')
         if supplied is not None:
             self.settings = supplied
+            self._microphones.select(read_microphone_selection(supplied))
         self._apply_settings_snapshot()
 
     def _apply_settings_snapshot(self):
@@ -238,8 +256,10 @@ class SpeechController(SpeechService):
         SpeechRecognition.set_recognizer_type(engine)
         SpeechRecognition.apply_settings(engine, self._asr_settings["models"].get(engine, {}))
 
-        self.device_id = self.settings.get("NM_MICROPHONE_ID", 0)
-        self.selected_microphone = self.settings.get("NM_MICROPHONE_NAME", "")
+        choice = self._microphones.initialize()
+        self.device_id = choice.index if choice.index is not None else 0
+        self.selected_microphone = choice.name
+        self.microphone_uid = choice.uid
 
         try:
             SpeechRecognition.VOSK_SAMPLE_RATE = int(self.settings.get("VOSK_SAMPLE_RATE", SpeechRecognition.VOSK_SAMPLE_RATE))
@@ -256,9 +276,17 @@ class SpeechController(SpeechService):
         self._sync_input_gate(reset=True)
         logger.info(f"Тип распознавателя установлен на: {engine}")
         if self.selected_microphone:
-            logger.info(f"Загружен микрофон из настроек: {self.selected_microphone} (ID: {self.device_id})")
+            logger.debug(
+                "Сохранённый микрофон: %s (endpoint=%s)",
+                self.selected_microphone,
+                self.microphone_uid or "legacy",
+            )
 
         self._request_reconcile("settings snapshot")
+
+    @property
+    def _microphones(self):
+        return self._microphone_service_instance
 
     # ——— settings changed
     def _on_setting_changed(self, change):
@@ -274,6 +302,9 @@ class SpeechController(SpeechService):
                 self.asr_is_ready = False
             self._request_reconcile(f"MIC_ACTIVE={bool(value)}")
             self.events_bus.emit(Events.GUI.UPDATE_STATUS_COLORS)
+
+        elif key == "NM_MICROPHONE_UID":
+            self.microphone_uid = value or None
 
         elif key in ("ASR_INPUT_MODE", "MIC_MUTE_WHILE_SPEAKING"):
             self._sync_input_gate()
@@ -416,7 +447,7 @@ class SpeechController(SpeechService):
             and self._running_engine == desired_engine
         ):
             switched = SpeechRecognition.speech_recognition_switch_microphone(
-                self.device_id
+                self._microphones.selection
             )
             desired_active = self._desired_mic_active()
             if switched and desired_active:
@@ -514,16 +545,12 @@ class SpeechController(SpeechService):
             self.settings.set("VOSK_SAMPLE_RATE", ASR_CAPTURE_SAMPLE_RATE)
             settings_changed = True
 
-        # PortAudio-индексы меняются между сеансами, а один физический микрофон
-        # раньше мог быть сохранён как несовместимый WDM-KS endpoint. Ищем его
-        # заново по имени и выбираем представление, проверенное на 16 кГц.
-        microphone = resolve_asr_input_device(
-            sd,
-            requested_index=self.device_id,
-            requested_name=self.selected_microphone,
-            sample_rate=ASR_CAPTURE_SAMPLE_RATE,
-            refresh=True,
-        )
+        try:
+            microphone = self._microphones.resolve_current(refresh=True)
+        except (MicrophoneIdentityUnavailable, MicrophoneBackendUnavailable) as error:
+            logger.warning("Microphone identity lookup failed: %s", error.detail)
+            self._handle_start_failure(message=_(str(error)))
+            return
         if microphone is None:
             logger.error(
                 "Не найден микрофон, совместимый с ASR (mono float32, 16000 Гц, blocking capture)."
@@ -531,28 +558,33 @@ class SpeechController(SpeechService):
             self._handle_start_failure()
             return
 
-        if self.device_id != microphone.index or self.selected_microphone != microphone.name:
-            logger.info(
-                f"Микрофон ASR переназначен: {self.selected_microphone or '<не выбран>'} "
-                f"({self.device_id}) -> {microphone.name} ({microphone.index}, {microphone.host_api or 'PortAudio'})"
-            )
-            self.device_id = microphone.index
-            self.selected_microphone = microphone.name
-            self.settings.set("NM_MICROPHONE_ID", microphone.index)
-            self.settings.set("NM_MICROPHONE_NAME", microphone.name)
-            self.settings.set("MIC_DEVICE", microphone.option_text)
-            settings_changed = True
+        choice = self._microphones.selection
+        self.device_id = choice.index
+        self.selected_microphone = choice.name
+        self.microphone_uid = choice.uid
 
         if settings_changed:
             self.settings.save_settings()
 
+        logger.info(
+            "Микрофон ASR: %s (endpoint=%s, PortAudio=%s)",
+            microphone.label,
+            microphone.uid or "legacy",
+            microphone.index,
+        )
+
         self.asr_is_ready = False
-        started = bool(SpeechRecognition.speech_recognition_start(microphone.index, loop_service.loop()))
+        started = bool(
+            SpeechRecognition.speech_recognition_start(
+                choice,
+                loop_service.loop(),
+            )
+        )
         self.mic_recognition_active = started
         if not started:
             self._handle_start_failure()
 
-    def _handle_start_failure(self):
+    def _handle_start_failure(self, *, message=None):
         """Старт распознавания не удался: раньше MIC_ACTIVE оставался
         включённым и чекбокс «микрофон» горел при мёртвом распознавании."""
         self.mic_recognition_active = False
@@ -562,13 +594,17 @@ class SpeechController(SpeechService):
             self.events_bus.emit(Events.GUI.UPDATE_STATUS_COLORS)
         except Exception:
             pass
-        self.events_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
-            'title': _('Распознавание речи', 'Speech recognition'),
-            'message': _(
-                'Не удалось запустить распознавание речи. Подробности в логе.',
-                'Failed to start speech recognition. See the log for details.'
-            )
-        })
+        self.events_bus.emit(
+            Events.GUI.SHOW_ERROR_MESSAGE,
+            {
+                "title": _("Распознавание речи", "Speech recognition"),
+                "message": message
+                or _(
+                    "Не удалось запустить распознавание речи. Подробности в логе.",
+                    "Failed to start speech recognition. See the log for details.",
+                ),
+            },
+        )
 
     def shutdown(self) -> None:
         self._shutting_down = True
@@ -688,6 +724,17 @@ class SpeechController(SpeechService):
     def microphone_list_async(self, callback) -> None:
         self._on_get_microphone_list(
             Event(Events.Speech.GET_MICROPHONE_LIST, {"callback": callback})
+        )
+
+    def microphone_catalog_async(self, callback) -> None:
+        self._on_get_microphone_list(
+            Event(
+                Events.Speech.GET_MICROPHONE_LIST,
+                {
+                    "callback": callback,
+                    "include_catalog": True,
+                },
+            )
         )
 
     def asr_models_glossary_async(self, callback, *, refresh: bool = False) -> None:
@@ -1090,16 +1137,16 @@ class SpeechController(SpeechService):
         return res
 
     def _on_set_microphone(self, event: Event):
-        name = event.data.get('name')
-        dev_id = event.data.get('device_id')
-        if name and dev_id is not None:
-            self.selected_microphone = name
-            self.device_id = dev_id
-            if self.settings:
-                self.settings.set("NM_MICROPHONE_ID", dev_id)
-                self.settings.set("NM_MICROPHONE_NAME", name)
-                self.settings.save_settings()
-            logger.info(f"Выбран микрофон: {name} (ID: {dev_id})")
+        selection = selection_from_event(event.data, self._microphones.selection)
+        if selection.index is None and not selection.uid:
+            return
+        choice = self._microphones.select(selection)
+        self.device_id = choice.index or 0
+        self.selected_microphone = choice.name
+        self.microphone_uid = choice.uid
+        logger.info(
+            "Выбран микрофон: %s (endpoint=%s)", choice.name, choice.uid or "legacy"
+        )
 
     # Команды START/STOP/RESTART меняют ЖЕЛАЕМОЕ состояние и будят реконсилятор,
     # а не дёргают движок сами. Прямой старт не знал текущего MIC_ACTIVE: пока
@@ -1121,6 +1168,7 @@ class SpeechController(SpeechService):
         dev_id = (event.data or {}).get('device_id')
         if dev_id is not None:
             self.device_id = dev_id
+            self._microphones.set_index_hint(dev_id)
         self._set_mic_desired(True)
         self._request_reconcile("explicit start")
 
@@ -1138,6 +1186,7 @@ class SpeechController(SpeechService):
         dev_id = data.get('device_id')
         if dev_id is not None:
             self.device_id = dev_id
+            self._microphones.set_index_hint(dev_id)
         with self._state_lock:
             self._restart_requested = True
             self._full_restart_requested = (
@@ -1151,12 +1200,8 @@ class SpeechController(SpeechService):
 
         def compute():
             try:
-                devices = list_asr_input_devices(
-                    sd,
-                    sample_rate=ASR_CAPTURE_SAMPLE_RATE,
-                    refresh=True,
-                )
-                return devices
+                catalog = self._microphones.catalog(refresh=True)
+                return catalog if data.get("include_catalog") else list(catalog.devices)
             except Exception as e:
                 logger.error(f"Ошибка получения списка микрофонов: {format_exception(e)}")
                 raise

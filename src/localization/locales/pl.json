@@ -2617,5 +2617,11 @@
   "Не удалось прочитать фото": "Nie można odczytać zdjęcia",
   "Снято": "Zrobiono",
   "Дата файла": "Data pliku",
-  "Фотографии из игры": "Zdjęcia z gry"
+  "Фотографии из игры": "Zdjęcia z gry",
+  "Совместимый режим": "Tryb zgodności",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "Trwały identyfikator niedostępny — wybór według nazwy i indeksu.",
+  "Не удалось проверить привязку микрофона": "Nie można zweryfikować przypisania mikrofonu",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Nie można odczytać identyfikatora Windows mikrofonu. Przypisanie zachowano; odśwież listę urządzeń.",
+  "Аудиобэкенд": "Backend audio",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Wybrany backend audio jest niedostępny dla tego mikrofonu. Wybierz inny backend lub Automatycznie."
 }

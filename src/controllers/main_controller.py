@@ -531,8 +531,19 @@ class MainController:
 
     def _create_speech_controller(self):
         from controllers.speech_controller import SpeechController
+        import sounddevice
+        from infrastructure.audio.portaudio_catalog import PortAudioCatalogProvider
+        from infrastructure.settings.microphone_preferences import (
+            SettingsMicrophonePreferences,
+        )
+        from services.microphone_selection import MicrophoneSelectionService
 
-        controller = SpeechController()
+        controller = SpeechController(
+            microphones=MicrophoneSelectionService(
+                SettingsMicrophonePreferences(services().get(SettingsService)),
+                PortAudioCatalogProvider(sounddevice),
+            )
+        )
         self.speech_controller = controller
         return controller
 

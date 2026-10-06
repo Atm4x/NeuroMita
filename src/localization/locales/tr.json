@@ -2617,5 +2617,11 @@
   "Не удалось прочитать фото": "Fotoğraf okunamadı",
   "Снято": "Çekim",
   "Дата файла": "Dosya tarihi",
-  "Фотографии из игры": "Oyun içi fotoğraflar"
+  "Фотографии из игры": "Oyun içi fotoğraflar",
+  "Совместимый режим": "Uyumluluk modu",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "Kalıcı kimlik kullanılamıyor — seçim ad ve dizine göre yapılır.",
+  "Не удалось проверить привязку микрофона": "Mikrofon eşleştirmesi doğrulanamadı",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Mikrofonun Windows kimliği okunamadı. Eşleştirme korundu; cihaz listesini yenileyin.",
+  "Аудиобэкенд": "Ses arka ucu",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Seçilen ses arka ucu bu mikrofon için kullanılamıyor. Başka bir arka uç veya Otomatik seçin."
 }

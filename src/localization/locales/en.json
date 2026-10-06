@@ -2348,5 +2348,11 @@
   "Не удалось прочитать фото": "Could not read photo",
   "Снято": "Taken",
   "Дата файла": "File date",
-  "Фотографии из игры": "In-game photos"
+  "Фотографии из игры": "In-game photos",
+  "Совместимый режим": "Compatibility mode",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "Persistent ID unavailable — selection uses name and index.",
+  "Не удалось проверить привязку микрофона": "Could not verify microphone binding",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Could not read the microphone's Windows ID. Binding is preserved; refresh the device list.",
+  "Аудиобэкенд": "Audio backend",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "The selected audio backend is unavailable for this microphone. Choose another backend or Auto."
 }

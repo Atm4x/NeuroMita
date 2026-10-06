@@ -1,13 +1,23 @@
 from __future__ import annotations
 from core.error_utils import format_exception
+from dataclasses import replace
 
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer
 
 from core.events import Events, Event
-from core.audio_input import ASRInputDevice
-from handlers.asr_audio_devices import normalize_device_name
+from domain.audio_input import ASRInputDevice, AudioInputCatalog, EndpointIdentityStatus
+from services.audio_input_contracts import MicrophoneIdentityUnavailable
+from services.microphone_selection import (
+    find_display_device,
+    microphone_backends,
+    resolve_microphone,
+)
+from infrastructure.settings.microphone_preferences import (
+    read_microphone_selection,
+    MICROPHONE_SETTING_KEYS,
+)
 from core.services import services
 from services.contracts import ASRCaptureState, InstallableCatalogService, SpeechService
 from main_logger import logger
@@ -64,8 +74,7 @@ class MicrophoneSettingsController(BaseController):
             keys=(
                 *self._EXTERNAL_TOGGLES,
                 "ASR_INPUT_MODE",
-                "NM_MICROPHONE_ID",
-                "NM_MICROPHONE_NAME",
+                *MICROPHONE_SETTING_KEYS,
             ),
         )
 
@@ -75,9 +84,8 @@ class MicrophoneSettingsController(BaseController):
         v = self.view
         if not v:
             return
-        if change.key in {"NM_MICROPHONE_ID", "NM_MICROPHONE_NAME"}:
-            if hasattr(v, "mic_combobox"):
-                self.refresh_microphones(prefer_saved=True)
+        if change.key in MICROPHONE_SETTING_KEYS:
+            self.refresh_microphones(prefer_saved=True)
             return
         if change.key == "ASR_INPUT_MODE":
             combo = getattr(v, "asr_input_mode_combobox", None)
@@ -142,7 +150,7 @@ class MicrophoneSettingsController(BaseController):
             "asr_input_mode_combobox",
         )
         for n in need:
-            if not hasattr(v, n):
+            if getattr(v, n, None) is None:
                 return None
         return tuple(id(getattr(v, n)) for n in need)
 
@@ -185,6 +193,10 @@ class MicrophoneSettingsController(BaseController):
 
         safe_disconnect(v.mic_combobox.activated, self._on_mic_changed)
         v.mic_combobox.activated.connect(self._on_mic_changed)
+        backend = getattr(v, "mic_backend_combobox", None)
+        if backend is not None:
+            safe_disconnect(backend.activated, self._on_backend_changed)
+            backend.activated.connect(self._on_backend_changed)
 
         safe_disconnect(
             v.recognizer_combobox.currentTextChanged, self._on_engine_changed
@@ -416,7 +428,11 @@ class MicrophoneSettingsController(BaseController):
 
     def refresh_microphones(self, *, prefer_saved=False):
         v = self.view
-        if not v or not hasattr(v, "mic_combobox"):
+        if not v:
+            return
+        combo = getattr(v, "mic_combobox", None)
+        refresh_button = getattr(v, "mic_refresh_button", None)
+        if combo is None or refresh_button is None:
             return
         monitor = getattr(v, "mic_monitor_controller", None)
         if monitor:
@@ -424,74 +440,95 @@ class MicrophoneSettingsController(BaseController):
         req_id = int(getattr(v, "_mic_list_req_id", 0)) + 1
         v._mic_list_req_id = req_id
         previous = None if prefer_saved else v.mic_combobox.currentData()
-        saved_name = (
-            previous.name
-            if isinstance(previous, ASRInputDevice)
-            else str(v.settings.get("NM_MICROPHONE_NAME", "") or "")
+        previous_selection = (
+            previous.selection if isinstance(previous, ASRInputDevice) else None
         )
-        saved_index = (
-            previous.index
-            if isinstance(previous, ASRInputDevice)
-            else v.settings.get("NM_MICROPHONE_ID")
-        )
-        try:
-            saved_index = int(saved_index) if saved_index is not None else None
-        except (TypeError, ValueError):
-            saved_index = None
         v.mic_combobox.setEnabled(False)
         v.mic_refresh_button.setEnabled(False)
 
         def cb(result, error=None):
             def apply():
-                if self.is_closed or int(getattr(v, "_mic_list_req_id", 0)) != req_id:
+                if (
+                    self.is_closed
+                    or int(getattr(v, "_mic_list_req_id", 0)) != req_id
+                    or getattr(v, "mic_combobox", None) is not combo
+                    or getattr(v, "mic_refresh_button", None) is not refresh_button
+                ):
                     return
-                devices = [d for d in (result or []) if isinstance(d, ASRInputDevice)]
-                combo = v.mic_combobox
+                catalog = (
+                    result
+                    if isinstance(result, AudioInputCatalog)
+                    else AudioInputCatalog(tuple(result or ()))
+                )
+                self._microphone_catalog = catalog
+                devices = [d for d in catalog.devices if isinstance(d, ASRInputDevice)]
                 combo.blockSignals(True)
                 try:
                     combo.clear()
                     selected = -1
-                    same_name = (
-                        [
-                            d
-                            for d in devices
-                            if normalize_device_name(d.name)
-                            == normalize_device_name(saved_name)
-                        ]
-                        if saved_name
-                        else []
+                    saved = read_microphone_selection(v.settings)
+                    selection = (
+                        previous_selection
+                        if previous_selection
+                        and previous_selection.uid
+                        and not prefer_saved
+                        else saved
                     )
-                    chosen = next(
-                        (d for d in same_name if d.index == saved_index), None
-                    )
-                    if chosen is None and len(same_name) == 1:
-                        chosen = same_name[0]
-                    if not saved_name:
-                        chosen = next(
-                            (d for d in devices if d.index == saved_index), None
+                    saved_name, saved_uid = selection.name, selection.uid
+                    try:
+                        chosen = resolve_microphone(
+                            catalog, replace(selection, backend="")
                         )
+                    except MicrophoneIdentityUnavailable:
+                        chosen = None
                     for device in devices:
-                        combo.addItem(device.name, device)
+                        combo.addItem(device.label, device)
                         i = combo.count() - 1
+                        detail = f"{device.label}\n{device.host_api} · PortAudio {device.index}"
+                        if not device.uid:
+                            detail += "\n" + _(
+                                "Постоянный ID недоступен — выбор по имени и индексу.",
+                                "Persistent ID unavailable — selection uses name and index.",
+                            )
                         combo.setItemData(
                             i,
-                            f"{device.name}\n{device.host_api} · ID {device.index}",
+                            detail,
                             Qt.ItemDataRole.ToolTipRole,
                         )
                         if device == chosen:
                             selected = i
-                    if selected < 0 and saved_name:
-                        combo.insertItem(
-                            0,
+                    if selected < 0 and (saved_name or saved_uid):
+                        binding_unknown = bool(saved_uid) and (
+                            error is not None
+                            or catalog.identity_status
+                            != EndpointIdentityStatus.AVAILABLE
+                        )
+                        title = (
                             _(
+                                "Не удалось проверить привязку микрофона",
+                                "Could not verify microphone binding",
+                            )
+                            if binding_unknown
+                            else _(
                                 "Выбранный микрофон недоступен",
                                 "Selected microphone is unavailable",
                             )
-                            + ": "
-                            + saved_name,
+                        )
+                        combo.insertItem(
+                            0,
+                            title + ": " + (saved_name or str(saved_uid)),
                             None,
                         )
                         selected = 0
+                        if binding_unknown:
+                            combo.setItemData(
+                                0,
+                                _(
+                                    "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.",
+                                    "Could not read the microphone's Windows ID. Binding is preserved; refresh the device list.",
+                                ),
+                                Qt.ItemDataRole.ToolTipRole,
+                            )
                     elif selected < 0 and devices:
                         selected = 0
                     elif not devices and not saved_name:
@@ -503,10 +540,14 @@ class MicrophoneSettingsController(BaseController):
                         selected = 0
                     combo.setCurrentIndex(selected)
                     combo.setEnabled(bool(devices))
-                    combo.setToolTip(combo.currentText())
+                    combo.setToolTip(
+                        combo.currentData(Qt.ItemDataRole.ToolTipRole)
+                        or combo.currentText()
+                    )
                 finally:
                     combo.blockSignals(False)
                     v.mic_refresh_button.setEnabled(True)
+                self._populate_backends(saved.backend)
                 if monitor:
                     monitor._render()
 
@@ -520,14 +561,18 @@ class MicrophoneSettingsController(BaseController):
                 cb([], RuntimeError("Speech service is unavailable"))
             return
         try:
-            speech.microphone_list_async(cb)
+            request = getattr(speech, "microphone_catalog_async", None)
+            if callable(request):
+                request(cb)
+            else:
+                speech.microphone_list_async(cb)
         except Exception as exc:
             logger.warning("Microphone list request failed: %s", format_exception(exc))
             cb([], exc)
 
     def refresh_engines(self, select_engine: str | None = None):
         v = self.view
-        if not v or not hasattr(v, "recognizer_combobox"):
+        if not v or getattr(v, "recognizer_combobox", None) is None:
             return
 
         req_id = int(getattr(v, "_asr_glossary_req_id", 0)) + 1
@@ -705,6 +750,83 @@ class MicrophoneSettingsController(BaseController):
         except Exception as exc:
             cb({}, exc)
 
+    def _populate_backends(self, backend=""):
+        combo = getattr(self.view, "mic_backend_combobox", None)
+        if combo is None:
+            return
+        device = self.view.mic_combobox.currentData()
+        catalog = getattr(self, "_microphone_catalog", AudioInputCatalog())
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem(_("Авто", "Auto"), "")
+            if isinstance(device, ASRInputDevice):
+                for candidate in microphone_backends(catalog, device):
+                    if combo.findData(candidate.host_api) < 0:
+                        combo.addItem(
+                            candidate.host_api.removeprefix("Windows "),
+                            candidate.host_api,
+                        )
+            index = combo.findData(backend)
+            if index < 0 and backend:
+                combo.addItem(backend + " — " + _("Недоступно", "Unavailable"), backend)
+                index = combo.count() - 1
+            combo.setCurrentIndex(max(0, index))
+            combo.setEnabled(isinstance(device, ASRInputDevice))
+        finally:
+            combo.blockSignals(False)
+        self._reflect_backend_device()
+
+    def _reflect_backend_device(self):
+        combo = getattr(self.view, "mic_backend_combobox", None)
+        device = self.view.mic_combobox.currentData()
+        if combo is None or not isinstance(device, ASRInputDevice):
+            return
+        catalog = getattr(self, "_microphone_catalog", AudioInputCatalog())
+        selected = next(
+            (
+                d
+                for d in microphone_backends(catalog, device)
+                if d.host_api == combo.currentData()
+            ),
+            None,
+        )
+        if not combo.currentData():
+            selected = find_display_device(catalog.devices, device.selection)
+        if selected is not None:
+            self.view.mic_combobox.setItemData(
+                self.view.mic_combobox.currentIndex(), selected
+            )
+            self.view.mic_combobox.setToolTip(
+                f"{selected.label}\n{selected.host_api} · PortAudio {selected.index}"
+            )
+        monitor = getattr(self.view, "mic_monitor_controller", None)
+        if monitor:
+            monitor.set_device_available(selected is not None)
+
+    def _on_backend_changed(self, _index):
+        monitor = getattr(self.view, "mic_monitor_controller", None)
+        if monitor:
+            monitor.stop()
+        self._reflect_backend_device()
+        self._emit_microphone_selection()
+
+    def _emit_microphone_selection(self):
+        device = self.view.mic_combobox.currentData()
+        if not isinstance(device, ASRInputDevice):
+            return
+        backend = getattr(self.view, "mic_backend_combobox", None)
+        selection = (
+            replace(device.selection, backend=backend.currentData() or "")
+            if backend
+            else device.selection
+        )
+        self.event_bus.emit(Events.Speech.SET_MICROPHONE, selection)
+        if self.view.settings.get("MIC_ACTIVE", False):
+            self.event_bus.emit(
+                Events.Speech.RESTART_SPEECH_RECOGNITION, {"device_id": device.index}
+            )
+
     def _on_mic_changed(self, index: int):
         v = self.view
         if not v or index < 0:
@@ -712,16 +834,15 @@ class MicrophoneSettingsController(BaseController):
         device = v.mic_combobox.itemData(index)
         if not isinstance(device, ASRInputDevice):
             return
-        v.mic_combobox.setToolTip(device.name)
-        self._save_setting("MIC_DEVICE", device.option_text)
-        self.event_bus.emit(
-            Events.Speech.SET_MICROPHONE,
-            {"name": device.name, "device_id": device.index},
+        v.mic_combobox.setToolTip(
+            v.mic_combobox.itemData(index, Qt.ItemDataRole.ToolTipRole) or device.label
         )
-        if v.settings.get("MIC_ACTIVE", False):
-            self.event_bus.emit(
-                Events.Speech.RESTART_SPEECH_RECOGNITION, {"device_id": device.index}
-            )
+        if v.mic_combobox.currentIndex() != index:
+            v.mic_combobox.blockSignals(True)
+            v.mic_combobox.setCurrentIndex(index)
+            v.mic_combobox.blockSignals(False)
+        self._populate_backends()
+        self._emit_microphone_selection()
 
     def _on_engine_changed(self, engine: str):
         v = self.view

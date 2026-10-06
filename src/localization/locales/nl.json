@@ -2617,5 +2617,11 @@
   "Не удалось прочитать фото": "Kan de foto niet lezen",
   "Снято": "Gemaakt",
   "Дата файла": "Bestandsdatum",
-  "Фотографии из игры": "Foto’s uit het spel"
+  "Фотографии из игры": "Foto’s uit het spel",
+  "Совместимый режим": "Compatibiliteitsmodus",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "Permanente ID niet beschikbaar — selectie op naam en index.",
+  "Не удалось проверить привязку микрофона": "Kan de microfoonkoppeling niet verifiëren",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Kan de Windows-ID van de microfoon niet lezen. De koppeling blijft behouden; vernieuw de apparatenlijst.",
+  "Аудиобэкенд": "Audiobackend",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "De geselecteerde audiobackend is niet beschikbaar voor deze microfoon. Kies een andere backend of Automatisch."
 }

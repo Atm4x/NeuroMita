@@ -1,13 +1,5 @@
-from dataclasses import dataclass
+"""Compatibility import for the audio domain model."""
 
+from domain.audio_input import ASRInputDevice
 
-@dataclass(frozen=True, slots=True)
-class ASRInputDevice:
-    index: int
-    name: str
-    host_api: str
-    default_sample_rate: float | None = None
-
-    @property
-    def option_text(self) -> str:
-        return f"{self.name} ({self.index})"
+__all__ = ["ASRInputDevice"]

@@ -2622,5 +2622,11 @@
   "Не удалось прочитать фото": "Impossibile leggere la foto",
   "Снято": "Scattata",
   "Дата файла": "Data del file",
-  "Фотографии из игры": "Foto del gioco"
+  "Фотографии из игры": "Foto del gioco",
+  "Совместимый режим": "Modalità compatibilità",
+  "Постоянный ID недоступен — выбор по имени и индексу.": "ID persistente non disponibile: selezione tramite nome e indice.",
+  "Не удалось проверить привязку микрофона": "Impossibile verificare l’associazione del microfono",
+  "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Impossibile leggere l’ID Windows del microfono. L’associazione è conservata; aggiorna l’elenco dei dispositivi.",
+  "Аудиобэкенд": "Backend audio",
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Il backend audio selezionato non è disponibile per questo microfono. Scegli un altro backend o Automatico."
 }
