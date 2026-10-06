@@ -153,7 +153,7 @@ def wire_voiceover_settings_logic(self):
                     event_name = (
                         Events.GUI.VOICEOVER_MODEL_REINITIALIZE
                         if action == "reinit"
-                        else Events.GUI.VOICEOVER_MODEL_SELECTED
+                        else Events.GUI.VOICEOVER_MODEL_INITIALIZE
                     )
                     eb.emit(event_name, {"model_id": mid})
 

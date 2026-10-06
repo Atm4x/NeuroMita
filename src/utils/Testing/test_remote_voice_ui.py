@@ -65,6 +65,7 @@ def test_key_is_masked_and_validation_keeps_draft(panel):
     app, service, vm, widget = panel
     widget.key.setText("private-key")
     assert widget.key.echoMode() == QLineEdit.EchoMode.Password
+    assert widget.preview_character.text() == widget.character_title.text()
     assert not widget.eye.icon().isNull()
     widget.eye.trigger()
     assert widget.key.echoMode() == QLineEdit.EchoMode.Normal
@@ -81,7 +82,6 @@ def test_key_is_masked_and_validation_keeps_draft(panel):
 def test_profile_switch_saves_draft_without_network(panel):
     app, service, vm, widget = panel
     original_id = service.configuration().active_id
-    widget.name.setText("Мой голос")
     widget.key.setText("private-key")
     widget.voice.setText("a" * 32)
     widget.add_button.click()
@@ -90,7 +90,7 @@ def test_profile_switch_saves_draft_without_network(panel):
     assert widget.key.text() == ""
     widget.profiles.setCurrentIndex(widget.profiles.findData(original_id))
     settle(app, vm)
-    assert widget.name.text() == "Мой голос"
+    assert service.configuration().active.name == "Fish Audio"
     assert widget.key.text() == "private-key"
     assert widget.voice.text() == "a" * 32
     assert not service.status().verified
@@ -123,6 +123,26 @@ def test_actual_voiceover_panel_has_api_and_shared_playback(panel):
     assert root.playback_settings_frame.isVisible()
     assert not root.local_settings_frame.isVisible()
     assert not root.tg_settings_frame.isVisible()
+    assert root.api_preview_frame.isVisible()
+    remote_panel = root.api_settings_frame.findChild(RemoteVoiceSettingsWidget)
+    remote_panel.key.setText("Draft key")
+    root.use_voice_checkbox.setChecked(False)
+    controller._effective_use_voice = root.use_voice_checkbox.isChecked
+    controller._apply_voiceover_visibility_from_widgets()
+    root.voice_method_selector.buttons["TG"].click()
+    assert root.settings["VOICEOVER_METHOD"] == "TG"
+    assert root.tg_settings_frame.isVisible()
+    assert root.telegram_status_frame.isVisible()
+    assert not root.api_preview_frame.isVisible()
+    root.voice_method_selector.buttons["Local"].click()
+    assert root.settings["VOICEOVER_METHOD"] == "Local"
+    assert root.local_status_frame.isVisible()
+    root.voice_method_selector.buttons["API"].click()
+    assert root.api_preview_frame.isVisible()
+    assert remote_panel.key.text() == "Draft key"
+    actions.remote.update_state(busy=True)
+    assert not root.api_preview_frame.isEnabled()
+    assert not remote_panel.controls.isEnabled()
     actions.close()
     root.close()
 
@@ -253,3 +273,52 @@ def test_language_refresh_preserves_drafts_selection_and_key_visibility(
     assert widget.status.text() == "Fish Audio: API key rejected (HTTP 401)."
     vm.update_state(busy=True)
     assert widget.status.text() == "Working…"
+
+
+def test_telegram_connect_requires_credentials_in_ui_and_action(panel):
+    from ui.settings.voiceover_settings.presentation import StartTelegramVoice
+
+    app, service, vm, widget = panel
+
+    class Store(dict):
+        def set(self, key, value):
+            self[key] = value
+
+    root = QWidget()
+    root.settings = Store(USE_VOICEOVER=True, VOICEOVER_METHOD="TG")
+    root._save_setting = root.settings.set
+    events = []
+    actions = VoiceoverSettingsViewModel(
+        events=SimpleNamespace(publish=lambda *args: events.append(args)),
+        remote_service=service,
+        telegram_settings=lambda: root.settings,
+    )
+    build_voiceover_settings_ui(root, QVBoxLayout(root), actions=actions)
+    settle(app, actions.remote)
+    assert not root.tg_connect_button.isEnabled()
+    actions.dispatch(StartTelegramVoice())
+    assert events == []
+    root.tg_api_id.setText("123456")
+    root.tg_api_hash.setText("hash")
+    root.tg_phone.setText(" ")
+    assert not root.tg_connect_button.isEnabled()
+    root.tg_phone.setText("+79991234567")
+    assert root.tg_connect_button.isEnabled()
+    root.tg_connect_button.click()
+    assert len(events) == 1
+    root.tg_api_hash.clear()
+    controller = VoiceoverGuiController.__new__(VoiceoverGuiController)
+    controller.view = root
+    controller._effective_use_voice = lambda: True
+    controller._effective_method = lambda: "TG"
+    controller._tg_is_connecting = lambda: False
+    controller._tg_connected = False
+    controller._get_setting = root.settings.get
+    controller._update_tg_connect_button()
+    assert not root.tg_connect_button.isEnabled()
+    root.tg_api_hash.editingFinished.emit()
+    assert not root.tg_connect_button.isEnabled()
+    actions.dispatch(StartTelegramVoice())
+    assert len(events) == 1
+    actions.close()
+    root.close()

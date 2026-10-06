@@ -1,3 +1,7 @@
+from core.telegram_credentials import (
+    TELEGRAM_CREDENTIAL_KEYS,
+    telegram_credentials_complete,
+)
 from core.error_utils import format_exception
 import os
 import time
@@ -57,6 +61,9 @@ class VoiceoverGuiController(BaseController):
         eb.subscribe(Events.GUI.VOICEOVER_REFRESH, self._on_refresh, weak=False)
         eb.subscribe(
             Events.GUI.VOICEOVER_MODEL_SELECTED, self._on_model_selected, weak=False
+        )
+        eb.subscribe(
+            Events.GUI.VOICEOVER_MODEL_INITIALIZE, self._on_model_initialize, weak=False
         )
         eb.subscribe(
             Events.GUI.VOICEOVER_MODEL_REINITIALIZE,
@@ -253,6 +260,7 @@ class VoiceoverGuiController(BaseController):
             "LOCAL_VOICE_LOAD_LAST",
             "VOICE_LANGUAGE",
             "TG_AUTOCONNECT",
+            *TELEGRAM_CREDENTIAL_KEYS,
         }
         if key not in relevant:
             return
@@ -402,6 +410,11 @@ class VoiceoverGuiController(BaseController):
 
         use_voice = self._effective_use_voice()
         method = self._effective_method()
+        if hasattr(btn, "setProperty"):
+            btn.setProperty(
+                "connectionLocked",
+                self._tg_connected is True or self._tg_is_connecting(),
+            )
 
         active = bool(use_voice and method == "TG")
 
@@ -420,7 +433,16 @@ class VoiceoverGuiController(BaseController):
             btn.setText(_("Подключено", "Connected"))
             return
 
-        btn.setEnabled(True)
+        credentials = {}
+        for key, name in zip(
+            TELEGRAM_CREDENTIAL_KEYS, ("tg_api_id", "tg_api_hash", "tg_phone")
+        ):
+            field = getattr(self.view, name, None)
+            credentials[key] = (
+                field.text() if field is not None else self._get_setting(key, "")
+            )
+        complete = telegram_credentials_complete(credentials)
+        btn.setEnabled(complete)
         btn.setText(_("Подключиться к Telegram", "Connect Telegram"))
 
     def _maybe_autoconnect_tg(self):
@@ -432,6 +454,10 @@ class VoiceoverGuiController(BaseController):
         if not use_voice or method != "TG":
             return
 
+        if not telegram_credentials_complete(
+            {key: self._get_setting(key, "") for key in TELEGRAM_CREDENTIAL_KEYS}
+        ):
+            return
         autoconnect = bool(self._get_setting("TG_AUTOCONNECT", True))
         if not autoconnect:
             return
@@ -453,6 +479,12 @@ class VoiceoverGuiController(BaseController):
 
     # ---------- Local models ----------
     def _on_model_selected(self, event: Event):
+        self._handle_model_action(event, initialize=False)
+
+    def _on_model_initialize(self, event: Event):
+        self._handle_model_action(event, initialize=True)
+
+    def _handle_model_action(self, event: Event, *, initialize: bool):
         model_id = str((event.data or {}).get("model_id") or "").strip()
         if not model_id:
             self._ui(lambda: self._sync_everything(allow_autoload=False))
@@ -479,7 +511,7 @@ class VoiceoverGuiController(BaseController):
 
             self._save_setting("NM_CURRENT_VOICEOVER", model_id)
             self._set_combobox_by_model_id(model_id)
-            self._select_or_init_model_async(model_id)
+            self._prepare_local_model_async(model_id, initialize=initialize)
 
         self._ui(apply)
 
@@ -510,7 +542,7 @@ class VoiceoverGuiController(BaseController):
 
         self._ui(apply)
 
-    def _select_or_init_model_async(self, model_id: str):
+    def _prepare_local_model_async(self, model_id: str, *, initialize: bool = False):
         if not model_id:
             return
 
@@ -590,7 +622,7 @@ class VoiceoverGuiController(BaseController):
                     )
                 return
 
-            if not self._begin_model_loading(current_id):
+            if not initialize or not self._begin_model_loading(current_id):
                 self._sync_local_model_status_from_snapshot(state)
                 self._emit_voice_icon_state_from_snapshot(state)
                 return
@@ -794,6 +826,18 @@ class VoiceoverGuiController(BaseController):
         self._ensure_tg_polling(tg_active)
         self._emit_voice_icon_state_from_snapshot(state)
 
+    @staticmethod
+    def _add_local_model_item(combo, name: str, model_id: str) -> None:
+        from installables.catalog_manifest import CATALOG_BY_ID
+
+        entry = CATALOG_BY_ID.get(f"tts:{model_id}")
+        ru = str(entry.metadata_ru.get("title") or name) if entry else name
+        en = str(entry.metadata_en.get("title") or "") if entry else ""
+        if hasattr(combo, "add_tr_item"):
+            combo.add_tr_item(ru, en, value=model_id)
+        else:
+            combo.addItem(_(ru, en), model_id)
+
     def _build_model_name_map(self, cfgs) -> dict[str, str]:
         mp: dict[str, str] = {}
         for c in cfgs or []:
@@ -868,7 +912,7 @@ class VoiceoverGuiController(BaseController):
         try:
             cb.clear()
             for name, mid in items:
-                cb.addItem(name, mid)
+                self._add_local_model_item(cb, name, mid)
         finally:
             cb.blockSignals(False)
 
@@ -983,7 +1027,7 @@ class VoiceoverGuiController(BaseController):
         method = self._effective_method()
 
         if not use_voice:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {"category": "voice", "state": None, "tooltip": None},
             )
@@ -994,7 +1038,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if method != "Local":
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {"category": "voice", "state": None, "tooltip": None},
             )
@@ -1002,7 +1046,7 @@ class VoiceoverGuiController(BaseController):
 
         model_id = str(state.get("current_model_id") or "")
         if not model_id:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1016,7 +1060,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if self._loading_model_id == model_id:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1027,7 +1071,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if state.get("availability") == "checking":
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1037,7 +1081,7 @@ class VoiceoverGuiController(BaseController):
             )
             return
         if not bool(state.get("installed")):
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1056,7 +1100,7 @@ class VoiceoverGuiController(BaseController):
         # Установлена, но не инициализирована — это НЕ «готово». Жёлтый "warn"
         # (настроено, но требует инициализации), а не зелёный, иначе индикатор
         # на вкладке противоречит плашке «Требуется инициализация» в теле страницы.
-        self.event_bus.emit(
+        self._publish_voice_indicator(
             Events.GUI.SET_SETTINGS_ICON_INDICATOR,
             {
                 "category": "voice",
@@ -1141,7 +1185,7 @@ class VoiceoverGuiController(BaseController):
         playback_frame = getattr(self.view, "playback_settings_frame", None)
 
         if method_cb is not None:
-            method_cb.setEnabled(use_voice)
+            method_cb.setEnabled(True)
 
         if tg_frame is not None:
             tg_frame.setVisible(method == "TG")
@@ -1153,12 +1197,30 @@ class VoiceoverGuiController(BaseController):
             playback_frame.setVisible(method in {"Local", "API"})
 
     # ---------- sidebar indicator ----------
+    def _publish_voice_indicator(self, event_name, payload):
+        widget = getattr(self.view, "voiceover_status", None)
+        if widget is not None:
+            widget.set_status(payload.get("state"), payload.get("tooltip"))
+        telegram = getattr(self.view, "telegram_status", None)
+        if telegram is not None and self._effective_method() == "TG":
+            if self._tg_is_connecting():
+                telegram.set_status("loading", _("Подключение…", "Connecting…"))
+            elif self._tg_connected is True:
+                telegram.set_status(
+                    "green", _("Telegram подключен", "Telegram connected")
+                )
+            else:
+                telegram.set_status(
+                    "red", _("Telegram не подключен", "Telegram not connected")
+                )
+        self.event_bus.emit(event_name, payload)
+
     def _emit_voice_icon_state(self):
         use_voice = self._effective_use_voice()
         method = self._effective_method()
 
         if not use_voice:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {"category": "voice", "state": None, "tooltip": None},
             )
@@ -1173,7 +1235,7 @@ class VoiceoverGuiController(BaseController):
             registry = services().get_optional(CharacterRegistry)
             character_id = registry.current_id() if registry else None
             status = remote.status(character_id=character_id) if remote else None
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1197,7 +1259,7 @@ class VoiceoverGuiController(BaseController):
 
         if method == "TG":
             if self._tg_is_connecting():
-                self.event_bus.emit(
+                self._publish_voice_indicator(
                     Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                     {
                         "category": "voice",
@@ -1210,7 +1272,7 @@ class VoiceoverGuiController(BaseController):
                 return
 
             if self._tg_connected is True:
-                self.event_bus.emit(
+                self._publish_voice_indicator(
                     Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                     {
                         "category": "voice",
@@ -1220,7 +1282,7 @@ class VoiceoverGuiController(BaseController):
                 )
                 return
 
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1231,7 +1293,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if method != "Local":
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {"category": "voice", "state": None, "tooltip": None},
             )
@@ -1239,7 +1301,7 @@ class VoiceoverGuiController(BaseController):
 
         model_id = self._current_model_id_from_settings()
         if not model_id:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1253,7 +1315,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if self._loading_model_id == model_id:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1265,7 +1327,7 @@ class VoiceoverGuiController(BaseController):
 
         installed_ids = getattr(self, "_installed_models_cache", None)
         if installed_ids is None:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1278,7 +1340,7 @@ class VoiceoverGuiController(BaseController):
             return
 
         if model_id not in installed_ids:
-            self.event_bus.emit(
+            self._publish_voice_indicator(
                 Events.GUI.SET_SETTINGS_ICON_INDICATOR,
                 {
                     "category": "voice",
@@ -1292,7 +1354,7 @@ class VoiceoverGuiController(BaseController):
         # Данные об инициализации берём из кэша, который ведёт snapshot-путь
         # (никаких блокирующих CHECK_MODEL_INITIALIZED в пути индикатора).
         initialized = model_id in getattr(self, "_initialized_models_cache", set())
-        self.event_bus.emit(
+        self._publish_voice_indicator(
             Events.GUI.SET_SETTINGS_ICON_INDICATOR,
             {
                 "category": "voice",
@@ -1452,7 +1514,7 @@ class VoiceoverGuiController(BaseController):
         try:
             cb.clear()
             for name, mid in items:
-                cb.addItem(name, mid)
+                self._add_local_model_item(cb, name, mid)
         finally:
             cb.blockSignals(False)
 

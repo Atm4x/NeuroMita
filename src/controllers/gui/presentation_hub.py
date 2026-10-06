@@ -94,8 +94,58 @@ class _ProviderOptionsController:
 
 
 class _SettingsSectionsController:
+    _PREPARATION_MODULES = {
+        "api": ("controllers.gui.api_settings",),
+        "characters": ("controllers.gui.character_settings_logic",),
+        "voice": (
+            "controllers.gui.voiceover_settings_view_model",
+            "controllers.gui.voiceover_settings_logic",
+            "controllers.gui.audio_model_controller",
+            "controllers.gui.voice_model_controller",
+            "ui.settings.voiceover_settings.remote_api",
+        ),
+        "microphone": (
+            "controllers.gui.asr_events_controller",
+            "controllers.gui.asr_glossary_controller",
+            "controllers.gui.microphone_settings_controller",
+            "controllers.gui.microphone_settings_logic",
+        ),
+        "ai_engine": ("controllers.gui.ai_engine_settings_view_model",),
+        "game": (
+            "controllers.gui.beat_settings_view_model",
+            "controllers.gui.beat_settings_controller",
+        ),
+        "models": (
+            "controllers.gui.settings_runtime_options_view_model",
+            "controllers.gui.embed_provider_view_model",
+            "controllers.gui.rag_preset_view_model",
+            "controllers.gui.rag_install_view_model",
+            "controllers.gui.rag_memory_controller",
+        ),
+        "screen": ("controllers.gui.settings_runtime_options_view_model",),
+        "updates": ("controllers.gui.updates_settings_controller",),
+        "data_collection": (
+            "ui.settings.data_settings",
+            "controllers.gui.finetune_data_view_model",
+        ),
+    }
+
     def __init__(self, presentation: "UiPresentationHub") -> None:
         self._presentation = presentation
+
+    @classmethod
+    def prepare_section(cls, category: str) -> None:
+        """Import section dependencies in a worker without creating Qt objects."""
+        from importlib import import_module
+        from ui.pages.settings.section_registry import get_settings_section_specs
+
+        spec = next(
+            item for item in get_settings_section_specs() if item.key == category
+        )
+        if isinstance(spec.builder_ref, str) and ":" in spec.builder_ref:
+            import_module(spec.builder_ref.partition(":")[0])
+        for module_name in cls._PREPARATION_MODULES.get(category, ()):
+            import_module(module_name)
 
     @staticmethod
     def preload_sections(preloads) -> None:
@@ -445,6 +495,7 @@ class _ViewModelFactory:
         return VoiceoverSettingsViewModel(
             events=self._presentation.events,
             remote_service=services().get(RemoteVoiceService),
+            telegram_settings=lambda: use(SettingsService),
             playback_volume=lambda: use(SettingsService).get(
                 "VOICEOVER_LOCAL_VOLUME", 100
             ),
@@ -533,6 +584,7 @@ class _ViewModelFactory:
             host=host,
             app=self._presentation.app,
             settings_data=self._presentation.settings_data,
+            prepare_section=self._presentation.settings_sections.prepare_section,
             parent=parent,
         )
 
@@ -1011,6 +1063,15 @@ class _ApplicationController:
             getattr(controller, "gui_controller", None)
             if controller is not None
             else None
+        )
+
+    @property
+    def gui_ready(self) -> bool:
+        controller = self.gui_controller()
+        return (
+            self.backend_ready
+            and controller is not None
+            and not bool(getattr(controller, "_closed", False))
         )
 
     def ensure_feature_async(self, feature: str):

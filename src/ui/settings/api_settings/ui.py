@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ui.widgets.settings_section_header import create_settings_header
 
 from PyQt6.QtCore import Qt, QSize, QStringListModel, QTimer, QRect, QRectF
 from PyQt6.QtWidgets import (
@@ -12,6 +13,7 @@ import qtawesome as qta
 from utils import _
 from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
+from styles.completion_popup import get_completion_popup_stylesheet
 from .model_settings_form import ModelSettingsForm
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
@@ -19,6 +21,7 @@ from .widgets import (
 )
 from ui.provider_icons import provider_icon
 from ui.widgets.tr_combobox import TRQComboBox
+from ui.widgets.template_url_edit import TemplateUrlEdit
 from ui.widgets.settings_sections import CollapsibleSection
 
 
@@ -70,7 +73,8 @@ class ApiEditorTabs(QTabWidget):
 
 
 class ApiField(QWidget):
-    def __init__(self, title, *, password=False):
+
+    def __init__(self, title, *, password=False, editor=None):
         super().__init__()
         self._base_label = str(title)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -85,7 +89,7 @@ class ApiField(QWidget):
         layout.addLayout(self.heading)
         self.input_layout = QHBoxLayout()
         self.input_layout.setSpacing(6)
-        self.edit = QLineEdit()
+        self.edit = editor if editor is not None else QLineEdit()
         self.edit.setMinimumHeight(40)
         if password:
             self.edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -133,21 +137,8 @@ def build_api_settings_ui(self, parent_layout):
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(14)
 
-    heading = QHBoxLayout()
-    titles = QVBoxLayout()
-    titles.setSpacing(4)
-    title = tr_set(QLabel(), "API пресеты", "API presets")
-    title.setObjectName("ApiSettingsTitle")
-    titles.addWidget(title)
-    subtitle = tr_set(QLabel(), "Управление подключениями к провайдерам и настройками моделей.",
-                      "Manage provider connections and model settings.")
-    subtitle.setObjectName("ApiSettingsSubtitle")
-    subtitle.setWordWrap(True)
-    titles.addWidget(subtitle)
-    heading.addLayout(titles, 1)
+    create_settings_header(layout, "api")
     self.add_preset_btn = _button("Добавить пресет", "Add preset", "fa5s.plus", "ApiAddPresetButton")
-
-    layout.addLayout(heading)
 
     workspace = QFrame()
     workspace.setObjectName("ApiWorkspacePanel")
@@ -274,8 +265,31 @@ def build_api_settings_ui(self, parent_layout):
     identity.addWidget(template_field, 0, 1)
     content.addLayout(identity)
 
-    self.api_url_row = ApiField(_("Ссылка API", "API URL"))
+    self.api_url_row = ApiField(_("Ссылка API", "API URL"), editor=TemplateUrlEdit())
     content.addWidget(self.api_url_row)
+    self.api_test_url_row = ApiField(
+        _("URL проверки (необязательно)", "Test URL (optional)")
+    )
+    self.api_test_url_row.edit.setPlaceholderText("http://localhost:1234/v1/models")
+    self.api_test_url_row.edit.setToolTip(
+        _(
+            "GET-адрес для проверки подключения и загрузки списка моделей. Если его нет, проверьте ответы в песочнице.",
+            "GET endpoint for checking the connection and loading models. If unavailable, try responses in the sandbox.",
+        )
+    )
+    self.api_test_url_row.setVisible(False)
+    self.api_test_url_error = tr_set(
+        QLabel(),
+        "Укажите HTTP или HTTPS URL с адресом сервера, например http://localhost:1234/v1/models.",
+        "Enter an HTTP or HTTPS URL with a server address, e.g. http://localhost:1234/v1/models.",
+    )
+    self.api_test_url_error.setWordWrap(True)
+    self.api_test_url_error.setStyleSheet(
+        f"color: {THEME['warn_text']}; font-size: 12px;"
+    )
+    self.api_test_url_error.hide()
+    self.api_test_url_row.layout().addWidget(self.api_test_url_error)
+    content.addWidget(self.api_test_url_row)
     credentials = QGridLayout()
     credentials.setHorizontalSpacing(16)
     credentials.setColumnStretch(0, 1)
@@ -359,18 +373,46 @@ def _build_protocol(self, layout):
     _update_reserve_count(self.reserve_keys_row)
     self.reserve_keys_section.add_widget(self.reserve_keys_row)
     layout.addWidget(self.reserve_keys_section)
-    self.protocol_section = CollapsibleSection(_("Расширенные настройки подключения", "Advanced connection settings"))
+    self.protocol_section = CollapsibleSection(
+        _("Расширенные настройки подключения", "Advanced connection settings"),
+        icon_name="fa5s.sliders-h",
+        subtitle=_(
+            "Формат API и обработка сообщений перед отправкой.",
+            "API format and message processing before sending.",
+        ),
+    )
     self.protocol_row = LabeledComboRow(_("Формат запроса", "Request format"))
+    self.protocol_row.combo.setMinimumHeight(40)
     self.protocol_section.add_widget(self.protocol_row)
     self.protocol_info_label = QLabel()
+    self.protocol_info_label.setObjectName("ApiProtocolHint")
+    self.protocol_info_label.setStyleSheet(
+        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+    )
     self.protocol_info_label.setWordWrap(True)
     self.protocol_section.add_widget(self.protocol_info_label)
-    self.protocol_transforms_view = QTextEdit()
-    self.protocol_transforms_view.setReadOnly(True)
-    self.protocol_transforms_view.setFixedHeight(90)
-    self.protocol_section.add_widget(self.protocol_transforms_view)
-    self.configure_pipeline_btn = _button("Настроить pipeline", "Configure pipeline", "fa5s.sliders-h")
-    self.protocol_section.add_widget(self.configure_pipeline_btn)
+    self.protocol_transforms_view = QLabel()
+    self.protocol_transforms_view.setWordWrap(True)
+    self.protocol_transforms_view.setObjectName("ApiProtocolHint")
+    self.protocol_transforms_view.setStyleSheet(
+        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+    )
+    processing_row = QWidget()
+    processing_layout = QHBoxLayout(processing_row)
+    processing_layout.setContentsMargins(0, 4, 0, 0)
+    processing_layout.setSpacing(12)
+    processing_layout.addWidget(self.protocol_transforms_view, 1)
+    self.configure_pipeline_btn = _button(
+        "Обработка сообщений",
+        "Message processing",
+        "fa5s.sliders-h",
+        "ApiPipelineButton",
+    )
+    self.configure_pipeline_btn.setStyleSheet(
+        f"background: {THEME["card_alt_bg"]}; color: {THEME["text"]}; border: 1px solid {THEME["panel_border"]}; border-radius: 9px;"
+    )
+    processing_layout.addWidget(self.configure_pipeline_btn)
+    self.protocol_section.add_widget(processing_row)
     layout.addWidget(self.protocol_section)
 
 
@@ -397,12 +439,16 @@ def _build_fallbacks(self, layout):
 
 
 def _build_completer(self):
-    self.api_model_completer = QCompleter()
-    self.api_model_list_model = QStringListModel()
+    self.api_model_completer = QCompleter(self.api_model_row.edit)
+    self.api_model_list_model = QStringListModel(self.api_model_completer)
     self.api_model_completer.setModel(self.api_model_list_model)
     self.api_model_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
     self.api_model_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
     self.api_model_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    popup = self.api_model_completer.popup()
+    popup.setObjectName("CompletionPopup")
+    popup.setStyleSheet(get_completion_popup_stylesheet())
+    self.api_model_completer.setMaxVisibleItems(8)
     self.api_model_row.edit.setCompleter(self.api_model_completer)
 
     def show_completer(event):
@@ -540,13 +586,11 @@ def _build_routing(self, layout):
     self.openrouter_routing_section.setVisible(False)
 
 
-
 def _filter_presets(widget, text):
     query = text.strip().casefold()
     for index in range(widget.count()):
         item = widget.item(index)
         item.setHidden(query not in f"{item.base_name} {item.model} {getattr(item, 'provider_label', '')}".casefold())
-
 
 
 def _update_reserve_count(editor):
