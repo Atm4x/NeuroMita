@@ -59,7 +59,7 @@ def test_native_contract_and_wav_output(service_factory):
     request = requests[0]
     assert str(request.url) == "https://api.fish.audio/v1/tts"
     assert request.headers["authorization"] == "Bearer " + SECRET
-    assert request.headers["model"] == "s1"
+    assert request.headers["model"] == "s2.1-pro-free"
     payload = json.loads(request.content)
     assert payload["format"] == "pcm"
     assert payload["reference_id"] == VOICE_ID
@@ -130,7 +130,7 @@ def test_profile_persistence_normalization_and_templates(service_factory, tmp_pa
     )
     assert service.configuration().active.voice_id == VOICE_ID
     second = service.add_preset("fish_audio").active
-    assert second.model == "s1" and second.api_key == ""
+    assert second.model == "s2.1-pro-free" and second.api_key == ""
     service.select_preset(active.id)
     assert service.configuration().active.api_key == SECRET
     assert (
@@ -145,6 +145,77 @@ def test_profile_persistence_normalization_and_templates(service_factory, tmp_pa
     with pytest.raises(RemoteVoiceError):
         service.save_preset(replace(active, model="invented"))
     assert service.templates()[0].endpoint == "https://api.fish.audio/v1/tts"
+
+
+def test_free_model_is_first_and_saved_paid_model_is_preserved(service_factory, tmp_path):
+    service = service_factory(lambda request: httpx.Response(200))
+    assert service.templates()[0].models[0] == "s2.1-pro-free"
+    active = service.configuration().active
+    service.save_preset(replace(active, model="s1"))
+    assert RemoteVoiceRepository(tmp_path / "profiles.json").load().active.model == "s1"
+
+
+@pytest.mark.parametrize(
+    "status,body,content_type",
+    [
+        (402, b"", "text/plain"),
+        (400, b'{"detail":"Invalid api key or insufficient balance"}', "application/json"),
+        (403, b'{"error":{"code":"insufficient_balance"}}', "application/json"),
+        (200, b'{"message":"Not enough credits"}', "application/json"),
+        (400, "Нет денег".encode(), "text/plain"),
+        (400, json.dumps({"detail": "Нет денег"}).encode(), "application/json"),
+    ],
+)
+def test_insufficient_balance_has_actionable_safe_message(
+    service_factory, tmp_path, status, body, content_type
+):
+    service = service_factory(
+        lambda request: httpx.Response(
+            status, content=body,
+            headers={"content-type": content_type},
+        )
+    )
+    with patch("services.remote_voice_service.logger") as log:
+        with pytest.raises(RemoteVoiceError) as error:
+            asyncio.run(service.synthesize("Привет"))
+    assert "недостаточно средств" in str(error.value)
+    assert "s2.1-pro-free" in str(error.value)
+    assert SECRET not in str(error.value)
+    assert SECRET not in str(log.mock_calls)
+    assert not list((tmp_path / "audio").glob("*"))
+    assert not service.status().verified
+
+
+def test_balance_error_does_not_echo_response_details(service_factory):
+    service = service_factory(
+        lambda request: httpx.Response(
+            400, json={"detail": "Insufficient balance: " + SECRET}
+        )
+    )
+    with patch("services.remote_voice_service.logger") as log:
+        with pytest.raises(RemoteVoiceError) as error:
+            asyncio.run(service.synthesize("Привет"))
+    assert "s2.1-pro-free" in str(error.value)
+    assert SECRET not in str(error.value)
+    assert SECRET not in str(log.mock_calls)
+
+
+def test_error_body_reading_is_bounded(service_factory):
+    chunks_read = []
+
+    class ErrorStream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(100):
+                chunks_read.append(index)
+                yield b"x" * 4096
+
+    service = service_factory(
+        lambda request: httpx.Response(500, stream=ErrorStream())
+    )
+    with pytest.raises(RemoteVoiceError) as error:
+        asyncio.run(service.synthesize("Привет"))
+    assert error.value.code == "http.500"
+    assert len(chunks_read) == 4
 
 
 @pytest.mark.parametrize(

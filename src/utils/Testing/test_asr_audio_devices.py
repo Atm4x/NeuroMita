@@ -1,7 +1,11 @@
 from __future__ import annotations
 from infrastructure.audio.windows_endpoint_identity import EndpointIdentityRead
+from domain.audio_input import EndpointIdentityStatus, MicrophoneSelection
+from infrastructure.audio.portaudio_catalog import read_portaudio_catalog
+from services.microphone_selection import resolve_microphone
 
 from types import SimpleNamespace
+import pytest
 
 from handlers.asr_audio_devices import (
     list_asr_input_devices,
@@ -400,3 +404,112 @@ def test_numeric_legacy_selection_maps_alias_index_to_endpoint(monkeypatch):
     resolved = resolve_asr_input_device(backend, requested_index=1, requested_name=None)
     assert resolved.uid == "B"
     assert resolved.index == 3
+
+
+def test_input_without_wasapi_identity_remains_selectable(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(((2, "headset-id"),)),
+    )
+    backend = _FakeSoundDevice(
+        [
+            _device("Built-in microphone", 0),
+            _device("Built-in microphone", 1),
+            _device("Headset", 2),
+        ],
+        [{"name": "MME"}, {"name": "Windows DirectSound"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000), (2, 48000)},
+    )
+    catalog = read_portaudio_catalog(backend)
+    selected = resolve_microphone(
+        catalog, MicrophoneSelection(index=0, name="Built-in microphone")
+    )
+    assert selected is not None
+    assert selected.index == 1
+    assert selected.uid is None
+    assert resolve_microphone(
+        catalog, MicrophoneSelection(index=0, name="Built-in microphone", backend="MME")
+    ).index == 0
+
+
+def test_partial_identity_failure_preserves_verified_microphone_backends(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(
+            ((1, "built-in-id"),), EndpointIdentityStatus.PARTIAL, "Headset ID failed"
+        ),
+    )
+    backend = _FakeSoundDevice(
+        [_device("Built-in", 0), _device("Built-in", 1), _device("Headset", 1)],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 48000), (2, 48000)},
+    )
+    catalog = read_portaudio_catalog(backend)
+    selected = resolve_microphone(
+        catalog, MicrophoneSelection("built-in-id", 0, "Built-in", "MME")
+    )
+    assert selected.index == 0
+    assert selected.uid == "built-in-id"
+
+
+def test_unmatched_backend_name_remains_available_without_guessed_identity(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(((1, "built-in-id"),)),
+    )
+    backend = _FakeSoundDevice(
+        [_device("Microphone Array (Intel SST)", 0), _device("Microphone Array", 1)],
+        [{"name": "Windows DirectSound"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 48000)},
+    )
+    catalog = read_portaudio_catalog(backend)
+    selected = resolve_microphone(
+        catalog, MicrophoneSelection(index=0, name="Microphone Array (Intel SST)")
+    )
+    assert selected is not None
+    assert selected.index == 0
+    assert selected.uid is None
+
+
+def test_partial_identity_does_not_guess_alias_between_identical_endpoint_names(monkeypatch):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(
+            ((1, "verified-id"),), EndpointIdentityStatus.PARTIAL, "Second ID failed"
+        ),
+    )
+    backend = _FakeSoundDevice(
+        [_device("Same name", 0), _device("Same name", 1), _device("Same name", 1)],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 48000), (2, 48000)},
+    )
+    catalog = read_portaudio_catalog(backend)
+    assert next(d for d in catalog.representations if d.index == 0).uid is None
+    assert resolve_microphone(catalog, MicrophoneSelection("verified-id")).index == 1
+
+
+@pytest.mark.parametrize(
+    "status", [EndpointIdentityStatus.AVAILABLE, EndpointIdentityStatus.PARTIAL]
+)
+def test_duplicate_backend_names_are_not_bound_to_one_endpoint(monkeypatch, status):
+    monkeypatch.setattr(
+        "infrastructure.audio.portaudio_catalog._endpoint_ids",
+        lambda sd, indices: EndpointIdentityRead(((2, "verified-id"),), status),
+    )
+    backend = _FakeSoundDevice(
+        [
+            _device("Same name", 0),
+            _device("Same name", 0),
+            _device("Same name", 1),
+            _device("Other", 1),
+        ],
+        [{"name": "MME"}, {"name": "Windows WASAPI"}],
+        supported={(0, 16000), (1, 16000), (2, 48000), (3, 48000)},
+    )
+    catalog = read_portaudio_catalog(backend)
+    selected = resolve_microphone(
+        catalog, MicrophoneSelection(index=1, name="Same name", backend="MME")
+    )
+    assert selected.index == 1
+    assert selected.uid is None
+    assert all(d.uid is None for d in catalog.representations if d.host_api == "MME")

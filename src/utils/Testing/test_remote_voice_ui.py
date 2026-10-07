@@ -79,6 +79,28 @@ def test_key_is_masked_and_validation_keeps_draft(panel):
     assert service.configuration().active.api_key == ""
 
 
+def test_model_warning_tracks_selection_and_live_language(panel, monkeypatch):
+    import localization
+    from localization.live import refresh_all
+
+    app, service, vm, widget = panel
+    assert widget.model.itemText(0) == "s2.1-pro-free"
+    assert widget.model.currentText() == "s2.1-pro-free"
+    monkeypatch.setattr(localization, "_current_language", lambda: "EN")
+    refresh_all()
+    assert "free model" in widget.model_hint.text()
+    widget.model.setCurrentText("s1")
+    assert "paid model" in widget.model_hint.text()
+    assert "paid models" in widget.quota.text()
+    widget.save_button.click()
+    settle(app, vm)
+    assert service.configuration().active.model == "s1"
+    monkeypatch.setattr(localization, "_current_language", lambda: "RU")
+    refresh_all()
+    assert "платная модель" in widget.model_hint.text()
+    assert widget.model.currentText() == "s1"
+
+
 def test_profile_switch_saves_draft_without_network(panel):
     app, service, vm, widget = panel
     original_id = service.configuration().active_id

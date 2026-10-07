@@ -2623,5 +2623,9 @@
   "Не удалось проверить привязку микрофона": "Mikrofon eşleştirmesi doğrulanamadı",
   "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Mikrofonun Windows kimliği okunamadı. Eşleştirme korundu; cihaz listesini yenileyin.",
   "Аудиобэкенд": "Ses arka ucu",
-  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Seçilen ses arka ucu bu mikrofon için kullanılamıyor. Başka bir arka uç veya Otomatik seçin."
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Seçilen ses arka ucu bu mikrofon için kullanılamıyor. Başka bir arka uç veya Otomatik seçin.",
+  "Выбрана бесплатная модель. Остальные модели платные.": "Ücretsiz bir model seçildi. Diğer modeller ücretlidir.",
+  "Выбрана платная модель. Озвучка расходует баланс API.": "Ücretli bir model seçildi. Ses sentezi API bakiyenizi kullanır.",
+  "Проверка отправляет текст провайдеру. Платные модели расходуют баланс API.": "Önizleme metni sağlayıcıya gönderir. Ücretli modeller API bakiyenizi kullanır.",
+  "недостаточно средств на балансе API; пополните баланс или выберите s2.1-pro-free": "API bakiyesi yetersiz; bakiyenizi yükleyin veya s2.1-pro-free seçin"
 }
