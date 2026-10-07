@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections import Counter
 from threading import RLock
 from typing import Any
 from domain.audio_input import ASRInputDevice, AudioInputCatalog, EndpointIdentityStatus
@@ -162,6 +163,10 @@ def _read_portaudio_catalog(
         except (TypeError, ValueError):
             continue
     host_names = [_host_api_name(sounddevice, device) for device in raw_devices]
+    backend_name_counts = Counter(
+        (host_names[index].casefold(), normalize_device_name(raw_devices[index].get("name")))
+        for index in input_indices
+    )
     wasapi_indices = [
         index
         for index in sorted(input_indices)
@@ -179,8 +184,11 @@ def _read_portaudio_catalog(
         )
     endpoint_ids = dict(identity.values)
     endpoints = [
-        (" ".join(str(raw_devices[index].get("name") or "").split()), uid)
-        for index, uid in endpoint_ids.items()
+        (
+            " ".join(str(raw_devices[index].get("name") or "").split()),
+            endpoint_ids.get(index),
+        )
+        for index in wasapi_indices
     ]
     full_names = set()
     for index in sorted(input_indices):
@@ -236,7 +244,14 @@ def _read_portaudio_catalog(
                     display_name = full_name
 
         uid = endpoint_ids.get(index)
-        if uid is None and identity.status == EndpointIdentityStatus.AVAILABLE:
+        if (
+            uid is None
+            and backend_name_counts[occurrence_key] == 1
+            and identity.status in (
+                EndpointIdentityStatus.AVAILABLE,
+                EndpointIdentityStatus.PARTIAL,
+            )
+        ):
             matches = {
                 endpoint_uid
                 for endpoint_name, endpoint_uid in endpoints
@@ -250,12 +265,6 @@ def _read_portaudio_catalog(
             }
             if len(matches) == 1:
                 uid = matches.pop()
-        if (
-            identity.status == EndpointIdentityStatus.AVAILABLE
-            and endpoint_ids
-            and uid is None
-        ):
-            continue
         if uid is not None:
             physical_key = (uid, 0)
 
