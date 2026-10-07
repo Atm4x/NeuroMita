@@ -28,7 +28,7 @@ class RemoteVoicePreset:
     template_id: str = "fish_audio"
     api_key: str = field(default="", repr=False)
     voice_id: str = ""
-    model: str = "s1"
+    model: str = "s2.1-pro-free"
     speed: float = 1.0
     character_voices: tuple[RemoteCharacterVoice, ...] = ()
     voice_display_name: str = ""

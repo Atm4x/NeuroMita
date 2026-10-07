@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -24,6 +25,31 @@ class FishAudioProvider(RemoteVoiceProvider):
     MAX_AUDIO_BYTES = 100 * 1024 * 1024
     MAX_DURATION = 180.0
     SAMPLE_RATE = 44100
+    MAX_ERROR_BYTES = 16 * 1024
+
+    @classmethod
+    def _has_insufficient_balance(cls, response: httpx.Response) -> bool:
+        if response.status_code == 402:
+            return True
+        body = bytearray()
+        for chunk in response.iter_bytes(chunk_size=4096):
+            body.extend(chunk[: cls.MAX_ERROR_BYTES - len(body)])
+            if len(body) >= cls.MAX_ERROR_BYTES:
+                break
+        message = body.decode("utf-8", errors="replace")
+        try:
+            message = str(json.loads(message))
+        except ValueError:
+            pass
+        message = message.casefold()
+        return bool(
+            re.search(
+                r"(?:insufficient|not[\s_]+enough)[\s_]+(?:balance|credits?|funds)"
+                r"|(?:balance|credits?)[\s_]+(?:exhausted|depleted)"
+                r"|нет\s+денег|недостаточно\s+(?:средств|денег)",
+                message,
+            )
+        )
 
     def __init__(self, client: ManagedHttpClient) -> None:
         self._client = client
@@ -115,10 +141,20 @@ class FishAudioProvider(RemoteVoiceProvider):
                 timeout=httpx.Timeout(45.0, connect=15.0),
                 follow_redirects=False,
             ) as response:
+                content_type = response.headers.get("content-type", "").lower()
+                text_response = "json" in content_type or "text/" in content_type
+                if response.status_code != 200 or text_response:
+                    insufficient_balance = self._has_insufficient_balance(response)
+                    if insufficient_balance:
+                        raise RemoteVoiceError(
+                            "Fish Audio: недостаточно средств на балансе API; "
+                            "пополните баланс или выберите s2.1-pro-free "
+                            f"(HTTP {response.status_code}).",
+                            code=f"http.{response.status_code}",
+                        )
                 if response.status_code != 200:
                     reasons = {
                         401: "API-ключ не принят",
-                        402: "недостаточно средств или квоты",
                         403: "нет доступа к голосу или API",
                         404: "голос не найден",
                         422: "голос или параметры не поддерживаются выбранной моделью",
@@ -129,8 +165,7 @@ class FishAudioProvider(RemoteVoiceProvider):
                         f"Fish Audio: {reason} (HTTP {response.status_code}).",
                         code=f"http.{response.status_code}",
                     )
-                content_type = response.headers.get("content-type", "").lower()
-                if "json" in content_type or "text/" in content_type:
+                if text_response:
                     raise RemoteVoiceError(
                         "Fish Audio вернул текст вместо аудио.", code="audio.invalid"
                     )

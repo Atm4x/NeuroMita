@@ -2629,5 +2629,9 @@
   "Не удалось проверить привязку микрофона": "Não foi possível verificar a associação do microfone",
   "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "Não foi possível ler o ID Windows do microfone. A associação foi preservada; atualize a lista de dispositivos.",
   "Аудиобэкенд": "Backend de áudio",
-  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "O backend de áudio selecionado não está disponível para este microfone. Escolha outro backend ou Automático."
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "O backend de áudio selecionado não está disponível para este microfone. Escolha outro backend ou Automático.",
+  "Выбрана бесплатная модель. Остальные модели платные.": "Um modelo gratuito está selecionado. Os outros modelos são pagos.",
+  "Выбрана платная модель. Озвучка расходует баланс API.": "Um modelo pago está selecionado. A síntese de voz consome seu saldo API.",
+  "Проверка отправляет текст провайдеру. Платные модели расходуют баланс API.": "A prévia envia texto ao provedor. Modelos pagos consomem seu saldo API.",
+  "недостаточно средств на балансе API; пополните баланс или выберите s2.1-pro-free": "saldo API insuficiente; recarregue seu saldo ou selecione s2.1-pro-free"
 }

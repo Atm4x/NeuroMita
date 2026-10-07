@@ -2623,5 +2623,9 @@
   "Не удалось проверить привязку микрофона": "Asocierea microfonului nu a putut fi verificată",
   "Не удалось прочитать Windows ID микрофона. Привязка сохранена; обновите список устройств.": "ID-ul Windows al microfonului nu a putut fi citit. Asocierea este păstrată; reîmprospătează lista dispozitivelor.",
   "Аудиобэкенд": "Backend audio",
-  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Backendul audio selectat nu este disponibil pentru acest microfon. Alegeți alt backend sau Automat."
+  "Выбранный аудиобэкенд недоступен для этого микрофона. Выберите другой бэкенд или Авто.": "Backendul audio selectat nu este disponibil pentru acest microfon. Alegeți alt backend sau Automat.",
+  "Выбрана бесплатная модель. Остальные модели платные.": "Este selectat un model gratuit. Celelalte modele sunt cu plată.",
+  "Выбрана платная модель. Озвучка расходует баланс API.": "Este selectat un model cu plată. Sinteza vocală consumă soldul API.",
+  "Проверка отправляет текст провайдеру. Платные модели расходуют баланс API.": "Previzualizarea trimite text furnizorului. Modelele cu plată consumă soldul API.",
+  "недостаточно средств на балансе API; пополните баланс или выберите s2.1-pro-free": "sold API insuficient; reîncarcă soldul sau selectează s2.1-pro-free"
 }

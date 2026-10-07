@@ -116,6 +116,12 @@ class RemoteVoiceSettingsWidget(QWidget):
         voice_row.addWidget(self.voices_button)
         self.model = QComboBox()
         form.addRow(self._label("Модель", "Model"), self.model)
+        self.model_hint = QLabel()
+        self.model_hint.setObjectName("RemoteVoiceHint")
+        self.model_hint.setWordWrap(True)
+        form.addRow("", self.model_hint)
+        self.model.currentTextChanged.connect(self._refresh_model_hint)
+        register(self, lambda w: w._refresh_model_hint())
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.5, 2.0)
         self.speed.setSingleStep(0.1)
@@ -199,14 +205,14 @@ class RemoteVoiceSettingsWidget(QWidget):
         self.preview_button.setObjectName("RemoteVoicePreview")
         self.preview_button.setIcon(qta.icon("fa5s.play", color=self._icon_color))
         preview_layout.addWidget(self.preview_button)
-        quota = tr_set(
+        self.quota = tr_set(
             QLabel(),
-            "Проверка отправляет текст провайдеру и расходует баланс API.",
-            "Preview sends text to the provider and uses your API balance.",
+            "Проверка отправляет текст провайдеру. Платные модели расходуют баланс API.",
+            "Preview sends text to the provider. Only paid models use your API balance.",
         )
-        quota.setObjectName("RemoteVoiceHint")
-        quota.setWordWrap(True)
-        preview_layout.addWidget(quota)
+        self.quota.setObjectName("RemoteVoiceHint")
+        self.quota.setWordWrap(True)
+        preview_layout.addWidget(self.quota)
         layout.addWidget(self.controls)
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -300,6 +306,22 @@ class RemoteVoiceSettingsWidget(QWidget):
             if state.busy
             else remote_voice_message(state.message)
         )
+
+    def _refresh_model_hint(self):
+        free = self.model.currentText() == "s2.1-pro-free"
+        self.model_hint.setText(
+            translate(
+                "Выбрана бесплатная модель. Остальные модели платные.",
+                "A free model is selected. The other models are paid.",
+            )
+            if free
+            else translate(
+                "Выбрана платная модель. Озвучка расходует баланс API.",
+                "A paid model is selected. Speech synthesis uses your API balance.",
+            )
+        )
+        color = get_theme()["muted"] if free else get_theme()["danger"]
+        self.model_hint.setStyleSheet(f"color: {color};")
 
     def _template_changed(self):
         template = next(
