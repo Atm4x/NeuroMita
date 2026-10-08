@@ -559,11 +559,14 @@ class EditorMixin:
         logger.info("[API UI] add preset clicked")
         v = self.view
         existing = {item.base_name for item in self.custom_presets_list_items.values()}
+        combo = v.template_combo
+        selected_base = self._parse_base(combo.currentData())
+        template_name = str(combo.currentText() or "").strip() if selected_base is not None else ""
+        template_name = template_name or str(_("Пользовательский API", "Custom API"))
         number = 1
-        while str(_("Пустой пресет", "Empty preset")) + f" {number}" in existing:
+        while f"{template_name} {number}" in existing:
             number += 1
-        name = str(_("Пустой пресет", "Empty preset")) + f" {number}"
-        selected_base = None
+        name = f"{template_name} {number}"
 
         payload = {
             "name": str(name).strip(),
