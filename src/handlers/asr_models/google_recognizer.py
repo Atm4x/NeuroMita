@@ -18,11 +18,23 @@ class GoogleRecognizer(SpeechRecognizerInterface):
     - is_installed() проверяет наличие python-модулей по requirements
     """
 
+    LANGUAGES = {
+        "ru-RU": "Russian",
+        "uk-UA": "Ukrainian",
+        "en-US": "English (US)",
+        "en-GB": "English (UK)",
+        "de-DE": "German",
+        "fr-FR": "French",
+        "es-ES": "Spanish",
+        "ja-JP": "Japanese",
+        "zh-CN": "Chinese",
+    }
+
     MODEL_CONFIGS = [
         {
             "id": "google",
             "name": "Google",
-            "languages": ["Russian", "English"],
+            "languages": list(LANGUAGES.values()),
             "gpu_vendor": ["CPU"],
             "tags": [
                 _("Онлайн", "Online"),
@@ -42,15 +54,20 @@ class GoogleRecognizer(SpeechRecognizerInterface):
     def __init__(self, pip_installer, logger):
         super().__init__(pip_installer, logger)
         self._sr = None
+        self.language = "ru-RU"
 
     def settings_spec(self):
-        return []
+        return [
+            {"key": "language", "label_ru": "Язык", "label_en": "Language",
+             "type": "combobox", "options": list(self.LANGUAGES),
+             "default": "ru-RU"},
+        ]
 
     def get_default_settings(self):
-        return {}
+        return {"language": "ru-RU"}
 
     def apply_settings(self, settings: dict):
-        pass
+        self.language = str(settings.get("language") or "ru-RU").strip() or "ru-RU"
 
     def requirements(self):
         return [
@@ -108,7 +125,7 @@ class GoogleRecognizer(SpeechRecognizerInterface):
         )
 
         try:
-            return recognizer.recognize_google(audio, language="ru-RU")
+            return recognizer.recognize_google(audio, language=self.language)
         except self._sr.UnknownValueError:
             return None
         except Exception as e:
