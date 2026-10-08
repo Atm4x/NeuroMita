@@ -65,6 +65,10 @@ class SettingsController(BaseController):
             self.view.update_chat_font_size(font_size)
 
     def _on_reload_chat_history(self, event: Event):
+        payload = event.data if isinstance(event.data, dict) else {}
+        if payload.get("deleted_message_id") and self.view:
+            self.view.chat_message_deleted_signal.emit(payload)
+            return
         if (
             self.view
             and hasattr(self.view, "load_chat_history_signal")

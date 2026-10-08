@@ -1303,8 +1303,16 @@ class ChatController(ChatService, GenerationActivityService):
             logger.warning(f"[ChatController] DELETE_MESSAGE: персонаж '{character_id}' не найден")
             return
         deleted = character.history_manager.delete_message(message_id)
-        if deleted:
-            self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY)
+        retry_deleted = UnityRetryStore.remove(character_id, message_id)
+        requests = getattr(self, "_ui_requests_by_message_id", {})
+        request = requests.get(message_id)
+        local_deleted = bool(request and str(request.get("character_id") or character_id) == character_id)
+        if deleted or retry_deleted or local_deleted:
+            requests.pop(message_id, None)
+            self.event_bus.emit(Events.GUI.RELOAD_CHAT_HISTORY, {
+                "deleted_message_id": message_id,
+                "character_id": character_id,
+            })
             logger.info(f"[ChatController] Удалено сообщение {message_id}")
         else:
             logger.warning(f"[ChatController] Сообщение {message_id} не найдено")

@@ -59,6 +59,7 @@ class AppWindowBase(QMainWindow):
     update_chat_signal = pyqtSignal(str, object, bool, str)
     render_chat_event_signal = pyqtSignal(dict)
     history_messages_committed_signal = pyqtSignal(dict)
+    chat_message_deleted_signal = pyqtSignal(dict)
     update_status_signal = pyqtSignal()
     update_debug_signal = pyqtSignal()
 
@@ -199,6 +200,7 @@ class AppWindowBase(QMainWindow):
 
         self.update_chat_signal.connect(self._on_update_chat_signal)
         self.render_chat_event_signal.connect(self._on_render_chat_event_signal)
+        self.chat_message_deleted_signal.connect(self._on_chat_message_deleted)
         self.history_messages_committed_signal.connect(
             self._on_history_messages_committed
         )
@@ -594,6 +596,10 @@ class AppWindowBase(QMainWindow):
         self._history_load_request_id = ""
 
     def _render_history_entry(self, entry: dict, *, character_id: str) -> None:
+        if self._chat_presentation.is_message_deleted(
+            message_id=str(entry.get("message_id") or ""), character_id=character_id,
+        ):
+            return
         role = entry["role"]
         content = entry["content"]
         message_time = entry.get("time", "???")
@@ -1155,6 +1161,10 @@ class AppWindowBase(QMainWindow):
             message_renderer.insert_message(
                 self._chat_render_context,
                 role,
+            if self._chat_presentation.is_message_deleted(
+                message_id=str(entry.get("message_id") or ""), character_id=character_id,
+            ):
+                continue
                 content,
                 insert_at_start=True,
                 message_time=message_time,
@@ -1840,6 +1850,21 @@ class AppWindowBase(QMainWindow):
             message_ids=payload.get("message_ids") or [],
             character_ids=character_ids,
         )
+    def _on_chat_message_deleted(self, data: dict) -> None:
+        message_id = str(data.get("deleted_message_id") or "")
+        character_id = str(data.get("character_id") or "")
+        self._chat_presentation.forget_message(
+            message_id=message_id, character_id=character_id,
+        )
+        chat_window = getattr(self, "chat_window", None)
+        if chat_window is not None and message_id:
+            current = str(self._shell_actions.current_character_id() or "")
+            for widget in list(getattr(chat_window, "_messages", ())):
+                owner = str(getattr(widget, "_character_id", current) or current)
+                if getattr(widget, "_message_id", None) == message_id and owner.casefold() == character_id.casefold():
+                    chat_window.remove_widget(widget)
+        self.load_chat_history()
+
 
     def _on_update_chat_signal(self, role, content, insert_at_start, message_time):
         # Legacy signal path has no stable message identity.  Do not enqueue an

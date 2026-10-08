@@ -211,6 +211,7 @@ def _connect_widget_signals(
     actions = gui.chat_message_actions
     if actions is None or actions.is_closed:
         raise RuntimeError("Chat message actions ViewModel is not attached")
+    widget._character_id = str(character_id or "")
 
     def on_delete(mid):
         actions.dispatch(DeleteChatMessage(str(mid), str(character_id)))

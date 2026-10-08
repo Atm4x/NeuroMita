@@ -101,6 +101,7 @@ class ChatPresentationCoordinator:
         self._max_stable_messages = max(16, int(max_stable_messages))
         self._stable: OrderedDict[tuple[str, str], _StableLiveMessage] = OrderedDict()
         self._persisted_acks: OrderedDict[tuple[str, str], int] = OrderedDict()
+        self._deleted_messages: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._ephemeral: deque[tuple[int, ChatRenderCommand]] = deque(
             maxlen=max(16, int(max_ephemeral_events))
         )
@@ -228,6 +229,8 @@ class ChatPresentationCoordinator:
             )
 
         key = (self._character_key(command.character_id), message_id)
+        if key in self._deleted_messages:
+            return False
         projected_signatures = self._history_projected.get(key)
         if projected_signatures and self._is_projected(projected_signatures, command):
             return False
@@ -325,6 +328,21 @@ class ChatPresentationCoordinator:
     def clear_failed(self, *, message_id: str, character_id: str) -> bool:
         return self.mark_failed(message_id=message_id, character_id=character_id, error="")
 
+    def is_message_deleted(self, *, message_id: str, character_id: str) -> bool:
+        return (self._character_key(character_id), self._message_key(message_id)) in self._deleted_messages
+
+    def forget_message(self, *, message_id: str, character_id: str) -> None:
+        key = (self._character_key(character_id), self._message_key(message_id))
+        if not key[1]:
+            return
+        self._deleted_messages[key] = None
+        self._deleted_messages.move_to_end(key)
+        while len(self._deleted_messages) > self._max_stable_messages * 2:
+            self._deleted_messages.popitem(last=False)
+        self._stable.pop(key, None)
+        self._persisted_acks.pop(key, None)
+        self._history_projected.pop(key, None)
+
     def begin_history_load(self, character_id: str) -> HistoryLoadTicket:
         ticket = HistoryLoadTicket(
             request_id=uuid.uuid4().hex,
@@ -345,6 +363,7 @@ class ChatPresentationCoordinator:
     def reset(self) -> None:
         self._stable.clear()
         self._persisted_acks.clear()
+        self._deleted_messages.clear()
         self._ephemeral.clear()
         self._history_projected.clear()
         self._active_history_load = None
