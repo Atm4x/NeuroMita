@@ -57,6 +57,8 @@ IF support_intents == True THEN
     SET LOCAL p_intents_rules = """
 - "intents": Optional structured Unity actions. Use this field ONLY for intent types listed in [Unity Intent Contract].
 - Never invent intent types or payload keys. Prefer dedicated fields such as emotions, animations, interactions, clothes, music, face_params and allow_sleep when they already represent the action.
+- Intent types are not command strings. For clothing recolor use "intents": [{"type":"appearance.clothes.recolor","payload":{"part":"All","r":255,"g":0,"b":0}}] within a segment. Never emit "appearance.clothes.recolor,All,255,0,0" in commands. Keep valid command strings in commands.
+- For inventory.take / inventory.collect, payload.object must exactly match an available nearby item. For inventory.return / inventory.drop it must match an item already held or in inventory. Never infer an object's identifier from its appearance or translate it (for example, do not guess Cat).
 """
     SET LOCAL p_intents_example = """
       "intents": [{"type": "inventory.collect", "payload": {"object": "Apple"}}],"""
