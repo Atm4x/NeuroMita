@@ -6,6 +6,8 @@ import os
 import uuid
 from typing import Any, Callable
 
+from PyQt6.QtCore import QTimer
+
 from core.events import Events, get_event_bus
 from domain.conversation_message_ids import ConversationMessageIds
 from core.services import services, use
@@ -71,6 +73,9 @@ class AppShellController:
         self._main_controller = controller
         self._backend_error = ""
         self._presentation.app.attach_backend(controller)
+        history_signal = getattr(self._view, "load_chat_history_signal", None)
+        if history_signal is not None:
+            QTimer.singleShot(0, history_signal.emit)
 
     def detach_backend(self) -> None:
         self._main_controller = None

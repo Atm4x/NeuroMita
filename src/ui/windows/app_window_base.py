@@ -533,7 +533,7 @@ class AppWindowBase(QMainWindow):
             QTimer.singleShot(
                 0, lambda data=pending_payload: self._on_history_loaded(data)
             )
-        elif self._chat_history_load_pending:
+        else:
             self._chat_history_load_pending = False
             QTimer.singleShot(0, self.load_chat_history)
 
@@ -751,7 +751,7 @@ class AppWindowBase(QMainWindow):
             created_at = float(record.get("created_at") or 0)
             message_time = (
                 datetime.datetime.fromtimestamp(created_at).strftime(
-                    "%Y-%m-%d %H:%M:%S"
+                    "%d.%m.%Y %H:%M:%S"
                 )
                 if created_at
                 else ""
@@ -767,7 +767,16 @@ class AppWindowBase(QMainWindow):
                 }
             )
             known_ids.add(message_id)
-        messages.sort(key=lambda item: str(item.get("time") or ""))
+        def chronological_time(item: dict) -> datetime.datetime:
+            value = str(item.get("time") or "")
+            for fmt in ("%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.datetime.strptime(value, fmt)
+                except ValueError:
+                    pass
+            return datetime.datetime.min
+
+        messages.sort(key=chronological_time)
         merged["messages"] = messages
         return merged
 
@@ -1152,6 +1161,10 @@ class AppWindowBase(QMainWindow):
         old_value = scrollbar.value()
         old_max = scrollbar.maximum()
         for entry in reversed(messages_to_prepend):
+            if self._chat_presentation.is_message_deleted(
+                message_id=str(entry.get("message_id") or ""), character_id=character_id,
+            ):
+                continue
             role = entry["role"]
             content = entry["content"]
             message_time = entry.get("time", "???")
@@ -1161,10 +1174,6 @@ class AppWindowBase(QMainWindow):
             message_renderer.insert_message(
                 self._chat_render_context,
                 role,
-            if self._chat_presentation.is_message_deleted(
-                message_id=str(entry.get("message_id") or ""), character_id=character_id,
-            ):
-                continue
                 content,
                 insert_at_start=True,
                 message_time=message_time,
@@ -1841,15 +1850,6 @@ class AppWindowBase(QMainWindow):
             return False
         return self._render_chat_command(command)
 
-    def _on_history_messages_committed(self, data: dict) -> None:
-        payload = data if isinstance(data, dict) else {}
-        character_ids = payload.get("character_ids") or []
-        if not character_ids and payload.get("character_id"):
-            character_ids = [payload.get("character_id")]
-        self._chat_presentation.acknowledge_persisted(
-            message_ids=payload.get("message_ids") or [],
-            character_ids=character_ids,
-        )
     def _on_chat_message_deleted(self, data: dict) -> None:
         message_id = str(data.get("deleted_message_id") or "")
         character_id = str(data.get("character_id") or "")
@@ -1865,6 +1865,18 @@ class AppWindowBase(QMainWindow):
                     chat_window.remove_widget(widget)
         self.load_chat_history()
 
+    def _on_history_messages_committed(self, data: dict) -> None:
+        payload = data if isinstance(data, dict) else {}
+        character_ids = payload.get("character_ids") or []
+        if not character_ids and payload.get("character_id"):
+            character_ids = [payload.get("character_id")]
+        self._chat_presentation.acknowledge_persisted(
+            message_ids=payload.get("message_ids") or [],
+            character_ids=character_ids,
+        )
+        current = str(self._shell_actions.current_character_id() or "").casefold()
+        if current and any(str(cid).casefold() == current for cid in character_ids):
+            self.load_chat_history()
 
     def _on_update_chat_signal(self, role, content, insert_at_start, message_time):
         # Legacy signal path has no stable message identity.  Do not enqueue an
