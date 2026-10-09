@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from utils import _
@@ -56,19 +57,40 @@ class ChatGPTPlanProvider(BaseProvider):
         try:
             if response.status_code != 200:
                 body = response.read().decode("utf-8", errors="replace")
+                code = self._error_code_from_body(body) or f"chatgpt_plan.http_{response.status_code}"
+                retryable = response.status_code in {408, 500, 502, 503, 504}
+                if response.status_code == 429:
+                    retryable = code != "subscription_sharing_usage_limit_exceeded"
+                if code in {
+                    "subscription_sharing_user_not_eligible",
+                    "subscription_sharing_unsupported_capability",
+                    "subscription_sharing_route_not_supported",
+                    "subscription_sharing_invalid_user",
+                    "chatpass_v2_scope_not_authorized",
+                    "chatpass_v2_invalid_authorization_context",
+                }:
+                    retryable = False
+                if code in {
+                    "subscription_sharing_usage_unavailable",
+                    "subscription_sharing_user_unavailable",
+                }:
+                    retryable = True
+                request_id = str(response.headers.get("x-request-id") or "").strip()
+                provider_message = body[:2000]
+                if request_id:
+                    provider_message = f"request_id={request_id}; {provider_message}"
                 raise LLMProviderError(
                     provider=self.name,
-                    friendly_message=self._http_error_message(response.status_code),
+                    friendly_message=self._http_error_message(response.status_code, code),
                     status_code=int(response.status_code),
-                    provider_message=body[:2000],
+                    provider_message=provider_message,
                     raw_payload=body,
-                    retryable=response.status_code in {408, 429, 500, 502, 503, 504},
-                    code=f"chatgpt_plan.http_{response.status_code}",
+                    retryable=retryable,
+                    code=code,
                     phase="http",
                     url=url,
                 )
 
-            record_response_body_started(req)
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
             usage: LLMUsage | None = None
@@ -85,6 +107,7 @@ class ChatGPTPlanProvider(BaseProvider):
                 if event_type == "response.output_text.delta":
                     delta = str(event.get("delta") or "")
                     if delta:
+                        record_response_body_started(req)
                         text_parts.append(delta)
                         if req.stream and req.stream_cb:
                             req.stream_cb(delta, StreamChannel.CONTENT)
@@ -93,6 +116,7 @@ class ChatGPTPlanProvider(BaseProvider):
                 if event_type in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
                     delta = str(event.get("delta") or "")
                     if delta:
+                        record_response_body_started(req)
                         reasoning_parts.append(delta)
                         if req.stream and req.stream_cb:
                             req.stream_cb(delta, StreamChannel.REASONING)
@@ -111,22 +135,27 @@ class ChatGPTPlanProvider(BaseProvider):
                     error = failed.get("error") if isinstance(failed.get("error"), dict) else {}
                     code = str(error.get("code") or "chatgpt_plan.response_failed")
                     detail = str(error.get("message") or code)
-                    quota = code in {
-                        "subscription_sharing_usage_limit_exceeded",
-                        "subscription_sharing_usage_unavailable",
-                    }
+                    limit_exceeded = code == "subscription_sharing_usage_limit_exceeded"
+                    usage_unavailable = code == "subscription_sharing_usage_unavailable"
+                    unsupported = code == "subscription_sharing_unsupported_capability"
                     raise LLMProviderError(
                         provider=self.name,
                         friendly_message=_(
-                            "Квота ChatGPT/Codex для приложений исчерпана или временно недоступна. Проверьте Usage в ChatGPT или используйте резервный провайдер.",
-                            "ChatGPT/Codex app quota is exhausted or temporarily unavailable. Check Usage in ChatGPT or use a fallback provider.",
-                        ) if quota else _(
+                            "Достигнут лимит ChatGPT/Codex для приложений. Проверьте Usage в ChatGPT или используйте резервный провайдер.",
+                            "The ChatGPT/Codex app usage limit was reached. Check Usage in ChatGPT or use a fallback provider.",
+                        ) if limit_exceeded else _(
+                            "Проверка квоты ChatGPT/Codex временно недоступна. Можно повторить запрос позже или использовать резервный провайдер.",
+                            "ChatGPT/Codex usage availability is temporarily unavailable. Retry later or use a fallback provider.",
+                        ) if usage_unavailable else _(
+                            "Текущий запрос использует неподдерживаемую возможность экспериментального ChatGPT-режима.",
+                            "This request uses a capability unsupported by the experimental ChatGPT mode.",
+                        ) if unsupported else _(
                             "ChatGPT не смог завершить ответ.",
                             "ChatGPT could not complete the response.",
                         ),
                         provider_message=detail,
                         raw_payload=failed,
-                        retryable=not quota,
+                        retryable=usage_unavailable or not (limit_exceeded or unsupported),
                         code=code,
                         phase="stream",
                         url=url,
@@ -171,16 +200,34 @@ class ChatGPTPlanProvider(BaseProvider):
             response.close()
 
     @staticmethod
-    def _http_error_message(status: int) -> str:
+    def _error_code_from_body(body: str) -> str:
+        try:
+            payload = json.loads(str(body or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        error = payload.get("error")
+        if isinstance(error, dict):
+            return str(error.get("code") or "")
+        return ""
+
+    @staticmethod
+    def _http_error_message(status: int, code: str = "") -> str:
+        if code == "subscription_sharing_usage_limit_exceeded" or status == 429:
+            return _(
+                "Достигнут лимит ChatGPT/Codex. Проверьте Usage в ChatGPT или используйте резервный провайдер.",
+                "The ChatGPT/Codex usage limit was reached. Check Usage in ChatGPT or use a fallback provider.",
+            )
+        if code in {"subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable"}:
+            return _(
+                "Проверка доступной квоты ChatGPT/Codex временно недоступна.",
+                "ChatGPT/Codex usage availability is temporarily unavailable.",
+            )
         if status in {401, 403}:
             return _(
                 "Сессия ChatGPT недействительна или доступ к использованию плана не разрешён. Выполните вход заново.",
                 "The ChatGPT session is invalid or plan usage is not authorized. Sign in again.",
-            )
-        if status == 429:
-            return _(
-                "Достигнут лимит ChatGPT/Codex. Проверьте Usage в ChatGPT или используйте резервный провайдер.",
-                "The ChatGPT/Codex usage limit was reached. Check Usage in ChatGPT or use a fallback provider.",
             )
         return _("Ошибка Responses API ChatGPT.", "ChatGPT Responses API error.")
 
