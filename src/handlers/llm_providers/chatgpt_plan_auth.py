@@ -99,8 +99,6 @@ class ChatGPTPlanAuth:
             callback: dict[str, str] = {}
             event = threading.Event()
 
-            auth_manager = self
-
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self):
                     parsed = urlparse(self.path)
@@ -193,6 +191,9 @@ class ChatGPTPlanAuth:
             token_response.raise_for_status()
             tokens = token_response.json()
             record = self._validated_record(tokens, issued_client_id, nonce)
+            previous_subject = str(account.get("subject") or "")
+            if previous_subject and str(record.get("subject") or "") != previous_subject:
+                raise ValueError("Sign in with ChatGPT returned a different account identity")
             self._data["account"] = record
             self._save()
             return self.status()
