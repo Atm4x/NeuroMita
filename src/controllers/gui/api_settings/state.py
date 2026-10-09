@@ -16,5 +16,6 @@ class PresetSnapshot:
     test_url: str = ""
     name: str = ""
     model_settings: Dict[str, Any] = field(default_factory=dict)
+    protocol_overrides: Dict[str, Any] = field(default_factory=dict)
     openrouter_routing: Dict[str, Any] = field(default_factory=dict)
     fallbacks: tuple = ()  # tuple of (preset_id, model) for hashable comparison

@@ -20,6 +20,7 @@ from .base import (
     normalize_usage_payload,
 )
 from .streaming import StreamAccumulator, iter_json_values, iter_sse_data, track_response_body
+from .message_transforms import iter_positioned_messages
 
 
 class GeminiProvider(BaseProvider):
@@ -114,8 +115,6 @@ class GeminiProvider(BaseProvider):
 
         return [{"role": "user", "parts": [{"text": prefix}]}] + contents
 
-    _INLINE_SYSTEM_TAG = "[SYSTEM INFO]"
-
     @staticmethod
     def _parts_have_payload(parts: list) -> bool:
         for part in parts or []:
@@ -128,27 +127,11 @@ class GeminiProvider(BaseProvider):
             return True  # inline_data / functionCall и прочее непустое по определению
         return False
 
-    @classmethod
-    def _prefix_parts_with_tag(cls, parts: list) -> list:
-        """Помечает parts тегом, чтобы служебный блок не читался как речь игрока."""
-        out = [dict(p) if isinstance(p, dict) else p for p in parts]
-        for part in out:
-            if isinstance(part, dict) and "text" in part:
-                part["text"] = f"{cls._INLINE_SYSTEM_TAG}\n{part.get('text', '')}"
-                return out
-        out.insert(0, {"text": cls._INLINE_SYSTEM_TAG})
-        return out
-
     def _format_messages_for_gemini_api(self, messages):
         system_parts = []
         contents = []
-        # system до первого сообщения диалога — статическая инструкция, ей место
-        # в system_instruction. Всё, что идёт дальше, позиционно: такой блок
-        # относится к соседним репликам, и в system_instruction он оторвался бы
-        # от своего места и уехал в начало запроса. Поэтому едет в contents.
-        dialogue_started = False
 
-        for msg in messages:
+        for msg, inline_system in iter_positioned_messages(messages):
             role = msg.get("role")
             content = msg.get("content")
 
@@ -156,13 +139,12 @@ class GeminiProvider(BaseProvider):
                 parts = self._format_content_to_parts(content)
                 if not self._parts_have_payload(parts):
                     continue
-                if dialogue_started:
+                if inline_system:
                     contents.append({"role": "user", "parts": self._prefix_parts_with_tag(parts)})
                 else:
                     system_parts.extend(parts)
                 continue
 
-            dialogue_started = True
             gemini_role = "model" if role == "assistant" else "user"
             contents.append({"role": gemini_role, "parts": self._format_content_to_parts(content)})
 
@@ -170,6 +152,16 @@ class GeminiProvider(BaseProvider):
         if system_parts:
             result["system_instruction"] = {"parts": system_parts}
         return result
+
+    @staticmethod
+    def _prefix_parts_with_tag(parts: list) -> list:
+        out = [dict(part) if isinstance(part, dict) else part for part in parts]
+        for part in out:
+            if isinstance(part, dict) and "text" in part:
+                part["text"] = f"[SYSTEM INFO]\n{part.get('text', '')}"
+                return out
+        out.insert(0, {"text": "[SYSTEM INFO]"})
+        return out
 
     def _format_content_to_parts(self, content):
         parts = []

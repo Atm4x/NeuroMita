@@ -2,6 +2,7 @@ from __future__ import annotations
 from core.error_utils import format_exception
 
 from typing import Any
+from copy import deepcopy
 
 from PyQt6.QtCore import QTimer
 
@@ -214,6 +215,8 @@ class PresetsMixin:
 
             self.current_preset_id = int(preset_id)
             self.current_preset_data = dict(preset)
+            overrides = preset.get("protocol_overrides")
+            self._protocol_overrides = deepcopy(overrides) if isinstance(overrides, dict) else {}
 
             model = str(state.get("model") or preset.get("default_model") or "")
             key = str(state.get("key") or preset.get("key") or "")
