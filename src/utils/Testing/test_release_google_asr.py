@@ -20,7 +20,7 @@ from ui.windows.app_window_base import AppWindowBase
 from core.events import Events
 
 
-@pytest.mark.parametrize("language", ["en-US", "ru-RU"])
+@pytest.mark.parametrize("language", ["en-US", "ru-RU", "it-IT", "pt-BR", "pl-PL", "ko-KR", "hi-IN", "yue-Hant-HK"])
 def test_google_language_setting_reaches_recognizer(language):
     adapter = GoogleRecognizer(None, Mock())
     adapter.apply_settings({"language": language})
@@ -37,17 +37,18 @@ def test_google_language_setting_reaches_recognizer(language):
 
 
 
-def test_google_choice_is_persisted_in_existing_asr_settings(tmp_path):
+@pytest.mark.parametrize("language", ["en-US", "it-IT", "pt-BR", "pl-PL", "ko-KR", "hi-IN", "yue-Hant-HK"])
+def test_google_choice_is_persisted_in_existing_asr_settings(tmp_path, language):
     from services.asr_settings_service import FileASRSettingsService
     path = str(tmp_path / "asr_settings.json")
     service = FileASRSettingsService(path)
     adapter = GoogleRecognizer(None, Mock())
     with patch("handlers.asr_models.speech_recognizer_base.ensure_asr_settings_service", return_value=service):
-        adapter.save_settings({"language": "en-US"})
+        adapter.save_settings({"language": language})
     reloaded = FileASRSettingsService(path)
     with patch("handlers.asr_models.speech_recognizer_base.ensure_asr_settings_service", return_value=reloaded):
         adapter.apply_settings(adapter.load_settings())
-    assert adapter.language == "en-US"
+    assert adapter.language == language
 
 
 
@@ -57,9 +58,9 @@ def test_ukrainian_asr_choice_survives_restart_and_reaches_google(tmp_path):
     adapter = GoogleRecognizer(None, Mock())
     schema = next(row for row in adapter.settings_spec() if row["key"] == "language")
     assert "uk-UA" in schema["options"]
-    assert set(adapter.MODEL_CONFIGS[0]["languages"]) == {
+    assert {
         "Russian", "Ukrainian", "English (US)", "English (UK)", "German", "French", "Spanish", "Japanese", "Chinese",
-    }
+    } <= set(adapter.MODEL_CONFIGS[0]["languages"])
     original = FileASRSettingsService(path)
     with patch("handlers.asr_models.speech_recognizer_base.ensure_asr_settings_service", return_value=original):
         adapter.save_settings({"language": "uk-UA"})

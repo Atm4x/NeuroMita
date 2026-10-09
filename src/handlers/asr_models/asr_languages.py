@@ -110,6 +110,8 @@ _WHISPER_LANGUAGES = (
     ('yue', 'Cantonese', 'Кантонский'),
 )
 
+# Google Web Speech demo catalogue (verified 2026-10-10), plus legacy zh-CN:
+# https://www.google.com/intl/en/chrome/demos/speech.html
 _GOOGLE_LANGUAGES = (
     ("ru-RU", "Russian", "Русский"),
     ("uk-UA", "Ukrainian", "Украинский"),
@@ -120,14 +122,120 @@ _GOOGLE_LANGUAGES = (
     ("es-ES", "Spanish", "Испанский"),
     ("ja-JP", "Japanese", "Японский"),
     ("zh-CN", "Chinese", "Китайский"),
+    ("af-ZA", "Afrikaans", "Африкаанс"),
+    ("am-ET", "Amharic", "Амхарский"),
+    ("az-AZ", "Azerbaijani", "Азербайджанский"),
+    ("bn-BD", "Bengali (Bangladesh)", "Бенгальский (Бангладеш)"),
+    ("bn-IN", "Bengali (India)", "Бенгальский (Индия)"),
+    ("id-ID", "Indonesian", "Индонезийский"),
+    ("ms-MY", "Malay", "Малайский"),
+    ("ca-ES", "Catalan", "Каталанский"),
+    ("cs-CZ", "Czech", "Чешский"),
+    ("da-DK", "Danish", "Датский"),
+    ("en-AU", "English (Australia)", "Английский (Австралия)"),
+    ("en-CA", "English (Canada)", "Английский (Канада)"),
+    ("en-IN", "English (India)", "Английский (Индия)"),
+    ("en-KE", "English (Kenya)", "Английский (Кения)"),
+    ("en-TZ", "English (Tanzania)", "Английский (Танзания)"),
+    ("en-GH", "English (Ghana)", "Английский (Гана)"),
+    ("en-NZ", "English (New Zealand)", "Английский (Новая Зеландия)"),
+    ("en-NG", "English (Nigeria)", "Английский (Нигерия)"),
+    ("en-ZA", "English (South Africa)", "Английский (ЮАР)"),
+    ("en-PH", "English (Philippines)", "Английский (Филиппины)"),
+    ("es-AR", "Spanish (Argentina)", "Испанский (Аргентина)"),
+    ("es-BO", "Spanish (Bolivia)", "Испанский (Боливия)"),
+    ("es-CL", "Spanish (Chile)", "Испанский (Чили)"),
+    ("es-CO", "Spanish (Colombia)", "Испанский (Колумбия)"),
+    ("es-CR", "Spanish (Costa Rica)", "Испанский (Коста-Рика)"),
+    ("es-EC", "Spanish (Ecuador)", "Испанский (Эквадор)"),
+    ("es-SV", "Spanish (El Salvador)", "Испанский (Сальвадор)"),
+    ("es-US", "Spanish (US)", "Испанский (США)"),
+    ("es-GT", "Spanish (Guatemala)", "Испанский (Гватемала)"),
+    ("es-HN", "Spanish (Honduras)", "Испанский (Гондурас)"),
+    ("es-MX", "Spanish (Mexico)", "Испанский (Мексика)"),
+    ("es-NI", "Spanish (Nicaragua)", "Испанский (Никарагуа)"),
+    ("es-PA", "Spanish (Panama)", "Испанский (Панама)"),
+    ("es-PY", "Spanish (Paraguay)", "Испанский (Парагвай)"),
+    ("es-PE", "Spanish (Peru)", "Испанский (Перу)"),
+    ("es-PR", "Spanish (Puerto Rico)", "Испанский (Пуэрто-Рико)"),
+    ("es-DO", "Spanish (Dominican Republic)", "Испанский (Доминиканская Республика)"),
+    ("es-UY", "Spanish (Uruguay)", "Испанский (Уругвай)"),
+    ("es-VE", "Spanish (Venezuela)", "Испанский (Венесуэла)"),
+    ("eu-ES", "Basque", "Баскский"),
+    ("fil-PH", "Filipino", "Филиппинский"),
+    ("jv-ID", "Javanese", "Яванский"),
+    ("gl-ES", "Galician", "Галисийский"),
+    ("gu-IN", "Gujarati", "Гуджарати"),
+    ("hr-HR", "Croatian", "Хорватский"),
+    ("zu-ZA", "Zulu", "Зулу"),
+    ("is-IS", "Icelandic", "Исландский"),
+    ("it-IT", "Italian (Italy)", "Итальянский (Италия)"),
+    ("it-CH", "Italian (Switzerland)", "Итальянский (Швейцария)"),
+    ("kn-IN", "Kannada", "Каннада"),
+    ("km-KH", "Khmer", "Кхмерский"),
+    ("lv-LV", "Latvian", "Латышский"),
+    ("lt-LT", "Lithuanian", "Литовский"),
+    ("ml-IN", "Malayalam", "Малаялам"),
+    ("mr-IN", "Marathi", "Маратхи"),
+    ("hu-HU", "Hungarian", "Венгерский"),
+    ("lo-LA", "Lao", "Лаосский"),
+    ("nl-NL", "Dutch", "Нидерландский"),
+    ("ne-NP", "Nepali", "Непальский"),
+    ("nb-NO", "Norwegian Bokmal", "Норвежский букмол"),
+    ("pl-PL", "Polish", "Польский"),
+    ("pt-BR", "Portuguese (Brazil)", "Португальский (Бразилия)"),
+    ("pt-PT", "Portuguese (Portugal)", "Португальский (Португалия)"),
+    ("ro-RO", "Romanian", "Румынский"),
+    ("si-LK", "Sinhala", "Сингальский"),
+    ("sl-SI", "Slovenian", "Словенский"),
+    ("su-ID", "Sundanese", "Сунданский"),
+    ("sk-SK", "Slovak", "Словацкий"),
+    ("fi-FI", "Finnish", "Финский"),
+    ("sv-SE", "Swedish", "Шведский"),
+    ("sw-TZ", "Swahili (Tanzania)", "Суахили (Танзания)"),
+    ("sw-KE", "Swahili (Kenya)", "Суахили (Кения)"),
+    ("ka-GE", "Georgian", "Грузинский"),
+    ("hy-AM", "Armenian", "Армянский"),
+    ("ta-IN", "Tamil (India)", "Тамильский (Индия)"),
+    ("ta-SG", "Tamil (Singapore)", "Тамильский (Сингапур)"),
+    ("ta-LK", "Tamil (Sri Lanka)", "Тамильский (Шри-Ланка)"),
+    ("ta-MY", "Tamil (Malaysia)", "Тамильский (Малайзия)"),
+    ("te-IN", "Telugu", "Телугу"),
+    ("vi-VN", "Vietnamese", "Вьетнамский"),
+    ("tr-TR", "Turkish", "Турецкий"),
+    ("ur-PK", "Urdu (Pakistan)", "Урду (Пакистан)"),
+    ("ur-IN", "Urdu (India)", "Урду (Индия)"),
+    ("el-GR", "Greek", "Греческий"),
+    ("bg-BG", "Bulgarian", "Болгарский"),
+    ("sr-RS", "Serbian", "Сербский"),
+    ("ko-KR", "Korean", "Корейский"),
+    ("cmn-Hans-CN", "Mandarin (Mainland China)", "Севернокитайский (материковый Китай)"),
+    ("cmn-Hans-HK", "Mandarin (Hong Kong)", "Севернокитайский (Гонконг)"),
+    ("cmn-Hant-TW", "Mandarin (Taiwan)", "Севернокитайский (Тайвань)"),
+    ("yue-Hant-HK", "Cantonese (Hong Kong)", "Кантонский (Гонконг)"),
+    ("hi-IN", "Hindi", "Хинди"),
+    ("th-TH", "Thai", "Тайский"),
 )
+
+_GOOGLE_PRIMARY_CODES = (
+    "ru-RU", "uk-UA", "en-US", "de-DE", "fr-FR", "es-ES",
+    "it-IT", "pt-BR", "ja-JP", "zh-CN", "ko-KR",
+)
+_WHISPER_PRIMARY_CODES = tuple(code.split("-")[0] for code in _GOOGLE_PRIMARY_CODES)
+
+
+def _primary_first(languages: tuple, primary_codes: tuple) -> tuple:
+    by_code = {row[0]: row for row in languages}
+    return tuple(by_code[code] for code in primary_codes) + tuple(
+        row for row in languages if row[0] not in primary_codes
+    )
 
 
 def _languages(engine_id: str) -> tuple:
     if engine_id == "google":
-        return _GOOGLE_LANGUAGES
+        return _primary_first(_GOOGLE_LANGUAGES, _GOOGLE_PRIMARY_CODES)
     if engine_id in ("whisper", "whisper_onnx"):
-        return _WHISPER_LANGUAGES
+        return _primary_first(_WHISPER_LANGUAGES, _WHISPER_PRIMARY_CODES)
     if engine_id in ("gigaam", "gigaam_onnx"):
         return (("ru", "Russian", "Русский"),)
     raise ValueError(f"Unknown ASR engine: {engine_id!r}")
@@ -143,16 +251,20 @@ def asr_language_field(engine_id: str) -> dict:
     labels = {code: f"{russian} / {english} ({code})" for code, english, russian in languages}
     fixed = engine_id in ("gigaam", "gigaam_onnx")
     if engine_id == "google":
-        help_ru = "В приложении доступны 9 вариантов Google Web Speech. Это не полный список языков всех сервисов Google. Нужен интернет; автоопределение здесь недоступно."
-        help_en = "The app offers 9 Google Web Speech choices, not all languages of every Google service. Internet is required; automatic detection is unavailable here."
+        for code in _GOOGLE_PRIMARY_CODES:
+            labels[code] = "★ " + labels[code]
+        help_ru = f"★ — 11 основных языков в начале списка. В приложении доступны {len(languages)} вариантов языка и региона по каталогу демонстрации Google Web Speech, включая прежний zh-CN. Нужен интернет; автоопределение здесь недоступно. Доступность и качество зависят от сервиса Google и записи."
+        help_en = f"★ marks the 11 primary languages at the top of the list. The app offers {len(languages)} language and regional choices from the Google Web Speech demo catalogue, including legacy zh-CN. Internet is required; automatic detection is unavailable here. Availability and quality depend on Google's service and the recording."
     elif fixed:
         help_ru = "Доступные модели GigaAM v2/v3 распознают только русский язык. Смена языка и автоопределение не поддерживаются."
         help_en = "The available GigaAM v2/v3 models recognize Russian only. Language selection and automatic detection are unsupported."
     else:
+        for code in _WHISPER_PRIMARY_CODES:
+            labels[code] = "★ " + labels[code]
         options.append("auto")
         labels["auto"] = "Автоопределение / Automatic detection (auto)"
-        help_ru = "Whisper large-v3 и large-v3-turbo поддерживают 100 языков и автоопределение. Качество зависит от языка и записи; автоопределение может ошибаться на коротких фрагментах."
-        help_en = "Whisper large-v3 and large-v3-turbo support 100 languages and automatic detection. Quality varies by language and recording; detection may be unreliable on short clips."
+        help_ru = "★ — 11 основных языков в начале списка. Whisper large-v3 и large-v3-turbo поддерживают 100 языков и автоопределение. Качество зависит от языка и записи; автоопределение может ошибаться на коротких фрагментах."
+        help_en = "★ marks the 11 primary languages at the top of the list. Whisper large-v3 and large-v3-turbo support 100 languages and automatic detection. Quality varies by language and recording; detection may be unreliable on short clips."
     return {
         "key": "language", "label_ru": "Язык", "label_en": "Language",
         "type": "combobox", "options": options, "option_labels": labels,
