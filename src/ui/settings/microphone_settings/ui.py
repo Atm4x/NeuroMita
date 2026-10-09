@@ -257,6 +257,23 @@ def build_microphone_settings_ui(self, parent_layout):
             weights=[3, 4, 1],
         )
     )
+    self.asr_language_combobox = QComboBox()
+    self.asr_language_combobox.setObjectName("ASRToolbarInput")
+    self.asr_language_combobox.setFixedHeight(38)
+    self.asr_language_combobox.setMinimumWidth(420)
+    self.asr_language_combobox.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
+    self.asr_language_combobox.setMinimumContentsLength(28)
+    self.asr_language_combobox.setEnabled(False)
+    self.asr_language_hint = _label("Выберите модель распознавания", "Select a recognition model")
+    language_row = _row(
+        "Язык распознавания", "Recognition language",
+        "Язык сохраняется отдельно для каждой модели.", "The language is saved separately for each model.",
+        self.asr_language_combobox, "fa5s.language",
+    )
+    strip_layout.addWidget(language_row)
+    strip_layout.addWidget(self.asr_language_hint)
     layout.addWidget(strip)
 
     behavior, behavior_layout = _card(
