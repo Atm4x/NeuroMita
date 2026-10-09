@@ -63,6 +63,8 @@ class ProtocolsMixin:
         v.api_type_label.setText(str(proto.get("name") or ""))
         if hasattr(v, "openrouter_routing_section"):
             v.openrouter_routing_section.setVisible(pid == "openrouter_default")
+        if hasattr(self, "_apply_chatgpt_plan_ui"):
+            self._apply_chatgpt_plan_ui(pid)
 
         dialect = str(proto.get("dialect") or "")
         provider = str(proto.get("provider") or "")
