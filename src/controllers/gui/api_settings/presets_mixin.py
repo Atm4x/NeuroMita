@@ -13,6 +13,9 @@ from utils import _
 from ui.provider_icons import template_provider, provider_icon
 
 
+_CHATGPT_PLAN_PROTOCOL_ID = "chatgpt_plan_default"
+
+
 class PresetsMixin:
     def _item_cls(self):
         # Lazy import to avoid import-time crashes / circular deps
@@ -77,8 +80,8 @@ class PresetsMixin:
             v.template_combo.clear()
             v.template_combo.add_tr_item("Без шаблона", "No template", value=None)
             v.template_combo.setItemIcon(0, provider_icon(""))
-            priority = {"Google AI Studio": 0, "OpenRouter": 1, "Mistral AI": 2}
-            ordered_templates = sorted(builtin, key=lambda p: priority.get(str(getattr(p, "name", "")), 3))
+            priority = {"ChatGPT Plan (Codex)": 0, "Google AI Studio": 1, "OpenRouter": 2, "Mistral AI": 3}
+            ordered_templates = sorted(builtin, key=lambda p: priority.get(str(getattr(p, "name", "")), 4))
             for p in ordered_templates:
                 v.template_combo.add_provider_item(
                     getattr(p, "name", ""), value=getattr(p, "id", None),
@@ -289,6 +292,7 @@ class PresetsMixin:
 
             v.provider_label.setText(str(preset.get("name", "")))
             v.preset_name_row.set_text(preset.get("name", ""))
+            self._apply_chatgpt_plan_ui(eff_pid)
             v.api_settings_container.setVisible(True)
             v.preset_active_tag.setVisible(int(v.settings.get("LAST_API_PRESET_ID", 0) or 0) == int(preset_id))
 
@@ -312,3 +316,30 @@ class PresetsMixin:
                     self._selection_retry_count = 0
 
         self._bus_call_async(_call, _apply, name="load_preset")
+
+    def _apply_chatgpt_plan_ui(self, protocol_id: str) -> None:
+        v = self.view
+        enabled = str(protocol_id or "") == _CHATGPT_PLAN_PROTOCOL_ID
+        v.test_button.setProperty("chatgptPlan", enabled)
+        if enabled:
+            v.test_button.setText(_("Войти через ChatGPT", "Continue with ChatGPT"))
+            v.api_type_label.setText(_(
+                "Экспериментальный режим · использует квоту ChatGPT/Codex · возможности ограничены",
+                "Experimental mode · uses your ChatGPT/Codex quota · limited capabilities",
+            ))
+            v.api_type_label.setToolTip(_(
+                "Использует вашу квоту ChatGPT/Codex. В текущем ограниченном режиме реализованы не все возможности; поддержка будет расширяться в будущих обновлениях.",
+                "Uses your ChatGPT/Codex quota. Not all capabilities are implemented in this limited mode; support may expand in future updates.",
+            ))
+        else:
+            v.test_button.setText(_("Проверить", "Check"))
+            v.api_type_label.setToolTip("")
+        v.api_url_row.setVisible(not enabled)
+        v.api_key_row.setVisible(not enabled)
+        v.reserve_keys_section.setVisible(not enabled)
+        try:
+            v.api_settings_container.setTabEnabled(1, not enabled)
+            if enabled and v.api_settings_container.currentIndex() == 1:
+                v.api_settings_container.setCurrentIndex(0)
+        except Exception:
+            pass
