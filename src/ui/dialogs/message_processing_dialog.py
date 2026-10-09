@@ -1,4 +1,5 @@
 from copy import deepcopy
+from html import escape
 
 import qtawesome as qta
 from PyQt6.QtCore import QSize, Qt
@@ -10,6 +11,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QTextBrowser,
     QVBoxLayout,
 )
 
@@ -19,13 +21,28 @@ from ui.widgets.tr_combobox import TRQComboBox
 from utils import _
 
 
+def _render_help(browser):
+    browser.setPlainText(str(_(browser.property("helpRu") or "", browser.property("helpEn") or "")))
+
+
+def _tooltip(text):
+    return "<qt>" + escape(text).replace("\n", "<br>") + "</qt>"
+
+
+def _render_combo_tooltips(combo):
+    catalog = combo.property("helpCatalog") or {}
+    for index in range(combo.count()):
+        ru, en = catalog.get(str(combo.itemData(index)), ("", ""))
+        combo.setItemData(index, _tooltip(str(_(ru, en))), Qt.ItemDataRole.ToolTipRole)
+
+
 class MessageProcessingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         tr_set(self, "Обработка сообщений", "Message processing", "setWindowTitle")
         self.setModal(True)
-        self.setMinimumWidth(600)
-        self.resize(660, 390)
+        self.setMinimumWidth(660)
+        self.resize(740, 570)
         self._catalog = {}
         self._available = []
         self._base = []
@@ -39,6 +56,7 @@ class MessageProcessingDialog(QDialog):
             QFrame#ProcessingStep QLabel {{ background: transparent; border: none; padding: 0; }}
             QLabel#ProcessingDescription {{ color: {THEME['muted']}; font-size: 12px; font-weight: normal; }}
             QLabel#ProcessingTitle {{ color: {THEME['text']}; font-size: 13px; font-weight: 600; }}
+            QTextBrowser#ProcessingHelp {{ background: {THEME['card_alt_bg']}; color: {THEME['text']}; border: 1px solid {THEME['panel_border']}; border-radius: 9px; padding: 10px; font-size: 12px; }}
             QListWidget#ProcessingList {{ background: transparent; border: none; padding: 0; }}
             QListWidget#ProcessingList::item {{ padding: 0; margin: 0 0 8px 0; border: none; background: transparent; }}
             QListWidget#ProcessingList::item:selected, QListWidget#ProcessingList::item:hover {{ background: transparent; border: none; }}
@@ -79,6 +97,20 @@ class MessageProcessingDialog(QDialog):
         add_row.addWidget(self.combo, 1)
         add_row.addWidget(self.add_button)
         layout.addLayout(add_row)
+        help_header = tr_set(QLabel(), "Пояснение выбранного шага", "Selected step explained")
+        help_header.setObjectName("ProcessingTitle")
+        layout.addWidget(help_header)
+        self.help_text = QTextBrowser()
+        self.help_text.setObjectName("ProcessingHelp")
+        self.help_text.setMinimumHeight(150)
+        self.help_text.setMaximumHeight(190)
+        self.help_text.setOpenLinks(False)
+        tr_set(self.help_text, "Пояснение выбранного шага", "Selected step explained", "setAccessibleName")
+        register(self.help_text, _render_help)
+        register(self.combo, _render_combo_tooltips)
+        self.combo.currentIndexChanged.connect(self._show_candidate_help)
+        self.combo.highlighted.connect(self._show_candidate_help)
+        layout.addWidget(self.help_text)
         list_header = QHBoxLayout()
         self.count_label = QLabel()
         self.count_label.setProperty("stepCount", 0)
@@ -191,6 +223,24 @@ class MessageProcessingDialog(QDialog):
         description = str(entry.get("description") or "")
         return ru, title, str(entry.get("description_ru") or description), description
 
+    def _help_labels(self, transform_id):
+        ru, en, short_ru, short_en = self._labels(transform_id)
+        entry = self._catalog.get(transform_id, {})
+        return (
+            f"{ru}\n\n{entry.get('help_ru') or entry.get('help') or short_ru}",
+            f"{en}\n\n{entry.get('help') or short_en}",
+        )
+
+    def _show_help(self, transform_id):
+        ru, en = self._help_labels(str(transform_id)) if transform_id else ("", "")
+        self.help_text.setProperty("helpRu", ru)
+        self.help_text.setProperty("helpEn", en)
+        _render_help(self.help_text)
+        self.help_text.verticalScrollBar().setValue(0)
+
+    def _show_candidate_help(self, index):
+        self._show_help(self.combo.itemData(index))
+
     def _reload(self, selection=0):
         self.list.blockSignals(True)
         self.list.clear()
@@ -201,6 +251,8 @@ class MessageProcessingDialog(QDialog):
             self.list.addItem(item)
             card = QFrame()
             card.setObjectName("ProcessingStep")
+            help_ru, help_en = self._help_labels(str(step["id"]))
+            tr_set(card, _tooltip(help_ru), _tooltip(help_en), "setToolTip")
             row = QHBoxLayout(card)
             row.setContentsMargins(14, 10, 14, 10)
             row.setSpacing(14)
@@ -233,6 +285,10 @@ class MessageProcessingDialog(QDialog):
             if tid not in used
         ]
         self.combo.set_items(items, current=selected)
+        self.combo.setProperty("helpCatalog", {
+            tid: self._help_labels(tid) for tid in self._available
+        })
+        _render_combo_tooltips(self.combo)
         self.combo.setEnabled(bool(items))
         self.add_button.setEnabled(bool(items))
         self.empty_label.setVisible(not self._current)
@@ -246,7 +302,7 @@ class MessageProcessingDialog(QDialog):
         self.reset_button.setEnabled(self._current != self._base)
         self.apply_button.setEnabled(self._current != self._initial)
         self.list.setMinimumHeight(max(86, min(len(self._current), 3) * 86))
-        self.resize(self.width(), 280 + max(100, min(len(self._current), 3) * 86))
+        self.resize(self.width(), 480 + max(100, min(len(self._current), 3) * 86))
         self._sync_selection()
 
     def _sync_selection(self, *_args):
@@ -259,6 +315,8 @@ class MessageProcessingDialog(QDialog):
             card.setProperty("selected", index == selected)
             card.style().unpolish(card)
             card.style().polish(card)
+        transform_id = self._current[selected]["id"] if 0 <= selected < len(self._current) else self.combo.currentData()
+        self._show_help(transform_id)
 
     def _on_add(self):
         transform_id = self.combo.currentData()

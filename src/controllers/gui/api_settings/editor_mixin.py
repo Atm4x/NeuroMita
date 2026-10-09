@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Optional, Any
 
 from PyQt6.QtCore import QTimer
@@ -112,6 +113,7 @@ class EditorMixin:
             reserve_keys_distribute=bool(v.reserve_keys_row.is_distribute()),
             protocol_id=self._current_protocol_id_ui(),
             model_settings=v.model_settings_form.document() or {},
+            protocol_overrides=deepcopy(self._protocol_overrides),
             openrouter_routing=self._read_openrouter_routing(),
             fallbacks=fb_tuple,
         )
@@ -202,6 +204,7 @@ class EditorMixin:
 
         v = self.view
         template_id = self._parse_base(v.template_combo.currentData())
+        self._protocol_overrides = {}
 
         if template_id is None:
             v.api_url_row.edit.set_template({})
@@ -232,6 +235,7 @@ class EditorMixin:
             self._is_loading_ui = True
 
             self._active_template = dict(tpl)
+            self._set_protocol_config_visible(False)
             v.api_url_row.edit.set_template(tpl)
             dialect = str((self._protocols.get(str(tpl.get("protocol_id") or "")) or {}).get("dialect") or "openai_chat_completions")
             self.model_settings_controller.set_dialect(dialect, str(tpl.get("settings_schema_id") or ""))
@@ -330,7 +334,12 @@ class EditorMixin:
             data["protocol_overrides"] = dict(self._protocol_overrides or {})
         else:
             data.pop("protocol_id", None)
-            data.pop("protocol_overrides", None)
+            if self._pipeline_editable():
+                data["protocol_overrides"] = {
+                    "transforms": deepcopy(self._protocol_overrides["transforms"])
+                } if "transforms" in self._protocol_overrides else {}
+            else:
+                data.pop("protocol_overrides", None)
             if not (self._active_template or {}).get("url_editable"):
                 data["url"] = ""
             if not (self._active_template or {}).get("test_url_editable"):
@@ -404,12 +413,17 @@ class EditorMixin:
         v.key_help_label.setVisible(bool(key_url))
         v.key_help_label.setText(f'<a href="{key_url}" style="color: {THEME["link"]}; text-decoration: underline;">{_("Получить ключ", "Get API key")}</a>' if key_url else "")
 
+    def _pipeline_editable(self) -> bool:
+        return self._parse_base(self.view.template_combo.currentData()) is None or bool(
+            (self._active_template or {}).get("pipeline_editable")
+        )
+
     def _set_protocol_config_visible(self, visible: bool) -> None:
         v = self.view
         v.protocol_row.set_enabled(visible)
         sec = getattr(v, "protocol_section", None)
         if sec is not None:
-            sec.setVisible(bool(visible))
+            sec.setVisible(bool(visible or (self._active_template or {}).get("pipeline_editable")))
 
     def _cancel_changes(self) -> None:
         if not self._snapshot:
@@ -420,6 +434,7 @@ class EditorMixin:
         self._active_template = (
             dict(self.current_preset_data) if self._snapshot.base is not None else None
         )
+        self._protocol_overrides = deepcopy(self._snapshot.protocol_overrides)
         v.api_url_row.edit.set_template(self._active_template or {})
         v.preset_name_row.set_text(self._snapshot.name)
         v.api_url_row.set_text(self._snapshot.url)
@@ -482,12 +497,15 @@ class EditorMixin:
             return
 
         def _call():
-            return use(ApiPresetService).save_custom(data)
+            service = use(ApiPresetService)
+            new_id = service.save_custom(data)
+            return new_id, service.get_full(new_id) if isinstance(new_id, int) else None
 
-        def _apply(new_id):
+        def _apply(result):
+            new_id, preset = result
             if not isinstance(new_id, int):
                 return
-            self.current_preset_data = dict(data)
+            self.current_preset_data = dict(preset or data)
             item = self.custom_presets_list_items.get(pid)
             if item is not None:
                 item.base_name = data["name"]
@@ -559,11 +577,14 @@ class EditorMixin:
         logger.info("[API UI] add preset clicked")
         v = self.view
         existing = {item.base_name for item in self.custom_presets_list_items.values()}
+        combo = v.template_combo
+        selected_base = self._parse_base(combo.currentData())
+        template_name = str(combo.currentText() or "").strip() if selected_base is not None else ""
+        template_name = template_name or str(_("Пользовательский API", "Custom API"))
         number = 1
-        while str(_("Пустой пресет", "Empty preset")) + f" {number}" in existing:
+        while f"{template_name} {number}" in existing:
             number += 1
-        name = str(_("Пустой пресет", "Empty preset")) + f" {number}"
-        selected_base = None
+        name = f"{template_name} {number}"
 
         payload = {
             "name": str(name).strip(),

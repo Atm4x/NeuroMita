@@ -102,9 +102,10 @@ class ApiPresetResolver:
         # Build base URL (no auth logic here)
         base_url = self._compute_base_url(preset or {}, api_model)
 
-        # Protocol overrides (only for custom presets with explicit base=None)
+        # Templates may allow transform overrides while retaining their protocol.
         base_present = isinstance(preset, dict) and ("base" in preset)
         base_is_none = bool(base_present and preset.get("base") is None)
+        pipeline_editable = bool(base_present and (base_is_none or preset.get("pipeline_editable")))
 
         protocol_overrides = (preset or {}).get("protocol_overrides") if isinstance(preset, dict) else None
         if not isinstance(protocol_overrides, dict):
@@ -114,11 +115,12 @@ class ApiPresetResolver:
         transforms = list(getattr(proto, "transforms", []) or [])
         capabilities = dict(getattr(proto, "capabilities", {}) or {})
 
-        if base_is_none and protocol_overrides:
+        if pipeline_editable:
             ot = protocol_overrides.get("transforms")
             if isinstance(ot, list):
                 transforms = [t for t in ot if isinstance(t, dict) and t.get("id")]
 
+        if base_is_none:
             oc = protocol_overrides.get("capabilities")
             if isinstance(oc, dict):
                 for k, v in oc.items():

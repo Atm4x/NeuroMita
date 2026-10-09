@@ -233,15 +233,12 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         Открываем окно через WindowManager (GUI controller).
         """
         v = self.view
-        base = self._parse_base(v.template_combo.currentData())
-
-        # 3) если выбран шаблон — НЕ показывать конфигурацию
-        if base is not None:
+        if not self._pipeline_editable():
             QMessageBox.information(
                 v,
                 _("Недоступно", "Not available"),
-                _("Pipeline можно настраивать только для пресетов без шаблона.",
-                  "Pipeline can be configured only for presets without a template."),
+                _("Этот шаблон не поддерживает настройку обработки сообщений.",
+                  "This template does not support message processing customization."),
             )
             return
 
