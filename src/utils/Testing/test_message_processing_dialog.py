@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from PyQt6.QtCore import QCoreApplication, QEvent
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt
 from PyQt6.QtWidgets import QApplication, QLabel
 
 from controllers.gui.protocol_pipeline_gui_controller import (
@@ -132,3 +132,36 @@ def test_live_language_change_keeps_selection_and_parameters(dialog, monkeypatch
     card = dialog.list.itemWidget(dialog.list.item(0))
     assert card.findChild(QLabel, "ProcessingTitle").text() == "Merge system messages"
     assert "Processing order" in dialog.count_label.text()
+
+
+def test_help_follows_candidate_and_existing_step_without_changing_pipeline(dialog):
+    dialog.apply_payload(payload())
+    original = dialog.transforms()
+    index = dialog.combo.findData("system_to_user_prefix")
+    dialog.combo.setCurrentIndex(index)
+    assert dialog.help_text.toPlainText()
+    candidate_help = dialog.help_text.toPlainText()
+    assert dialog.combo.itemData(index, Qt.ItemDataRole.ToolTipRole)
+    dialog.combo.highlighted.emit(dialog.combo.findData("normalize_system_messages"))
+    assert dialog.help_text.toPlainText() != candidate_help
+    dialog.list.currentRowChanged.emit(0)
+    assert dialog.help_text.toPlainText() != candidate_help
+    assert dialog.transforms() == original
+
+
+def test_detailed_help_retranslates_without_changing_candidate(dialog, monkeypatch):
+    import localization
+    from localization.live import refresh_all, language_changed_signal
+
+    monkeypatch.setattr(localization, "_current_language", lambda: "RU")
+    dialog.apply_payload(payload([]))
+    dialog.combo.setCurrentIndex(dialog.combo.findData("normalize_system_messages"))
+    original = dialog.help_text.toPlainText()
+    tooltip = dialog.combo.itemData(dialog.combo.currentIndex(), Qt.ItemDataRole.ToolTipRole)
+    monkeypatch.setattr(localization, "_current_language", lambda: "EN")
+    refresh_all()
+    language_changed_signal().emit("EN")
+    assert dialog.help_text.toPlainText() != original
+    assert dialog.combo.itemData(dialog.combo.currentIndex(), Qt.ItemDataRole.ToolTipRole) != tooltip
+    assert dialog.combo.currentData() == "normalize_system_messages"
+    assert dialog.transforms() == []
