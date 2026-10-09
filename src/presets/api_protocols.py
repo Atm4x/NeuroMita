@@ -4,7 +4,6 @@ from __future__ import annotations
 
 class Dialects:
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
-    OPENAI_RESPONSES_CHATGPT_PLAN = "openai_responses_chatgpt_plan"
     GEMINI_GENERATE_CONTENT = "gemini_generate_content"
     G4F = "g4f"
 
@@ -60,7 +59,9 @@ API_PROTOCOLS_DATA = [
         "settings_schema_id": "openai-compatible",
         "name": "ChatGPT Plan (Responses preview)",
         "display_name": "ChatGPT Plan (Codex)",
-        "dialect": Dialects.OPENAI_RESPONSES_CHATGPT_PLAN,
+        # Reuse the existing settings schema dialect. The transport is still a
+        # separate provider and never forwards Chat Completions-only parameters.
+        "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "chatgpt_plan",
         "auth": {"mode": "oauth_chatgpt"},
         "headers": {},
