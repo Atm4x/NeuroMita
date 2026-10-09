@@ -4,6 +4,7 @@ from __future__ import annotations
 
 class Dialects:
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+    OPENAI_RESPONSES_CHATGPT_PLAN = "openai_responses_chatgpt_plan"
     GEMINI_GENERATE_CONTENT = "gemini_generate_content"
     G4F = "g4f"
 
@@ -52,6 +53,24 @@ API_PROTOCOLS_DATA = [
         "auth": {"mode": "bearer"},
         "headers": {},
         "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True},
+        "transforms": [],
+    },
+    {
+        "id": "chatgpt_plan_default",
+        "settings_schema_id": "openai-compatible",
+        "name": "ChatGPT Plan (Responses preview)",
+        "display_name": "ChatGPT Plan (Codex)",
+        "dialect": Dialects.OPENAI_RESPONSES_CHATGPT_PLAN,
+        "provider": "chatgpt_plan",
+        "auth": {"mode": "oauth_chatgpt"},
+        "headers": {},
+        "capabilities": {
+            "tools_native": False,
+            "streaming": True,
+            "streaming_with_tools": False,
+            "supports_stream_usage": True,
+            "structured_output": False,
+        },
         "transforms": [],
     },
     {
