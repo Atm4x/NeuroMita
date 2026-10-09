@@ -309,3 +309,131 @@ def test_microphone_catalog_callback_ignores_replaced_widgets(panel):
     callbacks.pop()([ASRInputDevice(38, "Desk microphone", "WASAPI")])
     assert combo.count() == 0
     root.mic_combobox = combo
+
+
+class _LanguageCatalog:
+    def __init__(self):
+        self.values = {"google": {"language": "uk-UA", "custom": 7}, "whisper": {"language": "auto"}}
+
+    def settings_schema(self, component_id):
+        engine = component_id.split(":", 1)[1]
+        codes = ["ru-RU", "uk-UA"] if engine == "google" else ["ru", "uk", "auto"]
+        if engine.startswith("gigaam"):
+            codes = ["ru"]
+        return [{"key": "language", "type": "combobox", "options": codes,
+                 "option_labels": {code: "Language " + code for code in codes},
+                 "default": codes[0], "enabled": not engine.startswith("gigaam"),
+                 "help_ru": "Только русский" if engine.startswith("gigaam") else "Доступные языки",
+                 "help_en": "Russian only" if engine.startswith("gigaam") else "Available languages"}]
+
+    def load_settings(self, component_id):
+        return dict(self.values.get(component_id.split(":", 1)[1], {}))
+
+    def save_component_settings(self, component_id, values):
+        self.values[component_id.split(":", 1)[1]] = dict(values)
+        return {"ok": True}
+
+
+def _language_catalog(monkeypatch):
+    catalog = _LanguageCatalog()
+    monkeypatch.setattr("controllers.gui.microphone_settings_controller.services",
+                        lambda: SimpleNamespace(get_optional=lambda contract: catalog))
+    return catalog
+
+
+def test_common_asr_language_field_changes_with_engine_without_writing(panel, monkeypatch):
+    root, controller, _ = panel
+    catalog = _language_catalog(monkeypatch)
+    root.recognizer_combobox.addItems(["google", "whisper", "gigaam", "gigaam_onnx"])
+    for engine, expected, editable in [("google", "uk-UA", True), ("whisper", "auto", True),
+                                       ("gigaam", "ru", False), ("gigaam_onnx", "ru", False)]:
+        root.recognizer_combobox.setCurrentText(engine)
+        controller._refresh_asr_language()
+        assert root.asr_language_combobox.currentData() == expected
+        assert root.asr_language_combobox.isEnabled() == editable
+        assert root.asr_language_combobox.currentText() == "Language " + expected
+        assert root.asr_language_hint.text()
+    assert catalog.values["google"] == {"language": "uk-UA", "custom": 7}
+    controller.event_bus.emit.assert_not_called()
+
+
+def test_language_change_saves_raw_code_preserves_other_options_and_applies_live(panel, monkeypatch):
+    from core.events import Events
+    root, controller, _ = panel
+    catalog = _language_catalog(monkeypatch)
+    root.recognizer_combobox.addItem("google")
+    controller._refresh_asr_language()
+    index = root.asr_language_combobox.findData("ru-RU")
+    root.asr_language_combobox.setCurrentIndex(index)
+    controller._on_asr_language_changed(index)
+    assert catalog.values["google"] == {"language": "ru-RU", "custom": 7}
+    assert controller.event_bus.emit.call_args.args == (
+        Events.Speech.SET_RECOGNIZER_OPTION,
+        {"engine": "google", "key": "language", "value": "ru-RU"},
+    )
+
+
+def test_failed_language_save_restores_saved_selection_and_does_not_apply(panel, monkeypatch):
+    root, controller, _ = panel
+    catalog = _language_catalog(monkeypatch)
+    catalog.save_component_settings = lambda *args: {"ok": False, "errors": {"language": "locked file"}}
+    root.recognizer_combobox.addItem("google")
+    controller._refresh_asr_language()
+    index = root.asr_language_combobox.findData("ru-RU")
+    root.asr_language_combobox.setCurrentIndex(index)
+    controller._on_asr_language_changed(index)
+    assert root.asr_language_combobox.currentData() == "uk-UA"
+    assert "locked file" in root.asr_language_hint.text()
+    controller.event_bus.emit.assert_not_called()
+
+
+def test_language_control_disables_when_no_engine_is_available(panel, monkeypatch):
+    root, controller, _ = panel
+    _language_catalog(monkeypatch)
+    controller._refresh_asr_language()
+    assert not root.asr_language_combobox.isEnabled()
+    assert root.asr_language_combobox.count() == 0
+
+
+def test_ai_hub_language_labels_keep_codes_and_fixed_language_is_locked(panel):
+    from ui.windows.ai_hub.schema_renderer import SchemaForm
+    field = _LanguageCatalog().settings_schema("asr:gigaam")[0]
+    form = SchemaForm([field])
+    combo = form._widgets["language"]
+    assert combo.currentText() == "Language ru"
+    assert form.values()["language"] == "ru"
+    assert not combo.isEnabled()
+    form.close()
+    form.deleteLater()
+
+
+def test_active_recognition_restarts_worker_with_new_language(panel, monkeypatch):
+    from core.events import Events
+    root, controller, _ = panel
+    _language_catalog(monkeypatch)
+    root.settings["MIC_ACTIVE"] = True
+    root.recognizer_combobox.addItem("google")
+    controller._refresh_asr_language()
+    index = root.asr_language_combobox.findData("ru-RU")
+    controller._on_asr_language_changed(index)
+    calls = [call.args for call in controller.event_bus.emit.call_args_list]
+    assert calls == [(Events.Speech.SET_RECOGNIZER_OPTION,
+                      {"engine": "google", "key": "language", "value": "ru-RU"}),
+                     (Events.Speech.RESTART_SPEECH_RECOGNITION, {"full_restart": True})]
+
+
+def test_language_cannot_change_during_capture_and_fixed_model_stays_locked(panel, monkeypatch):
+    root, controller, _ = panel
+    _language_catalog(monkeypatch)
+    root.recognizer_combobox.addItems(["google", "gigaam"])
+    controller._refresh_asr_language()
+    controller._set_input_mode_enabled(False)
+    assert not root.asr_language_combobox.isEnabled()
+    controller._refresh_asr_language()
+    assert not root.asr_language_combobox.isEnabled()
+    controller._set_input_mode_enabled(True)
+    assert root.asr_language_combobox.isEnabled()
+    root.recognizer_combobox.setCurrentText("gigaam")
+    controller._refresh_asr_language()
+    controller._set_input_mode_enabled(True)
+    assert not root.asr_language_combobox.isEnabled()
