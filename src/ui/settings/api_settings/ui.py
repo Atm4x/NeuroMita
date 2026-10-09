@@ -387,7 +387,7 @@ def _build_protocol(self, layout):
     self.protocol_info_label = QLabel()
     self.protocol_info_label.setObjectName("ApiProtocolHint")
     self.protocol_info_label.setStyleSheet(
-        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+        f"color: {THEME['muted']}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
     )
     self.protocol_info_label.setWordWrap(True)
     self.protocol_section.add_widget(self.protocol_info_label)
@@ -395,7 +395,7 @@ def _build_protocol(self, layout):
     self.protocol_transforms_view.setWordWrap(True)
     self.protocol_transforms_view.setObjectName("ApiProtocolHint")
     self.protocol_transforms_view.setStyleSheet(
-        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+        f"color: {THEME['muted']}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
     )
     processing_row = QWidget()
     processing_layout = QHBoxLayout(processing_row)
@@ -409,7 +409,7 @@ def _build_protocol(self, layout):
         "ApiPipelineButton",
     )
     self.configure_pipeline_btn.setStyleSheet(
-        f"background: {THEME["card_alt_bg"]}; color: {THEME["text"]}; border: 1px solid {THEME["panel_border"]}; border-radius: 9px;"
+        f"background: {THEME['card_alt_bg']}; color: {THEME['text']}; border: 1px solid {THEME['panel_border']}; border-radius: 9px;"
     )
     processing_layout.addWidget(self.configure_pipeline_btn)
     self.protocol_section.add_widget(processing_row)
