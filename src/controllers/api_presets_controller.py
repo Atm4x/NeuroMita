@@ -53,6 +53,7 @@ class ApiTemplate:
     url: str = ""
     url_editable: bool = False
     test_url_editable: bool = False
+    pipeline_editable: bool = False
     request_path: str = ""
     test_path: str = ""
     url_tpl: str = ""
@@ -837,6 +838,7 @@ class ApiPresetsController(ApiPresetService):
             ),
             "url_editable": bool(tpl and tpl.url_editable),
             "test_url_editable": bool(tpl and tpl.test_url_editable),
+            "pipeline_editable": bool(tpl and tpl.pipeline_editable),
             "request_path": tpl.request_path if tpl else "",
             "test_path": tpl.test_path if tpl else "",
             "url_tpl": tpl.url_tpl if tpl else "",

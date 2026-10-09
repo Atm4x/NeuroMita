@@ -324,6 +324,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 9,
         "name": "LM Studio",
+        "pipeline_editable": True,
         "url_editable": True,
         "test_url_editable": False,
         "request_path": "/v1/chat/completions",
@@ -343,6 +344,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 10,
         "name": "Ollama",
+        "pipeline_editable": True,
         "url_editable": True,
         "test_url_editable": False,
         "request_path": "/v1/chat/completions",

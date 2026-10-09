@@ -1,7 +1,8 @@
 # src/handlers/llm_providers/message_transforms.py
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from copy import deepcopy
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
 def _as_text(x: Any) -> str:
@@ -178,6 +179,75 @@ def system_to_user_prefix(messages: List[Dict[str, Any]], tag: str = "[SYSTEM CO
     return out
 
 
+def iter_positioned_messages(messages: List[Dict[str, Any]]) -> Iterator[Tuple[Dict[str, Any], bool]]:
+    """Yield each message and whether it is a system block inside the dialogue."""
+    dialogue_started = False
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "system":
+            dialogue_started = True
+        yield message, dialogue_started and message.get("role") == "system"
+
+
+def system_messages_to_user(messages: List[Dict[str, Any]], tag: str = "[SYSTEM INFO]") -> List[Dict[str, Any]]:
+    """Keep leading instructions; convert later system blocks at their positions."""
+    out = []
+    for source, inline_system in iter_positioned_messages(messages):
+        message = deepcopy(source)
+        if message.get("role") != "system":
+            out.append(message)
+            continue
+
+        content = message.get("content")
+        if isinstance(content, list):
+            has_payload = any(
+                isinstance(part, dict) and (
+                    part.get("type") != "text" or _as_text(part.get("text")).strip()
+                ) for part in content
+            )
+        else:
+            has_payload = bool(_as_text(content).strip())
+        if not has_payload:
+            continue
+        if inline_system:
+            message["role"] = "user"
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        part["text"] = f"{tag}\n{_as_text(part.get('text'))}"
+                        break
+                else:
+                    content.insert(0, {"type": "text", "text": tag})
+            else:
+                message["content"] = f"{tag}\n{_as_text(content)}"
+        out.append(message)
+    return out
+
+
+def normalize_system_messages(messages: List[Dict[str, Any]], tag: str = "[SYSTEM INFO]") -> List[Dict[str, Any]]:
+    positioned = system_messages_to_user(messages, tag)
+    leading_count = 0
+    for message in positioned:
+        if message.get("role") != "system":
+            break
+        leading_count += 1
+    if leading_count < 2:
+        return positioned
+    contents = [message.get("content", "") for message in positioned[:leading_count]]
+    merged = dict(positioned[0])
+    if all(isinstance(content, str) for content in contents):
+        merged["content"] = "\n\n".join(contents)
+    else:
+        parts = []
+        for content in contents:
+            if parts:
+                parts.append({"type": "text", "text": "\n\n"})
+            parts.extend(content if isinstance(content, list) else [{"type": "text", "text": _as_text(content)}])
+        merged["content"] = parts
+    return [merged] + positioned[leading_count:]
+
+
 def trailing_system_to_user_prefix(messages: List[Dict[str, Any]], tag: str = "[SYSTEM INFO]") -> List[Dict[str, Any]]:
     out = [dict(m) for m in (messages or []) if isinstance(m, dict)]
     if not out:
@@ -197,6 +267,14 @@ def trailing_system_to_user_prefix(messages: List[Dict[str, Any]], tag: str = "[
 
 # --- Catalog (for UI) ---
 _TRANSFORM_CATALOG: List[Dict[str, Any]] = [
+    {
+        "id": "normalize_system_messages",
+        "title": "One system instruction, positioned context",
+        "title_ru": "Одна системная инструкция, контекст на своих местах",
+        "description_ru": "Объединяет начальные системные инструкции. Последующие системные блоки становятся сообщениями пользователя с меткой [SYSTEM INFO], сохраняя своё место в диалоге.",
+        "description": "Merge leading system instructions. Convert later system blocks to user messages tagged [SYSTEM INFO], keeping their positions in the conversation.",
+        "params_schema": {"tag": "str"},
+    },
     {
         "id": "merge_system_messages",
         "title": "Merge system messages",
@@ -237,6 +315,9 @@ def get_transform_catalog() -> List[Dict[str, Any]]:
 
 
 _TRANSFORMS = {
+    "normalize_system_messages": lambda msgs, params: normalize_system_messages(
+        msgs, tag=str((params or {}).get("tag", "[SYSTEM INFO]"))
+    ),
     "merge_system_messages": lambda msgs, params: merge_system_messages(msgs),
     "ensure_last_message_user": lambda msgs, params: ensure_last_message_user(
         msgs, fallback_user_text=str((params or {}).get("fallback_user_text", "."))
