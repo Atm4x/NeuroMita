@@ -21,6 +21,7 @@ from infrastructure.settings.microphone_preferences import (
 from core.services import services
 from services.contracts import ASRCaptureState, InstallableCatalogService, SpeechService
 from main_logger import logger
+from services.asr_settings_service import ensure_asr_settings_service
 from handlers.asr_input_gate import normalize_input_mode
 from utils import getTranslationVariant as _
 from .base_controller import BaseController
@@ -78,6 +79,10 @@ class MicrophoneSettingsController(BaseController):
             ),
         )
 
+        subscription = ensure_asr_settings_service().subscribe(
+            lambda change: self._ui(self._refresh_asr_language)
+        )
+        self._settings_subscriptions.append(subscription)
         self._ui(self._bind_if_ready)
 
     def _reflect_external_setting(self, change) -> None:
@@ -126,6 +131,10 @@ class MicrophoneSettingsController(BaseController):
             self._ui(lambda: self._set_input_mode_enabled(not state.active))
 
     def _set_input_mode_enabled(self, enabled: bool) -> None:
+        self._asr_capture_active = not enabled
+        language = getattr(self.view, "asr_language_combobox", None)
+        if language is not None:
+            language.setEnabled(enabled and bool(language.property("language_editable")))
         combo = getattr(self.view, "asr_input_mode_combobox", None)
         if combo is not None:
             combo.setEnabled(enabled)
@@ -148,6 +157,7 @@ class MicrophoneSettingsController(BaseController):
             "asr_restart_button",
             "vad_apply_button",
             "asr_input_mode_combobox",
+            "asr_language_combobox",
         )
         for n in need:
             if getattr(v, n, None) is None:
@@ -202,6 +212,9 @@ class MicrophoneSettingsController(BaseController):
             v.recognizer_combobox.currentTextChanged, self._on_engine_changed
         )
         v.recognizer_combobox.currentTextChanged.connect(self._on_engine_changed)
+
+        safe_disconnect(v.asr_language_combobox.activated, self._on_asr_language_changed)
+        v.asr_language_combobox.activated.connect(self._on_asr_language_changed)
 
         safe_disconnect(v.mic_active_checkbox.stateChanged, self._on_active_toggled)
         v.mic_active_checkbox.stateChanged.connect(self._on_active_toggled)
@@ -599,6 +612,7 @@ class MicrophoneSettingsController(BaseController):
                 v.recognizer_combobox.addItem(_("Загрузка...", "Loading..."))
             finally:
                 v.recognizer_combobox.blockSignals(False)
+            self._refresh_asr_language()
 
         self._ui(show_loading)
 
@@ -671,6 +685,7 @@ class MicrophoneSettingsController(BaseController):
                 if new_engine != prev_engine:
                     self._reset_init_status()
 
+                self._refresh_asr_language()
                 self._apply_asr_install_status(new_engine if engines else "")
 
             self._ui(apply)
@@ -857,7 +872,77 @@ class MicrophoneSettingsController(BaseController):
             return
         self._reset_init_status()
         self._save_setting("RECOGNIZER_TYPE", eng)
+        self._refresh_asr_language()
         self._apply_asr_install_status(eng)
+
+    def _refresh_asr_language(self):
+        combo = getattr(self.view, "asr_language_combobox", None)
+        hint = getattr(self.view, "asr_language_hint", None)
+        engine_combo = getattr(self.view, "recognizer_combobox", None)
+        if combo is None or hint is None or engine_combo is None:
+            return
+        engine = engine_combo.currentText() if engine_combo.isEnabled() else ""
+        catalog = services().get_optional(InstallableCatalogService)
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.setEnabled(False)
+            combo.setProperty("language_editable", False)
+            combo.setProperty("engine_id", engine)
+            if not engine or catalog is None:
+                hint.setText(_("Выберите модель распознавания", "Select a recognition model"))
+                return
+            field = next((entry for entry in catalog.settings_schema(f"asr:{engine}")
+                          if entry.get("key") == "language"), None)
+            if field is None:
+                hint.setText(_("Выбор языка для этой модели недоступен.", "Language selection is unavailable for this model."))
+                return
+            labels = field.get("option_labels") or {}
+            for code in field.get("options") or []:
+                combo.addItem(str(labels.get(code, code)), str(code))
+            values = catalog.load_settings(f"asr:{engine}")
+            selected = str(values.get("language") or field.get("default") or "")
+            index = combo.findData(selected)
+            help_text = _(field.get("help_ru", ""), field.get("help_en", ""))
+            if index < 0:
+                combo.addItem(_("Недоступно: ", "Unavailable: ") + selected, selected)
+                index = combo.count() - 1
+                help_text = _("Сохранённый язык не поддерживается. Выберите доступный язык.",
+                              "The saved language is unsupported. Select an available language.") + " " + help_text
+            combo.setCurrentIndex(index)
+            editable = bool(field.get("enabled", True)) and not bool(field.get("locked"))
+            combo.setProperty("language_editable", editable)
+            combo.setEnabled(editable and not getattr(self, "_asr_capture_active", False))
+            combo.setToolTip(combo.currentText() + "\n" + help_text)
+            hint.setText(help_text)
+        except Exception as exc:
+            hint.setText(_("Не удалось загрузить языки: ", "Could not load languages: ") + format_exception(exc))
+        finally:
+            combo.blockSignals(False)
+
+    def _on_asr_language_changed(self, index: int):
+        combo = self.view.asr_language_combobox
+        if index < 0 or not combo.isEnabled():
+            return
+        engine = str(combo.property("engine_id") or "")
+        if engine != self.view.recognizer_combobox.currentText():
+            self._refresh_asr_language()
+            return
+        catalog = services().get_optional(InstallableCatalogService)
+        if catalog is None:
+            return
+        value = combo.itemData(index)
+        values = catalog.load_settings(f"asr:{engine}")
+        values["language"] = value
+        result = catalog.save_component_settings(f"asr:{engine}", values)
+        if not result.get("ok"):
+            self._refresh_asr_language()
+            self.view.asr_language_hint.setText(str(result.get("errors") or _("Не удалось сохранить язык", "Could not save language")))
+            return
+        self.event_bus.emit(Events.Speech.SET_RECOGNIZER_OPTION,
+                            {"engine": engine, "key": "language", "value": value})
+        if self.view.settings.get("MIC_ACTIVE", False):
+            self.event_bus.emit(Events.Speech.RESTART_SPEECH_RECOGNITION, {"full_restart": True})
 
     def _on_active_toggled(self, state: int):
         self._save_setting("MIC_ACTIVE", bool(state))
