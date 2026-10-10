@@ -4,6 +4,8 @@ import json
 from copy import deepcopy
 from typing import Any, Mapping
 
+from .structured_output import responses_text_format
+
 
 def _content(content: Any, role: str) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
@@ -80,9 +82,13 @@ def build_responses_payload(model: str, messages: list[dict[str, Any]], *,
 
 class ResponsesInferenceAdapter:
     def build(self, req: Any) -> dict[str, Any]:
-        return build_responses_payload(req.model, req.messages,
+        payload = build_responses_payload(req.model, req.messages,
             parameters=req.native_parameters or req.extra,
             tools=req.tools_payload if req.tools_on else None)
+        caps = req.capabilities or {}
+        if caps.get('structured_output') and caps.get('native_structured_output', True):
+            payload.setdefault('text', {})['format'] = responses_text_format(req)
+        return payload
 
     def normalize_output(self, req: Any, response: Mapping[str, Any], text: str) -> str:
         calls = [item for item in response.get('output', []) if item.get('type') == 'function_call']

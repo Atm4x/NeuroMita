@@ -205,6 +205,11 @@ def test_real_preset_runner_provider_pipeline(monkeypatch):
         assert result.usage.total_tokens == 8
         assert requests[0]['store'] is False and requests[0]['stream'] is True
         assert requests[0]['input'][0]['role'] == 'developer'
+        response_format = requests[0]['text']['format']
+        assert response_format['type'] == 'json_schema'
+        assert response_format['strict'] is True
+        assert response_format['schema']['additionalProperties'] is False
+        assert 'segments' in response_format['schema']['required']
         assert any(event.text for event in events)
     finally:
         runner.close()

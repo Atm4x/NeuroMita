@@ -72,7 +72,7 @@ API_PROTOCOLS_DATA = [
             "streaming_with_tools": True,
             "supports_stream_usage": True,
             "structured_output": True,
-            "native_structured_output": False,
+            "native_structured_output": True,
             "images": True,
             "files": True,
         },

@@ -48,6 +48,14 @@ namespaced and serial; their output is normalized to NeuroMita's existing
 `StructuredResponse.tool_call` so execution stays with ModelController.
 Unadvertised tools and multiple calls in one response are rejected.
 
+Structured requests pass `req.structured_model` as a strict JSON Schema in
+Responses `text.format`, retaining request-specific field exclusions and custom
+parameter definitions. Every object declares its properties, requires those
+properties and disallows additional properties. Free-form intent payloads and
+tool arguments use JSON-encoded strings, which the existing response parser
+decodes back into dictionaries. Undeclared free-form fields fail explicitly.
+An explicit native-structured-output disable flag still bypasses this format.
+
 The dedicated `chatgpt-plan` settings schema exposes optional reasoning effort
 and text verbosity. Availability depends on the selected model. Protocol metadata
 declares migration from the old generic settings schema. `temperature`, `top_p`,
@@ -79,6 +87,7 @@ Sources verified on 2026-10-10:
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [Preview requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 - [Account lifecycle](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
+- [Structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)
 
 The general project test suite is not green: root discovery includes bundled
 dependency tests; the bundled Python 3.12 environment lacks compatible PyQt;
