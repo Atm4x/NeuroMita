@@ -67,35 +67,70 @@ def test_model_refresh_emits_list_models_without_reauthorization(editor):
     assert emitted[0]['protocol_id'] == 'chatgpt_plan_default'
 
 
-def test_chatgpt_template_is_paid_with_luna_and_existing_openai_icon(editor):
+def test_chatgpt_template_is_paid_with_account_catalog_and_existing_openai_icon(editor):
     from presets.api_templates import API_TEMPLATES_DATA
     from ui.provider_icons import template_provider, protocol_provider, provider_icon
     template = next(t for t in API_TEMPLATES_DATA if t['id'] == 12)
     assert template['pricing'] == 'paid'
     assert template['badge_kind'] == 'subscription'
-    assert template['default_model'] == 'gpt-5.6-luna'
+    assert template['default_model'] == ''
     assert API_TEMPLATES_DATA[-1]['id'] == 12
     assert template_provider(template['name'], template['protocol_id']) == 'openai'
     assert protocol_provider(template['protocol_id']) == 'openai'
     assert not provider_icon('openai').isNull()
 
 
-def test_subscription_notice_and_unknown_limits_are_provider_specific(editor):
+def test_subscription_notice_is_provider_specific_without_placeholder_bars(editor):
     editor._apply_provider_ui('chatgpt_plan_default')
     panel = editor.view.subscription_info
     assert not panel.isHidden()
-    assert '10.10.2026' in panel.cache_notice.text()
-    assert 'серверной' in panel.cache_notice.text()
-    assert 'ненадёжно' in panel.cache_notice.text()
-    assert len(panel.limit_bars) == 2
-    for bar in panel.limit_bars:
-        assert not bar.isEnabled()
-        assert bar.minimum() != bar.maximum()  # No ongoing-loading animation.
-        assert bar.format() == 'Данные недоступны'
-        assert '%' not in bar.format()
-    assert 'https://chatgpt.com/codex/cloud/settings/usage' in panel.dashboard_link.text()
+    assert 'Экспериментальный' in panel.notice.text()
+    assert 'квоту ChatGPT/Codex' in panel.notice.text()
+    assert '10.10.2026' not in panel.notice.text()
+    from PyQt6.QtWidgets import QProgressBar
+    assert not panel.findChildren(QProgressBar)
+    assert 'https://chatgpt.com/settings/usage' in panel.dashboard_link.text()
     editor._apply_provider_ui('openai_compatible_default')
     assert panel.isHidden()
-    assert panel.cache_notice.text() == ''
+    assert panel.notice.text() == ''
     editor._apply_provider_ui('chatgpt_plan_default')
     assert not panel.isHidden()
+
+
+@pytest.mark.parametrize('current, models, expected', [
+    ('gpt-5.6-luna', ['account-model'], 'account-model'),
+    ('', ['first', 'gpt-6-luna'], 'gpt-6-luna'),
+    ('first', ['first', 'gpt-6-luna'], 'first'),
+])
+def test_subscription_model_comes_from_account_catalog_even_if_dialog_cancelled(editor, monkeypatch, current, models, expected):
+    class CancelledDialog:
+        DialogCode = SimpleNamespace(Accepted=1)
+        def __init__(self, *args, **kwargs):
+            pass
+        def exec(self):
+            return 0
+    monkeypatch.setattr('controllers.gui.api_settings.test_mixin.ModelsLoadedDialog', CancelledDialog)
+    editor._on_field_changed = lambda: None
+    editor.view.api_model_row.set_text(current)
+    editor._process_test_result({'success': True, 'models': models})
+    assert editor.view.api_model_row.text() == expected
+
+
+def test_sandbox_selector_marks_only_subscription_presets():
+    from controllers.gui.sandbox_page_view_model import SandboxPageViewModel
+    updates = []
+    controller = SimpleNamespace(
+        character_snapshot=lambda: (['Crazy'], 'Crazy'),
+        model_snapshot=lambda character: ({'custom': [
+            {'id': 1, 'name': 'ChatGPT', 'protocol_id': 'chatgpt_plan_default'},
+            {'id': 2, 'name': 'Other', 'protocol_id': 'openai_compatible_default'},
+        ]}, 1),
+        prompt_snapshot=lambda character: ('Crazy', [], ''),
+    )
+    view_model = SimpleNamespace(_controller=controller, _update=lambda **kwargs: updates.append(kwargs),
+                                 _model_label=SandboxPageViewModel._model_label,
+                                 run_coalesced=lambda name, worker, applied, failed: applied(worker()))
+    SandboxPageViewModel.refresh_selectors(view_model)
+    items = updates[-1]['model_items']
+    assert items[0].usage_dashboard_url == 'https://chatgpt.com/settings/usage'
+    assert items[1].usage_dashboard_url == ''

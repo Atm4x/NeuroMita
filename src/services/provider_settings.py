@@ -23,7 +23,7 @@ class ProviderDescriptor:
     action_label: tuple[str, str] = ('Проверить', 'Check')
     settings: ProviderSettings = field(default_factory=ProviderSettings)
     account_actions: bool = False
-    cache_notice: tuple[str, str] = ('', '')
+    subscription_notice: tuple[str, str] = ('', '')
     usage_dashboard_url: str = ''
 
 
@@ -42,11 +42,11 @@ _AUTH_DESCRIPTORS = {
         'action_label': ('Войти через ChatGPT', 'Continue with ChatGPT'),
         'settings': ProviderSettings(False, False, False, True),
         'account_actions': True,
-        'cache_notice': (
-            'На 10.10.2026 кеширование при изменении контекста работает ненадёжно из-за ограничений серверной стороны ChatGPT. Явные точки кеширования недоступны; запрос может расходовать полный объём входных токенов.',
-            'As of 10 October 2026, caching after context changes is unreliable due to ChatGPT server-side limitations. Explicit cache breakpoints are unavailable; a request may consume the full input token allowance.',
+        'subscription_notice': (
+            'Экспериментальный режим. Запросы используют вашу квоту ChatGPT/Codex. Доступность моделей и лимиты зависят от аккаунта. Управление использованием — в ChatGPT.',
+            'Experimental mode. Requests use your ChatGPT/Codex allowance. Model availability and limits depend on your account. Manage usage in ChatGPT.',
         ),
-        'usage_dashboard_url': 'https://chatgpt.com/codex/cloud/settings/usage',
+        'usage_dashboard_url': 'https://chatgpt.com/settings/usage',
     },
 }
 
@@ -81,12 +81,28 @@ def run_account_action(protocol_id: str, action: str, account_id: str = '') -> d
         auth.sign_in()
     elif action != 'list_models':
         raise ValueError('Unknown account action')
-    models = auth.list_models()
+    status = auth.status()
+    if not status.get('plan_usage_enabled', True):
+        return {'success': action != 'list_models', 'account': status, 'models': [], 'message': _(
+            'Аккаунт подключён, но использование плана ChatGPT не разрешено. Войдите через ChatGPT повторно, чтобы включить его.',
+                    'Account connected, but ChatGPT plan usage is disabled. Sign in with ChatGPT again to enable it.')}
+    notice = getattr(auth, 'consume_plan_usage_notice', None)
+    show_notice = bool(action != 'list_models' and callable(notice) and notice())
+    try:
+        models = auth.list_models()
+    except Exception:
+        status = auth.status()
+        return {'success': action != 'list_models' and bool(status.get('signed_in')), 'account': status, 'models': [],
+                'show_plan_usage_notice': show_notice,
+                'catalog_error': True, 'message': _(
+                    'Не удалось обновить список моделей. Состояние аккаунта сохранено. Повторите «Получить модели».',
+                    'Could not refresh the model catalog. Account state was retained. Try Load models again.')}
     status = auth.status()
     return {'success': True, 'message': _(
         'Аккаунт: {email}. Найдено моделей: {count}',
         'Account: {email}. Models found: {count}').format(email=status.get('email') or '', count=len(models)),
-        'models': [m['id'] for m in models], 'model_infos': models, 'account': status}
+        'models': [m['id'] for m in models], 'model_infos': models, 'account': status,
+        'show_plan_usage_notice': show_notice}
 
 
 def list_provider_accounts(protocol_id: str) -> list[dict[str, Any]]:

@@ -241,7 +241,8 @@ def test_refresh_uses_latest_rotated_token_from_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(ChatGPTPlanAuth, '_unprotect_json', staticmethod(json.loads))
     path = tmp_path / 'auth.json'
     first = ChatGPTPlanAuth(client=client, path=path)
-    first._data['account'] = {'client_id': 'a', 'refresh_token': 'old', 'expires_at': 0}
+    first._data['account'] = {'client_id': 'a', 'refresh_token': 'old', 'expires_at': 0,
+                              'scopes': ['chatgpt.tokens.use.direct']}
     first._save()
     second = ChatGPTPlanAuth(client=client, path=path)
     first._data['account']['refresh_token'] = 'new'
@@ -263,7 +264,7 @@ def test_unreadable_credentials_are_not_overwritten(tmp_path):
 def test_account_error_state_stays_bound_to_request_account(tmp_path):
     client = httpx.Client()
     auth = ChatGPTPlanAuth(client=client, path=tmp_path / 'auth.json')
-    auth._data['account'] = {'client_id': 'b', 'refresh_token': 'token'}
+    auth._data['account'] = {'client_id': 'b', 'refresh_token': 'token', 'scopes': ['chatgpt.tokens.use.direct']}
     auth.record_inference_error('subscription_sharing_usage_limit_exceeded', account_id='a')
     assert auth.status()['usage_state'] == 'ready'
     assert auth._usage_states['a'] == 'quota_exhausted'

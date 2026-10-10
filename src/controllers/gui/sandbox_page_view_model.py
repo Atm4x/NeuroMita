@@ -10,6 +10,7 @@ from controllers.gui.sandbox_page_controller import SandboxPageController
 from core.events import Events, get_event_bus
 from main_logger import logger
 from services.contracts import SettingsService
+from services.provider_settings import describe_protocol
 from core.services import use
 from ui.pages.sandbox_presentation import (
     SandboxActivated,
@@ -173,7 +174,8 @@ class SandboxPageViewModel(IntentViewModel[SandboxState]):
                     name = str(field("name", "") or "")
                     model = str(field("default_model", "") or "")
                     label = self._model_label(name, model)
-                    model_items.append(SandboxModelItem(int(preset_id), label))
+                    descriptor = describe_protocol(str(field('protocol_id', '') or ''))
+                    model_items.append(SandboxModelItem(int(preset_id), label, descriptor.usage_dashboard_url))
             return {
                 "model_items": tuple(model_items),
                 "current_model_id": (

@@ -29,6 +29,11 @@ RESOURCE = "https://api.openai.com/v1"
 SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 DYNAMIC_CLIENT_ID = "dynamic_agent_client"
 AGENT_NAME = "NeuroMita"
+DIRECT_SCOPE = 'chatgpt.tokens.use.direct'
+TERMINAL_REFRESH_ERRORS = {
+    'invalid_grant', 'invalid_refresh_token', 'token_expired',
+    'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
+}
 
 
 def _b64url(data: bytes) -> str:
@@ -127,13 +132,16 @@ class ChatGPTPlanAuth:
     def status(self) -> dict[str, Any]:
         with self._lock:
             account = self._data.get("account") if isinstance(self._data.get("account"), dict) else {}
+            signed_in = bool(account.get('client_id') and (account.get('refresh_token') or account.get('id_token')))
+            plan_enabled = signed_in and DIRECT_SCOPE in (account.get('scopes') or [])
             return {
-                "signed_in": bool(account.get("client_id") and account.get("refresh_token")),
+                "signed_in": signed_in,
+                'plan_usage_enabled': plan_enabled,
                 "email": str(account.get("email") or ""),
                 "client_id": str(account.get("client_id") or ""),
                 "scopes": list(account.get("scopes") or []),
                 'usage_state': self._usage_states.get(str(account.get('client_id') or ''),
-                    'ready' if account.get('refresh_token') else 'sign_in_required'),
+                    ('ready' if plan_enabled else 'plan_usage_disabled') if signed_in else 'sign_in_required'),
             }
 
     def list_accounts(self) -> list[dict[str, Any]]:
@@ -141,6 +149,14 @@ class ChatGPTPlanAuth:
             active = str((self._data.get('account') or {}).get('client_id') or '')
             return [{'id': key, 'label': f"{record.get('email') or 'ChatGPT'} ({key})",
                      'active': key == active} for key, record in self._data.get('accounts', {}).items()]
+
+    def consume_plan_usage_notice(self) -> bool:
+        with self._session():
+            if not self.status()['plan_usage_enabled'] or self._data.get('plan_usage_notice_shown'):
+                return False
+            self._data['plan_usage_notice_shown'] = True
+            self._save()
+            return True
 
     def select_account(self, account_id: str) -> dict[str, Any]:
         with self._session():
@@ -152,9 +168,12 @@ class ChatGPTPlanAuth:
             previous = self._data.get('account')
             self._data['account'] = dict(record)
             try:
-                self.get_access_token()
+                if DIRECT_SCOPE in (record.get('scopes') or []):
+                    self.get_access_token()
             except Exception:
-                self._data['account'] = previous
+                if str((previous or {}).get('client_id') or '') != account_id:
+                    self._data['account'] = previous
+                    self._save()
                 raise
             self._save()
             return self.status()
@@ -252,6 +271,8 @@ class ChatGPTPlanAuth:
             if not saved_client_id:
                 params["agent_name_hint"] = AGENT_NAME
             else:
+                if DIRECT_SCOPE not in (account.get('scopes') or []):
+                    params['prompt'] = 'consent'
                 id_token_hint = str(account.get("id_token") or "")
                 email = str(account.get("email") or "")
                 if id_token_hint:
@@ -306,13 +327,18 @@ class ChatGPTPlanAuth:
             if previous_subject and str(record.get("subject") or "") != previous_subject:
                 raise ValueError("Sign in with ChatGPT returned a different account identity")
             self._data["account"] = record
-            self._usage_states[issued_client_id] = 'ready'
+            self._usage_states[issued_client_id] = (
+                'ready' if DIRECT_SCOPE in record['scopes'] else 'plan_usage_disabled')
             self._save()
             return self.status()
 
     def get_access_token(self) -> str:
         with self._session():
             account = self._data.get("account") if isinstance(self._data.get("account"), dict) else {}
+            if not account.get('client_id') or not (account.get('access_token') or account.get('refresh_token')):
+                raise RuntimeError("Sign in with ChatGPT is required")
+            if DIRECT_SCOPE not in (account.get('scopes') or []):
+                raise PermissionError('Sign in with ChatGPT again to enable ChatGPT plan usage')
             access_token = str(account.get("access_token") or "")
             expires_at = int(account.get("expires_at") or 0)
             if access_token and expires_at > int(time.time()) + 90:
@@ -320,6 +346,8 @@ class ChatGPTPlanAuth:
             if not account.get("refresh_token") or not account.get("client_id"):
                 raise RuntimeError("Sign in with ChatGPT is required")
             self._refresh(account)
+            if DIRECT_SCOPE not in (self._data['account'].get('scopes') or []):
+                raise PermissionError('Sign in with ChatGPT again to enable ChatGPT plan usage')
             return str(self._data["account"].get("access_token") or "")
 
     def get_credentials(self) -> tuple[str, str]:
@@ -357,17 +385,34 @@ class ChatGPTPlanAuth:
                 "resource": RESOURCE,
             },
         )
+        if response.status_code in {400, 401, 403}:
+            try:
+                error = response.json().get('error')
+                code = str(error.get('code') or error.get('type') or '') if isinstance(error, dict) else str(error or '')
+            except (ValueError, AttributeError):
+                code = ''
+            if code in TERMINAL_REFRESH_ERRORS:
+                for key in ('access_token', 'refresh_token', 'id_token'):
+                    account.pop(key, None)
+                account['expires_at'] = 0
+                self._data['account'] = account
+                self._usage_states[str(account.get('client_id') or '')] = 'sign_in_required'
+                self._save()
+                raise RuntimeError('Sign in with ChatGPT is required; the saved session is no longer valid')
         response.raise_for_status()
         payload = response.json()
+        if not payload.get('access_token'):
+            raise ValueError('OpenAI refresh response did not include an access token')
         account["access_token"] = str(payload.get("access_token") or "")
         if payload.get("refresh_token"):
             account["refresh_token"] = str(payload["refresh_token"])
         if payload.get("id_token"):
             account["id_token"] = str(payload["id_token"])
         account["expires_at"] = int(time.time()) + int(payload.get("expires_in") or 3600)
-        scopes = str(payload.get("scope") or "").split()
-        if scopes:
-            account["scopes"] = scopes
+        if 'scope' in payload:
+            account['scopes'] = str(payload.get('scope') or '').split()
+        self._usage_states[str(account.get('client_id') or '')] = (
+            'ready' if DIRECT_SCOPE in (account.get('scopes') or []) else 'plan_usage_disabled')
         self._data["account"] = account
         self._save()
 
@@ -377,8 +422,6 @@ class ChatGPTPlanAuth:
             raise ValueError("OpenAI token response did not include an ID token")
         claims = self._validate_jwt(id_token, client_id=client_id, nonce=nonce)
         scopes = str(tokens.get("scope") or "").split()
-        if "chatgpt.tokens.use.direct" not in scopes:
-            raise PermissionError("ChatGPT plan usage permission was not granted")
         return {
             "email": str(claims.get("email") or ""),
             "issuer": str(claims.get("iss") or ""),
@@ -455,7 +498,8 @@ class ChatGPTPlanAuth:
     def _save(self) -> None:
         path = Path(self._path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"ext_agent_host_id": self._data.get("ext_agent_host_id", "")}
+        payload = {"ext_agent_host_id": self._data.get("ext_agent_host_id", ""),
+                   'plan_usage_notice_shown': bool(self._data.get('plan_usage_notice_shown'))}
         account = self._data.get("account")
         if isinstance(account, dict) and account:
             records = self._data.setdefault('accounts', {})

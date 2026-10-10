@@ -113,6 +113,10 @@ class TestMixin:
             v.account_button.setText(str(account.get('email') if account.get('signed_in') else _("Аккаунты", "Accounts")))
 
         success = bool(data.get("success"))
+        if success and data.get('show_plan_usage_notice'):
+            QMessageBox.information(v, _("Вы используете план ChatGPT", "You're using your ChatGPT plan"), _(
+                'Запросы этого провайдера расходуют вашу квоту ChatGPT/Codex. Управлять использованием можно в настройках ChatGPT.',
+                'Requests from this provider use your ChatGPT/Codex allowance. Manage usage in ChatGPT settings.'))
         msg = str(data.get("message") or (_("Успешно", "Success") if success else _("Неизвестная ошибка", "Unknown error")))
         models = data.get("models") or []
         model_infos = data.get("model_infos") or []
@@ -131,6 +135,11 @@ class TestMixin:
                 cleaned.append(s)
 
         if success and cleaned:
+            if describe_protocol(self._current_protocol_id_ui()).account_actions:
+                if v.api_model_row.text().strip() not in cleaned:
+                    preferred = next((m for m in cleaned if 'luna' in m.lower()), cleaned[0])
+                    v.api_model_row.set_text(preferred)
+                    self._on_field_changed()
             try:
                 v.api_model_list_model.setStringList(cleaned)
             except Exception:

@@ -371,7 +371,7 @@ API_TEMPLATES_DATA = [
         "pricing": "paid",
         "badge_kind": "subscription",
         "url": "https://api.openai.com/v1/responses",
-        "default_model": "gpt-5.6-luna",
+        "default_model": "",
         "known_models": [],
         "protocol_id": "chatgpt_plan_default",
         "test_url": "https://api.openai.com/v1/models",
