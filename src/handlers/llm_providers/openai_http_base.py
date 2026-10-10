@@ -15,20 +15,18 @@ from handlers.llm_providers.base import (
     LLMRequest,
     LLMResponse,
     StreamCallback,
-    StreamChannel,
     check_request_cancelled,
-    normalize_usage_payload,
 )
 from handlers.llm_providers.errors import build_provider_error, build_stream_error, coerce_provider_error
 from handlers.llm_providers.message_transforms import trailing_system_to_user_prefix
-from schemas.structured_response import StructuredResponse
 from utils.openrouter_routing import (
     annotate_openrouter_prompt_cache,
     normalize_openrouter_routing,
 )
-from handlers.llm_providers.streaming import StreamAccumulator, iter_sse_data, track_response_body
-from services.structured_response_capabilities import provider_schema_options
-from schemas.sparse_structured_response import provider_structured_model
+from handlers.llm_providers.streaming import iter_sse_data, track_response_body
+from handlers.llm_providers.protocols.chat_completions import ChatCompletionsAdapter
+from handlers.llm_providers.protocols.chat_completions.request import apply_response_format
+from handlers.llm_providers.protocols.chat_completions.response import extract_usage
 
 # Уровни reasoning_effort, которые принимает LM Studio / llama.cpp.
 # "none" выставляется отдельно — это выключение, а не уровень.
@@ -273,21 +271,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
             if session_id:
                 payload["session_id"] = session_id
 
-        if self._supports_structured_output(req):
-            rf_mode = (req.capabilities or {}).get("structured_output_mode", "json_schema")
-            if rf_mode == "json_object":
-                payload["response_format"] = {"type": "json_object"}
-            else:
-                model_cls = req.structured_model or StructuredResponse
-                caps = req.capabilities or {}
-                model_cls = provider_structured_model(model_cls, caps)
-                schema_options = provider_schema_options(caps)
-                payload["response_format"] = model_cls.openai_response_format(
-                    exclude_fields=schema_options["exclude_fields"] or None,
-                    exclude_segment_fields=schema_options["exclude_segment_fields"] or None,
-                    require_fields=schema_options["require_fields"] or None,
-                )
-            logger.debug(f"[{self.name}] Structured output enabled: response_format={rf_mode}")
+        apply_response_format(req, payload)
 
         return payload
 
@@ -317,12 +301,9 @@ class OpenAIHTTPProviderBase(BaseProvider):
             logger.error(f"[{self.name}] api_url is empty.")
             raise build_provider_error(self.name, provider_message="api_url is empty.", url=req.api_url)
 
-        model_to_use = req.model
-        msgs = self._preprocess_messages(req)
-        msgs = self._normalize_messages(req, msgs)
         request_url = self._resolve_request_url(req)
-
-        payload = self._build_payload(req, model_to_use, msgs)
+        adapter = self._protocol_adapter()
+        payload = adapter.encode(req, wire_stream=req.stream)
 
         try:
             resp = self._request(request_url, req, payload)
@@ -335,7 +316,11 @@ class OpenAIHTTPProviderBase(BaseProvider):
             )
             raise provider_error from e
 
-        if resp.status_code == 400 and self._supports_structured_output(req):
+        if (
+            resp.status_code == 400
+            and self._supports_structured_output(req)
+            and (req.capabilities or {}).get("structured_output_fallback", True)
+        ):
             if req.stream:
                 resp.read()
             initial_mode = (req.capabilities or {}).get("structured_output_mode", "json_schema")
@@ -432,44 +417,14 @@ class OpenAIHTTPProviderBase(BaseProvider):
             logger.debug(f"[{self.name}] raw error payload: {self._stringify_error(data, limit=800)}")
             raise provider_error
 
-        message = (data.get("choices", [{}])[0].get("message") or {}) if isinstance(data, dict) else {}
-        finish_reason = ((data.get("choices") or [{}])[0].get("finish_reason") if isinstance(data, dict) else None)
+        return adapter.decode(req, data)
 
-        content, reasoning = self._resolve_content_and_reasoning(
-            str(message.get("content") or ""),
-            str(message.get("reasoning_content") or ""),
-        )
-        if not content:
-            response_preview = self._stringify_error(data, limit=600)
-            finish_suffix = f" finish_reason={finish_reason}." if finish_reason else ""
-            error_message = f"Provider returned 200 OK but empty message content.{finish_suffix}"
-            logger.debug(
-                "[%s] Empty response delegated to request runner: %s Raw response: %s",
-                self.name,
-                error_message,
-                response_preview,
-            )
-            return LLMResponse(
-                text=None,
-                usage=self._extract_usage(data, request_url),
-                model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-                provider_name=req.provider_name or self.name,
-                provider_display_name=req.provider_display_name or req.provider_name or self.name,
-                finish_reason=finish_reason,
-                error_message=error_message,
-                raw=data if isinstance(data, dict) else {},
-            )
-
-        return LLMResponse(
-            text=content.strip() if content else None,
-            usage=self._extract_usage(data, request_url),
-            model=(data.get("model") if isinstance(data, dict) else None) or model_to_use,
-            provider_name=req.provider_name or self.name,
-            provider_display_name=req.provider_display_name or req.provider_name or self.name,
-            finish_reason=finish_reason,
-            raw=data if isinstance(data, dict) else {},
-            reasoning=reasoning.strip() or None,
-        )
+    def _protocol_adapter(self) -> ChatCompletionsAdapter:
+        def payload_builder(req):
+            messages = self._normalize_messages(req, self._preprocess_messages(req))
+            return self._build_payload(req, req.model, messages)
+        return ChatCompletionsAdapter(provider_name=self.name, payload_builder=payload_builder,
+                                      supports_stream_usage=self.supports_stream_usage)
 
     def _handle_stream(
         self,
@@ -478,107 +433,28 @@ class OpenAIHTTPProviderBase(BaseProvider):
         req: LLMRequest,
         stream_callback: Optional[StreamCallback] = None,
     ) -> LLMResponse:
-        accumulator = StreamAccumulator(req, provider=self.name, model=req.model)
-        finish_reason = None
-        response_model = None
-        tool_calls: dict[int, dict[str, Any]] = {}
-        try:
+        def chunks():
             for chunk in iter_sse_data(track_response_body(req, resp.iter_lines())):
                 check_request_cancelled(req)
                 if chunk.strip() == "[DONE]":
-                    break
-
+                    return
                 try:
-                    obj = json.loads(chunk)
+                    yield json.loads(chunk)
                 except json.JSONDecodeError as e:
                     raise build_stream_error(
-                        self.name,
-                        payload=chunk[:500],
+                        self.name, payload=chunk[:500],
                         provider_message=f"Invalid JSON in provider stream: {format_exception(e)}",
-                        code="stream.invalid_json",
-                        url=api_url,
+                        code="stream.invalid_json", url=api_url,
                     ) from e
-                if not isinstance(obj, dict):
-                    raise build_stream_error(
-                        self.name,
-                        payload=obj,
-                        provider_message="Provider stream chunk is not a JSON object.",
-                        code="stream.invalid_payload",
-                        url=api_url,
-                    )
-                if obj.get("error"):
-                    raise build_stream_error(self.name, payload=obj, url=api_url)
-                if response_model is None:
-                    response_model = obj.get("model")
-                chunk_usage = self._extract_usage(obj, api_url)
-                if chunk_usage is not None:
-                    accumulator.set_usage(chunk_usage)
-                choices = obj.get("choices") or []
-                if not choices:
-                    continue
-                choice = choices[0] if isinstance(choices[0], dict) else {}
-                delta = choice.get("delta", {}) or {}
-                fr = choice.get("finish_reason")
-                if fr:
-                    finish_reason = fr
-                accumulator.add_text(delta.get("content", ""))
-                accumulator.add_reasoning(delta.get("reasoning_content", ""))
-                for tool_delta in delta.get("tool_calls") or []:
-                    if not isinstance(tool_delta, dict):
-                        continue
-                    index = int(tool_delta.get("index") or 0)
-                    state = tool_calls.setdefault(index, {"id": "", "name": "", "started": False})
-                    state["id"] = str(tool_delta.get("id") or state["id"])
-                    function = tool_delta.get("function") if isinstance(tool_delta.get("function"), dict) else {}
-                    state["name"] = str(function.get("name") or state["name"])
-                    if not state["started"] and (state["id"] or state["name"]):
-                        accumulator.tool_call_started(tool_call_id=state["id"], tool_name=state["name"])
-                        state["started"] = True
-                    arguments = str(function.get("arguments") or "")
-                    if arguments:
-                        accumulator.tool_call_delta(
-                            tool_call_id=state["id"],
-                            tool_name=state["name"],
-                            arguments_delta=arguments,
-                        )
+        try:
+            return self._protocol_adapter().consume_stream(req, chunks())
         except Exception as e:
-            provider_error = coerce_provider_error(self.name, e, url=api_url)
-            logger.debug(
-                "[%s] Stream failure delegated to request runner: %s",
-                self.name,
-                provider_error.to_console_summary(),
-            )
-            raise provider_error from e
+            raise coerce_provider_error(self.name, e, url=api_url) from e
         finally:
             try:
                 resp.close()
             except Exception:
                 logger.debug(f"[{self.name}] Failed to close HTTP stream", exc_info=True)
 
-        for state in tool_calls.values():
-            if state["started"]:
-                accumulator.tool_call_completed(tool_call_id=state["id"], tool_name=state["name"])
-        response = accumulator.complete(finish_reason=finish_reason, model=response_model)
-        if not response.text:
-            if finish_reason and finish_reason != "stop":
-                response.error_message = f"Provider stream ended without content (finish_reason={finish_reason})."
-        return response
-
     def _extract_usage(self, data: Any, api_url: str):
-        if not isinstance(data, dict):
-            return None
-
-        is_openrouter = "openrouter.ai" in str(api_url or "").lower()
-        usage = normalize_usage_payload(
-            data.get("usage"),
-            cost_currency="credits" if is_openrouter else None,
-            cost_source="provider_usage" if isinstance(data.get("usage"), dict) and data.get("usage", {}).get("cost") is not None else None,
-        )
-        if usage is not None:
-            return usage
-
-        if "usage" not in data:
-            return None
-
-        # Some providers expose usage but without cost; keep token stats if present.
-        return normalize_usage_payload(data.get("usage"))
+        return extract_usage(LLMRequest(model="", messages=[], api_url=api_url), data) if isinstance(data, dict) else None
