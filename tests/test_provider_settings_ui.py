@@ -133,7 +133,7 @@ def test_subscription_model_comes_from_account_catalog_even_if_dialog_cancelled(
     assert editor.view.api_model_row.text() == expected
 
 
-def test_sandbox_selector_marks_only_subscription_presets():
+def test_sandbox_selector_preserves_provider_labels():
     from controllers.gui.sandbox_page_view_model import SandboxPageViewModel
     updates = []
     controller = SimpleNamespace(
@@ -149,23 +149,17 @@ def test_sandbox_selector_marks_only_subscription_presets():
                                  run_coalesced=lambda name, worker, applied, failed: applied(worker()))
     SandboxPageViewModel.refresh_selectors(view_model)
     items = updates[-1]['model_items']
-    assert items[0].usage_dashboard_url == 'https://chatgpt.com/settings/usage'
-    assert items[1].usage_dashboard_url == ''
+    assert items[0].label == 'ChatGPT'
+    assert items[1].label == 'Other'
 
 
-def test_sandbox_label_does_not_claim_authorized_plan_usage(editor):
-    from PyQt6.QtWidgets import QLabel
+def test_sandbox_model_selector_only_updates_model_value(editor):
     from ui.pages.sandbox_page import SandboxPage
     from ui.pages.sandbox_presentation import SandboxModelItem, SandboxState
-    label = QLabel(editor.view)
-    receiver = SimpleNamespace(_chat_model_combobox=SimpleNamespace(set_value=lambda text: None),
-                               _chat_plan_usage_label=label)
-    items = (SandboxModelItem(1, 'ChatGPT', 'https://chatgpt.com/settings/usage'),
+    values = []
+    receiver = SimpleNamespace(_chat_model_combobox=SimpleNamespace(set_value=values.append))
+    items = (SandboxModelItem(1, 'ChatGPT'),
              SandboxModelItem(2, 'Other'))
     SandboxPage._render_model_selector(receiver, SandboxState(model_items=items, current_model_id=1))
-    assert not label.isHidden()
-    assert 'Провайдер ChatGPT Plan' in label.text()
-    assert 'Используется план' not in label.text()
-    assert 'https://chatgpt.com/settings/usage' in label.text()
     SandboxPage._render_model_selector(receiver, SandboxState(model_items=items, current_model_id=2))
-    assert label.isHidden()
+    assert values == ['ChatGPT', 'Other']

@@ -755,14 +755,6 @@ class SandboxPage(QWidget):
         value = self._chat_model_combobox
         if value is None:
             return
-        usage = getattr(self, '_chat_plan_usage_label', None)
-        if usage is not None:
-            selected = next((item for item in state.model_items if item.preset_id == state.current_model_id), None)
-            url = selected.usage_dashboard_url if selected else ''
-            usage.setVisible(bool(url))
-            usage.setText(str(_("Провайдер ChatGPT Plan", "ChatGPT Plan provider"))
-                          + f' · <a href="{url}" style="color: #7bc6ff;">'
-                          + str(_("Управление использованием", "Manage usage")) + '</a>')
         if state.selectors_loading and not state.model_items:
             value.set_value(_("Загрузка моделей...", "Loading models..."))
             return
@@ -1899,11 +1891,6 @@ class SandboxPage(QWidget):
             ),
         )
         _combo_row(active_layout, _("Модель", "Model"), model_combo)
-        self._chat_plan_usage_label = QLabel()
-        self._chat_plan_usage_label.setWordWrap(True)
-        self._chat_plan_usage_label.setOpenExternalLinks(True)
-        self._chat_plan_usage_label.hide()
-        active_layout.addWidget(self._chat_plan_usage_label)
         layout.addWidget(active_strip)
         self._panels["active"] = active_strip
 

@@ -10,7 +10,6 @@ from ui.mvvm import UiEffect, UiIntent
 class SandboxModelItem:
     preset_id: int
     label: str
-    usage_dashboard_url: str = ''
 
 
 @dataclass(frozen=True, slots=True)
