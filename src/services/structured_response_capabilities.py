@@ -25,6 +25,7 @@ class StructuredResponseCapabilities:
     tool_depth: int
     tool_max_depth: int
     prompt_intents: bool | None = None
+    sparse_enabled: bool = False
 
     def with_context_images(self, messages: Iterable[Mapping[str, Any]]) -> "StructuredResponseCapabilities":
         has_images = self.images_available or context_has_images(messages)
@@ -116,6 +117,7 @@ class StructuredResponseCapabilities:
             "tool_depth": self.tool_depth,
             "tool_max_depth": self.tool_max_depth,
             "prompt_intents": self.prompt_intents,
+            "sparse_enabled": self.sparse_enabled,
         }
 
     def sanitize_response(self, response: Any) -> None:
@@ -180,6 +182,7 @@ def resolve_structured_response_capabilities(
     images_available: bool,
     has_custom_params: bool,
     schema_reasoning: bool,
+    sparse_enabled: bool = False,
 ) -> StructuredResponseCapabilities:
     excluded = set()
     segment_excluded = set(runtime.structured_segment_exclude_fields)
@@ -246,6 +249,7 @@ def resolve_structured_response_capabilities(
         enabled_tools=active_tools,
         tool_depth=max(0, int(tool_depth)),
         tool_max_depth=max(0, int(tool_max_depth)),
+        sparse_enabled=bool(sparse_enabled),
     )
 
 

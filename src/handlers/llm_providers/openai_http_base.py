@@ -28,6 +28,7 @@ from utils.openrouter_routing import (
 )
 from handlers.llm_providers.streaming import StreamAccumulator, iter_sse_data, track_response_body
 from services.structured_response_capabilities import provider_schema_options
+from schemas.sparse_structured_response import provider_structured_model
 
 # Уровни reasoning_effort, которые принимает LM Studio / llama.cpp.
 # "none" выставляется отдельно — это выключение, а не уровень.
@@ -279,6 +280,7 @@ class OpenAIHTTPProviderBase(BaseProvider):
             else:
                 model_cls = req.structured_model or StructuredResponse
                 caps = req.capabilities or {}
+                model_cls = provider_structured_model(model_cls, caps)
                 schema_options = provider_schema_options(caps)
                 payload["response_format"] = model_cls.openai_response_format(
                     exclude_fields=schema_options["exclude_fields"] or None,

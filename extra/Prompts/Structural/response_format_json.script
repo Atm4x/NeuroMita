@@ -11,6 +11,10 @@
 // and then append character-specific emotions, animations, commands etc.
 // You may override or extend any section, but keep in sync with updates to this file.
 
+IF response_sparse_format == True THEN
+    RETURN ""
+ENDIF
+
 SET LOCAL p_header = """Response Format (Structured JSON):
 
 You MUST respond with a single JSON object. No extra text before or after the JSON.

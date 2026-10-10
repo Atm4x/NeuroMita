@@ -272,7 +272,10 @@ class PresetsMixin:
             v.reserve_keys_row.set_distribute(reserve_keys_distribute)
 
             dialect = str((self._protocols.get(eff_pid) or {}).get("dialect") or "openai_chat_completions")
-            self.model_settings_controller.load(preset, dialect, v.settings)
+            self.model_settings_controller.load(
+                preset, dialect, v.settings,
+                provider=str((self._protocols.get(eff_pid) or {}).get("provider") or ""),
+            )
 
             openrouter_routing = preset.get("openrouter_routing") or {}
             if isinstance(openrouter_routing, dict):

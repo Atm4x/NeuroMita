@@ -466,6 +466,10 @@ class PromptController(PromptBuilderService):
 
         try:
             feature_overrides = dict(caps.get("structured_prompt_features") or {})
+            profile = caps.get("structured_response_profile") if caps.get("structured_output") else None
+            if isinstance(profile, StructuredResponseCapabilities) and not profile.sparse_enabled:
+                profile = None
+            feature_overrides["response_sparse_format"] = isinstance(profile, StructuredResponseCapabilities)
             if getattr(policy, "react_level", None) == 1:
                 feature_overrides["support_intents"] = False
             blocks, dsl_system_infos = character.dsl_interpreter.process_main_template(
@@ -496,6 +500,16 @@ class PromptController(PromptBuilderService):
         # только от настроек (не от хода), поэтому живёт в кэшируемой зоне.
         if tools_prompt.strip():
             stable_blocks.append("[Available Tools]\n" + tools_prompt.strip())
+
+        if isinstance(profile, StructuredResponseCapabilities):
+            from schemas.structured_response import build_structured_response_model
+            from services.sparse_response_prompt import render_sparse_response_contract
+            profile = profile.with_prompt_intents(bool(character.dsl_interpreter.get_prompt_feature("support_intents", True)))
+            caps["structured_response_profile"] = profile
+            internal_model = build_structured_response_model(getattr(character, "custom_params", []) or [])
+            get_variable = getattr(character, "get_variable", lambda key, default: default)
+            reply_limits = {key: get_variable(key, default) for key, default in self._REPLY_DEFAULTS.items()}
+            stable_blocks.append(render_sparse_response_contract(profile, internal_model, reply_limits=reply_limits))
 
         stable_system_messages.extend(build_system_prompts(stable_blocks, separate=separate_prompts))
         volatile_system_messages.extend(build_system_prompts(volatile_blocks, separate=separate_prompts))
