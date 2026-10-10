@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "id": "chatgpt-plan",
-  "revision": 2,
+  "revision": 3,
   "title": {"ru": "ChatGPT Plan", "en": "ChatGPT Plan"},
   "description": {
     "ru": "Доступность параметров зависит от выбранной модели. Выключенные параметры не отправляются. Подписка не поддерживает temperature, top_p и ограничение числа токенов ответа.",
     "en": "Parameter availability depends on the selected model. Unchecked parameters are omitted. Plan usage does not support temperature, top_p or an output token limit."
   },
-  "dialect": "openai_chat_completions",
+  "dialect": "openai_responses",
   "supports": {"structured_output": true, "tools_native": true, "streaming": true},
   "documentation_url": "https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations",
   "fields": [

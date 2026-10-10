@@ -288,16 +288,42 @@ def test_subscription_settings_expose_only_supported_wire_parameters(tmp_path):
     document = service.create('chatgpt-plan')
     document['enabled'] = ['reasoning_effort', 'verbosity']
     document['values'].update(reasoning_effort='low', verbosity='low')
-    compiled = service.compile(document, 'openai_chat_completions')
+    compiled = service.compile(document, 'openai_responses')
     assert compiled == {'reasoning': {'effort': 'low'}, 'text': {'verbosity': 'low'}}
     payload = build_responses_payload('model', [], parameters=compiled)
     assert payload['reasoning'] == {'effort': 'low'}
     assert payload['text'] == {'verbosity': 'low'}
     old = service.create('openai-compatible')
-    migrated = service.for_preset({'protocol_id': 'chatgpt_plan_default', 'model_settings': old}, 'openai_chat_completions')
+    migrated = service.for_preset({'protocol_id': 'chatgpt_plan_default', 'model_settings': old}, 'openai_responses')
     assert migrated['schema_id'] == 'chatgpt-plan'
     assert not migrated['enabled']
     assert old['schema_id'] == 'openai-compatible'
+
+
+@pytest.mark.parametrize('location', ['catalog', 'preset'])
+def test_legacy_responses_definition_preserves_custom_parameters(tmp_path, location):
+    from copy import deepcopy
+    from model_settings.repository import SchemaRepository
+    from model_settings.service import ModelSettingsService
+    service = ModelSettingsService(SchemaRepository(tmp_path / 'schemas'))
+    document = service.create('chatgpt-plan')
+    legacy = deepcopy(service.repository.get('chatgpt-plan').data)
+    legacy['dialect'] = 'openai_chat_completions'
+    legacy['revision'] = 10
+    legacy['fields'].append({'id': 'seed', 'path': ['seed'], 'type': 'integer', 'default': 7})
+    document['values']['seed'] = 42
+    document['enabled'] = ['seed']
+    document['support_overrides'] = {'structured_output': False}
+    if location == 'catalog':
+        (tmp_path / 'schemas' / 'chatgpt-plan.json').write_text(json.dumps(legacy), encoding='utf-8')
+    else:
+        document['schema_override'] = legacy
+    original = deepcopy(document)
+    migrated = service.for_preset({'protocol_id': 'chatgpt_plan_default', 'model_settings': document}, 'openai_responses')
+    assert service.compile(migrated, 'openai_responses') == {'seed': 42}
+    assert migrated['support_overrides'] == {'structured_output': False}
+    assert document == original
+    assert service.resolve(migrated, 'openai_responses')[0].data['dialect'] == 'openai_responses'
 
 
 def test_quota_failure_after_delta_marks_progress_and_never_returns_partial_text(monkeypatch):

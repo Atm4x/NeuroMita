@@ -48,6 +48,20 @@ def test_subscription_action_stays_visible_without_test_url(editor):
     assert editor.view.models_button.isHidden()
 
 
+def test_responses_generation_form_loads_and_preserves_settings(editor, tmp_path):
+    from model_settings.repository import SchemaRepository
+    from model_settings.service import ModelSettingsService
+    from ui.settings.api_settings.model_settings_form import ModelSettingsForm
+    service = ModelSettingsService(SchemaRepository(tmp_path / 'schemas'))
+    document = service.create('chatgpt-plan')
+    document['enabled'] = ['reasoning_effort']
+    document['values']['reasoning_effort'] = 'low'
+    form = ModelSettingsForm(editor.view)
+    form.load(service.repository.get('chatgpt-plan'), document)
+    assert 'OpenAI Responses' in form.format_label.text()
+    assert service.compile(form.document(), 'openai_responses') == {'reasoning': {'effort': 'low'}}
+
+
 def test_account_action_emits_application_command_without_url_validation(editor):
     emitted = []
     editor.event_bus = SimpleNamespace(emit=lambda name, data: emitted.append(data))

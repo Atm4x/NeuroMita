@@ -14,7 +14,8 @@ class ModelSettingsService:
         self.repository = repository if repository is not None else SchemaRepository()
 
     def default_id(self, dialect: str, suggested: str = "") -> str:
-        identifier = suggested or {"gemini_generate_content": "google-level", "g4f": "g4f"}.get(dialect, "openai-compatible")
+        identifier = suggested or {"gemini_generate_content": "google-level", "g4f": "g4f",
+                                   "openai_responses": "chatgpt-plan"}.get(dialect, "openai-compatible")
         schema = self.repository.get(identifier)
         self.check_dialect(schema, dialect)
         return identifier
@@ -87,6 +88,12 @@ class ModelSettingsService:
     def for_preset(self, preset: Mapping[str, Any], dialect: str, settings: Any = None) -> dict[str, Any]:
         document = preset.get("model_settings")
         if document is not None:
+            override = document.get('schema_override') if isinstance(document, dict) else None
+            if (dialect == 'openai_responses' and isinstance(override, dict)
+                    and document.get('schema_id') == 'chatgpt-plan'
+                    and override.get('dialect') == 'openai_chat_completions'):
+                document = deepcopy(document)
+                document['schema_override']['dialect'] = dialect
             from presets.api_protocols import API_PROTOCOLS_DATA
             protocol = next((item for item in API_PROTOCOLS_DATA if item['id'] == preset.get('protocol_id')), {})
             migrations = protocol.get('settings_schema_migrations') or {}
