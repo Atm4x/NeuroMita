@@ -123,7 +123,10 @@ def build_sparse_response_model(
         if name in segment_excluded:
             continue
         annotation = list[SparseIntent] if name == "intents" else _strict_annotation(field.annotation)
-        segment_fields[name] = (annotation, copy.deepcopy(field))
+        info = copy.deepcopy(field)
+        info.default = PydanticUndefined
+        info.default_factory = None
+        segment_fields[name] = (annotation, info)
     segment_models = []
     seen_fields = set()
     for label, names in (
@@ -152,7 +155,7 @@ def build_sparse_response_model(
         if name == "custom_fields" and get_origin(_non_null(annotation)) is dict:
             annotation = str | None
             info.description = "JSON-encoded custom parameter object"
-        info.default = PydanticUndefined if profile else None
+        info.default = PydanticUndefined
         info.default_factory = None
         fields[name] = (_strict_annotation(annotation), info)
     if "reasoning" in fields:

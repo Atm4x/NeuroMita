@@ -33,6 +33,57 @@ def segment_variants(schema):
     return items.get("anyOf", [items])
 
 
+def complete_segment(text, *, variant="full", **values):
+    from schemas.structured_response import ResponseSegment
+    defaults = ResponseSegment(text=text).model_dump()
+    defaults.update(values)
+    names = {"text", "emotions", "animations", "idle_animations", "face_params"}
+    if variant == "action":
+        names |= {"commands", "intents", "target"}
+    elif variant == "full":
+        names = set(defaults) - set(profile().excluded_segment_fields)
+    return {name: value for name, value in defaults.items() if name in names}
+
+
+def test_all_wire_model_fields_are_required_even_without_a_profile():
+    from typing import get_args
+    from pydantic import BaseModel
+
+    def check(annotation):
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            for field in annotation.model_fields.values():
+                assert field.is_required(), annotation.__name__
+                check(field.annotation)
+        else:
+            for arg in get_args(annotation):
+                check(arg)
+
+    check(build_sparse_response_model(StructuredResponse, profile()))
+    check(build_sparse_response_model(StructuredResponse))
+
+
+@pytest.mark.parametrize("segment", [
+    {"text": "Hi", "emotions": ["happy"]},
+    {"text": "Hi", "commands": ["camera_snapshot"]},
+    {"text": "Hi", "clothes": ["outfit"]},
+])
+def test_incomplete_segment_variants_are_rejected(segment):
+    with pytest.raises(StructuredResponseParseError) as exc:
+        parse_structured_response_with_meta(json.dumps({"segments": [segment], "changes": []}), profile=profile())
+    assert exc.value.code == "structured_sparse_invalid"
+
+
+def test_missing_variant_fields_get_defaults_only_in_internal_response():
+    normalized = normalize_sparse_response({"segments": [{"text": "Hi"}], "changes": []}, profile=profile())
+    assert normalized["segments"] == [{"text": "Hi"}]
+    assert "attitude_change" not in normalized
+    response = StructuredResponse.model_validate(normalized)
+    assert response.segments[0].emotions == []
+    assert response.segments[0].commands == []
+    assert response.segments[0].target is None
+    assert response.attitude_change == 0
+
+
 def test_segment_schema_has_four_nested_variants_for_common_combinations():
     from schemas.structured_response import ResponseSegment
     caps = profile()
@@ -66,7 +117,7 @@ def test_mixed_segment_variants_keep_actions_and_full_fallback():
          "idle_animations": [], "face_params": ["smile"]},
         {"text": "Action", "emotions": [], "animations": [], "idle_animations": [], "face_params": [],
          "commands": ["camera_snapshot"], "intents": [{"type": "inventory.collect", "payload": '{"object":"Cat"}'}], "target": "Kind"},
-        {"text": "Rare", "clothes": ["outfit"], "music": ["Calm"], "allow_sleep": False},
+        complete_segment("Rare", clothes=["outfit"], music=["Calm"], allow_sleep=False),
     ], "changes": []}
     outcome = parse_structured_response_with_meta(json.dumps(data), profile=profile())
     assert outcome.control_plane_trusted
@@ -113,9 +164,9 @@ def test_neutral_reply_has_only_two_root_fields_and_normalizes_defaults():
 
 def test_changes_preserve_segment_positions_lists_and_memory_semantics():
     data = {"segments": [
-        {"text": "First", "music": ["Calm"]},
-        {"text": "Second", "commands": ["camera_snapshot"], "target": "Kind",
-         "intents": [{"type": "inventory.collect", "payload": '{"object":"Cat"}'}]},
+        complete_segment("First", music=["Calm"]),
+        complete_segment("Second", variant="action", commands=["camera_snapshot"], target="Kind",
+            intents=[{"type": "inventory.collect", "payload": '{"object":"Cat"}'}]),
     ], "changes": [
         {"type": "memory_add", "value": "island:language|Русский"},
         {"type": "memory_add", "value": "normal|Tea"},
@@ -132,7 +183,7 @@ def test_changes_preserve_segment_positions_lists_and_memory_semantics():
 
 @pytest.mark.parametrize("payload", ["broken", "[]", "{\"x\":NaN}"])
 def test_invalid_segment_intent_payload_is_rejected_before_execution(payload):
-    data = {"segments": [{"text": "Hi", "intents": [{"type": "inventory.collect", "payload": payload}]}], "changes": []}
+    data = {"segments": [complete_segment("Hi", variant="action", intents=[{"type": "inventory.collect", "payload": payload}])], "changes": []}
     with pytest.raises(StructuredResponseParseError):
         parse_structured_response_with_meta(json.dumps(data), profile=profile())
 
