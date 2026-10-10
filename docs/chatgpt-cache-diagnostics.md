@@ -62,3 +62,51 @@ Server diagnostics can remain unavailable even when usage reports a cache hit.
 The control differs from the earlier dialogue probes in timing, input and output
 format, so it does not isolate which of these explains the earlier misses.
 No additional live calls were made in this control.
+
+## Strict-schema and changing-state controls on 2026-10-10
+
+The user authorized further investigation. First performed four calls in two
+delayed pairs, with the same account/model and the application's strict
+`StructuredResponse` schema. Then announced and performed two single-call
+controls on the warmed dialogue context. No more calls were made in this stage.
+All six responses completed and parsed successfully. Image placeholders remained
+replaced with fixed text; generated actions were not executed.
+
+| Request | Input tokens | Cached tokens | Delay after baseline completion |
+| --- | ---: | ---: | ---: |
+| Synthetic reference + strict schema, first | 4,978 | 0 | — |
+| Same synthetic request, repeat | 4,978 | 0 | 99.661 s |
+| Saved dialogue + strict schema, first | 12,289 | 0 | — |
+| Same dialogue request, repeat | 12,289 | 12,032 | 101.983 s |
+| Change only final user message; retain first 36 items | 12,290 | 12,032 | 207.680 s |
+| Change only state block at zero-based item 28; retain first 28 items | 12,299 | 0 | 310.917 s |
+
+Baseline request hashes, account and model were verified identical within each
+pair. The last two controls retained the baseline's output schema and all other
+settings; only the stated input item changed. All compared responses returned
+server diagnostics `{"type":"unavailable"}`.
+
+These measurements show that strict output schemas do not categorically disable
+subscription caching. A roughly 100-second delay did not guarantee a hit on the
+shorter schema-bearing request, so a publication delay alone is not a sufficient
+explanation. The shorter miss does not establish a model-specific token threshold.
+
+Changing a state block before the end of the previously cached context reproduced
+a complete miss, whereas changing only the final prompt preserved 12,032 cached
+tokens. This is evidence that the current implicit cache path did not reuse the
+long common prefix in the state-change control; it is not proof that every such
+change always causes a miss or that server routing/eviction played no role.
+
+Actual saved application requests at 10:36:26.939 and 10:37:55.152 UTC contain 34
+and 36 messages. Their first 26 messages match; afterward history grows and
+system-state, memory and environment content changes. The matching first 26
+messages contain an estimated 7,693 text tokens, including 7,389 in the initial
+13 developer messages (estimates exclude original screenshot payloads). This
+matches the failure pattern tested above: volatile state arrives before the
+final user prompt, so the preceding full request is not an unchanged prefix.
+
+The next discriminating experiment is an explicit cache breakpoint at the end of
+the stable initial developer block, followed by a state-changing request with
+that breakpoint retained. Public subscription-route acceptance and cache reuse
+with that control have not yet been tested. No artificial pause or automatic
+breakpoint was added to application behavior.
