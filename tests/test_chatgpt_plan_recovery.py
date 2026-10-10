@@ -1,5 +1,7 @@
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import httpx
@@ -7,6 +9,73 @@ import pytest
 
 from handlers.llm_providers.chatgpt_plan_auth import ChatGPTPlanAuth
 from services.provider_settings import run_account_action
+
+
+@pytest.mark.parametrize('entry_point', ['sign_in', 'select_account'])
+@pytest.mark.parametrize('concurrent_action', ['credentials', 'status', 'sign_out', 'select_account'])
+def test_pending_oauth_does_not_hold_storage_lock_and_rechecks_publication(auth_factory, monkeypatch, concurrent_action, entry_point):
+    from urllib.parse import parse_qs, urlencode, urlparse
+    def handle(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'revocation_endpoint': 'https://auth.openai.com/revoke'})
+        if request.url.path == '/revoke':
+            return httpx.Response(200)
+        return httpx.Response(200, json={
+            'access_token': 'fresh', 'refresh_token': 'rotated', 'id_token': 'identity',
+            'scope': 'chatgpt.tokens.use.direct', 'expires_in': 3600,
+        })
+    auth = auth_factory(handle)
+    auth._data['accounts']['other'] = {
+        'client_id': 'other', 'subject': 'other-user', 'refresh_token': 'other-refresh',
+        'access_token': 'other-access', 'expires_at': int(time.time()) + 3600,
+        'scopes': ['chatgpt.tokens.use.direct'],
+    }
+    auth._save()
+    if entry_point == 'select_account':
+        auth._data['accounts']['registered'].pop('refresh_token')
+        auth._data['account'] = dict(auth._data['accounts']['other'])
+        auth._save()
+    other = auth_factory(handle)
+    ready, release = threading.Event(), threading.Event()
+    def browser(url, **kwargs):
+        query = parse_qs(urlparse(url).query)
+        ready.set()
+        assert release.wait(5)
+        callback = query['redirect_uri'][0] + '?' + urlencode({
+            'state': query['state'][0], 'code': 'code', 'client_id': 'registered',
+        })
+        with httpx.Client(trust_env=False) as client:
+            client.get(callback).raise_for_status()
+        return True
+    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_auth.webbrowser.open', browser)
+    monkeypatch.setattr(auth, '_validate_jwt', lambda *args, **kwargs: {
+        'sub': 'user', 'iss': 'https://auth.openai.com', 'email': 'user@example.org',
+    })
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pending = (executor.submit(auth.sign_in, 5) if entry_point == 'sign_in'
+                   else executor.submit(auth.select_account, 'registered'))
+        try:
+            assert ready.wait(3)
+            operation = {'credentials': other.get_credentials, 'status': auth.status, 'sign_out': other.sign_out,
+                         'select_account': lambda: other.select_account('other')}[concurrent_action]
+            executor.submit(operation).result(timeout=2)
+        finally:
+            release.set()
+        if concurrent_action in {'credentials', 'status'}:
+            assert pending.result(timeout=3)['plan_usage_enabled']
+        else:
+            with pytest.raises(RuntimeError, match='changed'):
+                pending.result(timeout=3)
+            reloaded = auth_factory(handle)
+            if concurrent_action == 'sign_out':
+                assert not reloaded.status()['signed_in']
+            else:
+                assert reloaded.status()['client_id'] == 'other'
+
+
+def test_oauth_callback_default_allows_time_to_fix_connectivity():
+    import inspect
+    assert inspect.signature(ChatGPTPlanAuth.sign_in).parameters['timeout'].default >= 1800
 
 
 @pytest.mark.parametrize('failure', [

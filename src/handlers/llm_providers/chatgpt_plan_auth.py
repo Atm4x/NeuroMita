@@ -163,20 +163,22 @@ class ChatGPTPlanAuth:
             record = self._data.get('accounts', {}).get(account_id)
             if not record:
                 raise ValueError('Unknown account registration')
-            if not record.get('refresh_token'):
-                return self.sign_in(account_id=account_id)
-            previous = self._data.get('account')
-            self._data['account'] = dict(record)
-            try:
-                if DIRECT_SCOPE in (record.get('scopes') or []):
-                    self.get_access_token()
-            except Exception:
-                if str((previous or {}).get('client_id') or '') != account_id:
-                    self._data['account'] = previous
-                    self._save()
-                raise
-            self._save()
-            return self.status()
+            if record.get('refresh_token'):
+                previous = self._data.get('account')
+                self._data['account'] = dict(record)
+                try:
+                    if DIRECT_SCOPE in (record.get('scopes') or []):
+                        self.get_access_token()
+                except Exception:
+                    if str((previous or {}).get('client_id') or '') != account_id:
+                        self._data['account'] = previous
+                        self._save()
+                    raise
+                self._data['auth_revision'] = int(self._data.get('auth_revision') or 0) + 1
+                self._save()
+                return self.status()
+
+        return self.sign_in(account_id=account_id)
 
     def sign_out(self) -> dict[str, Any]:
         with self._session():
@@ -211,122 +213,135 @@ class ChatGPTPlanAuth:
             account['expires_at'] = 0
             self._data['account'] = account
             self._usage_states[str(account.get('client_id') or '')] = 'sign_in_required'
+            self._data['auth_revision'] = int(self._data.get('auth_revision') or 0) + 1
             self._save()
             return {'revoked': revoked, **self.status()}
 
-    def sign_in(self, timeout: float = 240.0, *, new_account: bool = False, account_id: str = '') -> dict[str, Any]:
+    def sign_in(self, timeout: float = 1800.0, *, new_account: bool = False, account_id: str = '') -> dict[str, Any]:
         with self._session():
             account = {} if new_account else dict(
                 self._data.get('accounts', {}).get(account_id, {}) if account_id else self._data.get('account') or {})
             if account_id and not account:
                 raise ValueError('Unknown account registration')
-            saved_client_id = str(account.get("client_id") or "")
-            client_id = saved_client_id or DYNAMIC_CLIENT_ID
-            verifier, challenge = make_pkce_pair()
-            state = secrets.token_urlsafe(32)
-            nonce = secrets.token_urlsafe(32)
-            callback: dict[str, str] = {}
-            event = threading.Event()
+            expected_revision = int(self._data.get('auth_revision') or 0)
+            host_id = self.host_id
+        saved_client_id = str(account.get("client_id") or "")
+        client_id = saved_client_id or DYNAMIC_CLIENT_ID
+        verifier, challenge = make_pkce_pair()
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        callback: dict[str, str] = {}
+        event = threading.Event()
 
-            class Handler(BaseHTTPRequestHandler):
-                def do_GET(self):
-                    parsed = urlparse(self.path)
-                    if parsed.path != "/auth/callback":
-                        self.send_response(404)
-                        self.end_headers()
-                        return
-                    values = parse_qs(parsed.query)
-                    for key in ("code", "state", "client_id", "scope", "error", "error_description"):
-                        if values.get(key):
-                            callback[key] = str(values[key][0])
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                if parsed.path != "/auth/callback":
+                    self.send_response(404)
                     self.end_headers()
-                    self.wfile.write(
-                        "<html><body><h2>NeuroMita</h2><p>Authorization received. You can close this tab.</p></body></html>".encode("utf-8")
-                    )
-                    event.set()
-
-                def log_message(self, *_args):
                     return
+                values = parse_qs(parsed.query)
+                for key in ("code", "state", "client_id", "scope", "error", "error_description"):
+                    if values.get(key):
+                        callback[key] = str(values[key][0])
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    "<html><body><h2>NeuroMita</h2><p>Authorization received. You can close this tab.</p></body></html>".encode("utf-8")
+                )
+                event.set()
 
-            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            port = int(server.server_address[1])
-            redirect_uri = f"http://127.0.0.1:{port}/auth/callback"
-            thread = threading.Thread(target=server.serve_forever, name="chatgpt-plan-oauth", daemon=True)
-            thread.start()
+            def log_message(self, *_args):
+                return
 
-            params = {
-                "client_id": client_id,
-                "ext_agent_host_id": self.host_id,
-                "response_type": "code",
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        port = int(server.server_address[1])
+        redirect_uri = f"http://127.0.0.1:{port}/auth/callback"
+        thread = threading.Thread(target=server.serve_forever, name="chatgpt-plan-oauth", daemon=True)
+        thread.start()
+
+        params = {
+            "client_id": client_id,
+            "ext_agent_host_id": host_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": SCOPES,
+            "resource": RESOURCE,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge_method": "S256",
+            "code_challenge": challenge,
+        }
+        if not saved_client_id:
+            params["agent_name_hint"] = AGENT_NAME
+        else:
+            if DIRECT_SCOPE not in (account.get('scopes') or []):
+                params['prompt'] = 'consent'
+            id_token_hint = str(account.get("id_token") or "")
+            email = str(account.get("email") or "")
+            if id_token_hint:
+                params["id_token_hint"] = id_token_hint
+            if email:
+                params["login_hint"] = email
+
+        auth_url = AUTHORIZE_URL + "?" + urlencode(params)
+        try:
+            if not webbrowser.open(auth_url, new=1, autoraise=True):
+                logger.warning("Could not open the system browser for Sign in with ChatGPT")
+            if not event.wait(max(1.0, float(timeout))):
+                raise TimeoutError("Sign in with ChatGPT timed out")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        if callback.get("state") != state:
+            raise ValueError("Sign in with ChatGPT returned an invalid state")
+        if callback.get("error"):
+            raise RuntimeError(callback.get("error_description") or callback["error"])
+        code = str(callback.get("code") or "")
+        if not code:
+            raise RuntimeError("Sign in with ChatGPT did not return an authorization code")
+
+        returned_client_id = str(callback.get("client_id") or "")
+        if saved_client_id:
+            if returned_client_id and returned_client_id != saved_client_id:
+                raise ValueError("Sign in with ChatGPT returned a different client registration")
+            issued_client_id = saved_client_id
+        else:
+            issued_client_id = returned_client_id
+            if not issued_client_id or issued_client_id == DYNAMIC_CLIENT_ID:
+                raise RuntimeError("ChatGPT client registration was not completed")
+
+        token_response = self._client.post(
+            TOKEN_URL,
+            follow_redirects=False,
+            data={
+                "grant_type": "authorization_code",
+                "client_id": issued_client_id,
+                "code": code,
+                "code_verifier": verifier,
                 "redirect_uri": redirect_uri,
-                "scope": SCOPES,
                 "resource": RESOURCE,
-                "state": state,
-                "nonce": nonce,
-                "code_challenge_method": "S256",
-                "code_challenge": challenge,
-            }
-            if not saved_client_id:
-                params["agent_name_hint"] = AGENT_NAME
-            else:
-                if DIRECT_SCOPE not in (account.get('scopes') or []):
-                    params['prompt'] = 'consent'
-                id_token_hint = str(account.get("id_token") or "")
-                email = str(account.get("email") or "")
-                if id_token_hint:
-                    params["id_token_hint"] = id_token_hint
-                if email:
-                    params["login_hint"] = email
-
-            auth_url = AUTHORIZE_URL + "?" + urlencode(params)
-            try:
-                if not webbrowser.open(auth_url, new=1, autoraise=True):
-                    logger.warning("Could not open the system browser for Sign in with ChatGPT")
-                if not event.wait(max(1.0, float(timeout))):
-                    raise TimeoutError("Sign in with ChatGPT timed out")
-            finally:
-                server.shutdown()
-                server.server_close()
-
-            if callback.get("state") != state:
-                raise ValueError("Sign in with ChatGPT returned an invalid state")
-            if callback.get("error"):
-                raise RuntimeError(callback.get("error_description") or callback["error"])
-            code = str(callback.get("code") or "")
-            if not code:
-                raise RuntimeError("Sign in with ChatGPT did not return an authorization code")
-
-            returned_client_id = str(callback.get("client_id") or "")
+            },
+        )
+        token_response.raise_for_status()
+        tokens = token_response.json()
+        record = self._validated_record(tokens, issued_client_id, nonce)
+        previous_subject = str(account.get("subject") or "")
+        if previous_subject and str(record.get("subject") or "") != previous_subject:
+            raise ValueError("Sign in with ChatGPT returned a different account identity")
+        with self._session():
+            if int(self._data.get('auth_revision') or 0) != expected_revision or self.host_id != host_id:
+                raise RuntimeError('ChatGPT account state changed while signing in; start sign-in again')
+            current = self._data.get('accounts', {}).get(issued_client_id, {})
             if saved_client_id:
-                if returned_client_id and returned_client_id != saved_client_id:
-                    raise ValueError("Sign in with ChatGPT returned a different client registration")
-                issued_client_id = saved_client_id
-            else:
-                issued_client_id = returned_client_id
-                if not issued_client_id or issued_client_id == DYNAMIC_CLIENT_ID:
-                    raise RuntimeError("ChatGPT client registration was not completed")
-
-            token_response = self._client.post(
-                TOKEN_URL,
-                follow_redirects=False,
-                data={
-                    "grant_type": "authorization_code",
-                    "client_id": issued_client_id,
-                    "code": code,
-                    "code_verifier": verifier,
-                    "redirect_uri": redirect_uri,
-                    "resource": RESOURCE,
-                },
-            )
-            token_response.raise_for_status()
-            tokens = token_response.json()
-            record = self._validated_record(tokens, issued_client_id, nonce)
-            previous_subject = str(account.get("subject") or "")
-            if previous_subject and str(record.get("subject") or "") != previous_subject:
-                raise ValueError("Sign in with ChatGPT returned a different account identity")
-            self._data["account"] = record
+                if not current or any(current.get(key) != account.get(key) for key in ('client_id', 'subject', 'issuer')):
+                    raise RuntimeError('ChatGPT account registration changed while signing in')
+            elif current:
+                raise RuntimeError('ChatGPT account registration changed while signing in')
+            self._data['account'] = record
+            self._data['auth_revision'] = expected_revision + 1
             self._usage_states[issued_client_id] = (
                 'ready' if DIRECT_SCOPE in record['scopes'] else 'plan_usage_disabled')
             self._save()
@@ -499,7 +514,8 @@ class ChatGPTPlanAuth:
         path = Path(self._path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"ext_agent_host_id": self._data.get("ext_agent_host_id", ""),
-                   'plan_usage_notice_shown': bool(self._data.get('plan_usage_notice_shown'))}
+                   'plan_usage_notice_shown': bool(self._data.get('plan_usage_notice_shown')),
+                   'auth_revision': int(self._data.get('auth_revision') or 0)}
         account = self._data.get("account")
         if isinstance(account, dict) and account:
             records = self._data.setdefault('accounts', {})
