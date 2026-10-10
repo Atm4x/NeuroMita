@@ -158,6 +158,7 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
         v.cancel_button.clicked.connect(self._safe(self._cancel_changes, "cancel_changes"))
 
         v.test_button.clicked.connect(self._safe(self._test_connection, "test_connection"))
+        v.account_button.clicked.connect(self._safe(self._show_accounts, 'provider_accounts'))
 
         v.key_visibility_button.clicked.connect(self._safe(self._toggle_key_visibility, "toggle_key_visibility"))
         v.template_combo.currentIndexChanged.connect(self._safe(self._on_template_changed_async, "template_changed"))

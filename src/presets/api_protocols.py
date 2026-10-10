@@ -56,7 +56,8 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "chatgpt_plan_default",
-        "settings_schema_id": "openai-compatible",
+        "settings_schema_id": "chatgpt-plan",
+        "settings_schema_migrations": {"openai-compatible": "chatgpt-plan"},
         "name": "ChatGPT Plan (Responses preview)",
         "display_name": "ChatGPT Plan (Codex)",
         # Reuse the existing settings schema dialect. The transport is still a
@@ -66,11 +67,14 @@ API_PROTOCOLS_DATA = [
         "auth": {"mode": "oauth_chatgpt"},
         "headers": {},
         "capabilities": {
-            "tools_native": False,
+            "tools_native": True,
             "streaming": True,
-            "streaming_with_tools": False,
+            "streaming_with_tools": True,
             "supports_stream_usage": True,
-            "structured_output": False,
+            "structured_output": True,
+            "native_structured_output": False,
+            "images": True,
+            "files": True,
         },
         "transforms": [],
     },

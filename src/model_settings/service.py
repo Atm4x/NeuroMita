@@ -87,6 +87,12 @@ class ModelSettingsService:
     def for_preset(self, preset: Mapping[str, Any], dialect: str, settings: Any = None) -> dict[str, Any]:
         document = preset.get("model_settings")
         if document is not None:
+            from presets.api_protocols import API_PROTOCOLS_DATA
+            protocol = next((item for item in API_PROTOCOLS_DATA if item['id'] == preset.get('protocol_id')), {})
+            migrations = protocol.get('settings_schema_migrations') or {}
+            target = migrations.get(document.get('schema_id')) if isinstance(document, dict) else None
+            if target:
+                document = self.change_schema(document, target, dialect)
             return self.resolve(document, dialect)[1]
         from .migration import migrate_generation_settings
         return migrate_generation_settings(self, preset, dialect, settings)

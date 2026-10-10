@@ -4,7 +4,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 12,
         "name": "ChatGPT Plan (Codex)",
-        "settings_schema_id": "openai-compatible",
+        "settings_schema_id": "chatgpt-plan",
         "pricing": "mixed",
         "url": "https://api.openai.com/v1/responses",
         "default_model": "",

@@ -6,11 +6,12 @@ from typing import Any
 from utils import _
 
 from .base import (
-    BaseProvider, LLMRequest, LLMResponse, LLMUsage, StreamChannel,
+    BaseProvider, LLMRequest, LLMResponse, LLMUsage,
     check_request_cancelled, record_response_body_started,
 )
 from .chatgpt_plan_auth import get_chatgpt_plan_auth
-from .chatgpt_plan_protocol import build_responses_payload, normalize_responses_usage, parse_sse_data_line
+from .chatgpt_plan_protocol import ResponsesInferenceAdapter, normalize_responses_usage, parse_sse_data_line
+from .streaming import StreamAccumulator, iter_sse_data
 from .errors import LLMProviderError
 
 
@@ -19,18 +20,29 @@ class ChatGPTPlanProvider(BaseProvider):
 
     name = "chatgpt_plan"
     priority = 15
-    supports_tools_native = False
+    supports_tools_native = True
     supports_streaming = True
-    supports_streaming_with_tools = False
+    supports_streaming_with_tools = True
     supports_stream_usage = True
 
     def is_applicable(self, req: LLMRequest) -> bool:
         return str(req.provider_name or "") == self.name
 
     def generate(self, req: LLMRequest) -> LLMResponse:
+        url = str(req.api_url or 'https://api.openai.com/v1/responses')
+        if url != 'https://api.openai.com/v1/responses':
+            raise LLMProviderError(provider=self.name, friendly_message='Untrusted ChatGPT plan endpoint',
+                                   code='chatgpt_plan.invalid_destination', retryable=False, phase='request')
+        adapter = ResponsesInferenceAdapter()
+        payload = adapter.build(req)
         auth = get_chatgpt_plan_auth()
+        account_id = None
         try:
-            access_token = auth.get_access_token()
+            credentials = getattr(auth, 'get_credentials', None)
+            if callable(credentials):
+                access_token, account_id = credentials()
+            else:
+                access_token = auth.get_access_token()
         except Exception as exc:
             raise LLMProviderError(
                 provider=self.name,
@@ -44,16 +56,15 @@ class ChatGPTPlanProvider(BaseProvider):
                 phase="auth",
             ) from exc
 
-        url = str(req.api_url or "https://api.openai.com/v1/responses")
-        payload = build_responses_payload(req.model, req.messages)
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
-        headers.update(req.headers or {})
+        headers.update({k: v for k, v in (req.headers or {}).items()
+                        if k.lower() not in {'authorization', 'host', 'content-type', 'accept', 'cookie', 'proxy-authorization'}})
 
-        response = self.http_transport.post_json(req, url, headers=headers, payload=payload, stream=True)
+        response = self.http_transport.post_json(req, url, headers=headers, payload=payload, stream=True, follow_redirects=False)
         try:
             if response.status_code != 200:
                 body = response.read().decode("utf-8", errors="replace")
@@ -96,10 +107,11 @@ class ChatGPTPlanProvider(BaseProvider):
             usage: LLMUsage | None = None
             completed_response: dict[str, Any] = {}
             completed = False
+            accumulator = StreamAccumulator(req, provider=self.name, model=req.model) if req.stream else None
 
-            for line in response.iter_lines():
+            for data in iter_sse_data(response.iter_lines()):
                 check_request_cancelled(req)
-                event = parse_sse_data_line(line)
+                event = parse_sse_data_line('data: ' + data)
                 if not event:
                     continue
                 event_type = str(event.get("type") or "")
@@ -109,8 +121,8 @@ class ChatGPTPlanProvider(BaseProvider):
                     if delta:
                         record_response_body_started(req)
                         text_parts.append(delta)
-                        if req.stream and req.stream_cb:
-                            req.stream_cb(delta, StreamChannel.CONTENT)
+                        if accumulator:
+                            accumulator.add_text(delta)
                     continue
 
                 if event_type in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
@@ -118,8 +130,8 @@ class ChatGPTPlanProvider(BaseProvider):
                     if delta:
                         record_response_body_started(req)
                         reasoning_parts.append(delta)
-                        if req.stream and req.stream_cb:
-                            req.stream_cb(delta, StreamChannel.REASONING)
+                        if accumulator:
+                            accumulator.add_reasoning(delta)
                     continue
 
                 if event_type == "response.completed":
@@ -128,7 +140,27 @@ class ChatGPTPlanProvider(BaseProvider):
                     if usage_map:
                         usage = LLMUsage(**usage_map)
                     completed = True
+                    break
+
+                if event_type == 'response.output_item.added':
+                    item = event.get('item') or {}
+                    if item.get('type') == 'function_call':
+                        record_response_body_started(req)
+                        if accumulator:
+                            accumulator.tool_call_started(tool_call_id=str(item.get('call_id') or ''),
+                                                          tool_name=str(item.get('name') or ''))
                     continue
+                if event_type == 'response.function_call_arguments.delta':
+                    record_response_body_started(req)
+                    if accumulator:
+                        accumulator.tool_call_delta(tool_call_id=str(event.get('item_id') or ''),
+                                                    tool_name='', arguments_delta=str(event.get('delta') or ''))
+                    continue
+                if event_type == 'error':
+                    code = str(event.get('code') or 'chatgpt_plan.stream_error')
+                    raise LLMProviderError(provider=self.name, friendly_message=self._http_error_message(0, code),
+                        provider_message=str(event.get('message') or code), code=code,
+                        retryable=self._stream_retryable(code), phase='stream', url=url)
 
                 if event_type == "response.failed":
                     failed = event.get("response") if isinstance(event.get("response"), dict) else {}
@@ -155,7 +187,7 @@ class ChatGPTPlanProvider(BaseProvider):
                         ),
                         provider_message=detail,
                         raw_payload=failed,
-                        retryable=usage_unavailable or not (limit_exceeded or unsupported),
+                        retryable=self._stream_retryable(code),
                         code=code,
                         phase="stream",
                         url=url,
@@ -186,8 +218,12 @@ class ChatGPTPlanProvider(BaseProvider):
                     url=url,
                 )
 
+            text = adapter.normalize_output(req, completed_response, "".join(text_parts))
+            record_state = getattr(auth, 'record_inference_error', None)
+            if callable(record_state):
+                record_state('', account_id=account_id)
             return LLMResponse(
-                text="".join(text_parts),
+                text=text,
                 reasoning="".join(reasoning_parts),
                 usage=usage,
                 model=str(completed_response.get("model") or req.model),
@@ -196,8 +232,22 @@ class ChatGPTPlanProvider(BaseProvider):
                 finish_reason="completed",
                 raw=completed_response,
             )
+        except LLMProviderError as exc:
+            record_state = getattr(auth, 'record_inference_error', None)
+            if callable(record_state):
+                record_state(exc.code or '', account_id=account_id)
+            raise
         finally:
             response.close()
+
+    @staticmethod
+    def _stream_retryable(code: str) -> bool:
+        return code not in {
+            'subscription_sharing_usage_limit_exceeded', 'subscription_sharing_unsupported_capability',
+            'subscription_sharing_route_not_supported', 'subscription_sharing_user_not_eligible',
+            'subscription_sharing_invalid_user', 'chatpass_v2_scope_not_authorized',
+            'chatpass_v2_invalid_authorization_context',
+        }
 
     @staticmethod
     def _error_code_from_body(body: str) -> str:

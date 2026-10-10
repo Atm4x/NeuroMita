@@ -15,7 +15,7 @@ from presets.api_endpoints import server_address
 from ui.provider_icons import template_provider, provider_icon
 
 
-_CHATGPT_PLAN_PROTOCOL_ID = "chatgpt_plan_default"
+from services.provider_settings import describe_protocol
 
 
 class PresetsMixin:
@@ -302,7 +302,7 @@ class PresetsMixin:
 
             v.provider_label.setText(str(preset.get("name", "")))
             v.preset_name_row.set_text(preset.get("name", ""))
-            self._apply_chatgpt_plan_ui(eff_pid)
+            self._apply_provider_ui(eff_pid)
             v.api_settings_container.setVisible(True)
             v.preset_active_tag.setVisible(int(v.settings.get("LAST_API_PRESET_ID", 0) or 0) == int(preset_id))
 
@@ -327,29 +327,24 @@ class PresetsMixin:
 
         self._bus_call_async(_call, _apply, name="load_preset")
 
-    def _apply_chatgpt_plan_ui(self, protocol_id: str) -> None:
+    def _apply_provider_ui(self, protocol_id: str) -> None:
         v = self.view
-        enabled = str(protocol_id or "") == _CHATGPT_PLAN_PROTOCOL_ID
-        v.test_button.setProperty("chatgptPlan", enabled)
-        if enabled:
-            v.test_button.setText(_("Войти через ChatGPT", "Continue with ChatGPT"))
-            v.api_type_label.setText(_(
-                "Экспериментальный режим · использует квоту ChatGPT/Codex · возможности ограничены",
-                "Experimental mode · uses your ChatGPT/Codex quota · limited capabilities",
-            ))
-            v.api_type_label.setToolTip(_(
-                "Использует вашу квоту ChatGPT/Codex. В текущем ограниченном режиме реализованы не все возможности; поддержка будет расширяться в будущих обновлениях.",
-                "Uses your ChatGPT/Codex quota. Not all capabilities are implemented in this limited mode; support may expand in future updates.",
-            ))
-        else:
-            v.test_button.setText(_("Проверить", "Check"))
-            v.api_type_label.setToolTip("")
-        v.api_url_row.setVisible(not enabled)
-        v.api_key_row.setVisible(not enabled)
-        v.reserve_keys_section.setVisible(not enabled)
-        try:
-            v.api_settings_container.setTabEnabled(1, not enabled)
-            if enabled and v.api_settings_container.currentIndex() == 1:
-                v.api_settings_container.setCurrentIndex(0)
-        except Exception:
-            pass
+        descriptor = describe_protocol(protocol_id)
+        fields = descriptor.settings
+        v.test_button.setProperty('connectionActionLabel', descriptor.action_label)
+        if not v.test_button.property('apiTesting'):
+            v.test_button.setText(_(*descriptor.action_label))
+        v.api_url_row.setVisible(fields.api_url)
+        v.api_key_row.setVisible(fields.api_key)
+        v.reserve_keys_section.setVisible(fields.reserve_keys)
+        v.api_settings_container.setTabEnabled(1, fields.generation_parameters)
+        if not fields.generation_parameters and v.api_settings_container.currentIndex() == 1:
+            v.api_settings_container.setCurrentIndex(0)
+        if descriptor.account_actions:
+            v.test_button.setVisible(True)
+            v.test_button.setEnabled(not bool(v.test_button.property('apiTesting')))
+        if hasattr(v, 'api_test_url_row') and not fields.api_url:
+            v.api_test_url_row.setVisible(False)
+        if hasattr(v, 'account_button'):
+            v.account_button.setVisible(descriptor.account_actions)
+            v.account_button.setEnabled(not bool(v.test_button.property('apiTesting')))

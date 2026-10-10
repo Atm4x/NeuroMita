@@ -29,6 +29,7 @@ from model_settings.service import ModelSettingsService
 from model_settings.schema import SchemaError
 from presets.provider_host_metadata import infer_provider_currency
 from handlers.llm_providers.http_transport import LLMHttpClient
+from services.provider_settings import describe_protocol, run_account_action
 
 
 @dataclass
@@ -1237,6 +1238,15 @@ class ApiPresetsController(ApiPresetService):
 
         payload = event.data or {}
         saved = self.presets.get(preset_id)
+        protocol_id = str(payload.get('protocol_id') or (saved.protocol_id if saved else '')
+                          or (p_tpl.protocol_id if p_tpl else '') or 'openai_compatible_default')
+        descriptor = describe_protocol(protocol_id)
+        if descriptor.account_actions:
+            task_supervisor().start_thread(
+                self, 'api-preset-account-action', self._sync_account_action,
+                args=(preset_id or 0, protocol_id, str(payload.get('action') or descriptor.connection_action),
+                      str(payload.get('account_id') or '')), replace=True)
+            return
         api_url = str(payload.get("url", saved.url if saved else "") or "")
         custom_test_url = str(
             payload.get("test_url", saved.test_url if saved else "") or ""
@@ -1295,6 +1305,14 @@ class ApiPresetsController(ApiPresetService):
             args=(preset_id or 0, p_tpl, key),
             replace=True,
         )
+
+    def _sync_account_action(self, preset_id: int, protocol_id: str, action: str, account_id: str) -> None:
+        try:
+            result = run_account_action(protocol_id, action, account_id)
+            self.event_bus.emit(Events.ApiPresets.TEST_RESULT, {'id': preset_id or None, **result})
+        except Exception as exc:
+            self.event_bus.emit(Events.ApiPresets.TEST_FAILED, {
+                'id': preset_id or None, 'message': str(exc)})
 
     @staticmethod
     def _normalize_test_model_id(raw_model_id: Any) -> str:

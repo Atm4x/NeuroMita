@@ -1,72 +1,106 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Mapping
 
 
-_UNSUPPORTED_RESPONSE_FIELDS = {
-    "background", "conversation", "max_output_tokens", "max_tool_calls", "metadata",
-    "moderation", "multi_agent", "previous_response_id", "prompt", "prompt_cache_retention",
-    "safety_identifier", "temperature", "top_logprobs", "top_p", "truncation", "user",
-}
-
-
-def _message_text(message: Mapping[str, Any]) -> str:
-    content = message.get("content", "")
+def _content(content: Any, role: str) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
+    if content is None:
+        return ''
     if not isinstance(content, list):
-        return str(content or "")
-
-    parts: list[str] = []
+        raise ValueError('Unsupported message content')
+    result = []
     for part in content:
         if isinstance(part, str):
-            parts.append(part)
-            continue
-        if not isinstance(part, Mapping):
-            continue
-        text = part.get("text")
-        if isinstance(text, str):
-            parts.append(text)
-    return "\n".join(parts)
-
-
-def build_responses_payload(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the restricted Responses payload accepted by ChatGPT plan sharing.
-
-    NeuroMita owns conversation history, so every request sends the complete context.
-    System messages are moved to ``instructions`` because explicit system-role input
-    items are rejected by the current preview endpoint.
-    """
-    instructions: list[str] = []
-    input_items: list[dict[str, str]] = []
-
-    for message in messages or []:
-        role = str(message.get("role") or "user").strip().lower()
-        text = _message_text(message)
-        if not text:
-            continue
-        if role in {"system", "developer"}:
-            instructions.append(text)
-        elif role in {"user", "assistant"}:
-            input_items.append({"role": role, "content": text})
+            part = {'type': 'text', 'text': part}
+        kind = part.get('type') if isinstance(part, Mapping) else None
+        if kind in {'text', 'input_text', 'output_text'}:
+            result.append({'type': 'output_text' if role == 'assistant' else 'input_text', 'text': str(part.get('text') or '')})
+        elif kind == 'image_url' and role == 'user':
+            image = part.get('image_url')
+            image = image if isinstance(image, Mapping) else {'url': image}
+            result.append({'type': 'input_image', 'image_url': image.get('url'), **({'detail': image['detail']} if image.get('detail') else {})})
+        elif kind in {'input_image', 'input_file'} and role == 'user':
+            result.append(dict(part))
+        elif kind == 'file' and role == 'user':
+            result.append({'type': 'input_file', **dict(part.get('file') or {})})
         else:
-            # Limited mode does not execute provider-native tools. Preserve useful
-            # history instead of emitting an unsupported role to Responses.
-            input_items.append({"role": "user", "content": f"[{role}]\n{text}"})
+            raise ValueError(f'Unsupported Responses content type: {kind}')
+    return result
 
-    payload: dict[str, Any] = {
-        "model": str(model or "").strip(),
-        "input": input_items,
-        "store": False,
-        "stream": True,
-    }
-    if instructions:
-        payload["instructions"] = "\n\n".join(instructions)
 
-    for field in _UNSUPPORTED_RESPONSE_FIELDS:
-        payload.pop(field, None)
+def build_responses_payload(model: str, messages: list[dict[str, Any]], *,
+                            parameters: Mapping[str, Any] | None = None,
+                            tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    input_items: list[dict[str, Any]] = []
+    for message in messages or []:
+        role = str(message.get('role') or 'user').lower()
+        if role == 'tool':
+            call_id = message.get('tool_call_id')
+            if not call_id:
+                raise ValueError('Tool result has no call ID')
+            input_items.append({'type': 'function_call_output', 'call_id': call_id,
+                                'output': str(message.get('content') or '')})
+            continue
+        if role == 'system':
+            role = 'developer'
+        if role not in {'developer', 'user', 'assistant'}:
+            raise ValueError(f'Unsupported Responses role: {role}')
+        content = _content(message.get('content'), role)
+        if content:
+            input_items.append({'role': role, 'content': content})
+        for call in message.get('tool_calls') or []:
+            function = call.get('function') or {}
+            if not call.get('id') or not function.get('name'):
+                raise ValueError('Invalid function call history')
+            input_items.append({'type': 'function_call', 'call_id': call['id'],
+                                'name': function['name'], 'arguments': function.get('arguments') or '{}'})
+    payload: dict[str, Any] = {'model': str(model or '').strip(), 'input': input_items,
+                               'store': False, 'stream': True}
+    for name in ('reasoning', 'text', 'parallel_tool_calls'):
+        if parameters and name in parameters:
+            payload[name] = deepcopy(parameters[name])
+    if tools:
+        functions = []
+        for tool in tools:
+            if tool.get('type') not in {None, 'function'}:
+                raise ValueError('Unsupported Responses tool type')
+            function = tool.get('function') if tool.get('type') == 'function' else tool
+            if not isinstance(function, Mapping) or not function.get('name'):
+                raise ValueError('Unsupported Responses tool')
+            functions.append({'type': 'function', **dict(function)})
+        payload['tools'] = [{'type': 'namespace', 'name': 'neuromita',
+                             'description': 'NeuroMita local tools', 'tools': functions}]
+        payload['parallel_tool_calls'] = False
     return payload
+
+
+class ResponsesInferenceAdapter:
+    def build(self, req: Any) -> dict[str, Any]:
+        return build_responses_payload(req.model, req.messages,
+            parameters=req.native_parameters or req.extra,
+            tools=req.tools_payload if req.tools_on else None)
+
+    def normalize_output(self, req: Any, response: Mapping[str, Any], text: str) -> str:
+        calls = [item for item in response.get('output', []) if item.get('type') == 'function_call']
+        if not calls:
+            return text
+        if len(calls) != 1:
+            raise ValueError('The application supports one tool call per turn')
+        call = calls[0]
+        name = str(call.get('name') or '').removeprefix('neuromita.')
+        advertised = {str((tool.get('function') or tool).get('name') or '')
+                      for tool in (req.tools_payload or [])} if req.tools_on else set()
+        if name not in advertised:
+            raise ValueError('The model requested an unadvertised tool')
+        arguments = json.loads(call.get('arguments') or '{}')
+        if not isinstance(arguments, dict):
+            raise ValueError('Function arguments must be an object')
+        return json.dumps({'segments': [{'text': text}] if text else [],
+                           'tool_call': {'name': name, 'args': arguments}}, ensure_ascii=False)
 
 
 def normalize_responses_usage(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -101,4 +135,4 @@ def parse_sse_data_line(line: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-__all__ = ["build_responses_payload", "normalize_responses_usage", "parse_sse_data_line"]
+__all__ = ["ResponsesInferenceAdapter", "build_responses_payload", "normalize_responses_usage", "parse_sse_data_line"]

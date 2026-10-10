@@ -13,7 +13,7 @@ from handlers.llm_providers.chatgpt_plan_protocol import (
 
 
 class ChatGPTPlanProtocolTests(unittest.TestCase):
-    def test_payload_enforces_preview_contract_and_moves_system_to_instructions(self):
+    def test_payload_enforces_preview_contract_and_maps_system_to_developer(self):
         payload = build_responses_payload(
             "gpt-6.1-sol",
             [
@@ -25,8 +25,8 @@ class ChatGPTPlanProtocolTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-6.1-sol")
         self.assertIs(payload["store"], False)
         self.assertIs(payload["stream"], True)
-        self.assertEqual(payload["instructions"], "System rules")
-        self.assertEqual([item["role"] for item in payload["input"]], ["user", "assistant"])
+        self.assertEqual(payload['input'][0]['content'], 'System rules')
+        self.assertEqual([item["role"] for item in payload["input"]], ["developer", "user", "assistant"])
         for forbidden in (
             "temperature", "top_p", "max_output_tokens", "previous_response_id",
             "background", "conversation", "metadata", "user",

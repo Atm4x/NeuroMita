@@ -212,8 +212,11 @@ def build_api_settings_ui(self, parent_layout):
     caption.addWidget(self.api_type_label)
     toolbar.addLayout(caption, 1)
     self.test_button = _button("Проверить", "Check", "fa5s.link", "ApiCheckButton")
+    self.account_button = _button("Аккаунты", "Accounts", "fa5s.user", "ApiAccountButton")
+    self.account_button.hide()
+    toolbar.addWidget(self.account_button)
     register(self.test_button, lambda button: button.setText(
-        str(_("Проверка…", "Checking…") if button.property("apiTesting") else _("Проверить", "Check"))
+        str(_("Проверка…", "Checking…") if button.property("apiTesting") else _(*(button.property("connectionActionLabel") or ("Проверить", "Check"))))
     ))
     self.save_preset_button = _button("Сохранить", "Save", "fa5s.save", "ApiSaveButton")
     self.save_preset_button.setEnabled(False)
@@ -387,7 +390,7 @@ def _build_protocol(self, layout):
     self.protocol_info_label = QLabel()
     self.protocol_info_label.setObjectName("ApiProtocolHint")
     self.protocol_info_label.setStyleSheet(
-        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+        f"color: {THEME['muted']}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
     )
     self.protocol_info_label.setWordWrap(True)
     self.protocol_section.add_widget(self.protocol_info_label)
@@ -395,7 +398,7 @@ def _build_protocol(self, layout):
     self.protocol_transforms_view.setWordWrap(True)
     self.protocol_transforms_view.setObjectName("ApiProtocolHint")
     self.protocol_transforms_view.setStyleSheet(
-        f"color: {THEME["muted"]}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
+        f"color: {THEME['muted']}; font-size: 12px; font-weight: normal; border: none; padding: 0;"
     )
     processing_row = QWidget()
     processing_layout = QHBoxLayout(processing_row)
@@ -409,7 +412,7 @@ def _build_protocol(self, layout):
         "ApiPipelineButton",
     )
     self.configure_pipeline_btn.setStyleSheet(
-        f"background: {THEME["card_alt_bg"]}; color: {THEME["text"]}; border: 1px solid {THEME["panel_border"]}; border-radius: 9px;"
+        f"background: {THEME['card_alt_bg']}; color: {THEME['text']}; border: 1px solid {THEME['panel_border']}; border-radius: 9px;"
     )
     processing_layout.addWidget(self.configure_pipeline_btn)
     self.protocol_section.add_widget(processing_row)
