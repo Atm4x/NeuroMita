@@ -205,6 +205,6 @@ def normalize_sparse_response(
 
 def provider_structured_model(model_cls, capabilities):
     profile = (capabilities or {}).get("structured_response_profile")
-    if isinstance(profile, StructuredResponseCapabilities) and issubclass(model_cls, StructuredResponse):
+    if isinstance(profile, StructuredResponseCapabilities) and profile.sparse_enabled and issubclass(model_cls, StructuredResponse):
         return build_sparse_response_model(model_cls, profile)
     return model_cls

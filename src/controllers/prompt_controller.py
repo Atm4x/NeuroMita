@@ -467,6 +467,8 @@ class PromptController(PromptBuilderService):
         try:
             feature_overrides = dict(caps.get("structured_prompt_features") or {})
             profile = caps.get("structured_response_profile") if caps.get("structured_output") else None
+            if isinstance(profile, StructuredResponseCapabilities) and not profile.sparse_enabled:
+                profile = None
             feature_overrides["response_sparse_format"] = isinstance(profile, StructuredResponseCapabilities)
             if getattr(policy, "react_level", None) == 1:
                 feature_overrides["support_intents"] = False

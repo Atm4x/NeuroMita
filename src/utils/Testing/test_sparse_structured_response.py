@@ -265,6 +265,12 @@ def test_prompt_controller_renders_sparse_contract_after_template_intent_resolut
     assert ('"type": "intents"' in text) == support_intents
     assert "response_sparse_format" not in variables
     assert "25-70 words total" in text
+    from dataclasses import replace
+    caps["structured_response_profile"] = replace(profile(), sparse_enabled=False)
+    stable, _, _ = controller._build_system_messages(character, "chat", True, RequestPolicy(), caps)
+    old_text = "\n".join(message["content"] for message in stable)
+    assert "sparse_events_v1" not in old_text
+    assert '"attitude_change": <number' in old_text
     caps["structured_output"] = False
     stable, _, _ = controller._build_system_messages(character, "chat", True, RequestPolicy(), caps)
     assert "sparse_events_v1" not in "\n".join(message["content"] for message in stable)
@@ -276,3 +282,44 @@ def test_reasoning_order_is_preserved_for_streaming():
         excluded_fields=tuple(name for name in profile().excluded_fields if name != "reasoning"))
     schema = build_sparse_response_model(StructuredResponse, caps).json_schema_dict()
     assert next(iter(schema["properties"])) == "reasoning"
+
+
+@pytest.mark.parametrize("provider", ["chatgpt_plan", "common", "gemini"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_chat_model_selects_wire_dto_before_any_provider_and_keeps_retry_snapshot(monkeypatch, provider, enabled):
+    from handlers.chat_handler import ChatModel
+    from schemas.sparse_structured_response import SparseStructuredResponse
+    from unittest.mock import Mock
+    import handlers.chat_handler as chat_module
+    monkeypatch.setattr(chat_module, "_save_last_request_context", lambda *args, **kwargs: None)
+    model = object.__new__(ChatModel)
+    model._error_state = SimpleNamespace(last_error=None)
+    from threading import Lock
+    model._last_error_lock = Lock()
+    model.cfg = SimpleNamespace(max_request_attempts=2, request_delay=0)
+    model.cfg_loader = Mock()
+    model.settings = {"SPARSE_STRUCTURED_RESPONSE": not enabled}
+    model.tool_manager = None
+    model._log_generation_start = lambda *args: None
+    preset = SimpleNamespace(native_parameters={}, capabilities={"structured_output": True},
+        api_key=None, api_url="https://example.test", protocol_id="test", dialect_id="test",
+        provider_name=provider, provider_display_name=provider, headers={}, transforms=[])
+    captured = []
+    class Runner:
+        last_error = None
+        def run(self, **kwargs):
+            for _ in range(2):
+                captured.append(kwargs["build_request"](preset, "model"))
+            return None
+    model.request_runner = Runner()
+    caps = profile(SPARSE_STRUCTURED_RESPONSE=enabled)
+    model._generate_chat_response([], capabilities_override={"structured_response_profile": caps},
+        structured_model=StructuredResponse)
+    assert len(captured) == 2
+    for req in captured:
+        assert issubclass(req.structured_model, SparseStructuredResponse) == enabled
+        properties = req.structured_model.openai_response_format()["json_schema"]["schema"]["properties"]
+        assert ("events" in properties) == enabled
+        assert ("attitude_change" in properties) != enabled
+        assert req.capabilities["structured_response_profile"].sparse_enabled == enabled
+    assert captured[0].structured_model is captured[1].structured_model

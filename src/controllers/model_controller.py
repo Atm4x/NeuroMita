@@ -2608,11 +2608,12 @@ class ModelController(GenerationService, ModelStateService):
             continuation_capabilities["structured_segment_exclude_fields"] = continuation_profile.excluded_segment_fields
             continuation_capabilities["structured_required_fields"] = continuation_profile.required_fields
             continuation_capabilities["structured_prompt_features"] = continuation_profile.prompt_features()
-            from services.sparse_response_prompt import render_sparse_response_contract
-            combined_messages_v2.append({
-                "role": "system",
-                "content": render_sparse_response_contract(continuation_profile, structured_model_cls),
-            })
+            if continuation_profile.sparse_enabled:
+                from services.sparse_response_prompt import render_sparse_response_contract
+                combined_messages_v2.append({
+                    "role": "system",
+                    "content": render_sparse_response_contract(continuation_profile, structured_model_cls),
+                })
             if not continuation_profile.can_call_tools:
                 continuation_capabilities["tools_prompt"] = ""
                 combined_messages_v2.append({
