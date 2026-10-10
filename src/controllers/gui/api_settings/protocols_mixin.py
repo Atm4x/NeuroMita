@@ -96,6 +96,8 @@ class ProtocolsMixin:
         )
         if hasattr(v, "openrouter_routing_section"):
             v.openrouter_routing_section.setVisible(pid == "openrouter_default")
+        if hasattr(self, "_apply_chatgpt_plan_ui"):
+            self._apply_chatgpt_plan_ui(pid)
 
         caps = proto.get("capabilities") or {}
         labels = [

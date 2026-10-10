@@ -55,6 +55,26 @@ API_PROTOCOLS_DATA = [
         "transforms": [],
     },
     {
+        "id": "chatgpt_plan_default",
+        "settings_schema_id": "openai-compatible",
+        "name": "ChatGPT Plan (Responses preview)",
+        "display_name": "ChatGPT Plan (Codex)",
+        # Reuse the existing settings schema dialect. The transport is still a
+        # separate provider and never forwards Chat Completions-only parameters.
+        "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
+        "provider": "chatgpt_plan",
+        "auth": {"mode": "oauth_chatgpt"},
+        "headers": {},
+        "capabilities": {
+            "tools_native": False,
+            "streaming": True,
+            "streaming_with_tools": False,
+            "supports_stream_usage": True,
+            "structured_output": False,
+        },
+        "transforms": [],
+    },
+    {
         "id": "lmstudio_default",
         "settings_schema_id": "local-openai",
         "name": "LM Studio (OpenAI-compatible)",

@@ -2,6 +2,20 @@
 
 API_TEMPLATES_DATA = [
     {
+        "id": 12,
+        "name": "ChatGPT Plan (Codex)",
+        "settings_schema_id": "openai-compatible",
+        "pricing": "mixed",
+        "url": "https://api.openai.com/v1/responses",
+        "default_model": "",
+        "known_models": [],
+        "protocol_id": "chatgpt_plan_default",
+        "test_url": "https://api.openai.com/v1/models",
+        "documentation_url": "https://developers.openai.com/siwc/token-sharing-open-source",
+        "models_url": "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference",
+        "key_url": "",
+    },
+    {
         "id": 1,
         "name": "Mistral AI",
         "settings_schema_id": "mistral",
