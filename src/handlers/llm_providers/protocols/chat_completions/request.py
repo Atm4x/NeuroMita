@@ -41,6 +41,11 @@ def encode_request(req: LLMRequest, *, wire_stream: bool, payload: dict | None =
             ) if key in req.extra})
     else:
         payload = deepcopy(payload)
+    payload["messages"] = [
+        {key: value for key, value in message.items()
+         if key not in {"time", "responses_output", "responses_reasoning_items"}}
+        for message in payload.get("messages", []) if isinstance(message, dict)
+    ]
     payload["stream"] = bool(wire_stream)
     caps = req.capabilities or {}
     stream_usage = caps.get("supports_stream_usage")

@@ -32,23 +32,47 @@ API-key provider. Existing protocol and template IDs remain valid.
 Verification on 2026-10-10:
 
 - Initial baseline: 44 existing Responses/SIWC and HTTP transport tests passed.
-- Final selected regression suite: 448 tests and 20 subtests passed. Includes
-  mocked HTTP/SSE, both Completions transports, Responses, sparse schema/profile
+- Offline CI regression suite: 343 tests and 3 subtests passed in a clean
+  temporary virtual environment on Windows, including SIWC DPAPI coverage. A
+  separate regression batch passed 101 tests; its two unrelated failures were
+  reproduced against HEAD (hidden game-master result expected an empty string
+  but received a single space, and the pre-existing history-reset fixture noted
+  below).
+- CI regression scope includes mocked HTTP/SSE, both Completions transports, Responses, sparse schema/profile
   parity, native execution, SQLite history reload/projection, cancellation,
   retries/fallback and SIWC endpoint/redirect/header protections. Windows DPAPI
   tests passed outside the sandbox; sandbox CryptProtectData failed independently
   of the changes.
-- Six mock end-to-end paths use ChatModel -> request runner -> ProviderManager ->
+- Ten mock end-to-end paths use ChatModel -> request runner -> ProviderManager ->
   real httpx MockTransport -> normalized calls -> existing runtime executor ->
-  follow-up: Responses, HTTP Completions and SDK Completions, streaming on/off.
+  follow-up: Responses, HTTP Completions, SDK Completions, Responses-to-Chat HTTP
+  fallback and Responses-to-Chat SDK fallback, with UI streaming on and off. The
+  two fallback transports also reload the native tool exchange from SQLite and
+  project it into the subsequent Chat request.
 - Live gemini-3.5-flash-lite, using the user-selected Google account and Google's
   OpenAI-compatible endpoint: HTTP/nonstream and SDK/stream text returned OK;
   both tool/follow-up paths ran calculator once and returned 2. Ordinary and
   sparse structured output returned OK and passed the runtime parser without
   response-format fallback. Google thought signatures survive tool history.
-- Responses and SIWC live acceptance remain unverified: the supplied Google
-  endpoint's documented compatibility covers Chat Completions. Neither OAuth
-  credentials nor saved user presets were changed for live checks.
+- Live SIWC acceptance with the existing signed-in account and gpt-6-luna: text
+  returned OK and a synthetic red-square image returned Red, with UI streaming
+  enabled and disabled. A real calculator tool call ran exactly once and its
+  follow-up returned 2 in both modes. Strict and sparse structured live requests
+  were not run; automatic approval review rejected the additional runtime schema
+  payload as outside the authorized live-test scope.
+- Live API-key Responses remains unverified; Google gemini-3.5-flash-lite is only
+  the Chat Completions endpoint used in the earlier acceptance. No API-key
+  Responses preset was supplied. Neither OAuth credentials nor saved user presets
+  were changed for these SIWC checks.
+- Cross-recovery exactly-once is not guaranteed. Current call_id validation
+  prevents replay inside one request, but no durable operation ledger or recovery
+  protocol exists for an external side effect completed just before an app crash.
+  This is outside current per-turn execution scope.
+- Cross-protocol history safety fix: the shared Chat Completions encoder now
+  strips Responses-only reasoning/output fields (plus local timestamps) from both
+  HTTP and SDK payload builders while preserving native tool calls and provider
+  extensions. Regression tests cover Responses-to-Chat fallback and restored
+  SQLite tool history for both transports.
 - A broader history test run found an existing failure in
   test_history_epoch_guard.HistoryResetHookTests: its __new__ fixture lacks
   _action_memory_cap_warnings, which on_history_reset already accesses at HEAD.

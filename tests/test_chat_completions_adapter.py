@@ -20,6 +20,29 @@ def request(**kwargs):
                       provider_name="common", **kwargs)
 
 
+@pytest.mark.parametrize("builder", [False, True])
+def test_chat_encoder_projects_responses_history_without_mutating_it(builder):
+    from handlers.llm_providers.protocols.chat_completions import ChatCompletionsAdapter
+    messages = [{"role": "assistant", "content": None, "time": "local",
+        "responses_output": [{"type": "reasoning", "encrypted_content": "opaque"}],
+        "responses_reasoning_items": [{"type": "reasoning", "summary": []}],
+        "tool_calls": [{"id": "call1", "type": "function",
+            "function": {"name": "calculator", "arguments": "{}"},
+            "extra_content": {"google": {"thought_signature": "signature"}}}]},
+        {"role": "tool", "tool_call_id": "call1", "content": "2"}]
+    original = copy.deepcopy(messages)
+    req = request()
+    req.messages = messages
+    adapter = ChatCompletionsAdapter(payload_builder=(lambda _: {"model": "test", "messages": messages}) if builder else None)
+    encoded = adapter.encode(req, wire_stream=False)["messages"]
+    assert encoded[0] == {key: value for key, value in messages[0].items()
+                          if key not in {"time", "responses_output", "responses_reasoning_items"}}
+    assert encoded[1] == messages[1]
+    assert messages == original
+    encoded[0]["tool_calls"][0]["function"]["name"] = "changed"
+    assert messages == original
+
+
 def sdk_object(value):
     if isinstance(value, dict):
         return SimpleNamespace(**{key: sdk_object(item) for key, item in value.items()})
