@@ -15,6 +15,7 @@ from localization.live import tr_set, register_if_tr, register
 from styles.theme import THEME
 from styles.completion_popup import get_completion_popup_stylesheet
 from .model_settings_form import ModelSettingsForm
+from .subscription_info import SubscriptionInfo
 from .widgets import (
     ProviderDelegate, PresetsListWidget, LabeledLineEditRow, LabeledComboRow,
     FallbackChainEditor, ReserveKeysEditor,
@@ -314,6 +315,8 @@ def build_api_settings_ui(self, parent_layout):
     credentials.addWidget(self.api_key_row, 0, 1)
     credentials.addWidget(self.models_button, 0, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
     content.addLayout(credentials)
+    self.subscription_info = SubscriptionInfo()
+    content.addWidget(self.subscription_info)
 
     configuration_scroll = QScrollArea()
     configuration_scroll.setObjectName("ApiConfigurationScroll")

@@ -78,3 +78,24 @@ def test_chatgpt_template_is_paid_with_luna_and_existing_openai_icon(editor):
     assert template_provider(template['name'], template['protocol_id']) == 'openai'
     assert protocol_provider(template['protocol_id']) == 'openai'
     assert not provider_icon('openai').isNull()
+
+
+def test_subscription_notice_and_unknown_limits_are_provider_specific(editor):
+    editor._apply_provider_ui('chatgpt_plan_default')
+    panel = editor.view.subscription_info
+    assert not panel.isHidden()
+    assert '10.10.2026' in panel.cache_notice.text()
+    assert 'серверной' in panel.cache_notice.text()
+    assert 'ненадёжно' in panel.cache_notice.text()
+    assert len(panel.limit_bars) == 2
+    for bar in panel.limit_bars:
+        assert not bar.isEnabled()
+        assert bar.minimum() != bar.maximum()  # No ongoing-loading animation.
+        assert bar.format() == 'Данные недоступны'
+        assert '%' not in bar.format()
+    assert 'https://chatgpt.com/codex/cloud/settings/usage' in panel.dashboard_link.text()
+    editor._apply_provider_ui('openai_compatible_default')
+    assert panel.isHidden()
+    assert panel.cache_notice.text() == ''
+    editor._apply_provider_ui('chatgpt_plan_default')
+    assert not panel.isHidden()

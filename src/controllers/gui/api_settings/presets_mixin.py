@@ -331,6 +331,8 @@ class PresetsMixin:
         v = self.view
         descriptor = describe_protocol(protocol_id)
         fields = descriptor.settings
+        if hasattr(v, 'subscription_info'):
+            v.subscription_info.configure(descriptor)
         v.test_button.setProperty('connectionActionLabel', descriptor.action_label)
         if not v.test_button.property('apiTesting'):
             v.test_button.setText(_(*descriptor.action_label))

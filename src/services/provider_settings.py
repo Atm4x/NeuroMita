@@ -23,6 +23,8 @@ class ProviderDescriptor:
     action_label: tuple[str, str] = ('Проверить', 'Check')
     settings: ProviderSettings = field(default_factory=ProviderSettings)
     account_actions: bool = False
+    cache_notice: tuple[str, str] = ('', '')
+    usage_dashboard_url: str = ''
 
 
 class AuthenticationService(Protocol):
@@ -40,6 +42,11 @@ _AUTH_DESCRIPTORS = {
         'action_label': ('Войти через ChatGPT', 'Continue with ChatGPT'),
         'settings': ProviderSettings(False, False, False, True),
         'account_actions': True,
+        'cache_notice': (
+            'На 10.10.2026 кеширование при изменении контекста работает ненадёжно из-за ограничений серверной стороны ChatGPT. Явные точки кеширования недоступны; запрос может расходовать полный объём входных токенов.',
+            'As of 10 October 2026, caching after context changes is unreliable due to ChatGPT server-side limitations. Explicit cache breakpoints are unavailable; a request may consume the full input token allowance.',
+        ),
+        'usage_dashboard_url': 'https://chatgpt.com/codex/cloud/settings/usage',
     },
 }
 
