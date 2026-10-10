@@ -43,7 +43,7 @@ def test_whisper_full_catalogue_and_google_existing_choices():
     assert 'Ukrainian' in cat.asr_language_names('whisper')
     assert 'Cantonese' in cat.asr_language_names('whisper')
     assert cat.asr_language_field('whisper_onnx')['options'] == options
-    assert options[:11] == ['ru', 'uk', 'en', 'de', 'fr', 'es', 'it', 'pt', 'ja', 'zh', 'ko']
+    assert options[:12] == ['auto', 'ru', 'uk', 'en', 'de', 'fr', 'es', 'it', 'pt', 'ja', 'zh', 'ko']
     for engine in ('whisper', 'whisper_onnx'):
         whisper_labels = cat.asr_language_field(engine)['option_labels']
         assert all(not label.startswith('★ ') for label in whisper_labels.values())

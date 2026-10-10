@@ -262,7 +262,7 @@ def asr_language_field(engine_id: str) -> dict:
     elif fixed:
         help_ru, help_en = _HELP_SOURCES["fixed"]
     else:
-        options.append("auto")
+        options.insert(0, "auto")
         sources["auto"] = _HELP_SOURCES["auto"]
         labels["auto"] = "Автоопределение (auto)"
         help_ru, help_en = _HELP_SOURCES["whisper"]
