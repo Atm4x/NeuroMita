@@ -165,9 +165,14 @@ class ChatGPTPlanProvider(BaseProvider):
                                                     tool_name='', arguments_delta=str(event.get('delta') or ''))
                     continue
                 if event_type == 'error':
-                    code = str(event.get('code') or 'chatgpt_plan.stream_error')
+                    error = event.get('error') if isinstance(event.get('error'), dict) else event
+                    code = str(error.get('code') or event.get('code') or 'chatgpt_plan.stream_error')
+                    detail = str(error.get('message') or event.get('message') or code)
+                    request_id = str(response.headers.get('x-request-id') or '').strip()
+                    if request_id:
+                        detail = f'request_id={request_id}; {detail}'
                     raise LLMProviderError(provider=self.name, friendly_message=self._http_error_message(0, code),
-                        provider_message=str(event.get('message') or code), code=code,
+                        provider_message=detail, raw_payload=event, code=code,
                         retryable=self._stream_retryable(code), phase='stream', url=url)
 
                 if event_type == "response.failed":

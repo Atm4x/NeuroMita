@@ -43,6 +43,23 @@ class FakeAuth:
         return 'test-token'
 
 
+@pytest.mark.parametrize('nested', [False, True])
+def test_stream_error_preserves_quota_reason_and_disables_retry(monkeypatch, nested):
+    from handlers.llm_providers.errors import LLMProviderError
+    error = {'code': 'subscription_sharing_usage_limit_exceeded', 'message': 'Subscription usage limit reached'}
+    event = {'type': 'error', 'error': error} if nested else {'type': 'error', **error}
+    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_provider.get_chatgpt_plan_auth', lambda: FakeAuth())
+    transport = SimpleNamespace(post_json=lambda *args, **kwargs: httpx.Response(
+        200, headers={'x-request-id': 'test-request'}, content='data: ' + json.dumps(event) + '\n\n'))
+    with pytest.raises(LLMProviderError) as caught:
+        ChatGPTPlanProvider(http_transport=transport).generate(LLMRequest(model='m', messages=[]))
+    assert caught.value.code == error['code']
+    assert error['message'] in caught.value.provider_message
+    assert 'test-request' in caught.value.provider_message
+    assert caught.value.raw_payload == event
+    assert not caught.value.retryable
+
+
 @pytest.mark.parametrize('url', [
     'https://evil.example/v1/responses', 'http://api.openai.com/v1/responses',
     'https://api.openai.com/v1/responses?forward=1',
