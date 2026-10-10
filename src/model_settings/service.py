@@ -37,8 +37,10 @@ class ModelSettingsService:
     def resolve(self, document: Any, dialect: str) -> tuple[SettingsSchema, dict[str, Any]]:
         if not isinstance(document, dict) or type(document.get("version")) is not int or document["version"] != 1:
             raise SchemaError("Expected model settings with version: 1")
-        if set(document) - {"version", "schema_id", "schema_override", "values", "enabled", "support_overrides"}:
+        if set(document) - {"version", "schema_id", "schema_override", "values", "enabled", "support_overrides", "sparse_response"}:
             raise SchemaError("Unknown model settings keys")
+        if "sparse_response" in document and type(document["sparse_response"]) is not bool:
+            raise SchemaError("Compact response setting must be boolean")
         identifier = document.get("schema_id")
         if not isinstance(identifier, str) or not identifier:
             raise SchemaError("Model settings require schema_id")
@@ -67,6 +69,8 @@ class ModelSettingsService:
         schema, state = self.resolve(document, dialect)
         supported = {**schema.data.get("supports", {}), **state.get("support_overrides", {})}
         capabilities = deepcopy(protocol_capabilities)
+        if "sparse_response" in state:
+            capabilities["sparse_response"] = state["sparse_response"]
         for name, allowed in supported.items():
             if name == "structured_output":
                 capabilities["native_structured_output"] = allowed
@@ -117,6 +121,8 @@ class ModelSettingsService:
         updated["enabled"] = [key for key in old_enabled if key in updated["values"]]
         if document.get("support_overrides"):
             updated["support_overrides"] = deepcopy(document["support_overrides"])
+        if "sparse_response" in document:
+            updated["sparse_response"] = document["sparse_response"]
         return updated
 
     def customize(self, document: dict, definition: dict, dialect: str) -> dict:

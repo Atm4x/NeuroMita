@@ -17,13 +17,14 @@ from services.structured_response_capabilities import resolve_structured_respons
 from utils.structured_response_parser import parse_structured_response_with_meta, StructuredResponseParseError
 
 
-def profile(**settings):
+def profile(*, sparse_enabled=True, **settings):
     return resolve_structured_response_capabilities(
         settings=settings, runtime=RuntimeCapabilities(connected=True, remote_only=False),
         character=SimpleNamespace(secret_capable=False, secret_revealed=False),
         structured_output=True, tools_enabled=True, enabled_tools=("calculator",),
         tools_mode="schema", tool_depth=0, tool_max_depth=2, images_available=True,
         has_custom_params=False, schema_reasoning=False,
+        sparse_enabled=sparse_enabled,
     ).with_prompt_intents(True)
 
 
@@ -312,7 +313,7 @@ def test_chat_model_selects_wire_dto_before_any_provider_and_keeps_retry_snapsho
                 captured.append(kwargs["build_request"](preset, "model"))
             return None
     model.request_runner = Runner()
-    caps = profile(SPARSE_STRUCTURED_RESPONSE=enabled)
+    caps = profile(sparse_enabled=enabled)
     model._generate_chat_response([], capabilities_override={"structured_response_profile": caps},
         structured_model=StructuredResponse)
     assert len(captured) == 2

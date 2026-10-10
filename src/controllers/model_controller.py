@@ -1637,6 +1637,7 @@ class ModelController(GenerationService, ModelStateService):
             images_available=bool(image_data),
             has_custom_params=has_custom_params,
             schema_reasoning=bool(effective_capabilities.get("schema_reasoning", False)),
+            sparse_enabled=bool(effective_capabilities.get("sparse_response", False)),
         )
         effective_capabilities["structured_response_profile"] = profile
         effective_capabilities["working_state"] = "working_state" not in profile.excluded_fields
