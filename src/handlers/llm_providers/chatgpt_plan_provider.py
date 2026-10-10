@@ -13,6 +13,7 @@ from .chatgpt_plan_auth import get_chatgpt_plan_auth
 from .chatgpt_plan_protocol import ResponsesInferenceAdapter, normalize_responses_usage, parse_sse_data_line
 from .streaming import StreamAccumulator, iter_sse_data
 from .errors import LLMProviderError
+from .chatgpt_plan_cache_debug import CacheDiagnostics
 
 
 class ChatGPTPlanProvider(BaseProvider):
@@ -24,6 +25,10 @@ class ChatGPTPlanProvider(BaseProvider):
     supports_streaming = True
     supports_streaming_with_tools = True
     supports_stream_usage = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cache_diagnostics = CacheDiagnostics()
 
     def is_applicable(self, req: LLMRequest) -> bool:
         return str(req.provider_name or "") == self.name
@@ -64,7 +69,9 @@ class ChatGPTPlanProvider(BaseProvider):
         headers.update({k: v for k, v in (req.headers or {}).items()
                         if k.lower() not in {'authorization', 'host', 'content-type', 'accept', 'cookie', 'proxy-authorization'}})
 
+        diagnostic = self._cache_diagnostics.request(payload, account_id, req.native_parameters or req.extra)
         response = self.http_transport.post_json(req, url, headers=headers, payload=payload, stream=True, follow_redirects=False)
+        completed_response: dict[str, Any] = {}
         try:
             if response.status_code != 200:
                 body = response.read().decode("utf-8", errors="replace")
@@ -105,7 +112,6 @@ class ChatGPTPlanProvider(BaseProvider):
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
             usage: LLMUsage | None = None
-            completed_response: dict[str, Any] = {}
             completed = False
             accumulator = StreamAccumulator(req, provider=self.name, model=req.model) if req.stream else None
 
@@ -238,6 +244,7 @@ class ChatGPTPlanProvider(BaseProvider):
                 record_state(exc.code or '', account_id=account_id)
             raise
         finally:
+            self._cache_diagnostics.response(diagnostic, response, completed_response)
             response.close()
 
     @staticmethod
