@@ -760,7 +760,7 @@ class SandboxPage(QWidget):
             selected = next((item for item in state.model_items if item.preset_id == state.current_model_id), None)
             url = selected.usage_dashboard_url if selected else ''
             usage.setVisible(bool(url))
-            usage.setText(str(_("Используется план ChatGPT", "Using ChatGPT plan"))
+            usage.setText(str(_("Провайдер ChatGPT Plan", "ChatGPT Plan provider"))
                           + f' · <a href="{url}" style="color: #7bc6ff;">'
                           + str(_("Управление использованием", "Manage usage")) + '</a>')
         if state.selectors_loading and not state.model_items:

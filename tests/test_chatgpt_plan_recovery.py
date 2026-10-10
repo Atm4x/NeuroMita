@@ -9,6 +9,46 @@ from handlers.llm_providers.chatgpt_plan_auth import ChatGPTPlanAuth
 from services.provider_settings import run_account_action
 
 
+@pytest.mark.parametrize('failure', [
+    httpx.ConnectError('offline'), httpx.ReadTimeout('timeout'),
+    httpx.HTTPStatusError('unavailable', request=httpx.Request('POST', 'https://auth.openai.com/'),
+                         response=httpx.Response(503)),
+    httpx.HTTPStatusError('too many requests', request=httpx.Request('POST', 'https://auth.openai.com/'),
+                         response=httpx.Response(429)),
+])
+def test_provider_temporary_credential_failure_is_retryable(monkeypatch, failure):
+    from handlers.llm_providers.base import LLMRequest
+    from handlers.llm_providers.chatgpt_plan_provider import ChatGPTPlanProvider
+    from handlers.llm_providers.errors import LLMProviderError
+    def credentials():
+        raise failure
+    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_provider.get_chatgpt_plan_auth',
+                        lambda: SimpleNamespace(get_credentials=credentials))
+    provider = ChatGPTPlanProvider(http_transport=SimpleNamespace(
+        post_json=lambda *args, **kwargs: pytest.fail('No inference without credentials')))
+    with pytest.raises(LLMProviderError) as caught:
+        provider.generate(LLMRequest(model='m', messages=[]))
+    assert caught.value.retryable
+    assert caught.value.code == 'chatgpt_plan.auth_temporarily_unavailable'
+    assert caught.value.phase == 'auth'
+    assert caught.value.__cause__ is failure
+
+
+@pytest.mark.parametrize('failure', [PermissionError('consent required'), RuntimeError('Sign in required')])
+def test_provider_terminal_credential_failure_still_requires_sign_in(monkeypatch, failure):
+    from handlers.llm_providers.base import LLMRequest
+    from handlers.llm_providers.chatgpt_plan_provider import ChatGPTPlanProvider
+    from handlers.llm_providers.errors import LLMProviderError
+    def credentials():
+        raise failure
+    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_provider.get_chatgpt_plan_auth',
+                        lambda: SimpleNamespace(get_credentials=credentials))
+    with pytest.raises(LLMProviderError) as caught:
+        ChatGPTPlanProvider(http_transport=SimpleNamespace()).generate(LLMRequest(model='m', messages=[]))
+    assert not caught.value.retryable
+    assert caught.value.code == 'chatgpt_plan.sign_in_required'
+
+
 @pytest.fixture
 def auth_factory(tmp_path, monkeypatch):
     monkeypatch.setattr(ChatGPTPlanAuth, '_protect_json', staticmethod(json.dumps))

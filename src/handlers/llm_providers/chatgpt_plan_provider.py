@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import httpx
 from typing import Any
 
 from utils import _
@@ -44,15 +45,22 @@ class ChatGPTPlanProvider(BaseProvider):
             else:
                 access_token = auth.get_access_token()
         except Exception as exc:
+            status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            temporary = isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)) or (
+                status_code is not None and (status_code in {408, 429} or status_code >= 500))
             raise LLMProviderError(
                 provider=self.name,
                 friendly_message=_(
+                    'Не удалось обновить сессию ChatGPT из-за временной сетевой ошибки. Повторите запрос позже.',
+                    'Could not refresh the ChatGPT session due to a temporary network error. Try again later.',
+                ) if temporary else _(
                     "Войдите через ChatGPT в настройках API перед использованием этого провайдера.",
                     "Sign in with ChatGPT in API settings before using this provider.",
                 ),
                 provider_message=str(exc),
-                retryable=False,
-                code="chatgpt_plan.sign_in_required",
+                retryable=temporary,
+                status_code=status_code,
+                code='chatgpt_plan.auth_temporarily_unavailable' if temporary else 'chatgpt_plan.sign_in_required',
                 phase="auth",
             ) from exc
 

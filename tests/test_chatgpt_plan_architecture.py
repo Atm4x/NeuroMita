@@ -164,7 +164,8 @@ def test_transport_does_not_follow_redirect_with_bearer_credentials():
     transport.close()
 
 
-def test_real_preset_runner_provider_pipeline(monkeypatch):
+@pytest.mark.parametrize('refresh_failure', [False, True])
+def test_real_preset_runner_provider_pipeline(monkeypatch, refresh_failure):
     from managers.api_preset_resolver import ApiPresetResolver
     from managers.llm_request_runner import LLMRequestRunner
     from handlers.llm_providers.http_transport import LLMHttpClient
@@ -183,7 +184,15 @@ def test_real_preset_runner_provider_pipeline(monkeypatch):
         terminal = json.dumps({'type': 'response.completed', 'response': {'model': 'model',
             'usage': {'input_tokens': 5, 'output_tokens': 3, 'total_tokens': 8}}})
         return httpx.Response(200, content=f'data: {delta}\n\ndata: {terminal}\n\n')
-    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_provider.get_chatgpt_plan_auth', lambda: FakeAuth())
+    credential_calls = []
+    class Auth(FakeAuth):
+        def get_credentials(self):
+            credential_calls.append(1)
+            if refresh_failure and len(credential_calls) == 1:
+                raise httpx.ConnectError('temporary refresh failure')
+            return 'test-token', 'test-account'
+    auth = Auth()
+    monkeypatch.setattr('handlers.llm_providers.chatgpt_plan_provider.get_chatgpt_plan_auth', lambda: auth)
     transport = LLMHttpClient(enable_http2=False, client_factory=lambda *args: httpx.Client(transport=httpx.MockTransport(handle)))
     manager = ProviderManager()
     manager.http_transport.close()
@@ -200,7 +209,8 @@ def test_real_preset_runner_provider_pipeline(monkeypatch):
             stream=True, stream_event_cb=events.append)
     try:
         result = runner.run(messages=messages, preset_id=42, stream_callback=None, build_request=build,
-            max_attempts=1, retry_delay=0, request_timeout=10)
+            max_attempts=2, retry_delay=0, request_timeout=10)
+        assert len(credential_calls) == (2 if refresh_failure else 1)
         assert StructuredResponse.model_validate_json(result.text).segments[0].text == 'Hello'
         assert result.usage.total_tokens == 8
         assert requests[0]['store'] is False and requests[0]['stream'] is True
