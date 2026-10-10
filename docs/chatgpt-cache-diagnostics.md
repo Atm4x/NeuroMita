@@ -110,3 +110,56 @@ the stable initial developer block, followed by a state-changing request with
 that breakpoint retained. Public subscription-route acceptance and cache reuse
 with that control have not yet been tested. No artificial pause or automatic
 breakpoint was added to application behavior.
+
+## Explicit-control rejection and prefix-only warmup on 2026-10-10
+
+Following the user's authorization to investigate explicit breakpoints, sent
+one strict-schema dialogue request with a breakpoint on the final content block
+of the initial 13 developer messages, and `prompt_cache_options` mode `explicit`
+with TTL `30m`. The public subscription endpoint rejected it before generation:
+HTTP 400, `invalid_parameter`, `prompt_cache_options is not supported on this model`.
+Then sent a request containing only the content-block breakpoint, without the
+mode/TTL options. It was also rejected before generation: HTTP 400,
+`invalid_parameter`, `prompt_cache_breakpoint is not supported on this model`.
+These were actual wire requests with the fields injected after adapter conversion;
+the errors are not explained by our adapter dropping those fields.
+
+The prior comparison-only `prompt_cache_options` requests were accepted, so the
+mode/TTL rejection does not imply every member of that object is unsupported.
+The marker-only rejection establishes that a manual breakpoint cannot currently
+be used with this account/model/subscription route. The broader public API guide
+describes such breakpoints, but that capability is absent in these live tests.
+
+Then performed two announced generations without unsupported controls:
+
+| Request | Input tokens | Cached tokens | Result |
+| --- | ---: | ---: | --- |
+| Only initial 13 stable developer messages, same strict schema | 9,276 | 8,960 | completed, valid structured JSON |
+| Full 37-item dialogue, state block at item 28 changed, same initial 13 items | 12,299 | 0 | completed, valid structured JSON |
+
+The full request started 109.920 seconds after the prefix-only response completed.
+Account, model, initial-prefix hash and schema matched. Prefix SHA-256 was
+`af177007931444e0997fe3cf7be5db7a0dddbbaf8faf478a148dadee27d55a6b`.
+Prefix-only response ID:
+`resp_02b6cfc0696214e9016aca1cd8d88887d29a42ad3ea7f30a5f`.
+Full-response ID:
+`resp_03274dd971078f4e016aca1d50584487d284d59fa5a8bd3650`.
+The full response's server comparison again returned `{"type":"unavailable"}`.
+
+The prefix-only request already reported a cache read; this is not evidence of a
+new physical cache write. An available cached prefix did not translate into reuse
+inside the larger dialogue in this control. Automatic prefix-only warmup is thus
+not a verified workaround. No rejected cache controls or automatic warmup were
+added to application behavior.
+
+This stage contained two HTTP-400 requests and two successful generations.
+It establishes subscription-route capability limitations and an unsuccessful
+warmup control, not the server's internal routing/eviction policy. A subsequent
+candidate workaround is to preserve the previous full request as an unchanged
+prefix and append state updates and new turns, rather than rebuilding the volatile
+suffix. That strategy still requires live validation and a design that keeps the
+latest state authoritative and prevents unbounded context growth.
+
+Sources: [OpenAI prompt caching and shared-prefix caveats](https://developers.openai.com/api/docs/guides/prompt-caching),
+[subscription backend breakpoint reports](https://github.com/openai/codex/issues/35300),
+[another Sign in with ChatGPT integration's cache measurements](https://dshmp.com/en/plugins/dsh-plugin-chatgpt).
