@@ -18,8 +18,9 @@ class _StrictDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
-class SparseSegment(_StrictDTO):
-    text: str
+class SparseIntent(_StrictDTO):
+    type: str = Field(..., min_length=1)
+    payload: str = Field(..., description="JSON-encoded object matching the Unity Intent Contract")
 
 
 class SparseStructuredResponse(_StrictDTO):
@@ -87,25 +88,23 @@ def build_sparse_response_model(
 ) -> type[SparseStructuredResponse]:
     excluded = set(profile.excluded_fields) if profile else set()
     segment_excluded = set(profile.excluded_segment_fields) if profile else set()
-    events = []
+    changes = []
 
-    def add_event(name, annotation=None, *, segment=False, fields=None, description=""):
+    def add_change(name, annotation=None, *, fields=None, description=""):
         properties = {"type": (Literal[name], Field(...))}
-        if segment:
-            properties["segment"] = (int, Field(..., ge=0, description="Zero-based index in segments"))
         if fields:
             properties.update(fields)
         else:
             properties["value"] = (_strict_annotation(annotation), Field(..., description=description))
-        event = create_model(f"SparseEvent_{name}", __base__=_StrictDTO, **properties)
-        events.append(event)
+        change = create_model(f"SparseChange_{name}", __base__=_StrictDTO, **properties)
+        changes.append(change)
 
     for name, field in model_cls.model_fields.items():
         if name in excluded or name in {"segments", "reasoning", "secret_exposed", "custom_fields"}:
             continue
         if name == "tool_call":
             names = profile.enabled_tools if profile else ()
-            add_event(name, fields={
+            add_change(name, fields={
                 "name": (Literal[names] if names else str, Field(..., min_length=1)),
                 "args": (str, Field(..., description="JSON-encoded object containing actual tool arguments")),
             })
@@ -113,25 +112,19 @@ def build_sparse_response_model(
             annotation = _non_null(field.annotation)
             if get_origin(annotation) is list:
                 annotation = get_args(annotation)[0]
-            add_event(name, annotation, description=field.description or "")
+            add_change(name, annotation, description=field.description or "")
 
+    segment_fields = {}
     for name, field in ResponseSegment.model_fields.items():
-        if name == "text" or name in segment_excluded:
+        if name in segment_excluded:
             continue
-        if name == "intents":
-            add_event(name, segment=True, fields={
-                "intent_type": (str, Field(..., min_length=1, description="Exact verified Unity intent identifier")),
-                "payload": (str, Field(..., description="JSON-encoded object matching the Unity Intent Contract")),
-            })
-        else:
-            annotation = _non_null(field.annotation)
-            if get_origin(annotation) is list:
-                annotation = get_args(annotation)[0]
-            add_event(name, annotation, segment=True, description=field.description or "")
+        annotation = list[SparseIntent] if name == "intents" else _strict_annotation(field.annotation)
+        segment_fields[name] = (annotation, copy.deepcopy(field))
+    segment_model = create_model("SparseResponseSegment", __base__=_StrictDTO, **segment_fields)
 
     fields = {
-        "segments": (list[SparseSegment], Field(...)),
-        "events": (list[Union[tuple(events)]], Field(..., description="Only operations needed this turn; otherwise []")),
+        "segments": (list[segment_model], Field(...)),
+        "changes": (list[Union[tuple(changes)]], Field(..., description="Only top-level operations needed this turn; otherwise []")),
     }
     for name in ("reasoning", "secret_exposed", "custom_fields"):
         if name in excluded:
@@ -155,7 +148,7 @@ def _json_object(value: str) -> dict:
         raise ValueError("Non-finite JSON values are not allowed")
     result = json.loads(value, parse_constant=reject_constant)
     if not isinstance(result, dict):
-        raise ValueError("Event payload must decode to a JSON object")
+        raise ValueError("Payload must decode to a JSON object")
     return result
 
 
@@ -166,6 +159,11 @@ def normalize_sparse_response(
 ) -> dict:
     wire = build_sparse_response_model(model_cls, profile).model_validate(data)
     result = {"segments": [segment.model_dump() for segment in wire.segments]}
+    for segment in result["segments"]:
+        for intent in segment.get("intents", []):
+            if not intent["type"].strip():
+                raise ValueError("Intent type must not be blank")
+            intent["payload"] = _json_object(intent["payload"])
     for name in ("reasoning", "secret_exposed", "custom_fields"):
         if name in type(wire).model_fields:
             value = getattr(wire, name)
@@ -175,31 +173,21 @@ def normalize_sparse_response(
                 value = _json_object(value)
             result[name] = value
     singletons = set()
-    for event in wire.events:
-        name = event.type
-        index = getattr(event, "segment", None)
-        if index is not None and index >= len(result["segments"]):
-            raise ValueError("Event segment index is outside segments")
-        target = result if index is None else result["segments"][index]
-        source = model_cls if index is None else ResponseSegment
-        is_list = get_origin(_non_null(source.model_fields[name].annotation)) is list
+    for change in wire.changes:
+        name = change.type
+        is_list = get_origin(_non_null(model_cls.model_fields[name].annotation)) is list
         if not is_list:
-            key = (index, name)
-            if key in singletons:
-                raise ValueError(f"Duplicate scalar event: {name}")
-            singletons.add(key)
+            if name in singletons:
+                raise ValueError(f"Duplicate scalar change: {name}")
+            singletons.add(name)
         if name == "tool_call":
-            value = {"name": event.name, "args": _json_object(event.args)}
-        elif name == "intents":
-            if not event.intent_type.strip():
-                raise ValueError("Intent type must not be blank")
-            value = {"type": event.intent_type, "payload": _json_object(event.payload)}
+            value = {"name": change.name, "args": _json_object(change.args)}
         else:
-            value = event.value.model_dump() if isinstance(event.value, BaseModel) else event.value
+            value = change.value.model_dump() if isinstance(change.value, BaseModel) else change.value
         if is_list:
-            target.setdefault(name, []).append(value)
+            result.setdefault(name, []).append(value)
         else:
-            target[name] = value
+            result[name] = value
     return result
 
 

@@ -130,13 +130,13 @@ def parse_structured_response_with_meta(
         )
 
     model_cls = model_cls or StructuredResponse
-    if "events" in data and issubclass(model_cls, StructuredResponse):
+    if ("changes" in data or "events" in data) and issubclass(model_cls, StructuredResponse):
         from schemas.sparse_structured_response import normalize_sparse_response
         try:
             data = normalize_sparse_response(data, model_cls, profile)
         except (ValueError, TypeError) as exc:
             raise StructuredResponseParseError(
-                "Invalid sparse response events", code="structured_sparse_invalid", stage="schema",
+                "Invalid sparse response changes", code="structured_sparse_invalid", stage="schema",
             ) from exc
 
     # Compatibility fallback for older or unconstrained model output. Keep this
