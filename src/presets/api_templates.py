@@ -2,20 +2,6 @@
 
 API_TEMPLATES_DATA = [
     {
-        "id": 12,
-        "name": "ChatGPT Plan (Codex)",
-        "settings_schema_id": "chatgpt-plan",
-        "pricing": "mixed",
-        "url": "https://api.openai.com/v1/responses",
-        "default_model": "",
-        "known_models": [],
-        "protocol_id": "chatgpt_plan_default",
-        "test_url": "https://api.openai.com/v1/models",
-        "documentation_url": "https://developers.openai.com/siwc/token-sharing-open-source",
-        "models_url": "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference",
-        "key_url": "",
-    },
-    {
         "id": 1,
         "name": "Mistral AI",
         "settings_schema_id": "mistral",
@@ -376,6 +362,21 @@ API_TEMPLATES_DATA = [
         "test_url": "http://127.0.0.1:11434/v1/models",
         "documentation_url": "https://ollama.com/blog/openai-compatibility",
         "models_url": "https://ollama.com/search",
+        "key_url": "",
+    },
+    {
+        "id": 12,
+        "name": "ChatGPT Plan (Codex)",
+        "settings_schema_id": "chatgpt-plan",
+        "pricing": "paid",
+        "badge_kind": "subscription",
+        "url": "https://api.openai.com/v1/responses",
+        "default_model": "gpt-5.6-luna",
+        "known_models": [],
+        "protocol_id": "chatgpt_plan_default",
+        "test_url": "https://api.openai.com/v1/models",
+        "documentation_url": "https://developers.openai.com/siwc/token-sharing-open-source",
+        "models_url": "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference",
         "key_url": "",
     },
 ]

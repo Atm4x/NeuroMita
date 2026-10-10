@@ -159,6 +159,7 @@ class ApiSettingsController(QObject, ProtocolsMixin, EditorMixin, PresetsMixin, 
 
         v.test_button.clicked.connect(self._safe(self._test_connection, "test_connection"))
         v.account_button.clicked.connect(self._safe(self._show_accounts, 'provider_accounts'))
+        v.models_button.clicked.connect(self._safe(self._load_account_models, 'provider_models'))
 
         v.key_visibility_button.clicked.connect(self._safe(self._toggle_key_visibility, "toggle_key_visibility"))
         v.template_combo.currentIndexChanged.connect(self._safe(self._on_template_changed_async, "template_changed"))

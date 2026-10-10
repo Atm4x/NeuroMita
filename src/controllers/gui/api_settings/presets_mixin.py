@@ -82,7 +82,7 @@ class PresetsMixin:
             v.template_combo.clear()
             v.template_combo.add_tr_item("Без шаблона", "No template", value=None)
             v.template_combo.setItemIcon(0, provider_icon(""))
-            priority = {"ChatGPT Plan (Codex)": 0, "Google AI Studio": 1, "OpenRouter": 2, "Mistral AI": 3}
+            priority = {"Google AI Studio": 1, "OpenRouter": 2, "Mistral AI": 3, "ChatGPT Plan (Codex)": 5}
             ordered_templates = sorted(builtin, key=lambda p: priority.get(str(getattr(p, "name", "")), 4))
             for p in ordered_templates:
                 v.template_combo.add_provider_item(
@@ -348,3 +348,6 @@ class PresetsMixin:
         if hasattr(v, 'account_button'):
             v.account_button.setVisible(descriptor.account_actions)
             v.account_button.setEnabled(not bool(v.test_button.property('apiTesting')))
+        if hasattr(v, 'models_button'):
+            v.models_button.setVisible(descriptor.account_actions)
+            v.models_button.setEnabled(not bool(v.test_button.property('apiTesting')))

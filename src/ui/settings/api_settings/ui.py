@@ -302,6 +302,8 @@ def build_api_settings_ui(self, parent_layout):
     self.model_help_label = _link_label()
     self.key_help_label = _link_label()
     self.api_model_row.heading.addWidget(self.model_help_label)
+    self.models_button = _button("Получить модели", "Load models", "fa5s.sync-alt", "ApiModelsButton")
+    self.models_button.hide()
     self.api_key_row.heading.addWidget(self.key_help_label)
     self.key_visibility_button = QToolButton()
     self.key_visibility_button.setIcon(qta.icon("fa5s.eye", color=THEME["muted"]))
@@ -310,6 +312,7 @@ def build_api_settings_ui(self, parent_layout):
     self.api_key_row.input_layout.addWidget(self.key_visibility_button)
     credentials.addWidget(self.api_model_row, 0, 0)
     credentials.addWidget(self.api_key_row, 0, 1)
+    credentials.addWidget(self.models_button, 0, 1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
     content.addLayout(credentials)
 
     configuration_scroll = QScrollArea()

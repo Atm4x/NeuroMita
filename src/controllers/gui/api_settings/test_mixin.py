@@ -11,6 +11,9 @@ from services.provider_settings import describe_protocol, list_provider_accounts
 
 
 class TestMixin:
+    def _load_account_models(self) -> None:
+        self._test_connection(action='list_models')
+
     def _show_accounts(self) -> None:
         protocol_id = self._current_protocol_id_ui()
 
