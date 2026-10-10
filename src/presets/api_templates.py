@@ -367,6 +367,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 12,
         "name": "ChatGPT Plan (Codex)",
+        "preferred_model": "gpt-6-luna",
         "settings_schema_id": "chatgpt-plan",
         "pricing": "paid",
         "badge_kind": "subscription",

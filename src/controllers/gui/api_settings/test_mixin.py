@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QMessageBox, QMenu
 
 from utils import _
 from presets.api_endpoints import resolve_api_url, resolve_test_url
+from presets.model_selection import select_catalog_model
 from core.networking.errors import valid_http_url
 from core.events import Events
 from ui.settings.api_settings.dialogs.models_loaded_dialog import ModelsLoadedDialog
@@ -135,10 +136,13 @@ class TestMixin:
                 cleaned.append(s)
 
         if success and cleaned:
-            if describe_protocol(self._current_protocol_id_ui()).account_actions:
-                if v.api_model_row.text().strip() not in cleaned:
-                    preferred = next((m for m in cleaned if 'luna' in m.lower()), cleaned[0])
-                    v.api_model_row.set_text(preferred)
+            preset = getattr(self, 'current_preset_data', None) or {}
+            preferred = str(preset.get('preferred_model', (self._active_template or {}).get('preferred_model', '')) or '')
+            if preferred or describe_protocol(self._current_protocol_id_ui()).account_actions:
+                current = v.api_model_row.text().strip()
+                selected = select_catalog_model(current, cleaned, preferred)
+                if selected != current:
+                    v.api_model_row.set_text(selected)
                     self._on_field_changed()
             try:
                 v.api_model_list_model.setStringList(cleaned)

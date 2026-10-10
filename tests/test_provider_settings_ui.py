@@ -111,12 +111,14 @@ def test_subscription_notice_is_provider_specific_without_placeholder_bars(edito
     assert not panel.isHidden()
 
 
-@pytest.mark.parametrize('current, models, expected', [
-    ('gpt-5.6-luna', ['account-model'], 'account-model'),
-    ('', ['first', 'gpt-6-luna'], 'gpt-6-luna'),
-    ('first', ['first', 'gpt-6-luna'], 'first'),
+@pytest.mark.parametrize('current, models, preferred, expected', [
+    ('gpt-5.6-luna', ['account-model'], 'gpt-6-luna', 'account-model'),
+    ('', ['first', 'gpt-6-luna'], 'gpt-6-luna', 'gpt-6-luna'),
+    ('first', ['first', 'gpt-6-luna'], 'gpt-6-luna', 'first'),
+    ('', ['gpt-6-luna', 'preferred-vendor-model'], 'preferred-vendor-model', 'preferred-vendor-model'),
+    ('', ['first', 'gpt-6-luna'], '', 'first'),
 ])
-def test_subscription_model_comes_from_account_catalog_even_if_dialog_cancelled(editor, monkeypatch, current, models, expected):
+def test_subscription_model_comes_from_account_catalog_even_if_dialog_cancelled(editor, monkeypatch, current, models, preferred, expected):
     class CancelledDialog:
         DialogCode = SimpleNamespace(Accepted=1)
         def __init__(self, *args, **kwargs):
@@ -125,6 +127,7 @@ def test_subscription_model_comes_from_account_catalog_even_if_dialog_cancelled(
             return 0
     monkeypatch.setattr('controllers.gui.api_settings.test_mixin.ModelsLoadedDialog', CancelledDialog)
     editor._on_field_changed = lambda: None
+    editor.current_preset_data = {'preferred_model': preferred}
     editor.view.api_model_row.set_text(current)
     editor._process_test_result({'success': True, 'models': models})
     assert editor.view.api_model_row.text() == expected

@@ -59,6 +59,7 @@ class ApiTemplate:
     test_path: str = ""
     url_tpl: str = ""
     default_model: str = ""
+    preferred_model: str = ""
     known_models: List[str] = field(default_factory=list)
     model_profiles: List[Dict[str, Any]] = field(default_factory=list)
     settings_schema_id: str = ""
@@ -80,6 +81,7 @@ class UserPreset:
     pricing: str = "mixed"
     badge_kind: str = ""
     default_model: str = ""
+    preferred_model: Optional[str] = None
     url: str = ""
     test_url: str = ""
     key: str = ""
@@ -561,6 +563,7 @@ class ApiPresetsController(ApiPresetService):
             pricing=str(raw.get("pricing", "mixed") or "mixed"),
             badge_kind=str(raw.get("badge_kind", "") or "").strip(),
             default_model=str(raw.get("default_model", "") or ""),
+            preferred_model=str(raw['preferred_model'] or '').strip() if raw.get('preferred_model') is not None else None,
             url=url,
             test_url=str(raw.get("test_url") or "").strip(),
             key=str(raw.get("key", "") or ""),
@@ -844,6 +847,7 @@ class ApiPresetsController(ApiPresetService):
             "test_path": tpl.test_path if tpl else "",
             "url_tpl": tpl.url_tpl if tpl else "",
             "default_model": p.default_model or (tpl.default_model if tpl else ""),
+            "preferred_model": p.preferred_model if p.preferred_model is not None else (tpl.preferred_model if tpl else ""),
             "known_models": self._known_models_for_template(tpl),
             "test_url": resolve_test_url(asdict(tpl) if tpl else {}, p.url, p.test_url),
             "filter_fn": tpl.filter_fn if tpl else "",
@@ -1027,6 +1031,8 @@ class ApiPresetsController(ApiPresetService):
         up.pricing = str(data.get("pricing", up.pricing) or up.pricing)
         up.badge_kind = str(data.get("badge_kind", up.badge_kind) or up.badge_kind).strip()
         up.default_model = str(data.get("default_model", up.default_model) or up.default_model)
+        if 'preferred_model' in data:
+            up.preferred_model = str(data['preferred_model'] or '').strip() if data['preferred_model'] is not None else None
         up.url = (
             str(data.get("url", up.url) or "").strip()
             if not template or template.url_editable
