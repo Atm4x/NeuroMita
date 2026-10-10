@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import get_args
 
 from schemas.sparse_structured_response import build_sparse_response_model
 from schemas.structured_response import StructuredResponse
@@ -11,8 +10,7 @@ from schemas.structured_response import StructuredResponse
 def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, reply_limits=None) -> str:
     wire = build_sparse_response_model(model_cls or StructuredResponse, profile)
     schema = wire.json_schema_dict()
-    segment_model = get_args(wire.model_fields["segments"].annotation)[0]
-    base_example = {"segments": [segment_model(text="Hello.").model_dump()], "changes": []}
+    base_example = {"segments": [{"text": "Hello."}], "changes": []}
     lines = [
         "[Structured Response Contract: sparse_changes_v1]",
         "This contract defines the JSON wire format for this request and supersedes field layouts in older examples or history.",
@@ -24,7 +22,12 @@ def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, re
         "Segment actions trigger with their segment; target means the exact active character identifier for its spoken text.",
     ]
     segment_schema = schema["properties"]["segments"]["items"]
-    lines.append("Segment schema (all declared fields are required by the strict provider; use [] or null for unused fields): " + json.dumps(segment_schema, ensure_ascii=False))
+    segment_variants = segment_schema.get("anyOf", [segment_schema])
+    lines.append("Choose the smallest segment variant containing every field needed for that segment. Each segment may choose a different variant.")
+    lines.append("All fields in the chosen variant are required; use [] or null for unused fields in that variant. Do not emit fields belonging only to larger variants.")
+    for variant in segment_variants:
+        lines.append("Allowed segment fields: " + ", ".join(variant["properties"]) + ".")
+    lines.append("Segment field definitions: " + json.dumps(segment_variants[-1]["properties"], ensure_ascii=False))
     lines.append("Only the following change shapes are allowed for this request:")
     variants = schema["properties"]["changes"]["items"].get("anyOf", [schema["properties"]["changes"]["items"]])
     change_names = {variant["properties"]["type"]["enum"][0] for variant in variants}
@@ -77,6 +80,6 @@ def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, re
             'tool_call change: choose only a tool from [Available Tools]. args is a JSON object ENCODED AS A STRING, e.g. "{\\\"expression\\\":\\\"2+2\\\"}". Fill actual required arguments.',
             "Use a short acknowledgement segment (2-5 words). Tool names never belong in commands. The tool result arrives in the next turn; then answer fully.",
         ])
-    if "intents" in segment_schema["properties"]:
+    if "intents" in segment_variants[-1]["properties"]:
         lines.append("Segment intents: type is the verified Unity intent identifier; payload is a JSON object encoded as a string. Use dialogue.continue only when immediate continuation is intended.")
     return "\n".join(lines)

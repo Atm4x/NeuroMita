@@ -28,13 +28,79 @@ def profile(*, sparse_enabled=True, **settings):
     ).with_prompt_intents(True)
 
 
+def segment_variants(schema):
+    items = schema["properties"]["segments"]["items"]
+    return items.get("anyOf", [items])
+
+
+def test_segment_schema_has_four_nested_variants_for_common_combinations():
+    from schemas.structured_response import ResponseSegment
+    caps = profile()
+    schema = build_sparse_response_model(StructuredResponse, caps).json_schema_dict()
+    variants = segment_variants(schema)
+    assert len(variants) == 4
+    expression = {"text", "emotions", "animations", "idle_animations", "face_params"}
+    actions = expression | {"commands", "intents", "target"}
+    assert [set(v["properties"]) for v in variants] == [
+        {"text"}, expression, actions,
+        set(ResponseSegment.model_fields) - set(caps.excluded_segment_fields),
+    ]
+    assert "anyOf" not in schema
+    for variant in variants:
+        assert set(variant["required"]) == set(variant["properties"])
+        assert variant["additionalProperties"] is False
+
+
+def test_segment_variants_deduplicate_after_capability_filtering():
+    from dataclasses import replace
+    from schemas.structured_response import ResponseSegment
+    caps = replace(profile(), excluded_segment_fields=tuple(set(ResponseSegment.model_fields) - {"text"}))
+    schema = build_sparse_response_model(StructuredResponse, caps).json_schema_dict()
+    assert [set(v["properties"]) for v in segment_variants(schema)] == [{"text"}]
+
+
+def test_mixed_segment_variants_keep_actions_and_full_fallback():
+    data = {"segments": [
+        {"text": "Neutral"},
+        {"text": "Expressive", "emotions": ["happy"], "animations": ["wave"],
+         "idle_animations": [], "face_params": ["smile"]},
+        {"text": "Action", "emotions": [], "animations": [], "idle_animations": [], "face_params": [],
+         "commands": ["camera_snapshot"], "intents": [{"type": "inventory.collect", "payload": '{"object":"Cat"}'}], "target": "Kind"},
+        {"text": "Rare", "clothes": ["outfit"], "music": ["Calm"], "allow_sleep": False},
+    ], "changes": []}
+    outcome = parse_structured_response_with_meta(json.dumps(data), profile=profile())
+    assert outcome.control_plane_trusted
+    segments = outcome.response.segments
+    assert segments[0].commands == []
+    assert segments[1].face_params == ["smile"]
+    assert segments[2].target == "Kind"
+    assert segments[2].commands == ["camera_snapshot"]
+    assert segments[2].intents[0].payload == {"object": "Cat"}
+    assert segments[3].clothes == ["outfit"]
+    assert segments[3].music == ["Calm"]
+    assert segments[3].allow_sleep is False
+
+
+def test_responses_adapter_preserves_nested_segment_anyof():
+    from handlers.llm_providers.base import LLMRequest
+    from handlers.llm_providers.chatgpt_plan_protocol import ResponsesInferenceAdapter
+    caps = profile()
+    wire = build_sparse_response_model(StructuredResponse, caps)
+    req = LLMRequest(model="test", messages=[], structured_model=wire,
+        capabilities={"structured_output": True, "structured_response_profile": caps})
+    fmt = ResponsesInferenceAdapter().build(req)["text"]["format"]
+    assert fmt["strict"] is True
+    assert fmt["schema"] == wire.json_schema_dict()
+    assert len(segment_variants(fmt["schema"])) == 4
+
+
 def test_neutral_reply_has_only_two_root_fields_and_normalizes_defaults():
     caps = profile()
     wire = build_sparse_response_model(StructuredResponse, caps)
     schema = wire.openai_response_format()["json_schema"]
     assert schema["strict"] is True
     assert set(schema["schema"]["properties"]) == {"segments", "changes"}
-    segment_fields = set(schema["schema"]["properties"]["segments"]["items"]["properties"])
+    segment_fields = set(segment_variants(schema["schema"])[-1]["properties"])
     assert {"text", "commands", "intents", "target"} <= segment_fields
     outcome = parse_structured_response_with_meta(
         '{"segments":[{"text":"Hello"}],"changes":[]}', profile=caps,
@@ -80,8 +146,8 @@ def test_changes_never_advertise_segment_fields_and_disabled_segments_stay_exclu
     names = {variant["properties"]["type"]["enum"][0] for variant in variants}
     assert not names & set(ResponseSegment.model_fields)
     assert all("segment" not in variant["properties"] for variant in variants)
-    segments = schema["properties"]["segments"]["items"]["properties"]
-    assert not set(caps.excluded_segment_fields) & set(segments)
+    for variant in segment_variants(schema):
+        assert not set(caps.excluded_segment_fields) & set(variant["properties"])
     with pytest.raises(ValidationError):
         wire.model_validate({"segments": [{"text": "Hi", "intents": []}], "changes": []})
 
@@ -94,7 +160,7 @@ def test_prompt_base_example_contains_all_strict_segment_fields():
     example_line = next(line for line in contract.splitlines() if line.startswith("Base example"))
     example = json.loads(example_line.split(": ", 1)[1])
     wire.model_validate(example)
-    required = wire.json_schema_dict()["properties"]["segments"]["items"]["required"]
+    required = segment_variants(wire.json_schema_dict())[0]["required"]
     assert set(example["segments"][0]) == set(required)
 
 

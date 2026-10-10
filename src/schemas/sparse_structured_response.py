@@ -23,6 +23,10 @@ class SparseIntent(_StrictDTO):
     payload: str = Field(..., description="JSON-encoded object matching the Unity Intent Contract")
 
 
+_EXPRESSION_SEGMENT_FIELDS = frozenset({"text", "emotions", "animations", "idle_animations", "face_params"})
+_ACTION_SEGMENT_FIELDS = _EXPRESSION_SEGMENT_FIELDS | {"commands", "intents", "target"}
+
+
 class SparseStructuredResponse(_StrictDTO):
 
     @classmethod
@@ -120,10 +124,24 @@ def build_sparse_response_model(
             continue
         annotation = list[SparseIntent] if name == "intents" else _strict_annotation(field.annotation)
         segment_fields[name] = (annotation, copy.deepcopy(field))
-    segment_model = create_model("SparseResponseSegment", __base__=_StrictDTO, **segment_fields)
+    segment_models = []
+    seen_fields = set()
+    for label, names in (
+        ("Text", {"text"}),
+        ("Expression", _EXPRESSION_SEGMENT_FIELDS),
+        ("Action", _ACTION_SEGMENT_FIELDS),
+        ("Full", set(segment_fields)),
+    ):
+        selected = {name: field for name, field in segment_fields.items() if name in names}
+        key = tuple(selected)
+        if key in seen_fields:
+            continue
+        seen_fields.add(key)
+        segment_models.append(create_model(f"SparseSegment{label}", __base__=_StrictDTO, **selected))
+    segment_type = Union[tuple(segment_models)]
 
     fields = {
-        "segments": (list[segment_model], Field(...)),
+        "segments": (list[segment_type], Field(...)),
         "changes": (list[Union[tuple(changes)]], Field(..., description="Only top-level operations needed this turn; otherwise []")),
     }
     for name in ("reasoning", "secret_exposed", "custom_fields"):
