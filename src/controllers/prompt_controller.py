@@ -929,6 +929,10 @@ class PromptController(PromptBuilderService):
         }
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
+        cartridge = getattr(character, "cartridge_definition", None)
+        if cartridge is not None:
+            from services.cartridge_prompt import build_cartridge_prompt
+            return build_cartridge_prompt(request)
         char_id = str(getattr(character, "char_id", "") or "")
         if not char_id:
             raise ValueError("build_prompt: character без char_id")

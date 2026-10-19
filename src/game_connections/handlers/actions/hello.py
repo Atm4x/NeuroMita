@@ -19,6 +19,7 @@ class HelloAction:
         await server.send_json(ctx.writer, {
             "type": "hello_ack",
             "protocol_version": server.PROTOCOL_VERSION,
+            "cartridge_protocol_version": 1,
             "session_id": str(ctx.client_id or ""),
             "client_role": role,
             "owns_player_input": server.owns_player_input(ctx.client_id),

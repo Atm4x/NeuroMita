@@ -1469,6 +1469,7 @@ class ModelController(GenerationService, ModelStateService):
             request.cancellation.raise_if_cancelled()
         if (
             not is_game_master
+            and not getattr(char, "is_cartridge", False)
             and bool(self.settings.get("RAG_ENABLED", False))
             and policy.react_level != 1
         ):
@@ -1481,7 +1482,7 @@ class ModelController(GenerationService, ModelStateService):
         # Core-memory triggers (e.g. the code 23 easter egg) are exact hooks:
         # they fire on precise player input, independent of RAG availability or
         # embedding similarity of a two-digit message.
-        if not is_game_master:
+        if not is_game_master and not getattr(char, "is_cartridge", False):
             try:
                 from managers.core_memory_triggers import core_memory_context
                 core_memory_context_text = core_memory_context(user_input, character_id=char_id)
@@ -1559,6 +1560,7 @@ class ModelController(GenerationService, ModelStateService):
         _tools_on = (
             bool(self.settings.get("TOOLS_ON", True))
             and not is_game_master
+            and not getattr(char, "is_cartridge", False)
             and bool(effective_capabilities.get("tools_prompt_enabled", True))
             and int(self.settings.get("TOOL_MAX_DEPTH", 2)) > 0
         )

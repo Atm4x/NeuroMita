@@ -383,6 +383,10 @@ class AppVarsService(ABC):
 
 
 class CharacterRegistry(ABC):
+    def register_cartridges(self, definitions) -> None:
+        """Install validated virtual character definitions without changing the selected Mita."""
+        raise NotImplementedError("This character registry does not support cartridges")
+
     def stats_of(self, character_id: str) -> Dict[str, float]:
         """Read statistics without materializing a character runtime."""
         return {"attitude": 60.0, "boredom": 10.0, "stress": 5.0}

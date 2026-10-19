@@ -477,6 +477,8 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
+        if getattr(character, "is_cartridge", False):
+            return
         context = services().get_optional(TimelineContext)
         if context is not None:
             self._start_timeline_compression(character, context)

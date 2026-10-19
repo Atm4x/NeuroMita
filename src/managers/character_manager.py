@@ -4,7 +4,7 @@ from core.state_barrier import state_operation
 
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Type
+from typing import Callable, Dict, List, Optional
 
 from characters import (
     Cappie,
@@ -28,15 +28,17 @@ from managers.character_resource_manager import (
 @dataclass(frozen=True)
 class CharacterDefinition:
     character_id: str
-    factory: Type[Character]
+    factory: Callable[[], Character]
+    title: str = ""
+    storage: str = ""
 
     @property
     def display_name(self) -> str:
-        return str(getattr(self.factory, "DISPLAY_NAME", self.character_id) or self.character_id)
+        return self.title or str(getattr(self.factory, "DISPLAY_NAME", self.character_id) or self.character_id)
 
     @property
     def storage_name(self) -> str:
-        return str(getattr(self.factory, "STORAGE_NAME", self.character_id) or self.character_id)
+        return self.storage or str(getattr(self.factory, "STORAGE_NAME", self.character_id) or self.character_id)
 
 
 _CHARACTER_DEFINITIONS: tuple[CharacterDefinition, ...] = (
@@ -114,6 +116,23 @@ class CharacterManager:
 
     def get_all_characters(self) -> List[str]:
         return list(self._definitions)
+
+    def register_cartridges(self, definitions) -> None:
+        from characters.cartridge import CartridgeCharacter
+
+        with self._lock:
+            for item in definitions:
+                current = self.characters.get(item.character_id)
+                if current is not None:
+                    if not isinstance(current, CartridgeCharacter):
+                        raise ValueError("Cartridge cannot replace an ordinary character")
+                    current.cartridge_definition = item
+                    current.display_name = item.title
+                self._definitions[item.character_id] = CharacterDefinition(
+                    item.character_id, lambda definition=item: CartridgeCharacter(definition),
+                    item.title, item.character_id,
+                )
+                self.resources.register_character(item.character_id, item.character_id)
 
     def get_character_stats(self, char_id: str) -> dict[str, float]:
         """Read runtime values if loaded, otherwise only the persisted statistics."""
