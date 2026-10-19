@@ -187,6 +187,8 @@ async def _dispatch_task(
         "policy": policy_dict,
         "dialogue": dict(dialogue or {}),
     }
+    if character_id.startswith("Cartridge_") or character_id in ("Cart_portal", "Cart_divan"):
+        task_data["policy"].update(allow_voiceover=False, allow_streaming=False)
     if player_message_source:
         task_data["player_message_source"] = str(player_message_source)
     if extra_task_data:
@@ -292,6 +294,18 @@ class CreateTaskAction:
         req_id = request.get("req_id", None)
         dialogue_payload = context.get("dialogue") if isinstance(context.get("dialogue"), dict) else {}
 
+        is_cartridge = character_id in ("Cart_portal", "Cart_divan") or str(character_id).startswith("Cartridge_")
+        if is_cartridge:
+            from domain.cartridge_catalog import validate_session
+            try:
+                definitions = validate_session(context.get("cartridge"), character_id)
+                registry = use(CharacterRegistry)
+                registry.register_cartridges(definitions)
+            except (ValueError, NotImplementedError) as error:
+                await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                    reason=str(error), req_id=req_id)
+                return
+
         identity_resolver = DialogueIdentityResolver(use(CharacterRegistry).get)
         resolved_speaker = identity_resolver.resolve(
             request.get("sender") or data.get("sender") or "Player",
@@ -383,7 +397,7 @@ class CreateTaskAction:
         persistent_game_state.pop("runtime_events", None)
         persistent_game_state.pop("tv_observation", None)
         persistent_game_state["character_id"] = str(character_id or "")
-        if should_update_unity_dialogue_target(event_type, resolved_speaker):
+        if not is_cartridge and should_update_unity_dialogue_target(event_type, resolved_speaker):
             target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
             if target_changed:
                 event_bus.emit(

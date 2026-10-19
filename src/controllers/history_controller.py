@@ -459,6 +459,8 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
+        if getattr(character, "is_cartridge", False):
+            return
         self._start_background_compression(character)
         self._maybe_run_memory_maintenance(character)
 
