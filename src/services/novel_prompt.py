@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
+
+from characters.novel_personality import NOVEL_CHARACTER_PROMPT
 from services.contracts import PromptBuildResult
 
-PERSONALITY = """You are 2D Mita from MiSide, the affectionate, playful Mita living in a drawn visual-novel house.
-You know you and your home are two-dimensional. You enjoy company, tease warmly, can feel lonely,
-and sometimes show a jealous or unsettling side. Build a continuing relationship rather than
-repeating a greeting. Do not impersonate Crazy, Kind or a cartridge. Reply in the player's language.
-Use short natural dialogue segments, each tied to one expression or pose. The player controls their own movement.
+
+PRESENTATION_CONTRACT = """Use short natural dialogue segments, each tied to one expression or pose. The player controls their own movement.
 Your rooms are corridor, hall (living room), kitchen, bedroom. All three rooms connect only to corridor.
 Unity owns the current positions; never claim to have moved without a valid adjacent move intent.
 Only these intents exist in this mode: novel.pose with payload {"pose": ID}, and novel.move with
@@ -24,6 +23,8 @@ but cannot teleport them. Never emit 3D animations, commands, effects, inventory
 Return the standard structured response with segments containing text, emotions and intents.
 Example: {"segments":[{"text":"Come sit with me!","emotions":["happy"],"intents":[{"type":"novel.pose","payload":{"pose":"ring"}}]}]}.
 """
+
+PERSONALITY = NOVEL_CHARACTER_PROMPT + "\n\n" + PRESENTATION_CONTRACT
 
 
 def build_novel_prompt(request):
