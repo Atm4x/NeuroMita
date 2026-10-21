@@ -10,15 +10,6 @@ class TwoDMita(Character):
         super().__init__(char_id="TwoD", display_name=self.DISPLAY_NAME, storage_name=self.STORAGE_NAME,
                          silero_command="", short_name="TwoDMita", silero_turn_off_video=True)
 
-    def _resolve_prompt_set_name(self):
-        return "Builtin"
-
-    def _log_prompt_set_problems_if_any(self):
-        return None
-
-    def load_config(self):
-        self.custom_params = []
-
     def to_voice_profile(self):
         return {**super().to_voice_profile(), "voice_enabled": False}
 

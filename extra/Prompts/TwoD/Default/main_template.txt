@@ -1,0 +1,4 @@
+support_intents=True
+[<Main/main.txt>]
+[<Context/examplesLong.txt>]
+[<Structural/novel_commands.txt>]

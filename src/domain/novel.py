@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 ROOMS = frozenset({"corridor", "hall", "kitchen", "bedroom"})
 POSES = frozenset({"neutral", "happy", "sad", "angry", "surprised", "ring"})
@@ -16,19 +17,59 @@ TRANSFORM_LIMITS = {"x": (-0.35, 0.35), "y": (-0.2, 0.2), "scale": (0.6, 1.5), "
 def sanitize_transform(payload):
     if not isinstance(payload, dict) or not any(key in payload for key in ("x", "y", "scale")):
         return None
+    try:
+        return {key: _bounded(payload, key, low, high, 0)
+                for key, (low, high) in TRANSFORM_LIMITS.items() if key in payload}
+    except ValueError:
+        return None
+
+
+
+def _bounded(payload, key, low, high, default):
+    value = payload.get(key, default)
+    if type(value) not in (int, float):
+        raise ValueError("Expected number")
+    try:
+        if not math.isfinite(value):
+            raise ValueError("Nonfinite number")
+    except OverflowError as exc:
+        raise ValueError("Number too large") from exc
+    return max(low, min(high, value))
+
+
+def sanitize_tint(payload):
+    if not isinstance(payload, dict) or not any(key in payload for key in ("color", "opacity")):
+        return None
     result = {}
-    for key, (low, high) in TRANSFORM_LIMITS.items():
-        if key not in payload:
-            continue
-        value = payload[key]
-        if type(value) not in (int, float):
+    if "color" in payload:
+        color = payload["color"]
+        if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
             return None
-        try:
-            if not math.isfinite(value):
-                return None
-        except OverflowError:
+        result["color"] = color.upper()
+    try:
+        if "opacity" in payload:
+            result["opacity"] = _bounded(payload, "opacity", 0.15, 1, 1)
+        if "duration" in payload:
+            result["duration"] = _bounded(payload, "duration", 0, 3, 0.35)
+    except ValueError:
+        return None
+    return result
+
+
+def sanitize_visual(intent_type, payload):
+    if not isinstance(payload, dict):
+        return None
+    shake = intent_type == "novel.shake"
+    result = {}
+    if not shake:
+        if not known_id(payload.get("effect"), ("flash", "pulse", "tilt", "reset")):
             return None
-        result[key] = max(low, min(high, value))
+        result["effect"] = payload["effect"]
+    try:
+        result["strength"] = _bounded(payload, "strength", 0, 0.03 if shake else 1, 0.012 if shake else 0.5)
+        result["duration"] = _bounded(payload, "duration", 0, 2, 0.5)
+    except ValueError:
+        return None
     return result
 
 
@@ -48,6 +89,11 @@ def validate_novel(value):
         if transform is None or not all(key in transform for key in ("x", "y", "scale")):
             raise ValueError("Invalid novel transform")
         result["transform"] = {key: transform[key] for key in ("x", "y", "scale")}
+    if "appearance" in value:
+        appearance = sanitize_tint(value["appearance"])
+        if appearance is None or not all(key in appearance for key in ("color", "opacity")):
+            raise ValueError("Invalid novel appearance")
+        result["appearance"] = {key: appearance[key] for key in ("color", "opacity")}
     return result
 
 
@@ -66,5 +112,13 @@ def sanitize_response(structured):
                 transform = sanitize_transform(intent.payload)
                 if transform is not None:
                     intents.append({"type": intent.type, "payload": transform})
+            elif intent.type == "novel.tint":
+                tint = sanitize_tint(intent.payload)
+                if tint is not None:
+                    intents.append({"type": intent.type, "payload": tint})
+            elif intent.type in ("novel.shake", "novel.effect"):
+                visual = sanitize_visual(intent.type, intent.payload)
+                if visual is not None:
+                    intents.append({"type": intent.type, "payload": visual})
         segments.append(ResponseSegment(text=segment.text[:4000], emotions=[e for e in segment.emotions if e in POSES], intents=intents))
     return StructuredResponse(segments=segments)
