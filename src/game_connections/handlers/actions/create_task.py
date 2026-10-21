@@ -294,6 +294,15 @@ class CreateTaskAction:
         req_id = request.get("req_id", None)
         dialogue_payload = context.get("dialogue") if isinstance(context.get("dialogue"), dict) else {}
 
+        if character_id == "TwoD":
+            from domain.novel import validate_novel
+            try:
+                context["novel"] = validate_novel(context.get("novel"))
+            except ValueError as error:
+                await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                    reason=str(error), req_id=req_id)
+                return
+
         is_cartridge = character_id in ("Cart_portal", "Cart_divan") or str(character_id).startswith("Cartridge_")
         if is_cartridge:
             from domain.cartridge_catalog import validate_session
@@ -390,6 +399,7 @@ class CreateTaskAction:
             "intent_rules": context.get("intent_rules", ""),
             "runtime_events": context.get("runtime_events", []),
             "tv_observation": context.get("tv_observation", {}),
+            "novel": context.get("novel", {}) if character_id == "TwoD" else {},
         }
         # Runtime events are consumable by this exact turn and must never leak
         # into the persistent fallback state used by non-Unity requests.
@@ -397,7 +407,7 @@ class CreateTaskAction:
         persistent_game_state.pop("runtime_events", None)
         persistent_game_state.pop("tv_observation", None)
         persistent_game_state["character_id"] = str(character_id or "")
-        if not is_cartridge and should_update_unity_dialogue_target(event_type, resolved_speaker):
+        if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
             target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
             if target_changed:
                 event_bus.emit(

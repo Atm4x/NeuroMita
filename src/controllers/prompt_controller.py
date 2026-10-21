@@ -926,6 +926,9 @@ class PromptController(PromptBuilderService):
         }
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
+        if getattr(character, "is_novel", False):
+            from services.novel_prompt import build_novel_prompt
+            return build_novel_prompt(request)
         cartridge = getattr(character, "cartridge_definition", None)
         if cartridge is not None:
             from services.cartridge_prompt import build_cartridge_prompt

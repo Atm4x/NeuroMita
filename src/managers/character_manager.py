@@ -17,6 +17,7 @@ from characters import (
     SleepyMita,
 )
 from characters.character import Character
+from characters.novel import TwoDMita
 from main_logger import logger
 from managers.character_resource_manager import (
     CharacterResourceManager,
@@ -50,6 +51,7 @@ _CHARACTER_DEFINITIONS: tuple[CharacterDefinition, ...] = (
     CharacterDefinition("Creepy", CreepyMita),
     CharacterDefinition("Ghost", GhostMita),
     CharacterDefinition("GameMaster", GameMaster),
+    CharacterDefinition("TwoD", TwoDMita),
 )
 
 

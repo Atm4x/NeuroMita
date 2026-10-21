@@ -906,7 +906,8 @@ class ChatController(ChatService, GenerationActivityService):
                     _route_filtered(stream_json_filter.flush_visible())
                 flush_stream_output()
 
-            if response_text and self.settings.get("USE_VOICEOVER") and eff_policy.allow_voiceover:
+            if (response_text and self.settings.get("USE_VOICEOVER") and eff_policy.allow_voiceover
+                    and not (isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False)):
                 if isinstance(voice_profile, dict):
                     is_game_master = (voice_profile.get("character_id") == "GameMaster")
                     if (not is_game_master) or bool(self.settings.get("GM_VOICE", False)):
