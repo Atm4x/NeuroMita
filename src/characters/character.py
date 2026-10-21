@@ -1,4 +1,5 @@
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 import datetime
 import re
 import os
@@ -1094,7 +1095,9 @@ class Character:
         """Force-sync full state to DB: flushes dirty variables, then persists
         all messages and variables. Called at end-of-turn and on explicit saves."""
         self.flush_variables()
-        history_data = {"messages": messages, "variables": self.variables.copy()}
+        limit = runtime_profile_for(self).history_message_limit
+        history_data = {"messages": messages[-limit:] if limit is not None else messages,
+                        "variables": self.variables.copy()}
         self.history_manager.save_history(history_data)
 
     def clear_history(self):

@@ -1,6 +1,7 @@
 # src/controllers/model_controller.py
 from __future__ import annotations
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 
 import base64
 import dataclasses
@@ -1380,6 +1381,7 @@ class ModelController(GenerationService, ModelStateService):
         char_id = getattr(char, "char_id", "") or ""
         char_name = getattr(char, "display_name", "") or ""
         is_game_master = char_id.casefold() == "gamemaster"
+        character_profile = runtime_profile_for(char)
 
         rag_context = ""
         core_memory_context_text = ""
@@ -1387,7 +1389,7 @@ class ModelController(GenerationService, ModelStateService):
             request.cancellation.raise_if_cancelled()
         if (
             not is_game_master
-            and not (getattr(char, "is_cartridge", False) or getattr(char, "is_novel", False))
+            and character_profile.rag_enabled
             and bool(self.settings.get("RAG_ENABLED", False))
             and policy.react_level != 1
         ):
@@ -1400,7 +1402,7 @@ class ModelController(GenerationService, ModelStateService):
         # Core-memory triggers (e.g. the code 23 easter egg) are exact hooks:
         # they fire on precise player input, independent of RAG availability or
         # embedding similarity of a two-digit message.
-        if not is_game_master and not (getattr(char, "is_cartridge", False) or getattr(char, "is_novel", False)):
+        if not is_game_master and character_profile.core_memory_enabled:
             try:
                 from managers.core_memory_triggers import core_memory_context
                 core_memory_context_text = core_memory_context(user_input, character_id=char_id)
@@ -1421,7 +1423,7 @@ class ModelController(GenerationService, ModelStateService):
             or game_state.get("worldPlayer")
             or ""
         ).strip()
-        character_world_context = get_world_context_text(
+        character_world_context = "" if character_profile.scene_context_key else get_world_context_text(
             character_id=char_id,
             world_id=character_world,
         )
@@ -1472,13 +1474,13 @@ class ModelController(GenerationService, ModelStateService):
         except Exception as e:
             logger.warning(f"[ModelController] Failed to resolve preset capabilities: {format_exception(e)}")
 
-        if is_game_master or getattr(char, "is_novel", False):
+        if is_game_master or character_profile.requires_structured_output:
             effective_capabilities["structured_output"] = True
 
         _tools_on = (
             bool(self.settings.get("TOOLS_ON", True))
             and not is_game_master
-            and not (getattr(char, "is_cartridge", False) or getattr(char, "is_novel", False))
+            and character_profile.tools_enabled
             and bool(effective_capabilities.get("tools_prompt_enabled", True))
             and int(self.settings.get("TOOL_MAX_DEPTH", 2)) > 0
         )
