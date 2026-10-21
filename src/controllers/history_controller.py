@@ -477,7 +477,7 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
-        if getattr(character, "is_cartridge", False):
+        if getattr(character, "is_cartridge", False) or getattr(character, "is_novel", False):
             return
         context = services().get_optional(TimelineContext)
         if context is not None:
