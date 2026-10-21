@@ -1,6 +1,7 @@
 from __future__ import annotations
 from services.native_tool_calls import persisted_native_tool_messages
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import datetime
@@ -477,7 +478,7 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
-        if getattr(character, "is_cartridge", False) or getattr(character, "is_novel", False):
+        if not runtime_profile_for(character).background_memory_enabled:
             return
         context = services().get_optional(TimelineContext)
         if context is not None:

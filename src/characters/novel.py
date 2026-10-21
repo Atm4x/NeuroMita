@@ -1,10 +1,17 @@
 from characters.character import Character
+from domain.character_runtime_profile import CharacterRuntimeProfile
 
 
 class TwoDMita(Character):
     DISPLAY_NAME = "2D Mita"
     STORAGE_NAME = "2D Mita"
-    is_novel = True
+    runtime_profile = CharacterRuntimeProfile(
+        rag_enabled=False, core_memory_enabled=False, tools_enabled=False,
+        background_memory_enabled=False, requires_structured_output=True,
+        scene_context_key="novel",
+        scene_context_fields=("player_room", "mita_room", "pose", "transform", "appearance"),
+        history_message_limit=40,
+    )
 
     def __init__(self):
         super().__init__(char_id="TwoD", display_name=self.DISPLAY_NAME, storage_name=self.STORAGE_NAME,
@@ -12,9 +19,6 @@ class TwoDMita(Character):
 
     def to_voice_profile(self):
         return {**super().to_voice_profile(), "voice_enabled": False}
-
-    def save_character_state_to_history(self, messages):
-        super().save_character_state_to_history(messages[-40:])
 
     def process_structured_response(self, structured, save_as_missed=False):
         from domain.novel import sanitize_response

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from characters.character import Character
 from domain.cartridge_catalog import CartridgeDefinition
+from domain.character_runtime_profile import CharacterRuntimeProfile
 
 
 class CartridgeCharacter(Character):
     """Virtual character using the standard model pipeline and character-scoped history."""
+
+    runtime_profile = CharacterRuntimeProfile(
+        rag_enabled=False, core_memory_enabled=False, tools_enabled=False,
+        background_memory_enabled=False,
+    )
 
     def __init__(self, definition: CartridgeDefinition):
         self.cartridge_definition = definition
