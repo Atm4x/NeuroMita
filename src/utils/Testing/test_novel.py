@@ -92,6 +92,23 @@ class NovelTests(unittest.TestCase):
         build_novel_prompt(request)
         history.get_recent_messages.assert_not_called()
 
+    def test_prompt_controller_routes_novel_persona_without_fabricating_history(self):
+        from controllers.prompt_controller import PromptController
+        from characters.novel_personality import NOVEL_CHARACTER_PROMPT
+        history = MagicMock()
+        history.get_recent_messages.return_value = [{"role": "assistant", "content": "Our real earlier reply"}]
+        request = SimpleNamespace(character=SimpleNamespace(is_novel=True, history_manager=history),
+            policy=SimpleNamespace(use_history_in_prompt=True), user_input="Я вернулся", sender="Player",
+            game_state={"novel": dict(player_room="hall", mita_room="hall", pose="happy")})
+        result = object.__new__(PromptController).build(request)
+        self.assertTrue(result.messages[0]["content"].startswith(NOVEL_CHARACTER_PROMPT))
+        for command in ("novel.pose", "novel.move", "novel.transform"):
+            self.assertIn(command, result.messages[0]["content"])
+        self.assertEqual(result.history_messages, [
+            {"role": "assistant", "content": "Our real earlier reply"},
+            {"role": "user", "content": "Я вернулся", "sender": "Player"}])
+        self.assertEqual([message["role"] for message in result.messages], ["system", "assistant", "user"])
+
     def test_character_is_registered_separately(self):
         from managers.character_manager import _CHARACTER_DEFINITIONS
         definition = next(d for d in _CHARACTER_DEFINITIONS if d.character_id == "TwoD")
