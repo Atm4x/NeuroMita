@@ -2,11 +2,23 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from domain.novel import validate_novel, sanitize_response, sanitize_transform
+from domain.novel import validate_novel, sanitize_response, sanitize_transform, sanitize_tint, sanitize_visual
 from schemas.structured_response import StructuredResponse
+
+
+PROMPTS = Path(__file__).resolve().parents[3] / "extra" / "Prompts"
+
+
+def prompt_character(history):
+    from DSL.dsl_engine import DslInterpreter
+    from DSL.path_resolver import LocalPathResolver
+    character = SimpleNamespace(char_id="TwoD", is_novel=True, history_manager=history,
+        base_data_path=str(PROMPTS / "TwoD" / "Default"), main_template_path_relative="main_template.txt")
+    character.dsl_interpreter = DslInterpreter(character, LocalPathResolver(str(PROMPTS), character.base_data_path))
+    return character
 
 
 class NovelTests(unittest.TestCase):
@@ -67,7 +79,7 @@ class NovelTests(unittest.TestCase):
         from services.novel_prompt import build_novel_prompt
         history = MagicMock()
         history.get_recent_messages.return_value = [{"role": "user", "content": "Earlier"}, {"role": "assistant", "content": "Remembered"}]
-        request = SimpleNamespace(character=SimpleNamespace(history_manager=history),
+        request = SimpleNamespace(character=prompt_character(history),
             policy=SimpleNamespace(use_history_in_prompt=True), user_input="Hello", sender="Player",
             game_state={"novel": dict(player_room="bedroom", mita_room="corridor", pose="sad", transform=dict(x=0.15, y=0, scale=1.2))})
         result = build_novel_prompt(request)
@@ -82,7 +94,7 @@ class NovelTests(unittest.TestCase):
         from services.novel_prompt import build_novel_prompt
         history = MagicMock()
         history.get_recent_messages.return_value = [{"role": "assistant", "content": "x" * 20000}]
-        request = SimpleNamespace(character=SimpleNamespace(history_manager=history),
+        request = SimpleNamespace(character=prompt_character(history),
             policy=SimpleNamespace(use_history_in_prompt=True), user_input="y" * 5000, sender="Player", game_state={})
         result = build_novel_prompt(request)
         self.assertEqual(len(result.user_message["content"]), 2000)
@@ -94,20 +106,74 @@ class NovelTests(unittest.TestCase):
 
     def test_prompt_controller_routes_novel_persona_without_fabricating_history(self):
         from controllers.prompt_controller import PromptController
-        from characters.novel_personality import NOVEL_CHARACTER_PROMPT
         history = MagicMock()
         history.get_recent_messages.return_value = [{"role": "assistant", "content": "Our real earlier reply"}]
-        request = SimpleNamespace(character=SimpleNamespace(is_novel=True, history_manager=history),
+        request = SimpleNamespace(character=prompt_character(history),
             policy=SimpleNamespace(use_history_in_prompt=True), user_input="Я вернулся", sender="Player",
             game_state={"novel": dict(player_room="hall", mita_room="hall", pose="happy")})
         result = object.__new__(PromptController).build(request)
-        self.assertTrue(result.messages[0]["content"].startswith(NOVEL_CHARACTER_PROMPT))
-        for command in ("novel.pose", "novel.move", "novel.transform"):
+        self.assertIn((PROMPTS / "TwoD/Default/Main/main.txt").read_text(encoding="utf-8").strip(), result.messages[0]["content"])
+        for command in ("novel.pose", "novel.move", "novel.transform", "novel.tint", "novel.shake", "novel.effect"):
             self.assertIn(command, result.messages[0]["content"])
         self.assertEqual(result.history_messages, [
             {"role": "assistant", "content": "Our real earlier reply"},
             {"role": "user", "content": "Я вернулся", "sender": "Player"}])
         self.assertEqual([message["role"] for message in result.messages], ["system", "assistant", "user"])
+
+    def test_visual_commands_are_bounded_and_malformed_values_are_rejected(self):
+        self.assertEqual(sanitize_tint(dict(color="#aa22ff", opacity=0, duration=99)),
+                         dict(color="#AA22FF", opacity=0.15, duration=3))
+        self.assertEqual(sanitize_visual("novel.shake", dict(strength=9, duration=9)), dict(strength=0.03, duration=2))
+        self.assertEqual(sanitize_visual("novel.effect", dict(effect="pulse")), dict(effect="pulse", strength=0.5, duration=0.5))
+        for bad in ("red", "#123", [], None):
+            self.assertIsNone(sanitize_tint(dict(color=bad)))
+        for bad in (True, "1", None, [], float("nan"), float("inf")):
+            self.assertIsNone(sanitize_tint(dict(color="#FFFFFF", opacity=bad)))
+            self.assertIsNone(sanitize_visual("novel.shake", dict(strength=bad)))
+        self.assertIsNone(sanitize_visual("novel.effect", dict(effect="shake")))
+        self.assertIsNone(sanitize_visual("novel.effect", dict(effect=[])))
+        raw = StructuredResponse.model_validate({"segments": [{"text": "Hi", "intents": [
+            {"type": "novel.tint", "payload": {"color": "#ffaacc", "junk": 3}},
+            {"type": "novel.shake", "payload": {}},
+            {"type": "novel.effect", "payload": {"effect": "tilt"}},
+            {"type": "novel.effect", "payload": {"effect": "destroy"}}]}]})
+        intents = sanitize_response(raw).segments[0].intents
+        self.assertEqual([i.type for i in intents], ["novel.tint", "novel.shake", "novel.effect"])
+        self.assertEqual(intents[0].payload, dict(color="#FFAACC"))
+        valid = dict(version=1, session="a", player_room="hall", mita_room="hall", pose="happy",
+                     appearance=dict(color="#FFFFFF", opacity=1))
+        self.assertEqual(validate_novel(valid), valid)
+
+    def test_normal_prompt_set_is_discoverable_selected_and_reloaded_from_disk(self):
+        import shutil
+        import tempfile
+        from characters.novel import TwoDMita
+        from managers.prompt_catalogue_manager import list_prompt_sets
+        from services.novel_prompt import build_novel_prompt
+        self.assertIn("Default", list_prompt_sets(str(PROMPTS), "TwoD"))
+        with tempfile.TemporaryDirectory() as directory:
+            prompt_root = Path(directory)
+            target = prompt_root / "TwoD/Custom"
+            shutil.copytree(PROMPTS / "TwoD/Default", target)
+            settings = MagicMock()
+            settings.get.return_value = "Custom"
+            instance = object.__new__(TwoDMita)
+            instance.char_id, instance.prompts_root = "TwoD", str(prompt_root)
+            with patch("characters.character.use", return_value=settings):
+                self.assertEqual(instance._resolve_prompt_set_name(), "Custom")
+            character = prompt_character(MagicMock())
+            from DSL.dsl_engine import DslInterpreter
+            from DSL.path_resolver import LocalPathResolver
+            character.base_data_path = str(target)
+            character.dsl_interpreter = DslInterpreter(character, LocalPathResolver(str(prompt_root), str(target)))
+            request = SimpleNamespace(character=character, policy=SimpleNamespace(use_history_in_prompt=False),
+                user_input="Hi", sender="Player", game_state={})
+            (target / "Main/main.txt").write_text("User edited persona FIRST", encoding="utf-8")
+            self.assertIn("User edited persona FIRST", build_novel_prompt(request).messages[0]["content"])
+            (target / "Main/main.txt").write_text("User edited persona SECOND", encoding="utf-8")
+            result = build_novel_prompt(request).messages[0]["content"]
+            self.assertIn("User edited persona SECOND", result)
+            self.assertNotIn("User edited persona FIRST", result)
 
     def test_character_is_registered_separately(self):
         from managers.character_manager import _CHARACTER_DEFINITIONS
