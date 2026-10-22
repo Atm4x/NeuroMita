@@ -7,6 +7,7 @@ import threading
 import pygame
 
 from main_logger import logger
+from core.state_barrier import StateLease
 
 
 class AudioHandler:
@@ -20,6 +21,8 @@ class AudioHandler:
         volume: int = 100,
         *,
         raise_errors: bool = False,
+        state_lease=None,
+        cancellation=None,
     ):
         """Проигрывает звуковой файл (MP3 или OGG).
 
@@ -29,7 +32,7 @@ class AudioHandler:
         """
         try:
             logger.info(f"Проигрываю файл: {file_path}")
-            await cls.play_audio_with_pygame(file_path, volume)
+            await cls.play_audio_with_pygame(file_path, volume, state_lease=state_lease, cancellation=cancellation)
             if os.path.exists(file_path) and delete:
                 try:
                     await asyncio.sleep(0.02)
@@ -67,11 +70,17 @@ class AudioHandler:
             return None
 
     @classmethod
-    async def play_audio_with_pygame(self, file_path, volume: int = 100):
+    async def play_audio_with_pygame(self, file_path, volume: int = 100, *, state_lease=None, cancellation=None):
         """Проигрывает аудиофайл с учётом громкости."""
+
+        state_lease = state_lease or StateLease.capture()
 
         def play():
             with AudioHandler._lock:
+                if state_lease is not None:
+                    state_lease.require_current()
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
                 gain = max(0.0, float(volume) / 100.0)
                 play_path = file_path
                 temp_path = None
@@ -93,6 +102,9 @@ class AudioHandler:
                     while (
                         pygame.mixer.music.get_busy()
                     ):  # Ждем завершения воспроизведения
+                        if ((state_lease is not None and not state_lease.current)
+                                or (cancellation is not None and cancellation.cancelled)):
+                            break
                         pygame.time.Clock().tick(10)
                     pygame.mixer.music.stop()
                     pygame.mixer.quit()

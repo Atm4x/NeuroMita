@@ -244,3 +244,24 @@ class GameManager:
                 return None
             return self.active_game.get_state_prompt()
         return None
+
+    def restore_paused_snapshot(self, snapshot, *, selection):
+        """Replace a paused process without publishing new gameplay or lifecycle facts."""
+        current = self.active_game
+        if snapshot is None:
+            if current is not None:
+                current.cleanup()
+                self.active_game = None
+            return
+        if current is None or current.game_id != snapshot["game_id"] or not current.process_alive:
+            if current is not None:
+                current.cleanup()
+            current = self.available_games[snapshot["game_id"]](self.character, snapshot["game_id"], host=self)
+            self.active_game = current
+            current.timeline_selection = selection
+            saved = snapshot["state"]
+            current.start({"snapshot": saved, "is_auto": saved.get("is_auto", False),
+                           "is_cheat": saved.get("is_cheat", False), "player_is_white": saved.get("player_is_white", True)})
+            current.pause_for_snapshot()
+        current.apply_paused_snapshot(snapshot["state"])
+        current.instance_id = snapshot["instance_id"]

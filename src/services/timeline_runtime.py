@@ -9,6 +9,7 @@ from domain.timeline import ConcurrentTimelineWrite, JsonDocument, new_id
 from domain.timeline.models import TimelineSelection, TimelineTurn, TurnKind
 from domain.timeline.ports import TimelineRepository, TimelineWorkspace
 from core.cancellation import CancellationToken
+from core.state_barrier import StateBarrier
 from .session_timeline import SessionTimeline
 
 
@@ -17,12 +18,14 @@ class SessionTimelineRuntime:
 
     def __init__(
         self, repository: TimelineRepository, workspace: TimelineWorkspace, *,
-        workspace_name: str = "desktop",
+        workspace_name: str = "desktop", state: StateBarrier | None = None,
     ):
         self.repository = repository
         self.workspace = workspace
         self.workspace_name = workspace_name
         self._lock = RLock()
+        self.state = state or StateBarrier()
+        self.restoration = None
         self._cancellations = {}
         self._turn: ContextVar[TimelineTurn | None] = ContextVar("session_timeline_turn", default=None)
         if workspace.selection(workspace_name) is None:
@@ -55,7 +58,7 @@ class SessionTimelineRuntime:
         character_id: str = "", include_target: bool = False,
         input_event_ids: tuple[str, ...] = (),
     ) -> TimelineTurn:
-        with self._lock:
+        with self.state.access(wait=True), self._lock:
             selection = self.selection
             timeline = SessionTimeline(self.repository, selection.branch_id)
             head = timeline.branch.head_sequence
@@ -68,7 +71,7 @@ class SessionTimelineRuntime:
         token = self._turn.set(turn)
         registration = object()
         try:
-            with self._lock:
+            with self.state.access(wait=True), self._lock:
                 self.assert_current()
                 if cancellation is not None:
                     cancellation.raise_if_cancelled()
@@ -94,12 +97,14 @@ class SessionTimelineRuntime:
 
     @contextmanager
     def writing(self) -> Iterator[SessionTimeline]:
-        with self._lock:
+        with self.state.access(wait=True), self._lock:
             self.assert_current()
             yield self.timeline
 
     def activate(self, branch_id: str) -> TimelineSelection:
-        with self._lock:
+        with self.state.access(), self._lock:
+            if self.restoration is not None and not self.state.exclusive_owner:
+                raise RuntimeError("Stateful session branches must be activated through checkpoint restoration")
             current = self.selection
             selection = self.workspace.select(self.workspace_name, branch_id, expected=current)
             cancellations = tuple(cancellation for cancellation, _turn in self._cancellations.values())
@@ -114,13 +119,29 @@ class SessionTimelineRuntime:
         for token in tokens:
             token.cancel("Character timeline context was reset")
 
-    def start_session(self) -> SessionTimeline:
-        timeline = SessionTimeline.create(self.repository)
+    def start_session(self, *, initial_snapshot: JsonDocument | None = None, inherit_current: bool = False,
+                      session_id: str | None = None, branch_id: str | None = None) -> SessionTimeline:
+        if self.restoration is not None:
+            return self.restoration.start_session(initial_snapshot=initial_snapshot, inherit_current=inherit_current,
+                                                   session_id=session_id, branch_id=branch_id)
+        if initial_snapshot is not None or inherit_current:
+            raise RuntimeError("Stateful session initialization requires registered state participants")
+        timeline = SessionTimeline.create(self.repository, session_id=session_id, branch_id=branch_id)
         self.activate(timeline.branch_id)
         return timeline
 
-    def restore(self, checkpoint_id: str, *, branch_id: str | None = None) -> JsonDocument:
+    def restore(self, checkpoint_id: str, *, branch_id: str | None = None,
+                checkpoint_branch_id: str | None = None) -> JsonDocument:
+        if self.restoration is not None:
+            return self.restoration.restore(checkpoint_id, branch_id=branch_id, checkpoint_branch_id=checkpoint_branch_id)
+        if checkpoint_branch_id is not None:
+            raise RuntimeError("Cross-branch state restoration requires registered state participants")
         with self._lock:
             restored = self.timeline.fork(checkpoint_id, branch_id=branch_id or new_id())
         self.activate(restored.timeline.branch_id)
         return restored.snapshot
+
+    def checkpoint(self, *, key: str | None = None, label: str = ""):
+        if self.restoration is None:
+            raise RuntimeError("Full session snapshots require registered state participants")
+        return self.restoration.checkpoint(key=key, label=label)

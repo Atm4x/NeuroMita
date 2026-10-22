@@ -7,10 +7,10 @@ from .sqlite import SQLiteTimelineRepository
 from .assets import SQLiteTimelineAssets
 
 
-def bootstrap_timeline(database, character_resources, character_ids) -> ConversationTimeline:
+def bootstrap_timeline(database, character_resources, character_ids, *, state=None) -> ConversationTimeline:
     """Resume one conservative, restartable import before admitting runtime requests."""
     repository = SQLiteTimelineRepository(connection_factory=database.get_connection)
-    runtime = SessionTimelineRuntime(repository, repository)
+    runtime = SessionTimelineRuntime(repository, repository, state=state)
     conversation = ConversationTimeline(runtime, SQLiteTimelineAssets(database.get_connection))
     with database.connection() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS timeline_migrations (name TEXT PRIMARY KEY)")

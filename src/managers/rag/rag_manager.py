@@ -1,25 +1,20 @@
 from core.error_utils import format_exception
-import logging
-import math
-import sqlite3
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import json
-import struct
-import random
 import datetime
 import time as _time
 from typing import List, Dict, Any, Optional, Tuple
 
 from managers.database_manager import DatabaseManager
-from managers.rag.pipeline.retrievers.faiss_index import invalidate as _faiss_invalidate
+from core.state_barrier import bind_state_job, state_operation, state_job, state_access, StateUnavailable
 from core.events import get_event_bus
 from main_logger import logger
 from core.cancellation import TaskCancelledError
 
 
-from managers.rag.rag_utils import rag_clean_text, make_reindex_progress_logger, extract_keywords, keyword_score
+from managers.rag.rag_utils import rag_clean_text
 from managers.settings_manager import SettingsManager
 
 
@@ -487,337 +482,48 @@ class RAGManager:
         parts = re.split(r'(?<=[.!?…])\s+|\n+', text)
         return [p.strip() for p in parts if len(p.strip()) >= min_len]
 
-    def _index_sentences(
-        self,
-        conn,
-        source_table: str,
-        source_id: int,
-        content: str,
-        *,
-        model: str,
-        batch_size: int = 16,
-        min_len: int = 20,
-    ) -> int:
-        """Split content into sentences, embed each, store in sentence_embeddings.
-
-        Returns the number of sentences stored.
-        """
-        sentences = self._split_sentences(content, min_len=min_len)
-        if not sentences:
-            return 0
-
-        vecs = list(self._get_embeddings(sentences, batch_size=batch_size, priority="bulk") or [])
-        if len(vecs) != len(sentences):
-            logger.error(
-                f"RAGManager: sentence embedding count mismatch: "
-                f"texts={len(sentences)}, vectors={len(vecs)}"
-            )
-            if len(vecs) < len(sentences):
-                vecs.extend([None] * (len(sentences) - len(vecs)))
-            else:
-                vecs = vecs[:len(sentences)]
-
-        stored = 0
-        for idx, sent in enumerate(sentences):
-            vec = vecs[idx]
-            if vec is None:
-                continue
-            blob = self._array_to_blob(vec)
-            try:
-                conn.execute(
-                    """INSERT OR REPLACE INTO sentence_embeddings
-                       (source_table, source_id, character_id, model_name, sentence_idx, embedding, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
-                    (source_table, source_id, self.character_id, model, idx, blob),
-                )
-                stored += 1
-            except Exception:
-                pass
-        return stored
-
-    def _index_sentences_missing(self, cursor, conn, model: str, batch_size: int = 16) -> int:
-        """Index sentence embeddings for rows that have whole-doc embeddings but no sentence embeddings yet."""
-        min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
-        updated = 0
-
-        # History rows with whole-doc embedding but no sentence embeddings for current model
-        try:
-            hist_where = "h.character_id=? AND h.content != '' AND h.content IS NOT NULL"
-            if "is_deleted" in self._history_cols:
-                hist_where += " AND h.is_deleted=0"
-            cursor.execute(
-                f"""SELECT h.id, h.content FROM history h
-                    INNER JOIN embeddings e
-                      ON e.source_table='history' AND e.source_id=h.id
-                      AND e.character_id=h.character_id AND e.model_name=?
-                    LEFT JOIN sentence_embeddings se
-                      ON se.source_table='history' AND se.source_id=h.id
-                      AND se.character_id=h.character_id AND se.model_name=?
-                    WHERE {hist_where} AND se.id IS NULL""",
-                (model, model, self.character_id),
-            )
-            hist_rows = cursor.fetchall() or []
-        except Exception as e:
-            logger.warning(f"RAGManager: sentence index query failed (history): {format_exception(e)}")
-            hist_rows = []
-
-        for row_id, content in hist_rows:
-            try:
-                n = self._index_sentences(conn, "history", row_id, str(content or ""),
-                                          model=model, batch_size=batch_size, min_len=min_len)
-                updated += n
-            except Exception:
-                pass
-        if hist_rows:
-            try:
-                conn.commit()
-            except Exception:
-                pass
-
-        # Memory rows with whole-doc embedding but no sentence embeddings for current model
-        try:
-            cursor.execute(
-                """SELECT m.eternal_id, m.content FROM memories m
-                   INNER JOIN embeddings e
-                     ON e.source_table='memories' AND e.source_id=m.eternal_id
-                     AND e.character_id=m.character_id AND e.model_name=?
-                   LEFT JOIN sentence_embeddings se
-                     ON se.source_table='memories' AND se.source_id=m.eternal_id
-                     AND se.character_id=m.character_id AND se.model_name=?
-                   WHERE m.character_id=? AND m.is_deleted=0 AND se.id IS NULL""",
-                (model, model, self.character_id),
-            )
-            mem_rows = cursor.fetchall() or []
-        except Exception as e:
-            logger.warning(f"RAGManager: sentence index query failed (memories): {format_exception(e)}")
-            mem_rows = []
-
-        for eternal_id, content in mem_rows:
-            try:
-                n = self._index_sentences(conn, "memories", eternal_id, str(content or ""),
-                                          model=model, batch_size=batch_size, min_len=min_len)
-                updated += n
-            except Exception:
-                pass
-        if mem_rows:
-            try:
-                conn.commit()
-            except Exception:
-                pass
-
-        if updated:
-            logger.info(f"RAGManager: indexed {updated} sentence embeddings (model={model})")
-        return updated
-
+    @state_job(check_result=True)
     def index_graph_entity_embeddings(self) -> int:
-        """Embed entity names that have no vector yet. Returns count embedded."""
+        """Compute graph vectors outside the state barrier and guard each write."""
         try:
             from managers.rag.graph.graph_store import GraphStore
-            gs = GraphStore(self.db, self.character_id)
-            entities = gs.get_entities_without_embeddings()
-            if not entities:
-                return 0
-            model = self._current_model_name()
-            names = [e["name"] for e in entities]
-            vecs = self._get_embeddings(names, priority="bulk")
-            if not vecs:
-                return 0
+            with state_access(wait=True):
+                graph = GraphStore(self.db, self.character_id)
+                entities = graph.get_entities_without_embeddings()
+                model = self._current_model_name()
+            vectors = self._get_embeddings([entity["name"] for entity in entities], priority="bulk") if entities else []
             count = 0
-            for ent, vec in zip(entities, vecs):
-                if vec is not None:
-                    gs.store_entity_embedding(
-                        ent["id"],
-                        vec.astype(np.float32).tobytes(),
-                        model_name=model,
-                    )
+            for entity, vector in zip(entities, vectors or []):
+                if vector is not None:
+                    graph.store_entity_embedding(entity["id"], vector.astype(np.float32).tobytes(), model_name=model)
                     count += 1
-            if count:
-                logger.info(f"RAGManager: embedded {count} graph entities (model={model})")
             return count
-        except Exception as e:
-            logger.warning(f"RAGManager: index_graph_entity_embeddings failed: {format_exception(e)}")
+        except (StateUnavailable, TaskCancelledError):
+            raise
+        except Exception as exc:
+            logger.warning("RAG graph indexing failed: %s", format_exception(exc))
             return 0
 
+    @state_job(check_result=True)
     def update_memory_embedding(self, eternal_id: int, text: str):
-        """Создает и сохраняет эмбеддинг для воспоминания (без падений, RAG опционален)."""
-        try:
-            vector = self._get_embedding(text)
-        except Exception as e:
-            logger.warning(f"RAGManager: embedding generation failed (memory) - ignored: {format_exception(e)}", exc_info=True)
-            return
+        """Stage a memory vector before committing against the unchanged source."""
+        from managers.rag.indexing import RagIndexer
+        RagIndexer(self).documents("memories", ((eternal_id, text),), single=True)
 
-        if vector is None:
-            return
+    @state_job(check_result=True)
+    def update_history_embeddings(self, items: List[Tuple[int, str]], *, priority: str = "bulk") -> int:
+        """Compute a batch outside state access and atomically store current results."""
+        from managers.rag.indexing import RagIndexer
+        return RagIndexer(self).documents("history", items or (), priority=priority)
 
-        blob = self._array_to_blob(vector)
-        model = self._current_model_name()
-        dims = self._current_dimensions() or (vector.shape[0] if vector is not None else 0)
-        conn = None
-        try:
-            conn = self.db.get_connection()
-            # Legacy BLOB column (backwards compat)
-            conn.execute(
-                "UPDATE memories SET embedding = ? WHERE character_id = ? AND eternal_id = ?",
-                (blob, self.character_id, eternal_id)
-            )
-            # New embeddings table
-            conn.execute(
-                """INSERT OR REPLACE INTO embeddings
-                   (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                   VALUES ('memories', ?, ?, ?, ?, ?, datetime('now'))""",
-                (eternal_id, self.character_id, model, dims, blob),
-            )
-            # Sentence-level indexing (optional)
-            if SettingsManager.get("RAG_SENTENCE_LEVEL", False):
-                min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
-                self._index_sentences(conn, "memories", eternal_id, text, model=model, min_len=min_len)
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"RAGManager: sqlite operational error while updating memory embedding (ignored): {format_exception(e)}")
-        except Exception as e:
-            logger.warning(f"RAGManager: failed to update memory embedding (ignored): {format_exception(e)}", exc_info=True)
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-
-    def update_history_embeddings(
-        self,
-        items: List[Tuple[int, str]],
-        *,
-        priority: str = "bulk",
-    ) -> int:
-        """Generate and persist history embeddings in a single batch."""
-        normalized: List[Tuple[int, str]] = []
-        for msg_id, text in items or []:
-            clean_text = str(text or "").strip()
-            if msg_id and clean_text:
-                normalized.append((int(msg_id), clean_text))
-        if not normalized:
-            return 0
-
-        try:
-            vectors = list(
-                self._get_embeddings(
-                    [text for _msg_id, text in normalized],
-                    priority=priority,
-                )
-                or []
-            )
-        except Exception as e:
-            logger.warning(
-                f"RAGManager: batch embedding generation failed (history) - ignored: {format_exception(e)}",
-                exc_info=True,
-            )
-            return 0
-
-        if len(vectors) != len(normalized):
-            logger.warning(
-                "RAGManager: history batch embedding count mismatch: texts=%s, vectors=%s",
-                len(normalized),
-                len(vectors),
-            )
-            vectors = (vectors + [None] * len(normalized))[:len(normalized)]
-
-        model = self._current_model_name()
-        configured_dims = self._current_dimensions()
-        sentence_level = bool(SettingsManager.get("RAG_SENTENCE_LEVEL", False))
-        min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
-        conn = None
-        stored = 0
-        try:
-            conn = self.db.get_connection()
-            for (msg_id, text), vector in zip(normalized, vectors):
-                if vector is None:
-                    continue
-                blob = self._array_to_blob(vector)
-                dims = configured_dims or int(vector.shape[0])
-                conn.execute(
-                    "UPDATE history SET embedding = ? WHERE id = ?",
-                    (blob, msg_id),
-                )
-                conn.execute(
-                    """INSERT OR REPLACE INTO embeddings
-                       (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                       VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
-                    (msg_id, self.character_id, model, dims, blob),
-                )
-                if sentence_level:
-                    self._index_sentences(
-                        conn,
-                        "history",
-                        msg_id,
-                        text,
-                        model=model,
-                        min_len=min_len,
-                    )
-                stored += 1
-            conn.commit()
-            return stored
-        except sqlite3.OperationalError as e:
-            logger.warning(
-                f"RAGManager: sqlite operational error while updating history embeddings (ignored): {format_exception(e)}"
-            )
-        except Exception as e:
-            logger.warning(
-                f"RAGManager: failed to update history embeddings (ignored): {format_exception(e)}",
-                exc_info=True,
-            )
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-        return 0
-
+    @state_job(check_result=True)
     def update_history_embedding(self, msg_id: int, text: str):
-        """Создает и сохраняет эмбеддинг для сообщения истории (без падений, RAG опционален)."""
-        try:
-            vector = self._get_embedding(text)
-        except Exception as e:
-            logger.warning(f"RAGManager: embedding generation failed (history) - ignored: {format_exception(e)}", exc_info=True)
-            return
+        """Stage one history vector without holding state access during embedding."""
+        from managers.rag.indexing import RagIndexer
+        RagIndexer(self).documents("history", ((msg_id, text),), single=True)
 
-        if vector is None:
-            return
 
-        blob = self._array_to_blob(vector)
-        model = self._current_model_name()
-        dims = self._current_dimensions() or (vector.shape[0] if vector is not None else 0)
-        conn = None
-        try:
-            conn = self.db.get_connection()
-            # Legacy BLOB column (backwards compat)
-            conn.execute(
-                "UPDATE history SET embedding = ? WHERE id = ?",
-                (blob, msg_id)
-            )
-            # New embeddings table
-            conn.execute(
-                """INSERT OR REPLACE INTO embeddings
-                   (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                   VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
-                (msg_id, self.character_id, model, dims, blob),
-            )
-            # Sentence-level indexing (optional)
-            if SettingsManager.get("RAG_SENTENCE_LEVEL", False):
-                min_len = int(SettingsManager.get("RAG_SENTENCE_MIN_LEN", 20) or 20)
-                self._index_sentences(conn, "history", msg_id, text, model=model, min_len=min_len)
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"RAGManager: sqlite operational error while updating history embedding (ignored): {format_exception(e)}")
-        except Exception as e:
-            logger.warning(f"RAGManager: failed to update history embedding (ignored): {format_exception(e)}", exc_info=True)
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-
+    @state_job(check_result=True)
     def search_relevant(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT,
                         threshold: float = DEFAULT_SEARCH_THRESHOLD,
                         config_overrides: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -939,7 +645,10 @@ class RAGManager:
         buckets = {}
         for r in retrievers:
             try:
-                buckets[r.name] = r.retrieve(qs)
+                with state_access(wait=True):
+                    buckets[r.name] = r.retrieve(qs)
+            except StateUnavailable:
+                raise
             except Exception as e:
                 logger.debug(f"[RAG][PIPE] retriever \'{r.name}\' failed (ignored): {format_exception(e)}", exc_info=True)
                 buckets[r.name] = []
@@ -1065,8 +774,10 @@ class RAGManager:
                 meta = getattr(c, "meta", None) or {}
                 subj = meta.get("subject", "")
                 obj_ = meta.get("object", "")
-                if subj: graph_names.add(subj.lower())
-                if obj_:  graph_names.add(obj_.lower())
+                if subj:
+                    graph_names.add(subj.lower())
+                if obj_:
+                    graph_names.add(obj_.lower())
 
         if not memory_ids and not graph_names:
             return
@@ -1097,299 +808,18 @@ class RAGManager:
                 logger.debug(f"[RAG] access tracking failed: {format_exception(e)}")
 
         try:
-            self._get_access_executor().submit(_do_track)
+            self._get_access_executor().submit(bind_state_job(state_operation(_do_track)))
         except Exception:
             pass
 
+    @state_job(check_result=True)
     def index_all_missing(self, progress_callback=None) -> int:
-        """
-        Генерит embedding только для записей без embedding для текущей модели.
-        Проверяет таблицу embeddings — если для данной модели нет записи, генерирует.
-        Возвращает количество записей, где embedding реально записали (updated_count).
-        """
-        model = self._current_model_name()
-        dims = self._current_dimensions()
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        """Index missing document, sentence and graph vectors in guarded batches."""
+        from managers.rag.indexing import RagIndexer
+        return RagIndexer(self).bulk(missing=True, progress_callback=progress_callback)
 
-        try:
-            # History: нет записи в embeddings для текущей модели
-            hist_where = "h.character_id=? AND h.content != '' AND h.content IS NOT NULL"
-            if "is_deleted" in self._history_cols:
-                hist_where += " AND h.is_deleted=0"
-            cursor.execute(
-                f"""SELECT h.id, h.content FROM history h
-                    LEFT JOIN embeddings e
-                      ON e.source_table='history' AND e.source_id=h.id
-                      AND e.character_id=h.character_id AND e.model_name=?
-                    WHERE {hist_where} AND e.id IS NULL""",
-                (model, self.character_id),
-            )
-            hist_rows = cursor.fetchall() or []
-
-            # Memories: нет записи в embeddings для текущей модели
-            cursor.execute(
-                """SELECT m.eternal_id, m.content FROM memories m
-                   LEFT JOIN embeddings e
-                     ON e.source_table='memories' AND e.source_id=m.eternal_id
-                     AND e.character_id=m.character_id AND e.model_name=?
-                   WHERE m.character_id=? AND m.is_deleted=0 AND e.id IS NULL""",
-                (model, self.character_id),
-            )
-            mem_rows = cursor.fetchall() or []
-
-            total = len(hist_rows) + len(mem_rows)
-            if total == 0:
-                return 0
-
-            batch_size = self._get_reindex_batch_size()
-
-            processed = 0
-            updated_count = 0
-
-            prog = make_reindex_progress_logger(self,
-                "index_all_missing",
-                total,
-                extra_meta=f"model={model} | batch_size={batch_size} | hist={len(hist_rows)} | mem={len(mem_rows)}",
-            )
-            prog.start()
-
-            # --- History ---
-            for i in range(0, len(hist_rows), batch_size):
-                chunk = hist_rows[i:i + batch_size]
-                texts = [(c if isinstance(c, str) else "") for _, c in chunk]
-                vecs = self._get_embeddings(
-                    texts,
-                    batch_size=batch_size,
-                    allow_when_rag_disabled=True,
-                    priority="bulk",
-                )
-
-                for (row_id, _), vec in zip(chunk, vecs):
-                    if vec is not None:
-                        blob = self._array_to_blob(vec)
-                        d = dims or (vec.shape[0] if vec is not None else 0)
-                        cursor.execute("UPDATE history SET embedding = ? WHERE id = ?", (blob, row_id))
-                        cursor.execute(
-                            """INSERT OR REPLACE INTO embeddings
-                               (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                               VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
-                            (row_id, self.character_id, model, d, blob),
-                        )
-                        updated_count += 1
-
-                    processed += 1
-                    if progress_callback:
-                        try:
-                            progress_callback(processed, total)
-                        except TaskCancelledError:
-                            raise
-                        except Exception:
-                            pass
-                    prog.tick(processed=processed, updated=updated_count, stage="history")
-
-                conn.commit()
-
-            # --- Memories ---
-            for i in range(0, len(mem_rows), batch_size):
-                chunk = mem_rows[i:i + batch_size]
-                texts = [str(c or "") for _, c in chunk]
-                vecs = self._get_embeddings(
-                    texts,
-                    batch_size=batch_size,
-                    allow_when_rag_disabled=True,
-                    priority="bulk",
-                )
-
-                for (eternal_id, _), vec in zip(chunk, vecs):
-                    if vec is not None:
-                        blob = self._array_to_blob(vec)
-                        d = dims or (vec.shape[0] if vec is not None else 0)
-                        cursor.execute(
-                            "UPDATE memories SET embedding = ? WHERE character_id = ? AND eternal_id = ?",
-                            (blob, self.character_id, eternal_id),
-                        )
-                        cursor.execute(
-                            """INSERT OR REPLACE INTO embeddings
-                               (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                               VALUES ('memories', ?, ?, ?, ?, ?, datetime('now'))""",
-                            (eternal_id, self.character_id, model, d, blob),
-                        )
-                        updated_count += 1
-
-                    processed += 1
-                    if progress_callback:
-                        try:
-                            progress_callback(processed, total)
-                        except TaskCancelledError:
-                            raise
-                        except Exception:
-                            pass
-                    prog.tick(processed=processed, updated=updated_count, stage="memories")
-
-                conn.commit()
-
-            prog.done(processed=processed, updated=updated_count)
-
-            # --- Sentence-level indexing pass (when RAG_SENTENCE_LEVEL=True) ---
-            if SettingsManager.get("RAG_SENTENCE_LEVEL", False):
-                updated_count += self._index_sentences_missing(cursor, conn, model, batch_size)
-
-            # --- Graph entity embedding pass (when graph vector search enabled) ---
-            if SettingsManager.get("RAG_GRAPH_VECTOR_SEARCH", False):
-                self.index_graph_entity_embeddings()
-
-            # Invalidate FAISS cache so next query rebuilds from fresh embeddings
-            if updated_count > 0:
-                _faiss_invalidate(self.character_id, model, "history")
-                _faiss_invalidate(self.character_id, model, "memories")
-
-            return updated_count
-
-        except TaskCancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Error during re-indexing: {format_exception(e)}", exc_info=True)
-            return 0
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-
+    @state_job(check_result=True)
     def index_all(self, progress_callback=None) -> int:
-        """
-        Полная переиндексация: пересоздаёт embedding для ВСЕХ записей текущей моделью.
-        Возвращает количество записей, где embedding реально записали (updated_count).
-        """
-        model = self._current_model_name()
-        dims = self._current_dimensions()
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-
-        try:
-            # History: все записи с контентом
-            hist_where = "character_id=? AND content != '' AND content IS NOT NULL"
-            if "is_deleted" in self._history_cols:
-                hist_where += " AND is_deleted=0"
-            cursor.execute(
-                f"SELECT id, content FROM history WHERE {hist_where}",
-                (self.character_id,),
-            )
-            hist_rows = cursor.fetchall() or []
-
-            # Memories: все не удалённые с контентом
-            mem_where = "character_id=? AND is_deleted=0 AND content IS NOT NULL"
-            cursor.execute(
-                f"SELECT eternal_id, content FROM memories WHERE {mem_where}",
-                (self.character_id,),
-            )
-            mem_rows = cursor.fetchall() or []
-
-            total = len(hist_rows) + len(mem_rows)
-            if total == 0:
-                return 0
-
-            batch_size = self._get_reindex_batch_size()
-
-            processed = 0
-            updated_count = 0
-
-            prog = make_reindex_progress_logger(
-                self,
-                "index_all",
-                total,
-                extra_meta=f"model={model} | batch_size={batch_size} | hist={len(hist_rows)} | mem={len(mem_rows)}",
-            )
-            prog.start()
-
-            # --- History ---
-            for i in range(0, len(hist_rows), batch_size):
-                chunk = hist_rows[i:i + batch_size]
-                texts = [(c if isinstance(c, str) else "") for _, c in chunk]
-                vecs = self._get_embeddings(
-                    texts,
-                    batch_size=batch_size,
-                    allow_when_rag_disabled=True,
-                    priority="bulk",
-                )
-
-                for (row_id, _), vec in zip(chunk, vecs):
-                    if vec is not None:
-                        blob = self._array_to_blob(vec)
-                        d = dims or (vec.shape[0] if vec is not None else 0)
-                        cursor.execute("UPDATE history SET embedding = ? WHERE id = ?", (blob, row_id))
-                        cursor.execute(
-                            """INSERT OR REPLACE INTO embeddings
-                               (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                               VALUES ('history', ?, ?, ?, ?, ?, datetime('now'))""",
-                            (row_id, self.character_id, model, d, blob),
-                        )
-                        updated_count += 1
-
-                    processed += 1
-                    if progress_callback:
-                        try:
-                            progress_callback(processed, total)
-                        except TaskCancelledError:
-                            raise
-                        except Exception:
-                            pass
-                    prog.tick(processed=processed, updated=updated_count, stage="history")
-
-                conn.commit()
-
-            # --- Memories ---
-            for i in range(0, len(mem_rows), batch_size):
-                chunk = mem_rows[i:i + batch_size]
-                texts = [str(c or "") for _, c in chunk]
-                vecs = self._get_embeddings(
-                    texts,
-                    batch_size=batch_size,
-                    allow_when_rag_disabled=True,
-                    priority="bulk",
-                )
-
-                for (eternal_id, _), vec in zip(chunk, vecs):
-                    if vec is not None:
-                        blob = self._array_to_blob(vec)
-                        d = dims or (vec.shape[0] if vec is not None else 0)
-                        cursor.execute(
-                            "UPDATE memories SET embedding = ? WHERE character_id = ? AND eternal_id = ?",
-                            (blob, self.character_id, eternal_id),
-                        )
-                        cursor.execute(
-                            """INSERT OR REPLACE INTO embeddings
-                               (source_table, source_id, character_id, model_name, dimensions, embedding, created_at)
-                               VALUES ('memories', ?, ?, ?, ?, ?, datetime('now'))""",
-                            (eternal_id, self.character_id, model, d, blob),
-                        )
-                        updated_count += 1
-
-                    processed += 1
-                    if progress_callback:
-                        try:
-                            progress_callback(processed, total)
-                        except TaskCancelledError:
-                            raise
-                        except Exception:
-                            pass
-                    prog.tick(processed=processed, updated=updated_count, stage="memories")
-
-                conn.commit()
-
-            prog.done(processed=processed, updated=updated_count)
-            return updated_count
-
-        except TaskCancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Error during full re-indexing: {format_exception(e)}", exc_info=True)
-            return 0
-        finally:
-            try:
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
+        """Recompute document vectors without holding a transaction during inference."""
+        from managers.rag.indexing import RagIndexer
+        return RagIndexer(self).bulk(missing=False, progress_callback=progress_callback)

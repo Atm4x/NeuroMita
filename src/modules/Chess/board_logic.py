@@ -26,6 +26,22 @@ class PureBoardLogic:
     def get_fen(self):
         return self.board.fen()
 
+    def snapshot(self):
+        return {"root_fen": self.board.root().fen(en_passant="fen", promoted=True),
+                "moves": [move.uci() for move in self.board.move_stack],
+                "fen": self.board.fen(en_passant="fen", promoted=True)}
+
+    def restore_snapshot(self, state):
+        if (not isinstance(state, dict) or set(state) != {"root_fen", "moves", "fen"}
+                or not isinstance(state["moves"], list) or not all(isinstance(move, str) for move in state["moves"])):
+            raise ValueError("Invalid chess position snapshot")
+        board = chess.Board(state["root_fen"])
+        for move in state["moves"]:
+            board.push(chess.Move.from_uci(move))
+        if board.fen(en_passant="fen", promoted=True) != state["fen"]:
+            raise ValueError("Chess move history does not match the saved position")
+        self.board = board
+
     def get_turn(self):
         return self.board.turn
 

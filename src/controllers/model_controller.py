@@ -10,6 +10,7 @@ import re
 import copy
 import threading
 from contextlib import nullcontext
+from core.state_barrier import state_operation
 from types import SimpleNamespace
 from typing import Optional, Any
 
@@ -319,6 +320,55 @@ class ModelController(GenerationService, ModelStateService):
     # Game state / temp system infos
     # ---------------------------------------------------------------------
 
+    @state_operation
+    def snapshot_session_context(self) -> dict:
+        from domain.timeline import JsonDocument
+        with self._game_states_lock, self._temporary_system_infos_lock:
+            return JsonDocument({
+                "game_states": {key: dataclasses.asdict(value) for key, value in self._game_states_by_character_id.items()},
+                "shared_world_info": self._shared_world_info,
+                "temporary_system_infos": self._temporary_system_infos,
+            }).to_dict()
+
+    @staticmethod
+    def validate_session_context(data: dict):
+        from domain.timeline import JsonDocument
+        JsonDocument(data)
+        if set(data) != {"game_states", "shared_world_info", "temporary_system_infos"} or not all(isinstance(value, dict) for value in data.values()):
+            raise ValueError("Invalid model context snapshot")
+        for value in data["game_states"].values():
+            if not isinstance(value, dict) or set(value) != set(GameState.__dataclass_fields__):
+                raise ValueError("Invalid observed world state")
+            if (type(value["distance"]) not in {int, float} or type(value["roomPlayer"]) is not int
+                    or type(value["roomMita"]) is not int or any(not isinstance(item, str) for key, item in value.items()
+                        if key not in {"distance", "roomPlayer", "roomMita"})):
+                raise ValueError("Invalid observed world field types")
+        if (not data["shared_world_info"].keys() <= {"roomPlayer", "worldPlayer"}
+                or ("roomPlayer" in data["shared_world_info"] and type(data["shared_world_info"]["roomPlayer"]) is not int)
+                or ("worldPlayer" in data["shared_world_info"] and not isinstance(data["shared_world_info"]["worldPlayer"], str))):
+            raise ValueError("Invalid shared world observation")
+        for messages in data["temporary_system_infos"].values():
+            if not isinstance(messages, list) or not all(isinstance(message, dict) and set(message) == {"role", "content"}
+                    and message["role"] == "system" and isinstance(message["content"], str) for message in messages):
+                raise ValueError("Invalid temporary system context")
+
+    @state_operation
+    def restore_session_context(self, data: dict):
+        self.validate_session_context(data)
+        with self._game_states_lock, self._temporary_system_infos_lock:
+            self._game_states_by_character_id = {key: GameState(**value) for key, value in data["game_states"].items()}
+            self._shared_world_info = dict(data["shared_world_info"])
+            self._temporary_system_infos = {key: [dict(message) for message in messages]
+                                            for key, messages in data["temporary_system_infos"].items()}
+            self._last_token_stats = {}
+        with self._context_snapshot_lock:
+            self._context_snapshot_cache.clear()
+        self.total_messages_in_history = 0
+        self.loaded_messages_offset = 0
+        self.loading_more_history = False
+        self._history_character_id = ""
+
+    @state_operation
     def _on_set_game_data(self, event: Event):
         data = event.data or {}
         if not isinstance(data, dict):
@@ -344,6 +394,7 @@ class ModelController(GenerationService, ModelStateService):
             result["shared_world_info"] = dict(self._shared_world_info)
             return result
 
+    @state_operation
     def _on_add_temporary_system_info(self, event: Event):
         data = event.data or {}
         content = data.get("content", "")
@@ -364,6 +415,7 @@ class ModelController(GenerationService, ModelStateService):
         with self._temporary_system_infos_lock:
             return list(self._temporary_system_infos.get(character_id, ()))
 
+    @state_operation
     def _consume_temporary_system_infos(self, character_id: str, reserved: list[dict]) -> None:
         if not character_id or not reserved:
             return
@@ -941,6 +993,7 @@ class ModelController(GenerationService, ModelStateService):
     # Token counting / cost
     # ---------------------------------------------------------------------
 
+    @state_operation
     def _record_context_snapshot(self, character_id: str, event_type: str, messages: list[dict]) -> None:
         """Record the assembled request without retaining image payloads."""
         if not character_id or not isinstance(messages, list):

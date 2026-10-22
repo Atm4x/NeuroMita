@@ -65,6 +65,10 @@ class MiniGameSessionRegistry:
         with self._lock:
             return tuple(self._sessions.values())
 
+    def restore_snapshot(self, session: MiniGamePublicSession) -> None:
+        with self._lock:
+            self._sessions[session.owner_character_id] = session
+
 
 _registry = MiniGameSessionRegistry()
 

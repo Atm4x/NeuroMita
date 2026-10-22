@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 
 from main_logger import logger
 from modules.game_interface import GameInterface
+from core.state_barrier import StateUnavailable, state_operation
 from managers.mini_game_session_registry import mini_game_sessions
 
 class SeaBattleGame(GameInterface):
@@ -38,6 +39,7 @@ class SeaBattleGame(GameInterface):
             self.command_queue = multiprocessing.Queue()
             self.state_queue = multiprocessing.Queue()
             self.reaction_queue = multiprocessing.Queue()
+            self.snapshot_queue = multiprocessing.Queue()
             self._last_state = None
             self._reaction_stop_event.clear()
 
@@ -45,16 +47,12 @@ class SeaBattleGame(GameInterface):
 
             self.gui_process = multiprocessing.Process(
                 target=run_seabattle_gui_process,
-                args=(self.command_queue, self.state_queue, self.reaction_queue),
+                args=(self.command_queue, self.state_queue, self.reaction_queue, self.snapshot_queue, params.get("snapshot")),
                 daemon=True
             )
             self.gui_process.start()
-            self._reaction_listener = threading.Thread(
-                target=self._listen_for_player_target_reactions,
-                name=f"SeaBattleReaction-{self.character.char_id}",
-                daemon=True,
-            )
-            self._reaction_listener.start()
+            if params.get("snapshot") is None:
+                self.start_notification_listener()
         except ImportError as e:
             logger.error(f"[{self.character.char_id}] Не удалось импортировать модуль 'Морского боя': {format_exception(e)}", exc_info=True)
             self.cleanup()
@@ -112,55 +110,70 @@ class SeaBattleGame(GameInterface):
         self.gui_process = None
         self.command_queue = None
         self.state_queue = None
+        if self.snapshot_queue is not None:
+            self.snapshot_queue.close()
+        self.snapshot_queue = None
         self.reaction_queue = None
         self._reaction_listener = None
         self._last_state = None
 
     def _listen_for_player_target_reactions(self):
-        """Forward explicit player shots from the GUI to the normal L2 react path."""
         while not self._reaction_stop_event.is_set():
-            reaction_queue = self.reaction_queue
-            if reaction_queue is None:
-                return
             try:
-                event = reaction_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            except (EOFError, OSError, ValueError):
-                return
-            except Exception as exc:
-                logger.debug(
-                    f"[{self.character.char_id}] Ошибка очереди реакций Морского боя: "
-                    f"{format_exception(exc)}"
-                )
-                continue
+                self._consume_reaction()
+            except StateUnavailable:
+                self._reaction_stop_event.wait(0.05)
 
-            if not isinstance(event, dict):
-                continue
-            event_name = event.get("event")
-            if event_name == "game_closed":
-                self.publish_event("game_closed")
-                self.cleanup()
-                return
-            if not event.get("react", True):
-                if event_name in {"mita_shot", "mita_target_hit", "player_target_selected"}:
-                    self._publish_shot(event)
-                else:
-                    self.publish_event(str(event_name or "SeaBattleAction"),
-                                       {key: value for key, value in event.items() if key != "react"})
-                continue
-            if event_name == "player_target_selected":
-                self._dispatch_player_target_reaction(event)
-            elif event_name == "mita_target_hit":
-                self._dispatch_mita_target_hit_reaction(event)
-            elif event_name == "manual_mita_turn":
-                self._dispatch_manual_turn_reaction()
-            elif event_name == "player_game_over":
-                self._dispatch_game_over_reaction(event)
-            elif event_name == "player_placement_completed":
-                self._dispatch_placement_completed_reaction()
-            elif event_name == "player_game_closed":
-                self._dispatch_player_close_reaction()
+    @state_operation
+    def _consume_reaction(self):
+        reaction_queue = self.reaction_queue
+        if reaction_queue is None:
+            self._reaction_stop_event.set()
+            return
+        try:
+            event = reaction_queue.get(timeout=0.2)
+        except queue.Empty:
+            return
+        except (EOFError, OSError, ValueError):
+            self._reaction_stop_event.set()
+            return
+        except Exception as exc:
+            logger.debug(
+                f"[{self.character.char_id}] Ошибка очереди реакций Морского боя: "
+                f"{format_exception(exc)}"
+            )
+            return
+
+        self._handle_reaction_event(event)
+
+    def _handle_reaction_event(self, event):
+        if not isinstance(event, dict):
+            return
+        event_name = event.get("event")
+        if event_name == "game_closed":
+            self.publish_event("game_closed")
+            self.cleanup()
+            return
+        if not event.get("react", True):
+            if event_name in {"mita_shot", "mita_target_hit", "player_target_selected"}:
+                self._publish_shot(event)
+            else:
+                self.publish_event(str(event_name or "SeaBattleAction"),
+                                   {key: value for key, value in event.items() if key != "react"})
+            return
+        if event_name == "player_target_selected":
+            self._dispatch_player_target_reaction(event)
+        elif event_name == "mita_target_hit":
+            self._dispatch_mita_target_hit_reaction(event)
+        elif event_name == "manual_mita_turn":
+            self._dispatch_manual_turn_reaction()
+        elif event_name == "player_game_over":
+            self._dispatch_game_over_reaction(event)
+        elif event_name == "player_placement_completed":
+            self._dispatch_placement_completed_reaction()
+        elif event_name == "player_game_closed":
+            self._dispatch_player_close_reaction()
+
 
     def _dispatch_player_target_reaction(self, event: Dict[str, Any]):
         if not self.character.get_variable("playingGame", False):
@@ -327,7 +340,9 @@ class SeaBattleGame(GameInterface):
         # multiprocessing.Queue.empty() is unreliable between processes.
         while True:
             try:
-                latest_state = self.state_queue.get_nowait()
+                candidate = self.state_queue.get_nowait()
+                if self.accepts_state(candidate):
+                    latest_state = candidate
             except queue.Empty:
                 break
             except Exception:
@@ -335,7 +350,9 @@ class SeaBattleGame(GameInterface):
 
         if latest_state is None and self._last_state is None:
             try:
-                latest_state = self.state_queue.get(timeout=0.25)
+                candidate = self.state_queue.get(timeout=0.25)
+                if self.accepts_state(candidate):
+                    latest_state = candidate
             except queue.Empty:
                 pass
             except Exception:

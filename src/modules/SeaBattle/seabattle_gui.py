@@ -173,7 +173,7 @@ class BoardWidget(QWidget):
     def leaveEvent(self, event): self.clear_preview()
 
 class SeaBattleWindow(QWidget):
-    def __init__(self, command_queue, state_queue, reaction_queue=None):
+    def __init__(self, command_queue, state_queue, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
         super().__init__()
         self.command_queue = command_queue
         self.state_queue = state_queue
@@ -185,9 +185,33 @@ class SeaBattleWindow(QWidget):
         self.init_ui()
         self.update_view()
 
+        from modules.session_snapshot import GameSnapshotEndpoint, GameStateQueue
+        self.state_queue = GameStateQueue(state_queue)
+        self.snapshot_endpoint = GameSnapshotEndpoint(snapshot_queue, reaction_queue,
+            self.capture_session_snapshot, self.apply_session_snapshot, lambda paused: self.setEnabled(not paused), self.state_queue)
+        if initial_snapshot is not None:
+            self.state_queue.generation = 1
+            self.apply_session_snapshot(initial_snapshot)
+            self.snapshot_endpoint.paused = True
+            self.setEnabled(False)
+
         self.command_timer = QTimer(self)
         self.command_timer.timeout.connect(self.process_commands)
         self.command_timer.start(100)
+
+    def capture_session_snapshot(self):
+        return {"board": self.game.engine.snapshot(), "react_enabled": self.mita_reaction_checkbox.isChecked()}
+
+    def apply_session_snapshot(self, state):
+        from modules.session_snapshot import validate_game_state
+        validate_game_state("seabattle", state)
+        self.game.engine.restore_snapshot(state["board"])
+        self.game.player_id, self.game.mita_id = self.game.engine.player_id, self.game.engine.mita_id
+        self.game.last_error = None
+        self.ship_to_place = None
+        self.mita_reaction_checkbox.setChecked(state["react_enabled"])
+        self.update_view()
+        self.send_state_update()
 
     def closeEvent(self, event):
         if not self._programmatic_close:
@@ -322,6 +346,10 @@ class SeaBattleWindow(QWidget):
             try:
                 cmd = self.command_queue.get_nowait()
                 action = cmd.get("action")
+                if self.snapshot_endpoint.handle(cmd):
+                    continue
+                if self.snapshot_endpoint.paused and action not in {"get_state", "stop_gui_process"}:
+                    continue
                 game_over_reaction = None
                 mita_hit_reaction = None
 
@@ -582,14 +610,14 @@ class SeaBattleWindow(QWidget):
         }
         return messages.get(result, str(fallback or ""))
 
-def run_seabattle_gui_process(command_queue, state_queue, reaction_queue=None):
+def run_seabattle_gui_process(command_queue, state_queue, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
     try:
         set_app_user_model_id()
         app = QApplication(sys.argv)
         app.setWindowIcon(application_icon())
         install_dark_titlebar_sync(app, True)
         app.setStyleSheet(get_stylesheet() + SEABATTLE_QSS)
-        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue, snapshot_queue, initial_snapshot)
         window.show()
         apply_dark_titlebar(window, True)
         window.send_state_update()

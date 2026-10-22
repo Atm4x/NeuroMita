@@ -1,5 +1,6 @@
 from __future__ import annotations
 from core.error_utils import format_exception
+from core.state_barrier import state_operation
 
 import threading
 from dataclasses import dataclass
@@ -146,6 +147,7 @@ class CharacterManager:
         with self._lock:
             return self.characters.get(str(char_id or ""))
 
+    @state_operation(wait=True)
     def get_character(self, char_id: str) -> Optional[Character]:
         key = str(char_id or "").strip()
         if not key:

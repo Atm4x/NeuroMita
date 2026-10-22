@@ -218,7 +218,8 @@ class HistoryManager(CharacterScopedService):
                 )
 
         try:
-            self._get_embed_executor().submit(_bulk_embed_job)
+            from core.state_barrier import bind_state_job
+            self._get_embed_executor().submit(bind_state_job(_bulk_embed_job))
         except Exception as e:
             logger.warning(
                 f"[HistoryManager] Failed to schedule embeddings batch (ignored): {format_exception(e)}",
@@ -1335,6 +1336,31 @@ class HistoryManager(CharacterScopedService):
         row_id = self._insert_history_row(msg=message, is_active=1)
         self._schedule_message_embedding(row_id, message)
         return row_id
+
+    def replace_timeline_cache(self, messages: list[dict]) -> None:
+        """Rebuild disposable SQL/RAG rows from one authoritative branch projection."""
+        if not self._history_cols:
+            self._refresh_history_columns()
+        committed = []
+        with self._write_lock:
+            connection = self.db.get_connection()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("UPDATE history SET is_active=0, is_deleted=1, embedding=NULL WHERE character_id=?",
+                                   (self.storage_key,))
+                cursor = connection.cursor()
+                for message in messages:
+                    row_id = self._insert_history_row_tx(cursor, msg=message, is_active=1, dedupe=False)
+                    text = self._extract_text_for_embedding(message.get("content"))
+                    if row_id and text:
+                        committed.append((row_id, text))
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        self._schedule_history_embeddings(committed)
 
     def update_variable(self, key, value):
         conn = self.db.get_connection()

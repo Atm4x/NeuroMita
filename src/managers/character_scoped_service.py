@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Iterator
 import threading
+from core.state_barrier import state_access
 
 
 @dataclass(frozen=True)
@@ -169,7 +170,7 @@ class CharacterScopedService:
     @contextmanager
     def operation(self, scope: CharacterScope) -> Iterator[None]:
         lock = self._operation_lock_for(scope.character_id)
-        with lock:
+        with state_access(), lock:
             with self.activate(scope):
                 yield
 

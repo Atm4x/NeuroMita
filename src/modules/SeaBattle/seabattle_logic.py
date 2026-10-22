@@ -1,6 +1,7 @@
 # seabattle_logic.py
 
 import random
+from copy import deepcopy
 from typing import List, Tuple, Dict, Any
 
 def to_alg(x: int, y: int) -> str:
@@ -39,6 +40,80 @@ class SeaBattleEngine:
 
     def _create_empty_board(self):
         return [[self.CELL_EMPTY for _ in range(self.BOARD_SIZE)] for _ in range(self.BOARD_SIZE)]
+
+    def snapshot(self):
+        return {"player_id": self.player_id, "mita_id": self.mita_id, "phase": self.game_phase,
+                "current_player": self.current_player, "winner": self.winner,
+                "last_move": deepcopy(self.last_move_result), "players": [
+                    {"id": identity, "board": deepcopy(self.player_boards[identity]),
+                     "ships": deepcopy(self.player_ships[identity]), "remaining": list(self.ships_to_place[identity])}
+                    for identity in (self.player_id, self.mita_id)]}
+
+    def restore_snapshot(self, state):
+        if (not isinstance(state, dict) or set(state) != {"player_id", "mita_id", "phase", "current_player", "winner", "last_move", "players"}
+                or type(state["player_id"]) is not int or type(state["mita_id"]) is not int
+                or state["player_id"] == state["mita_id"] or not isinstance(state["players"], list) or len(state["players"]) != 2):
+            raise ValueError("Invalid Sea Battle snapshot")
+        players = {state["player_id"], state["mita_id"]}
+        if (type(state["current_player"]) is not int or state["current_player"] not in players
+                or (state["winner"] is not None and (type(state["winner"]) is not int or state["winner"] not in players))
+                or state["phase"] not in {"placement", "battle", "game_over"}
+                or (state["phase"] == "game_over") != (state["winner"] is not None)):
+            raise ValueError("Invalid Sea Battle lifecycle")
+        boards, ships, remaining = {}, {}, {}
+        for player in state["players"]:
+            identity = player.get("id")
+            board = player.get("board")
+            if (set(player) != {"id", "board", "ships", "remaining"} or type(identity) is not int
+                    or identity not in players or identity in boards or not isinstance(board, list) or len(board) != 10
+                    or any(not isinstance(row, list) or len(row) != 10 or any(type(cell) is not int or cell not in range(6) for cell in row) for row in board)
+                    or not isinstance(player.get("ships"), list) or not isinstance(player.get("remaining"), list)
+                    or any(type(length) is not int or length not in self.SHIP_CONFIG for length in player["remaining"])):
+                raise ValueError("Invalid Sea Battle board")
+            restored_ships = []
+            occupied = set()
+            for ship in player["ships"]:
+                coords = ship.get("coords")
+                hits = ship.get("hits")
+                if (not isinstance(coords, list) or not coords or not isinstance(hits, list) or len(hits) != len(coords)
+                        or any(type(hit) is not bool for hit in hits) or type(ship.get("sunk")) is not bool):
+                    raise ValueError("Invalid Sea Battle ship")
+                cells = []
+                for coord in coords:
+                    if (not isinstance(coord, (list, tuple)) or len(coord) != 2
+                            or any(type(value) is not int or not 0 <= value < 10 for value in coord)
+                            or tuple(coord) in occupied):
+                        raise ValueError("Invalid Sea Battle ship coordinates")
+                    occupied.add(tuple(coord))
+                    cells.append(tuple(coord))
+                if (ship["sunk"] != all(hits) or len(cells) not in self.SHIP_CONFIG
+                        or not (len({x for x, _y in cells}) == 1 and max(y for _x, y in cells) - min(y for _x, y in cells) + 1 == len(cells)
+                            or len({y for _x, y in cells}) == 1 and max(x for x, _y in cells) - min(x for x, _y in cells) + 1 == len(cells))):
+                    raise ValueError("Inconsistent Sea Battle ship damage")
+                for (x, y), hit in zip(cells, hits):
+                    expected = self.CELL_SUNK if ship["sunk"] else self.CELL_HIT if hit else self.CELL_SHIP
+                    if board[y][x] != expected:
+                        raise ValueError("Sea Battle board does not match its ship damage")
+                restored_ships.append({"coords": cells, "hits": list(hits), "sunk": ship["sunk"]})
+            if sorted([len(ship["coords"]) for ship in restored_ships] + player["remaining"]) != sorted(self.SHIP_CONFIG):
+                raise ValueError("Inconsistent Sea Battle fleet")
+            for y, row in enumerate(board):
+                for x, cell in enumerate(row):
+                    if cell in {self.CELL_SHIP, self.CELL_HIT, self.CELL_SUNK} and (x, y) not in occupied:
+                        raise ValueError("Sea Battle board contains an unidentified ship cell")
+            boards[identity], ships[identity], remaining[identity] = deepcopy(board), restored_ships, list(player["remaining"])
+        last_move = deepcopy(state["last_move"])
+        if last_move is not None:
+            if not isinstance(last_move, dict) or last_move.get("attacker") not in players or last_move.get("result") not in {"hit", "miss", "sunk", "win"}:
+                raise ValueError("Invalid Sea Battle last move")
+            coords = last_move.get("coords")
+            if not isinstance(coords, (list, tuple)) or len(coords) != 2 or any(type(value) is not int or not 0 <= value < 10 for value in coords):
+                raise ValueError("Invalid Sea Battle last move coordinates")
+            last_move["coords"] = tuple(coords)
+        self.player_id, self.mita_id = state["player_id"], state["mita_id"]
+        self.player_boards, self.player_ships, self.ships_to_place = boards, ships, remaining
+        self.game_phase, self.current_player, self.winner = state["phase"], state["current_player"], state["winner"]
+        self.last_move_result = last_move
 
     def place_ship(self, player_id, x, y, length, orientation):
         if self.game_phase != "placement": return False, "Неверная фаза игры"

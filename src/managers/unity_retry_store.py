@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from main_logger import logger
+from core.state_barrier import state_operation
 
 
 class UnityRetryStore:
@@ -26,6 +27,17 @@ class UnityRetryStore:
     _delivered_in_process: set[tuple[str, str]] = set()
     _unreadable_paths: set[str] = set()
     _session_id = uuid.uuid4().hex
+
+    @staticmethod
+    def _timeline_context(character_id: str):
+        from core.services import services
+        from services.timeline_runtime import SessionTimelineRuntime
+        runtime = services().get_optional(SessionTimelineRuntime)
+        if runtime is None:
+            return None
+        selection = runtime.selection
+        return {"branch_id": selection.branch_id,
+                "character_epoch": runtime.repository.context_epoch(selection.branch_id, character_id)}
 
     @classmethod
     def _root(cls) -> Path:
@@ -146,7 +158,13 @@ class UnityRetryStore:
             (item.get("status"), item.get("error"), item.get("created_at"))
             for item in records
         ]
+        context = cls._timeline_context(character_id)
         for item in records:
+            if context is not None and item.get("timeline_context") != context and item.get("status") != "unretryable":
+                item["status"] = "unretryable"
+                item["error"] = "Unity-запрос относится к другому состоянию сессии; повтор отключён."
+                item.pop("result", None)
+                changed = True
             try:
                 cls._restore_bytes(item)
             except (ValueError, TypeError, binascii.Error):
@@ -168,12 +186,18 @@ class UnityRetryStore:
         return records, changed
 
     @classmethod
+    @state_operation(wait=True)
     def add(cls, character_id: str, record: dict[str, Any]) -> bool:
         with cls._lock:
             records, _ = cls._read_records_locked(character_id)
             message_id = str(record.get("message_id") or "")
-            if message_id and any(str(item.get("message_id") or "") == message_id for item in records):
-                return True
+            context = cls._timeline_context(character_id)
+            matching = [item for item in records if message_id and str(item.get("message_id") or "") == message_id]
+            if matching:
+                if context is None or matching[0].get("timeline_context") == context:
+                    return True
+                records = [item for item in records if str(item.get("message_id") or "") != message_id]
+                cls._delivered_in_process.discard((str(character_id), message_id))
             if len(records) >= cls.MAX_RECORDS:
                 logger.warning("Unity retry outbox is full for character %s", character_id)
                 return False
@@ -182,12 +206,15 @@ class UnityRetryStore:
             stored.setdefault("status", "generating")
             stored.setdefault("active_task_uid", "")
             stored["session_id"] = cls._session_id
+            if context is not None:
+                stored["timeline_context"] = context
             saved = cls._write(character_id, [*records, stored])
             if not saved:
                 logger.warning("Unity retry outbox size limit reached for character %s", character_id)
             return saved
 
     @classmethod
+    @state_operation(wait=True)
     def list_for_character(cls, character_id: str) -> list[dict[str, Any]]:
         with cls._lock:
             records, changed = cls._read_records_locked(character_id)
@@ -204,6 +231,7 @@ class UnityRetryStore:
             return restored
 
     @classmethod
+    @state_operation(wait=True)
     def recover_interrupted_attempts(cls) -> int:
         """Called exactly once on application startup, never during a normal read."""
         recovered = 0
@@ -243,6 +271,7 @@ class UnityRetryStore:
         return recovered
 
     @classmethod
+    @state_operation(wait=True)
     def get(cls, character_id: str, message_id: str) -> dict[str, Any] | None:
         target = str(message_id or "")
         return next(
@@ -252,6 +281,7 @@ class UnityRetryStore:
         )
 
     @classmethod
+    @state_operation(wait=True)
     def is_superseded_attempt(cls, character_id: str, message_id: str, task_uid: str) -> bool:
         key = (str(character_id or ""), str(message_id or ""))
         with cls._lock:
@@ -265,6 +295,7 @@ class UnityRetryStore:
             )
 
     @classmethod
+    @state_operation(wait=True)
     def update(cls, character_id: str, message_id: str, **changes: Any) -> bool:
         with cls._lock:
             records, _ = cls._read_records_locked(character_id)
@@ -278,6 +309,7 @@ class UnityRetryStore:
             return False
 
     @classmethod
+    @state_operation(wait=True)
     def update_request_context(
         cls,
         character_id: str,
@@ -307,6 +339,7 @@ class UnityRetryStore:
             return False
 
     @classmethod
+    @state_operation(wait=True)
     def transition(
         cls,
         character_id: str,
@@ -344,6 +377,7 @@ class UnityRetryStore:
             return False
 
     @classmethod
+    @state_operation(wait=True)
     def claim(cls, character_id: str, message_id: str) -> dict[str, Any] | None:
         """Atomically claim only an explicitly retryable record."""
         with cls._lock:
@@ -373,10 +407,12 @@ class UnityRetryStore:
             return None
 
     @classmethod
+    @state_operation(wait=True)
     def set_active_task(cls, character_id: str, message_id: str, task_uid: str) -> bool:
         return cls.update(character_id, message_id, active_task_uid=str(task_uid or ""))
 
     @classmethod
+    @state_operation(wait=True)
     def finish_failed_attempt(
         cls,
         character_id: str,
@@ -413,6 +449,7 @@ class UnityRetryStore:
             return False
 
     @classmethod
+    @state_operation(wait=True)
     def mark_delivery_failed(
         cls,
         character_id: str,
@@ -438,6 +475,7 @@ class UnityRetryStore:
             return False
 
     @classmethod
+    @state_operation(wait=True)
     def mark_voiceover_failed(
         cls,
         character_id: str,
@@ -456,6 +494,7 @@ class UnityRetryStore:
         )
 
     @classmethod
+    @state_operation(wait=True)
     def complete_delivery(cls, character_id: str, message_id: str, task_uid: str) -> bool:
         with cls._lock:
             records, _ = cls._read_records_locked(character_id)
@@ -477,6 +516,7 @@ class UnityRetryStore:
             return True
 
     @classmethod
+    @state_operation(wait=True)
     def remove(cls, character_id: str, message_id: str) -> bool:
         with cls._lock:
             records, _ = cls._read_records_locked(character_id)

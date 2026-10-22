@@ -12,6 +12,7 @@ Domain and application code do not depend on SQLite or on CFMD runtime types.
 | Persistence port | `domain/timeline/ports.py` | Atomic append, branch reads, receipts, transfer and selection contracts |
 | Session application | `SessionTimeline` | Explicit branch operations and character projections |
 | Runtime application | `SessionTimelineRuntime` | Durable active selection, pinned turns, cancellation and short effect scopes |
+| State coordination | `SessionRestoration` | Full Python checkpoints, participant restore, compensation and durable recovery |
 | Conversation ingress | `ConversationTimeline` | Message identity, semantic turn kind and context provenance |
 | Context projection | `TimelineContext` | Disposable branch-scoped summaries verified against source facts |
 | History queries | `TimelineHistoryQueries` | Bounded incremental projections, detached paging and historical reads |
@@ -139,10 +140,17 @@ prefix and then owns its own events. Parent events after the cutoff remain
 retained and cannot be causal targets from the child. Nested forks apply all
 ancestor cutoffs. A branch marker is created atomically with the child.
 
-`checkpoint(snapshot, ...)` stores an explicit caller-provided JSON snapshot.
-`SessionTimelineRuntime.restore(...)` creates and activates a child and returns
-the snapshot to its caller. Applying external world state is the caller's
-responsibility; this method does not claim to reconstruct Unity from events.
+`SessionTimeline.checkpoint(snapshot, ...)` is the low-level operation storing
+an explicit JSON snapshot. The configured application uses
+`SessionTimelineRuntime.checkpoint(...)` to capture all registered Python state
+owners. Its `restore(...)` validates the snapshot, forks at the checkpoint,
+restores the owners and activates the child after successful application.
+The abandoned future and its final mutable state remain retained.
+
+The coordinator journals cross-owner transitions and recovers unfinished work
+before the application accepts chat/server requests. See
+[Python session state restoration](session-state-restoration.md) for the
+participant contract, failure semantics and session initialization policy.
 
 Existing per-character snapshot export includes a timeline checkpoint reference.
 Loading an existing character-history JSON still replaces that character's
@@ -179,12 +187,17 @@ CFMD history, snapshots and maintained queries can implement these operations,
 but the Python domain does not emulate CFMD's universal Candidate/rebase/watch
 calculus on SQLite. A candidate adapter should pass the same domain and transfer
 tests and preserve the same exported session meaning.
+Full Python state coordination additionally requires a `RestorationJournal`
+adapter and a semantic character-state participant replacing
+`SQLiteCharacterState`. Swapping only the event repository does not migrate
+the character variables and memory tables.
 
 ## Current boundaries and remaining work
 
-- Character variables, long-term memory, graph memory and working-state stores
-  still have their existing owners. Their rollback is not implied by restoring
-  only the timeline. Complete world restore needs explicit snapshot participants.
+- Registered participants now restore character variables, semantic memory and
+  graph, working state, reminders, model observations and Python mini-games.
+  Unity scene/physics and external providers require their own restoration
+  adapters; restoring Python observations does not restore the Unity world.
 - There is no new session/branch selection UI in this change. Runtime operations
   are available to application orchestration.
 - Initial import rejects conflicting retained versions of a supposedly identical
@@ -235,6 +248,10 @@ independent oracle, then transfer the resulting session. Attachment tests verify
 deduplication, bounded materialization and the archive's reachable closure.
 Existing chat, history, native-tool and mini-game regression suites
 are also exercised. All changes are Python; no Unity or `dotnet` build is needed.
+The restoration suites are `tests/test_session_restoration.py`,
+`tests/test_session_state_participants.py`, `tests/test_game_snapshots.py` and
+`tests/test_session_outputs.py`. They include durable recovery with new runtime
+owners, a real Sea Battle subprocess and a combined store/model/game restore.
 
 Run the focused suites with `python -m unittest discover -s tests -p "test_*timeline*.py"`
 from the repository root, using the project's Python environment with the existing
