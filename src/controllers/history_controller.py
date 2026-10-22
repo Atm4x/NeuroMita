@@ -32,6 +32,7 @@ from services.contracts import (
     SettingsService,
     UtilityGenerationRequest,
 )
+from services.timeline_context import TimelineContext
 
 
 class HistoryController(HistoryService):
@@ -168,6 +169,23 @@ class HistoryController(HistoryService):
         effective_limit = 8 if is_game_master else int(memory_limit)
         if effective_limit <= 0:
             effective_limit = 1
+
+        timeline_context = services().get_optional(TimelineContext)
+        if timeline_context is not None:
+            summary, messages = timeline_context.unsummarized(char_id)
+            _, history_limited = self._split_history_by_dialog_limit(messages, effective_limit)
+            history_limited = history_limited[-max(64, effective_limit * 3):]
+            last_message_at = self._last_message_time(history_limited)
+            target_context = timeline_context.conversation.target_context(char_id)
+            if target_context is not None:
+                history_limited.append(target_context)
+            history_limited = list(timeline_context.conversation.content.materialize(history_limited))
+            if image_quality.get("enabled", False):
+                history_limited = self._apply_history_image_quality_reduction(history_limited, image_quality)
+            return PreparedHistory(
+                messages=self._sanitize_history_for_llm(character, history_limited),
+                summary=summary, action_context="", last_message_at=last_message_at,
+            )
 
         history_data = character.history_manager.load_history()
         llm_messages_history: List[Dict[str, Any]] = history_data.get("messages", []) or []
@@ -459,8 +477,56 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
+        context = services().get_optional(TimelineContext)
+        if context is not None:
+            self._start_timeline_compression(character, context)
+            self._maybe_run_memory_maintenance(character)
+            return
         self._start_background_compression(character)
         self._maybe_run_memory_maintenance(character)
+
+    def _start_timeline_compression(self, character, context: TimelineContext) -> None:
+        if getattr(self, "_closed", False) or not self._compression_enabled():
+            return
+        char_id = character.char_id
+        with self._compression_guard:
+            if char_id in self._background_compression_inflight:
+                return
+            self._background_compression_inflight.add(char_id)
+        turn = context.conversation.runtime.capture(character_id=char_id)
+
+        def compress():
+            try:
+                with context.conversation.runtime.turn_scope(turn):
+                    previous_summary, messages = context.unsummarized(char_id)
+                    limit = max(1, int(self._get_setting("MODEL_MESSAGE_LIMIT", 40)))
+                    if len(messages) <= max(64, limit * 2):
+                        return
+                    prefix, _ = self._split_history_by_dialog_limit(messages, limit)
+                    if not prefix:
+                        prefix = messages[:-max(32, limit)]
+                    if not prefix:
+                        return
+                    through = max(message["timeline_learned_at"] for message in prefix)
+                    all_prefix = [message for message in context.conversation.context_messages(char_id)
+                                  if message["timeline_learned_at"] <= through]
+                    summary = self._compress_history_singleflight(
+                        character, prefix, previous_summary=previous_summary,
+                    )
+                    if summary:
+                        context.store(char_id, all_prefix, summary)
+            except Exception:
+                logger.warning("Timeline context compression failed for %s", char_id, exc_info=True)
+            finally:
+                with self._compression_guard:
+                    self._background_compression_inflight.discard(char_id)
+
+        try:
+            executors().try_submit(Pools.BACKGROUND_LLM, compress)
+        except Exception:
+            with self._compression_guard:
+                self._background_compression_inflight.discard(char_id)
+            logger.warning("Could not schedule timeline compression for %s", char_id, exc_info=True)
 
     def _maybe_run_memory_maintenance(self, character) -> None:
         """Раз в N ответов запускает фоновую ревизию памяти (dedup-sweep, без LLM)."""

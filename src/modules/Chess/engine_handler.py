@@ -229,8 +229,10 @@ def setup_maia_weights(maia_elo: int):
 class ChessGameController:
     def __init__(self, initial_elo: int, player_is_white_gui: bool,
                  state_q: queue.Queue, status_update_cb_gui, board_update_cb_gui, game_over_cb_gui,
-                 is_auto: bool = False, is_cheat: bool = False):
-        self.board_logic = PureBoardLogic()
+                 is_auto: bool = False, is_cheat: bool = False, semantic_event_queue=None):
+        self.semantic_event_queue = semantic_event_queue
+        self.last_move_event = None
+        self.board_logic = PureBoardLogic(on_move=self._publish_move_fact)
         self.engine = None
         self.current_maia_elo = initial_elo
         self.current_maia_weights_path = None
@@ -245,6 +247,22 @@ class ChessGameController:
         self.is_auto = is_auto    # True = Maia ходит сама, False = LLM выбирает ходы
         self.is_cheat = is_cheat  # True = разрешены чит-команды
         self._send_status_to_gui_if_possible(f"Контроллер инициализирован. ELO: {self.current_maia_elo}")
+
+    def _publish_move_fact(self, uci, san, mover):
+        from uuid import uuid4
+
+        event = {
+            "event": "chess_move", "semantic_id": uuid4().hex,
+            "uci": uci, "san": san, "ply": len(self.board_logic.board.move_stack),
+            "mover": "Player" if mover == self.player_is_white_in_gui else "Character",
+            "react": False,
+        }
+        self.last_move_event = event
+        if self.semantic_event_queue is not None:
+            try:
+                self.semantic_event_queue.put(dict(event))
+            except (OSError, ValueError):
+                print("Could not publish an accepted chess move to the session host")
 
     def _send_status_to_gui_if_possible(self, message: str):
         if self.status_update_cb_gui:

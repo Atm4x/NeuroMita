@@ -263,6 +263,29 @@ class MainController:
         )
         logger.notify("CharacterController успешно инициализирован.")
 
+        from infrastructure.timeline.bootstrap import bootstrap_timeline
+        from managers.database_manager import DatabaseManager
+        from services.conversation_timeline import ConversationTimeline
+        from services.timeline_runtime import SessionTimelineRuntime
+
+        character_manager = self.character_controller.character_manager
+        conversation_timeline = self._build_component(
+            "session_timeline", lambda: bootstrap_timeline(
+                DatabaseManager(), character_manager.resources, character_manager.get_all_characters(),
+            ),
+        )
+        services().register(ConversationTimeline, conversation_timeline, replace=True)
+        services().register(SessionTimelineRuntime, conversation_timeline.runtime, replace=True)
+        from services.unity_timeline import UnityTimelineIngress
+
+        services().register(UnityTimelineIngress, UnityTimelineIngress(conversation_timeline.runtime), replace=True)
+        from infrastructure.timeline.context import SQLiteContextSummaries
+        from services.timeline_context import TimelineContext
+
+        services().register(TimelineContext, TimelineContext(
+            conversation_timeline, SQLiteContextSummaries(DatabaseManager().get_connection),
+        ), replace=True)
+
         self.model_controller = self._build_component(
             "model", lambda: ModelController(self.settings)
         )

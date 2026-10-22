@@ -159,8 +159,16 @@ class ChessGame(GameInterface):
             if not isinstance(event, dict):
                 continue
             if event.get("event") == "game_closed":
+                self.publish_event("game_closed")
                 self.cleanup()
                 return
+            if not event.get("react", True):
+                if event.get("event") in {"chess_move", "player_chess_move"}:
+                    self._publish_chess_move(event)
+                else:
+                    self.publish_event(str(event.get("event") or "ChessAction"),
+                                       {key: value for key, value in event.items() if key != "react"})
+                continue
             if event.get("event") == "player_chess_move":
                 self._dispatch_player_move_reaction(event)
             elif event.get("event") == "manual_mita_turn":
@@ -186,8 +194,14 @@ class ChessGame(GameInterface):
             f"{san_move}" + (f" ({uci_move})" if uci_move else "") + ". "
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly RequestBestChessMove in commands. Do not wait for the player "
-            "to ask again; the recommended legal move will be selected and applied."
+            "to ask again; the recommended legal move will be selected and applied.",
+            event_id=self._publish_chess_move(event),
         )
+
+    def _publish_chess_move(self, event: Dict[str, Any]):
+        return self.publish_event("ChessMove", {
+            key: event[key] for key in ("semantic_id", "san", "uci", "mover", "ply") if key in event
+        })
 
     def _dispatch_manual_turn_reaction(self):
         if not self.character.get_variable("playingGame", False):
@@ -196,13 +210,15 @@ class ChessGame(GameInterface):
         self.request_character_reaction(
             "[Chess manual turn request] The player pressed the button asking Mita to "
             "make her move. It is your turn. In this same response, react briefly in "
-            "character and put exactly RequestBestChessMove in commands."
+            "character and put exactly RequestBestChessMove in commands.",
+            event_id=self.publish_event("manual_mita_turn"),
         )
 
     def _dispatch_player_close_reaction(self):
         self.request_character_reaction(
             "[Chess] The player closed the chess game window. "
-            "React briefly and naturally in character to the end of this match."
+            "React briefly and naturally in character to the end of this match.",
+            event_id=self.publish_event("player_game_closed"),
         )
 
     def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
@@ -233,7 +249,10 @@ class ChessGame(GameInterface):
                 "React briefly and naturally in character; do not make a chess move."
             )
         self.request_character_reaction(
-            instruction
+            instruction,
+            event_id=self.publish_event("player_game_over", {
+                key: event[key] for key in ("outcome", "result", "choice") if key in event
+            }),
         )
 
 

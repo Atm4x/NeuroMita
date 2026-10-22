@@ -3,12 +3,15 @@ from typing import Any, Dict, List, Optional, Protocol
 
 
 class GameHost(Protocol):
+    def publish_event(self, game: "GameInterface", name: str, payload: Dict[str, Any]) -> str | None: ...
+
     def request_character_reaction(
         self,
         game: "GameInterface",
         instruction: str,
         *,
         visible: bool = True,
+        event_id: str | None = None,
     ) -> bool: ...
 
 
@@ -19,12 +22,22 @@ class GameInterface(ABC):
         self.character = character
         self.game_id = game_id
         self.host = host
+        from domain.timeline import new_id
+        self.instance_id = new_id()
+        self.timeline_selection = None
 
-    def request_character_reaction(self, instruction: str, *, visible: bool = True) -> bool:
+    def publish_event(self, name: str, payload: Dict[str, Any] | None = None) -> str | None:
+        publisher = getattr(self.host, "publish_event", None)
+        return publisher(self, name, payload or {}) if callable(publisher) else None
+
+    def request_character_reaction(self, instruction: str, *, visible: bool = True, event_id: str | None = None) -> bool:
         """Ask the owning game host to initiate a character reaction."""
         if self.host is None:
             return False
-        return bool(self.host.request_character_reaction(self, instruction, visible=visible))
+        options = {"visible": visible}
+        if event_id is not None:
+            options["event_id"] = event_id
+        return bool(self.host.request_character_reaction(self, instruction, **options))
 
     @abstractmethod
     def start(self, params: Dict[str, Any]):

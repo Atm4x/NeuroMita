@@ -37,6 +37,9 @@ from services.contracts import (
 from services.llm_stream import LLMStreamEvent, LLMStreamEventType
 from services.dialogue_runtime_state import get_dialogue_runtime_state_service
 from services.stream_presentation import TextDeltaCoalescer
+from services.conversation_timeline import ConversationTimeline
+from domain.timeline.models import TimelineTurn
+from core.services import services
 from schemas.structured_response import RESPONSE_PROTOCOL_VERSION
 
 
@@ -256,6 +259,12 @@ class ChatController(ChatService, GenerationActivityService):
         target_message_id = str(message_id or "").strip()
         if not target_message_id:
             raise ValueError("ChatAPI.reply requires a non-empty message_id")
+        timeline = services().get_optional(ConversationTimeline)
+        if timeline is not None:
+            target = timeline.resolve_message(target_message_id)
+            if not timeline.runtime.timeline.knows(character_id, target.event_id):
+                raise ValueError("ChatAPI.reply target is unknown to the character")
+            target_message_id = target.payload.to_dict().get("message_id") or target.event_id
         return self._submit_semantic_turn(
             character_id=character_id,
             user_input=user_input,
@@ -271,14 +280,23 @@ class ChatController(ChatService, GenerationActivityService):
         self,
         *,
         character_id: str,
-        instruction: str,
+        instruction: str = "",
+        event_id: str | None = None,
         visible: bool = True,
         sender: str = "Player",
         participants: list[str] | None = None,
     ) -> bool:
         instruction = str(instruction or "").strip()
-        if not instruction:
-            raise ValueError("ChatAPI.react requires a non-empty instruction")
+        if not instruction and not event_id:
+            raise ValueError("ChatAPI.react requires an event_id or a non-empty instruction")
+        if event_id:
+            timeline = use(ConversationTimeline)
+            event = timeline.runtime.timeline.event(event_id)
+            if not timeline.runtime.timeline.knows(character_id, event_id):
+                raise ValueError("ChatAPI.react target is unknown to the character")
+            if not instruction:
+                payload = event.payload.to_dict()
+                instruction = str(payload.get("description") or payload.get("name") or event.kind.value)
         if not bool(self.settings.get("REACT_ENABLED", True)):
             return False
 
@@ -295,6 +313,7 @@ class ChatController(ChatService, GenerationActivityService):
             sender=sender,
             participants=participants,
             policy=resolve_policy(model_event_type="react", react_level=react_level),
+            timeline_event_id=event_id,
         )
 
     def initiate(
@@ -312,6 +331,7 @@ class ChatController(ChatService, GenerationActivityService):
             sender=sender,
             participants=participants,
             policy=resolve_policy(model_event_type="chat"),
+            timeline_initiate=True,
         )
 
     def _submit_semantic_turn(
@@ -325,6 +345,8 @@ class ChatController(ChatService, GenerationActivityService):
         participants: list[str] | None,
         origin_message_id: str | None = None,
         policy: RequestPolicy,
+        timeline_event_id: str | None = None,
+        timeline_initiate: bool = False,
     ) -> bool:
         data = {
             "character_id": str(character_id or ""),
@@ -358,6 +380,8 @@ class ChatController(ChatService, GenerationActivityService):
             previous_player_message_source=PlayerMessageSource.NONE,
             gm_instruction_override=None,
             trace_id=trace_id,
+            timeline_event_id=timeline_event_id,
+            timeline_initiate=timeline_initiate,
         )
         return True
 
@@ -507,6 +531,9 @@ class ChatController(ChatService, GenerationActivityService):
         trace_id: str | None = None,
         operation_id: str = "",
         cancellation: CancellationToken | None = None,
+        timeline_event_id: str | None = None,
+        timeline_initiate: bool = False,
+        timeline_turn: TimelineTurn | None = None,
     ):
         """Полный путь одного запроса. Выполняется в пуле GENERATION.
 
@@ -515,6 +542,8 @@ class ChatController(ChatService, GenerationActivityService):
         игры, telegram), а вызывающий поток шины стоял на fut.result(600).
         """
         eff_policy = None
+        req_id = str(req_id or uuid.uuid4().hex)
+        timeline_event_id = timeline_event_id or (game_state or {}).get("_timeline_event_id")
         dialogue = parse_dialogue_turn_context(dialogue)
         player_message_source = parse_player_message_source(player_message_source)
         previous_player_message_source = parse_player_message_source(previous_player_message_source)
@@ -740,6 +769,9 @@ class ChatController(ChatService, GenerationActivityService):
                     participants=list(participants or []),
                     req_id=req_id,
                     origin_message_id=origin_message_id,
+                    timeline_event_id=timeline_event_id,
+                    timeline_initiate=timeline_initiate,
+                    timeline_turn=timeline_turn,
                     task_uid=task_uid,
                     trace_id=trace_id,
                     cancellation=cancellation,
@@ -1082,6 +1114,11 @@ class ChatController(ChatService, GenerationActivityService):
         task_uid = kwargs.get("task_uid")
         trace_id = kwargs.get("trace_id")
         with trace_scope(trace_id):
+            conversation_timeline = services().get_optional(ConversationTimeline)
+            if conversation_timeline is not None:
+                kwargs["timeline_turn"] = conversation_timeline.runtime.capture(
+                    character_id=str(kwargs.get("character_id") or ""),
+                )
             operation_id = str(trace_id or uuid.uuid4().hex)
             cancellation = CancellationToken()
             kwargs["operation_id"] = operation_id

@@ -148,12 +148,10 @@ class ChessMoveReactionTests(unittest.TestCase):
                     window.mita_reaction_checkbox.setChecked(enabled)
 
                     def check_before_dismissal(dialog):
-                        if enabled:
-                            event = reactions.get_nowait()
-                            self.assertEqual(event["event"], "player_game_over")
-                            self.assertEqual(event["result"], result)
-                        else:
-                            self.assertTrue(reactions.empty())
+                        event = reactions.get_nowait()
+                        self.assertEqual(event["event"], "player_game_over")
+                        self.assertEqual(event["result"], result)
+                        self.assertEqual(event["react"], enabled)
                         return 0
 
                     try:

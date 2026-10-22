@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from typing import Protocol, Sequence
+
+from .models import AppendReceipt, Branch, EventDraft, JsonDocument, TimelineEvent, TimelineSelection
+from .archive import SessionArchive
+
+
+class TimelineRepository(Protocol):
+    """Atomic storage laws shared by SQLite and future CFMD implementations."""
+
+    def create_session(self, session_id: str, branch_id: str) -> Branch: ...
+
+    def get_branch(self, branch_id: str) -> Branch: ...
+
+    def append(
+        self, branch_id: str, events: Sequence[EventDraft], *,
+        expected_head: int, idempotency_key: str,
+        command: JsonDocument | None = None,
+    ) -> tuple[TimelineEvent, ...]: ...
+
+    def receipt(self, branch_id: str, key: str) -> AppendReceipt | None: ...
+
+    def read(
+        self, branch_id: str, *, after: int = 0, through: int | None = None,
+        limit: int = 500, observer: str | None = None,
+    ) -> tuple[TimelineEvent, ...]: ...
+
+    def get_event(self, branch_id: str, event_id: str) -> TimelineEvent: ...
+
+    def find_message(self, branch_id: str, message_id: str) -> TimelineEvent: ...
+
+    def knows(self, branch_id: str, character_id: str, event_id: str, *, through: int | None = None) -> bool: ...
+
+    def context_epoch(self, branch_id: str, character_id: str, *, through: int | None = None) -> int: ...
+
+    def presentation_epoch(self, branch_id: str, character_id: str, *, through: int | None = None) -> int: ...
+
+    def present(self, branch_id: str, *, through: int | None = None) -> frozenset[str]: ...
+
+    def fork(self, branch_id: str, checkpoint_id: str, new_branch_id: str) -> Branch: ...
+
+    def export_session(self, session_id: str) -> SessionArchive: ...
+
+    def import_session(self, archive: SessionArchive) -> Branch: ...
+
+
+class TimelineWorkspace(Protocol):
+    def selection(self, workspace: str) -> TimelineSelection | None: ...
+
+    def select(
+        self, workspace: str, branch_id: str, *, expected: TimelineSelection | None,
+    ) -> TimelineSelection: ...

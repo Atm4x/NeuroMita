@@ -1057,17 +1057,18 @@ class HistoryManager(CharacterScopedService):
     # ---------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------
-    def load_variables(self, keys: Iterable[str]) -> dict[str, Any]:
-        """Read selected persisted variables without loading conversation history."""
-        names = tuple(dict.fromkeys(str(key) for key in keys))
-        if not names:
+    def load_variables(self, keys: Iterable[str] | None = None) -> dict[str, Any]:
+        """Read persisted variables without loading conversation history."""
+        names = tuple(dict.fromkeys(str(key) for key in keys)) if keys is not None else None
+        if names == ():
             return {}
         conn = self.db.get_connection()
         try:
-            placeholders = ",".join("?" for _ in names)
+            placeholders = ",".join("?" for _ in names) if names is not None else ""
+            selected = f" AND key IN ({placeholders})" if names is not None else ""
             rows = conn.execute(
-                f"SELECT key, value FROM variables WHERE character_id = ? AND key IN ({placeholders})",
-                (self.storage_key, *names),
+                f"SELECT key, value FROM variables WHERE character_id = ?{selected}",
+                (self.storage_key, *(names or ())),
             ).fetchall()
             values = {}
             for key, value in rows:
@@ -1110,6 +1111,25 @@ class HistoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+        messages = self._decode_history_rows(rows, select_cols)
+        return {
+            "fixed_parts": [],
+            "messages": messages,
+            "temp_context": [],
+            "variables": variables,
+        }
+
+    def export_timeline_history(self) -> list[dict]:
+        """Read every retained fact, including archived rows, for the timeline import."""
+        columns = self._history_select_columns()
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(columns)} FROM history WHERE character_id=? "
+                f"{self._history_not_deleted_clause()} ORDER BY id", (self.storage_key,),
+            ).fetchall()
+        return self._decode_history_rows(rows, columns)
+
+    def _decode_history_rows(self, rows, select_cols: list[str]) -> list[dict]:
         messages: list[dict] = []
         for row in rows:
             rd = dict(zip(select_cols, row))
@@ -1130,12 +1150,7 @@ class HistoryManager(CharacterScopedService):
             msg = self._normalize_loaded_message(msg)
             messages.append(msg)
 
-        return {
-            "fixed_parts": [],
-            "messages": messages,
-            "temp_context": [],
-            "variables": variables,
-        }
+        return messages
 
     def save_history(self, data):
         messages = [msg for msg in (data.get("messages", []) or []) if isinstance(msg, dict)]

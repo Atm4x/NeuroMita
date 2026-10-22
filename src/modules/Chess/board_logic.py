@@ -9,8 +9,9 @@ PIECE_SYMBOLS = {
 
 
 class PureBoardLogic:
-    def __init__(self):
+    def __init__(self, on_move=None):
         self.board = chess.Board()
+        self.on_move = on_move
 
     def reset_board(self, fen=None):
         if fen:
@@ -97,7 +98,10 @@ class PureBoardLogic:
             move = chess.Move.from_uci(uci_move_str)
             if move in self.board.legal_moves:
                 san_move_str = self.board.san(move)
+                mover = self.board.turn
                 self.board.push(move)
+                if self.on_move is not None:
+                    self.on_move(uci_move_str, san_move_str, mover)
                 return True, f"Ход {san_move_str} (UCI: {uci_move_str}) сделан.", san_move_str
             else:
                 promotion_move_options = [
@@ -118,8 +122,11 @@ class PureBoardLogic:
         """Cheat: делает ход без проверки легальности."""
         try:
             move = chess.Move.from_uci(uci_move_str)
+            mover = self.board.turn
+            san = self.board.san(move) if move in self.board.legal_moves else uci_move_str
             self.board.push(move)
-            san = self.board.san(move)
+            if self.on_move is not None:
+                self.on_move(uci_move_str, san, mover)
             return True, f"Чит-ход {san} (UCI: {uci_move_str}).", san
         except (ValueError, AssertionError):
             return False, f"Невозможный чит-ход: {uci_move_str}", None

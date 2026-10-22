@@ -9,6 +9,7 @@ import datetime
 import re
 import copy
 import threading
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Optional, Any
 
@@ -51,6 +52,7 @@ from services.structured_response_capabilities import (
 )
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
+from services.conversation_timeline import ConversationTimeline
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
     structured_response_to_result_dict,
@@ -152,6 +154,17 @@ def _strip_graph_tag(text: str) -> tuple[str, Optional[str]]:
     return clean, json_str
 
 
+def _assert_timeline_current(controller) -> None:
+    timeline = getattr(getattr(controller, "event_writer", None), "timeline", None)
+    if timeline is not None:
+        timeline.runtime.assert_current()
+
+
+def _timeline_effect_scope(controller):
+    timeline = getattr(getattr(controller, "event_writer", None), "timeline", None)
+    return timeline.runtime.writing() if timeline is not None else nullcontext()
+
+
 class ModelController(GenerationService, ModelStateService):
     """
     ModelController:
@@ -201,7 +214,10 @@ class ModelController(GenerationService, ModelStateService):
         self._temporary_system_infos: dict[str, list[dict]] = {}
         self._temporary_system_infos_lock = threading.Lock()
 
-        self.event_writer = ConversationEventWriter(character_ref_resolver=self._get_character_ref)
+        self.event_writer = ConversationEventWriter(
+            character_ref_resolver=self._get_character_ref,
+            timeline=services().get_optional(ConversationTimeline),
+        )
         self.ui_projector = HistoryUiProjector(
             resolve_name=lambda cid: str(
                 getattr(self._get_character_ref(cid), "display_name", "") or cid
@@ -1348,7 +1364,20 @@ class ModelController(GenerationService, ModelStateService):
             if request.cancellation is not None:
                 request.cancellation.raise_if_cancelled()
             perf_mark(request.trace_id, "generation.character_lock_acquired")
-            return self._generate_chat_serialized(request, char)
+            timeline = getattr(self.event_writer, "timeline", None)
+            if timeline is None:
+                return self._generate_chat_serialized(request, char)
+            runtime = timeline.runtime
+            with runtime.turn_scope(
+                request.timeline_turn or runtime.capture(character_id=str(char.char_id)),
+                cancellation=request.cancellation,
+            ):
+                policy = request.policy or resolve_policy(model_event_type=request.event_type)
+                if not policy.write_to_history:
+                    return self._generate_chat_serialized(request, char)
+                turn = self.event_writer.begin_turn(request, str(char.char_id))
+                with runtime.turn_scope(turn):
+                    return self._generate_chat_serialized(request, char)
 
     def _generate_chat_serialized(self, request: ChatGenerationRequest, char) -> Optional[ChatGenerationResult]:
         if request.dialogue is not None and not hasattr(request.dialogue, "participants"):
@@ -1810,6 +1839,7 @@ class ModelController(GenerationService, ModelStateService):
                     error_details=error_details,
                 )
 
+            _assert_timeline_current(self)
             raw_text = llm_response.text
             effective_capabilities['tool_mode'] = (llm_response.raw or {}).get(
                 'tool_mode', effective_capabilities.get('tool_mode'),
@@ -1888,7 +1918,7 @@ class ModelController(GenerationService, ModelStateService):
                     and bool(self.settings.get("GRAPH_EXTRACTION_INLINE", False))):
                 visible_raw, inline_graph_json = _strip_graph_tag(visible_raw)
 
-            with character_lock(char_id):
+            with _timeline_effect_scope(self), character_lock(char_id):
                 with perf_span(trace_id, "generation.nlp_postprocess"):
                     processed = char.process_response_nlp_commands(
                         visible_raw,
@@ -2021,6 +2051,9 @@ class ModelController(GenerationService, ModelStateService):
                 rag_limit = int(self.settings.get("RAG_MAX_RESULTS", 8))
                 rag_thr = float(self.settings.get("RAG_SIM_THRESHOLD", 0.4))
                 results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
+                conversation = services().get_optional(ConversationTimeline)
+                if conversation is not None:
+                    results = conversation.filter_retrieval(char_id, results)
                 forgotten_count = rag.get_forgotten_count()
 
                 if results:
@@ -2161,6 +2194,7 @@ class ModelController(GenerationService, ModelStateService):
     ) -> Optional[ChatGenerationResult]:
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
+        _assert_timeline_current(self)
         try:
             with perf_span(trace_id, "generation.structured_postprocess", stage="parse"):
                 parse_outcome = parse_structured_response_with_meta(
@@ -2277,7 +2311,7 @@ class ModelController(GenerationService, ModelStateService):
 
         # Apply and snapshot character state in a short critical section. Tool
         # execution and any follow-up provider request happen after this lock.
-        with character_lock(char_id):
+        with _timeline_effect_scope(self), character_lock(char_id):
             char.process_structured_response(
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
@@ -2568,6 +2602,8 @@ class ModelController(GenerationService, ModelStateService):
         if native_tool_call is not None:
             history_task_uid = f"{task_uid or req_id or char_id}:native:{native_tool_call['id']}"
             first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
+        else:
+            history_task_uid = f"{task_uid or req_id or char_id}:tool:{tool_depth}"
 
         def persist_tool_turn(history_data):
             nonlocal first_assistant_message_id
@@ -2621,6 +2657,7 @@ class ModelController(GenerationService, ModelStateService):
         # Execute the tool
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
+        _assert_timeline_current(self)
         logger.info(f"[ModelController] Executing tool '{tool_name}' with args: {tool_args}")
         self.model.tool_manager.set_char_context(char_id)
         try:

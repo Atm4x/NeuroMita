@@ -45,6 +45,21 @@ class _ConnectionProxy:
 
 
 class HistoryManagerAtomicityTests(unittest.TestCase):
+    def test_timeline_export_retains_archived_facts_and_excludes_deleted_rows(self) -> None:
+        self.hm.rag = None
+        rows = self.hm.add_messages([
+            {"message_id": "archived", "role": "user", "content": "old fact", "time": "2026-09-30 10:00:00"},
+            {"message_id": "active", "role": "assistant", "content": "recent fact", "time": "2026-10-01 10:00:00"},
+            {"message_id": "deleted", "role": "user", "content": "removed fact"},
+        ])
+        self._sqlite.execute("UPDATE history SET is_active=0 WHERE id=?", (rows[0],))
+        self._sqlite.execute("UPDATE history SET is_deleted=1 WHERE id=?", (rows[2],))
+        self._sqlite.commit()
+        self.assertEqual([message["message_id"] for message in self.hm.load_history()["messages"]], ["active"])
+        exported = self.hm.export_timeline_history()
+        self.assertEqual([message["message_id"] for message in exported], ["archived", "active"])
+        self.assertEqual(exported[0]["content"], "old fact")
+
     def setUp(self) -> None:
         self.tmpdir = None
         self._sqlite = sqlite3.connect(":memory:", check_same_thread=False)

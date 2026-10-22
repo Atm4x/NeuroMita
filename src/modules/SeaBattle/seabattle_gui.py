@@ -1,4 +1,5 @@
 from core.error_utils import format_exception
+from uuid import uuid4
 # seabattle_gui.py
 
 import sys
@@ -359,6 +360,7 @@ class SeaBattleWindow(QWidget):
                         move_accepted = result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}
                         self.game.last_error = None if move_accepted else f"Ход Миты не принят: {message}"
                         if move_accepted:
+                            self._publish_mita_move_fact(x, y, result)
                             final_state = self.game.get_full_state()
                             if final_state["phase"] == "game_over":
                                 game_over_reaction = (final_state.get("winner"), final_state.get("player_id"))
@@ -423,6 +425,7 @@ class SeaBattleWindow(QWidget):
         final_state = self.game.get_full_state()
         game_over = final_state["phase"] == "game_over"
         if game_over:
+            self._request_mita_reaction(x, y, result, message, react=False)
             self._request_game_over_reaction(final_state.get("winner"), final_state.get("player_id"))
         elif result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
             self._request_mita_reaction(x, y, result, message)
@@ -441,8 +444,8 @@ class SeaBattleWindow(QWidget):
         except Exception as exc:
             print(f"GUI Error: Could not queue manual Mita turn request: {format_exception(exc)}")
 
-    def _request_mita_reaction(self, x, y, result, message):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+    def _request_mita_reaction(self, x, y, result, message, *, react=None):
+        if not self.reaction_queue:
             return
         try:
             self.reaction_queue.put({
@@ -450,44 +453,61 @@ class SeaBattleWindow(QWidget):
                 "coord": to_alg(x, y),
                 "result": str(result or ""),
                 "message": str(message or ""),
+                "react": self.mita_reaction_checkbox.isChecked() if react is None else react,
+                "semantic_id": uuid4().hex,
+                "mover": "Player",
             })
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita reaction: {format_exception(exc)}")
 
     def _request_game_over_reaction(self, winner, player_id):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_over", "winner": winner, "player_id": player_id})
+            self.reaction_queue.put({"event": "player_game_over", "winner": winner, "player_id": player_id,
+                                     "react": self.mita_reaction_checkbox.isChecked()})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita Sea Battle game-over reaction: {format_exception(exc)}")
 
     def _request_mita_hit_reaction(self, x, y, result, message):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({
+            event = {
                 "event": "mita_target_hit",
                 "coord": to_alg(x, y),
                 "result": str(result or ""),
                 "message": str(message or ""),
-            })
+                "react": self.mita_reaction_checkbox.isChecked(),
+                "mover": "Character",
+            }
+            source = getattr(self, "_last_mita_move_event", None)
+            if source and source.get("coord") == to_alg(x, y):
+                event["semantic_id"] = source["semantic_id"]
+            self.reaction_queue.put(event)
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita follow-up reaction: {format_exception(exc)}")
 
+    def _publish_mita_move_fact(self, x, y, result):
+        event = {"event": "mita_shot", "coord": to_alg(x, y), "result": str(result or ""),
+                 "mover": "Character", "semantic_id": uuid4().hex, "react": False}
+        self._last_mita_move_event = event
+        if self.reaction_queue:
+            self.reaction_queue.put(dict(event))
+
     def _request_placement_completed_reaction(self):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_placement_completed"})
+            self.reaction_queue.put({"event": "player_placement_completed", "react": self.mita_reaction_checkbox.isChecked()})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita placement reaction: {format_exception(exc)}")
 
     def _request_game_closed_reaction(self):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_closed"})
+            self.reaction_queue.put({"event": "player_game_closed", "react": self.mita_reaction_checkbox.isChecked()})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita Sea Battle close reaction: {format_exception(exc)}")
 

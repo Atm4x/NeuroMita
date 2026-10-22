@@ -139,8 +139,16 @@ class SeaBattleGame(GameInterface):
                 continue
             event_name = event.get("event")
             if event_name == "game_closed":
+                self.publish_event("game_closed")
                 self.cleanup()
                 return
+            if not event.get("react", True):
+                if event_name in {"mita_shot", "mita_target_hit", "player_target_selected"}:
+                    self._publish_shot(event)
+                else:
+                    self.publish_event(str(event_name or "SeaBattleAction"),
+                                       {key: value for key, value in event.items() if key != "react"})
+                continue
             if event_name == "player_target_selected":
                 self._dispatch_player_target_reaction(event)
             elif event_name == "mita_target_hit":
@@ -159,7 +167,7 @@ class SeaBattleGame(GameInterface):
             return
 
         coord = str(event.get("coord") or "неизвестную клетку")
-        result_code = str(event.get("result") or "").casefold()
+        result_code = str(event.get("result") or event.get("message") or "").casefold()
         result_message = str(event.get("message") or result_code or "сделал ход")
         public_coord = (
             coord.upper()
@@ -183,7 +191,8 @@ class SeaBattleGame(GameInterface):
             f"{coord}. Result: {result_message}. "
             "It is now your turn. In this same response, react briefly in character "
             "and put exactly one legal MakeMove,<coordinate> command in commands. "
-            "Do not wait for the player to ask again."
+            "Do not wait for the player to ask again.",
+            event_id=self._publish_shot(dict(event, coord=coord, result=result_code, mover="Player")),
         )
 
     def _dispatch_mita_target_hit_reaction(self, event: Dict[str, Any]):
@@ -197,8 +206,14 @@ class SeaBattleGame(GameInterface):
             f"{coord}. Result: {result}. It is still your turn. "
             "In this same response, react briefly in character and put exactly one legal "
             "MakeMove,<coordinate> command in commands. Do not wait for the player "
-            "to ask again."
+            "to ask again.",
+            event_id=self._publish_shot(dict(event, coord=coord, result=str(event.get("result") or "hit"), mover="Character")),
         )
+
+    def _publish_shot(self, event: Dict[str, Any]):
+        return self.publish_event("SeaBattleShot", {
+            key: event[key] for key in ("semantic_id", "coord", "result", "mover") if key in event
+        })
 
     def _dispatch_manual_turn_reaction(self):
         if not self.character.get_variable("playingGame", False):
@@ -207,7 +222,8 @@ class SeaBattleGame(GameInterface):
         self.request_character_reaction(
             "[Sea Battle manual turn request] The player pressed the button asking Mita "
             "to make her move. It is your turn. In this same response, react briefly in "
-            "character and put exactly one legal MakeMove,<coordinate> command in commands."
+            "character and put exactly one legal MakeMove,<coordinate> command in commands.",
+            event_id=self.publish_event("manual_mita_turn"),
         )
 
     def _dispatch_placement_completed_reaction(self):
@@ -215,7 +231,8 @@ class SeaBattleGame(GameInterface):
             "[Sea Battle] The player has finished placing all ships. "
             "In this same response, react briefly in character and complete your own placement: "
             "put PlaceShipsRandomly in commands when you still have ships to place. "
-            "Do not wait for the player to ask again."
+            "Do not wait for the player to ask again.",
+            event_id=self.publish_event("player_placement_completed"),
         )
 
     def _dispatch_game_over_reaction(self, event: Dict[str, Any]):
@@ -223,13 +240,15 @@ class SeaBattleGame(GameInterface):
         outcome = "The player won" if winner == event.get("player_id") else "Mita won"
         self.request_character_reaction(
             f"[Sea Battle] The game has ended: {outcome}. "
-            "React briefly and naturally in character; do not take another shot."
+            "React briefly and naturally in character; do not take another shot.",
+            event_id=self.publish_event("player_game_over", {"winner": winner, "player_id": event.get("player_id")}),
         )
 
     def _dispatch_player_close_reaction(self):
         self.request_character_reaction(
             "[Sea Battle] The player closed the Sea Battle game window. "
-            "React briefly and naturally in character to the end of this match."
+            "React briefly and naturally in character to the end of this match.",
+            event_id=self.publish_event("player_game_closed"),
         )
 
     def process_llm_tags(self, response: str) -> str:

@@ -3,7 +3,11 @@ from main_logger import logger
 from modules.available_games import get_available_games
 from modules.game_interface import GameInterface
 from core.chat_api import ChatAPI
-from core.services import use
+from core.services import services, use
+from domain.timeline import EventKind, new_id
+from services.timeline_runtime import SessionTimelineRuntime
+from threading import RLock
+from contextlib import nullcontext
 from services.contracts import GameLinkService, SettingsService
 from managers.mini_game_session_registry import mini_game_sessions
 
@@ -14,6 +18,8 @@ class GameManager:
         self.character = character
         self.active_game: Optional[GameInterface] = None
         self.available_games: Dict[str, Type[GameInterface]] = get_available_games()
+        self._timeline_lock = RLock()
+        self._last_start_event_id = None
 
     def _parse_id_string(self, id_str: str) -> tuple[str, Dict[str, Any]]:
         parts = id_str.split('/')
@@ -70,6 +76,11 @@ class GameManager:
         return True
 
     def start_game(self, full_id_str: str) -> bool:
+        runtime = services().get_optional(SessionTimelineRuntime)
+        with (runtime.writing() if runtime is not None else nullcontext()), self._timeline_lock:
+            return self._start_game(full_id_str)
+
+    def _start_game(self, full_id_str: str) -> bool:
         if self.active_game:
             logger.warning(f"[{self.character.char_id}] Игра уже активна. Остановка перед запуском новой.")
             self.active_game.stop(params={})
@@ -88,6 +99,8 @@ class GameManager:
 
         logger.info(f"[{self.character.char_id}] Запуск игры '{game_name}' с параметрами: {params}")
         game = game_class(self.character, game_name, host=self)
+        runtime = services().get_optional(SessionTimelineRuntime)
+        game.timeline_selection = runtime.selection if runtime is not None else None
         self.active_game = game
         game.start(params)
         if self.active_game is not game:
@@ -108,7 +121,25 @@ class GameManager:
             ),
             game_id=game_name,
         )
+        self._last_start_event_id = self.publish_event(game, "GameStarted", {"parameters": params})
         return True
+
+    def publish_event(self, game: GameInterface, name: str, payload: Dict[str, Any]) -> str | None:
+        runtime = services().get_optional(SessionTimelineRuntime)
+        if runtime is None:
+            return None
+        with runtime.writing() as timeline, self._timeline_lock:
+            if game.timeline_selection != runtime.selection:
+                return None
+            kind = (EventKind.GAME_STARTED if name == "GameStarted" else
+                    EventKind.GAME_ENDED if name in {"GameEnded", "player_game_over", "player_game_closed", "game_closed"}
+                    else EventKind.GAME_ACTION)
+            event = timeline.publish(kind, {
+                "game_id": game.game_id, "instance_id": game.instance_id,
+                "name": name, "data": {key: value for key, value in payload.items() if key != "semantic_id"},
+            }, actor_id=self.character.char_id, observers=(self.character.char_id,),
+                key=f"game:{game.instance_id}:{payload.get('semantic_id') or new_id()}")
+            return event.event_id
 
     def start_game_from_player(self, full_id_str: str) -> bool:
         """Start a game from the desktop UI and optionally invite a Mita reaction.
@@ -149,6 +180,7 @@ class GameManager:
             ),
             visible=True,
             sender="Player",
+            **({"event_id": self._last_start_event_id} if self._last_start_event_id else {}),
         )
 
     def request_character_reaction(
@@ -157,6 +189,7 @@ class GameManager:
         instruction: str,
         *,
         visible: bool = True,
+        event_id: str | None = None,
     ) -> bool:
         """Application boundary used by a concrete mini-game to request chat activity."""
         if self.active_game is not game:
@@ -165,11 +198,17 @@ class GameManager:
                 f"'{getattr(game, 'game_id', 'unknown')}'."
             )
             return False
+        runtime = services().get_optional(SessionTimelineRuntime)
+        if runtime is not None and game.timeline_selection != runtime.selection:
+            return False
+        if runtime is not None and event_id is None:
+            event_id = self.publish_event(game, "GameActivity", {"description": str(instruction or "")})
         return ChatAPI.react(
             character_id=self.character.char_id,
             instruction=str(instruction or ""),
             visible=visible,
             sender="Player",
+            **({"event_id": event_id} if event_id else {}),
         )
 
     def stop_game(self, full_id_str: str):
@@ -185,6 +224,7 @@ class GameManager:
             )
 
         logger.info(f"[{self.character.char_id}] Остановка игры '{self.active_game.game_id}' с параметрами: {params}")
+        self.publish_event(self.active_game, "GameEnded", {"reason": "stopped", "parameters": params})
         self.active_game.stop(params)
         self.active_game = None
 
@@ -199,5 +239,8 @@ class GameManager:
 
     def get_active_game_state_prompt(self) -> Optional[str]:
         if self.active_game:
+            runtime = services().get_optional(SessionTimelineRuntime)
+            if runtime is not None and self.active_game.timeline_selection != runtime.selection:
+                return None
             return self.active_game.get_state_prompt()
         return None
