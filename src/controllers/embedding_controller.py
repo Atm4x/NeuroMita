@@ -17,6 +17,7 @@ from handlers.embedding_presets import (
     resolve_model_settings,
 )
 from main_logger import logger
+from managers.rag.request_timeouts import embedding_timeout
 from services.contracts import (
     AIEngineService,
     AIRuntimeUnavailable,
@@ -32,10 +33,6 @@ class EmbeddingController(EmbeddingService):
     Typed RAG embedding service backed by ``ai_engine`` service='rag'.
     """
 
-    # Раньше стояло 3600с: «вечное» ожидание маскировало зависший worker.
-    # Эмбеддинг запроса пользователя не имеет смысла ждать дольше самой генерации.
-    _HOT_TIMEOUT_SEC = 60.0
-
     _EMBED_SETTING_KEYS = frozenset({
         "RAG_EMBED_MODEL",
         "RAG_EMBED_MODEL_CUSTOM",
@@ -44,6 +41,8 @@ class EmbeddingController(EmbeddingService):
         "RAG_VECTOR_SEARCH_ENABLED",
         "RAG_EMBED_PRESET_ID",
         "RAG_ENABLED",
+        "RAG_LOCAL_BACKEND",
+        "RAG_ONNX_DEVICE",
     })
 
     def __init__(self) -> None:
@@ -243,6 +242,7 @@ class EmbeddingController(EmbeddingService):
     def _activate_embeddings(self) -> None:
         """Поднять окружение эмбеддингов в AI-движке. Долгая операция."""
         ms = resolve_model_settings()
+        from managers.rag.local_backend import request_backend_options
         engine = use(AIEngineService).get_engine()
         activate = getattr(engine, "activate_environment", None) if engine is not None else None
         if not callable(activate):
@@ -257,6 +257,7 @@ class EmbeddingController(EmbeddingService):
             validation_payload={
                 "model_name": ms["hf_name"],
                 "query_prefix": ms["query_prefix"],
+                **request_backend_options(),
             },
             validation_timeout=3600.0,
         ):
@@ -347,7 +348,7 @@ class EmbeddingController(EmbeddingService):
                 query_prefix=ms["query_prefix"],
                 prefix=str(prefix or ""),
                 batch_size=1,
-                timeout_sec=self._HOT_TIMEOUT_SEC,
+                timeout_sec=embedding_timeout(),
                 priority="hot",
             )
             return results[0] if results else None
@@ -381,7 +382,7 @@ class EmbeddingController(EmbeddingService):
                 query_prefix=ms["query_prefix"],
                 prefix=str(prefix or ""),
                 batch_size=bs,
-                timeout_sec=(None if priority == "bulk" else self._HOT_TIMEOUT_SEC),
+                timeout_sec=(None if priority == "bulk" else embedding_timeout()),
                 priority=priority,
             )
         except AIRuntimeUnavailable as e:

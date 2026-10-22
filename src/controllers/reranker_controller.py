@@ -25,6 +25,8 @@ class RerankerController:
         "RAG_CROSS_ENCODER_ENABLED",
         "RAG_CROSS_ENCODER_MODEL",
         "RAG_CROSS_ENCODER_MODEL_CUSTOM",
+        "RAG_LOCAL_BACKEND",
+        "RAG_ONNX_DEVICE",
     })
 
     def __init__(self) -> None:
@@ -81,6 +83,10 @@ class RerankerController:
     def _on_setting_changed(self, change) -> None:
         if change.key not in self._RERANK_SETTING_KEYS:
             return
+        if change.key in {"RAG_LOCAL_BACKEND", "RAG_ONNX_DEVICE"}:
+            from managers.rag.pipeline.cross_encoder import CrossEncoderReranker
+
+            CrossEncoderReranker.reset_runtime(failed=False, reason="RAG backend changed")
         # Индикатор RAG считает готовность по прогретой модели: сменили модель —
         # состояние снова «не готово», пока новая не поднимется.
         self.event_bus.emit(Events.GUI.UPDATE_STATUS_COLORS)
