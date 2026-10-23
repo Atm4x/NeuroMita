@@ -18,10 +18,26 @@ from handlers.voice_models.edge_tts_rvc_model import (
     _coerce_edge_tts_rate,
 )
 from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec
+from handlers.voice_models.fairseq_compat import patch_fairseq_compatibility
 from installables.registry_builder import build_installable_registry
 
 
 class EdgeTTSRVCInstallablesTests(unittest.TestCase):
+    def test_fairseq_patch_is_a_cuda_environment_mutation(self):
+        for model_class, model_id in (
+            (EdgeTTSRVCCudaModel, EDGE_TTS_RVC_CUDA_ID),
+            (EdgeTTSRVCCudaModel, SILERO_RVC_CUDA_ID),
+            (EdgeTTSRVCOnnxModel, EDGE_TTS_RVC_ONNX_ID),
+        ):
+            with patch.object(model_class, "is_model_installed", return_value=False):
+                plan = model_class.build_install_plan_for_model(model_id, {})
+            actions = [action for action in plan.actions if action.fn is patch_fairseq_compatibility]
+            if model_class is EdgeTTSRVCCudaModel:
+                self.assertEqual(len(actions), 1)
+                self.assertTrue(actions[0].environment_mutation)
+            else:
+                self.assertEqual(actions, [])
+
     def test_missing_rvc_file_reports_its_path(self):
         parent = SimpleNamespace(current_model_id=EDGE_TTS_RVC_ONNX_ID)
         model = EdgeTTSRVCOnnxModel(parent, EDGE_TTS_RVC_ONNX_ID)
