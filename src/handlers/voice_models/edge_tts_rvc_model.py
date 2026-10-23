@@ -20,6 +20,7 @@ from core.voice_device_selection import VoiceDeviceCatalog, device_half_precisio
 from core.install_requirements import InstallRequirement, check_requirements
 from core.install_types import InstallAction, InstallPlan
 from handlers.voice_models.context import VoiceRuntimeContext
+from handlers.voice_models.fairseq_compat import patch_fairseq_compatibility
 
 from handlers.voice_models.install_plan_helpers import (
     patch_tts_with_rvc_audio,
@@ -409,40 +410,6 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
         return bool(st.get("ok"))
 
     @classmethod
-    def _patch_fairseq_configs_call(cls):
-        def _fn(*, pip_installer=None, callbacks=None, ctx=None, **_kwargs) -> bool:
-            libs_path_abs = getattr(pip_installer, "libs_path_abs", None) if pip_installer else None
-            libs_path_abs = str(libs_path_abs or os.environ.get("NEUROMITA_LIB_DIR", os.path.abspath("Lib")))
-            config_path = os.path.join(libs_path_abs, "fairseq", "dataclass", "configs.py")
-
-            def log(message: str) -> None:
-                try:
-                    if callbacks:
-                        callbacks.log(str(message))
-                except Exception:
-                    pass
-
-            if not os.path.exists(config_path):
-                log(_("fairseq/dataclass/configs.py не найден, патч пропущен", "fairseq/dataclass/configs.py not found, patch skipped"))
-                return True
-
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    source = f.read()
-                patched = re.sub(r"metadata=\{(.*?)help:", r'metadata={\1"help":', source)
-                if patched != source:
-                    with open(config_path, "w", encoding="utf-8") as f:
-                        f.write(patched)
-                    log(_("Патч fairseq/dataclass/configs.py применён", "fairseq/dataclass/configs.py patched"))
-                return True
-            except Exception as exc:
-                log(format_exception(exc))
-                log(traceback.format_exc())
-                return False
-
-        return _fn
-
-    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         mid = str(model_id)
         compat_warning = rvc_python_compat_error(cls.RVC_PACKAGE)
@@ -490,7 +457,8 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                     type="call",
                     description=_("Применение совместимости fairseq...", "Applying fairseq compatibility patch..."),
                     progress=90,
-                    fn=cls._patch_fairseq_configs_call(),
+                    fn=patch_fairseq_compatibility,
+                    environment_mutation=True,
                 )
             )
         actions.append(
