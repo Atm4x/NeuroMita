@@ -50,11 +50,24 @@ def status_from_installed(
     backend: BackendKind,
     ctx: dict[str, Any],
     details: dict[str, Any] | None = None,
+    needs_reinstall: bool = False,
 ) -> ComponentStatus:
     backend_ready, backend_details = backend_status_ok(backend, ctx)
     merged_details = dict(details or {})
     if backend_details:
         merged_details["backend"] = backend_details
+
+    if needs_reinstall and backend_ready:
+        return ComponentStatus(
+            id=component_id,
+            code=ComponentStatusCode.NEEDS_REINSTALL,
+            installed=True,
+            ready=False,
+            message="Dependencies need to be reinstalled",
+            backend=backend,
+            backend_ok=True,
+            details=merged_details,
+        )
 
     if installed and backend_ready:
         return ComponentStatus(

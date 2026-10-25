@@ -628,6 +628,10 @@ class F5TTSModel(IVoiceModel):
         return F5TTSInstallSpec.is_installed(model_id, ctx)
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
+        return F5TTSInstallSpec.requirements(model_id, ctx)
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         return F5TTSInstallSpec.build_install_plan(model_id, ctx)
 

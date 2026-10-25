@@ -18,12 +18,44 @@ from telethon.errors import (
 from utils.audio_converter import AudioConverter
 from handlers.audio_handler import AudioHandler
 from main_logger import logger
-from utils import getTranslationVariant
+from utils import getTranslationVariant, SH
 import platform
 from core.events import get_event_bus, Events
 from core.services import use
 from services.contracts import TelegramAuthService
 from services.contracts import GameLinkService, LoopService, SettingsService
+
+
+_CODE_DELIVERY_HINTS = {
+    "SentCodeTypeApp": "to the Telegram app",
+    "SentCodeTypeSms": "by SMS",
+    "SentCodeTypeCall": "by voice call",
+    "SentCodeTypeFlashCall": "via flash call",
+    "SentCodeTypeMissedCall": "via missed call",
+    "SentCodeTypeEmailCode": "to email",
+    "SentCodeTypeSetUpEmailRequired": "nowhere: Telegram requires an email to be set up",
+    "SentCodeTypeFragmentSms": "via Fragment SMS",
+    "SentCodeTypeFirebaseSms": "via Firebase SMS",
+    "SentCodeTypeSmsWord": "by SMS (the code is a word in the message)",
+    "SentCodeTypeSmsPhrase": "by SMS (the code is a phrase in the message)",
+}
+
+
+def _describe_code_delivery(sent_code) -> str:
+    """Описывает канал доставки кода, не раскрывая сам код."""
+    code_type = getattr(sent_code, "type", None)
+    type_name = type(code_type).__name__ if code_type is not None else "unknown"
+    description = _CODE_DELIVERY_HINTS.get(type_name, "via an unknown channel")
+
+    # Имена полей различаются между версиями Telethon: email_pattern,
+    # phone_pattern (старые слои), pattern у FlashCall, prefix у MissedCall.
+    for attr in ("email_pattern", "phone_pattern", "pattern", "prefix"):
+        target = getattr(code_type, attr, None)
+        if target:
+            description = f"{description} {target}"
+            break
+
+    return f"{description} ({type_name})"
 
 
 class TelegramBotHandler:
@@ -322,9 +354,7 @@ class TelegramBotHandler:
         Бросает исключение, если авторизоваться не удалось — вызывающий обязан
         трактовать это как неуспех (без ложного «успешно подключен»).
         """
-        await asyncio.wait_for(
-            self.client.send_code_request(self.phone), timeout=self.NETWORK_STEP_TIMEOUT
-        )
+        await self._request_login_code()
 
         last_error = ""
         for attempt in range(1, max_attempts + 1):
@@ -351,16 +381,24 @@ class TelegramBotHandler:
                     "The code expired, a new one was requested. Enter the fresh code.",
                 )
                 logger.warning("Telegram: код истёк, запрашиваю новый.")
-                await asyncio.wait_for(
-                    self.client.send_code_request(self.phone),
-                    timeout=self.NETWORK_STEP_TIMEOUT,
-                )
+                await self._request_login_code()
                 continue
             except SessionPasswordNeededError:
                 await self._sign_in_with_password_retries(loop, max_attempts=max_attempts)
                 return  # успех (пароль принят внутри)
 
         raise RuntimeError("Не удалось подтвердить код Telegram после нескольких попыток.")
+
+    async def _request_login_code(self) -> None:
+        sent_code = await asyncio.wait_for(
+            self.client.send_code_request(self.phone), timeout=self.NETWORK_STEP_TIMEOUT
+        )
+        timeout = getattr(sent_code, "timeout", None)
+        retry_hint = f"; the next code can be requested in {timeout} s" if timeout else ""
+        logger.info(
+            f"Telegram: confirmation code sent {_describe_code_delivery(sent_code)} "
+            f"for {SH(self.phone)}{retry_hint}."
+        )
 
     async def _sign_in_with_password_retries(self, loop, max_attempts: int = 3):
         """Ввод пароля 2FA с повторами при неверном пароле."""
