@@ -53,6 +53,11 @@ SILERO_RVC_ONNX_ID = "silero_rvc_onnx"
 _RVC_F0_METHODS = ("pm", "dio", "crepe", "rmvpe", "harvest", "fcpe")
 _RVC_F0_DEFAULT = "rmvpe"
 _EDGE_TTS_COMPATIBILITY_SPEC = "edge-tts>=6.1.9,<8.0.0"
+# fairseq-built still imports the pre-1.4 Hydra API. Newer tts-with-rvc
+# metadata already caps these versions; pin them here as well so an overlay
+# with a stale hydra-core 1.4 is detectable and repaired instead of trusted.
+_RVC_HYDRA_SPEC = "hydra-core>=1.3.2,<1.4"
+_RVC_OMEGACONF_SPEC = "omegaconf>=2.2,<2.4"
 _EDGE_TTS_RATE_DEFAULT = 0
 _EDGE_TTS_RATE_MIN = -50
 _EDGE_TTS_RATE_MAX = 100
@@ -341,6 +346,7 @@ def _ensure_lib_path() -> None:
 class EdgeTTSRVCBaseModel(IVoiceModel):
     BACKEND_KIND = BackendKind.NONE
     RVC_PACKAGE = ""
+    RVC_EXTRA_SPECS: tuple[str, ...] = ()
     RVC_IMPORT_CANDIDATES: tuple[str, ...] = ()
     RVC_UNINSTALL_PACKAGES: tuple[str, ...] = ()
     MODEL_EXTENSION = "pth"
@@ -389,6 +395,15 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 required=True,
             ),
         ]
+        for spec in cls.RVC_EXTRA_SPECS:
+            req.append(
+                InstallRequirement(
+                    id=spec.split(">", 1)[0].split("=", 1)[0].strip(),
+                    kind="python_dist",
+                    spec=spec,
+                    required=True,
+                )
+            )
         if cls.RVC_IMPORT_CANDIDATES:
             req.append(
                 InstallRequirement(
@@ -446,7 +461,11 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         mid = str(model_id)
         compat_warning = rvc_python_compat_error(cls.RVC_PACKAGE)
-        if cls.is_model_installed(mid, ctx):
+        clean = bool(
+            dict(ctx or {}).get("clean")
+            or (dict(ctx or {}).get("meta") or {}).get("clean")
+        )
+        if not clean and cls.is_model_installed(mid, ctx):
             return InstallPlan(
                 actions=[],
                 already_installed=True,
@@ -455,7 +474,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
                 already_installed_status=_("Уже установлено", "Already installed"),
             )
 
-        pkgs = ["omegaconf", cls.RVC_PACKAGE, _EDGE_TTS_COMPATIBILITY_SPEC]
+        pkgs = [*cls.RVC_EXTRA_SPECS, "omegaconf", cls.RVC_PACKAGE, _EDGE_TTS_COMPATIBILITY_SPEC]
         if cls._is_silero_model(mid):
             pkgs.append("silero")
         # Держим scipy на numpy-1.x-совместимой ветке: tts-with-rvc без верхней
@@ -1163,6 +1182,7 @@ class EdgeTTSRVCBaseModel(IVoiceModel):
 class EdgeTTSRVCCudaModel(EdgeTTSRVCBaseModel):
     BACKEND_KIND = BackendKind.CUDA
     RVC_PACKAGE = "tts-with-rvc"
+    RVC_EXTRA_SPECS = (_RVC_OMEGACONF_SPEC, _RVC_HYDRA_SPEC)
     RVC_IMPORT_CANDIDATES = ("tts_with_rvc",)
     RVC_UNINSTALL_PACKAGES = ("tts-with-rvc",)
     MODEL_EXTENSION = "pth"

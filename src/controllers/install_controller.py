@@ -924,7 +924,7 @@ class InstallController(InstallService):
                         )
                     )
 
-        if plan.already_installed and not backend_actions:
+        if plan.already_installed and not backend_actions and not clean:
             cb.status(plan.already_installed_status or "Already installed")
             cb.progress(100)
             return True
@@ -984,9 +984,15 @@ class InstallController(InstallService):
 
                 cb.log(f"Installing: {', '.join(to_install)}")
                 extra_args = list(act.extra_args or [])
-                if clean and "--reinstall" not in extra_args and "--force-reinstall" not in extra_args:
-                    # PipInstaller translates --reinstall -> --force-reinstall for pip.
-                    extra_args.append("--reinstall")
+                if clean:
+                    # pip --target does not replace existing files unless --upgrade
+                    # is passed, so a stale dependency tree survives a plain
+                    # --force-reinstall. Both pip and uv accept --upgrade.
+                    # PipInstaller translates --reinstall -> --force-reinstall.
+                    if "--reinstall" not in extra_args:
+                        extra_args.append("--reinstall")
+                    if "--upgrade" not in extra_args:
+                        extra_args.append("--upgrade")
                 
                 # --- ДИНАМИЧЕСКИЙ СБОР СУЩЕСТВУЮЩИХ ПАКЕТОВ ---
                 target_dir = str(ctx.get("target_dir") or os.environ.get("NEUROMITA_LIB_DIR", self.libs_path))
@@ -1274,6 +1280,7 @@ class InstallController(InstallService):
             "python_executable": pip_installer.script_path,
             "cancel_event": cancellation,
         }
+        clean_requested = bool(meta.get("clean"))
 
         def watch_cancellation() -> None:
             while not task_finished.is_set():
@@ -1323,12 +1330,29 @@ class InstallController(InstallService):
                 op = str(meta.get("op") or "install").strip().lower()
                 managed = bool(environment_candidate and result.environment_managed)
 
-                if managed and result.already_installed and active_environment is not None and op != "uninstall":
+                if (
+                    managed
+                    and result.already_installed
+                    and active_environment is not None
+                    and op != "uninstall"
+                    and not clean_requested
+                ):
                     cb.status(result.already_installed_status or "Already installed")
                     cb.progress(100)
                     ok = True
                 elif managed and op == "install":
                     requested_specs = self._collect_pip_specs(result)
+                    if clean_requested and active_environment is not None:
+                        # Rebuild from an empty overlay. Reinstalling into the
+                        # old directory can leave stale hydra/fairseq files.
+                        cb.log("Clean reinstall: removing the existing environment")
+                        if not environment_manager.remove_installed(
+                            active_environment.logical_id, delete=True
+                        ):
+                            raise RuntimeError(
+                                f"Failed to remove environment '{active_environment.logical_id}'"
+                            )
+                        active_environment = None
                     candidate_transaction = environment_manager.begin(
                         meta={**meta, **({"environment_id": result.environment_id} if result.environment_id else {})},
                         requested_specs=requested_specs,

@@ -18,10 +18,59 @@ from handlers.voice_models.edge_tts_rvc_model import (
     _coerce_edge_tts_rate,
 )
 from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec
+from core.installables.helpers import status_from_installed
+from core.installables.types import ComponentStatusCode
+from handlers.voice_models.base_model import _requirements_need_reinstall
 from installables.registry_builder import build_installable_registry
 
 
 class EdgeTTSRVCInstallablesTests(unittest.TestCase):
+    def test_requirements_pin_compatible_hydra_and_omegaconf(self):
+        specs = [req.spec for req in EdgeTTSRVCCudaModel.requirements(EDGE_TTS_RVC_CUDA_ID, {})]
+
+        self.assertIn("hydra-core>=1.3.2,<1.4", specs)
+        self.assertIn("omegaconf>=2.2,<2.4", specs)
+
+    def test_clean_reinstall_builds_actions_for_installed_component(self):
+        with patch.object(EdgeTTSRVCCudaModel, "is_model_installed", return_value=True):
+            normal = EdgeTTSRVCCudaModel.build_install_plan_for_model(EDGE_TTS_RVC_CUDA_ID, {})
+            clean = EdgeTTSRVCCudaModel.build_install_plan_for_model(
+                EDGE_TTS_RVC_CUDA_ID, {"clean": True}
+            )
+
+        self.assertTrue(normal.already_installed)
+        self.assertFalse(clean.already_installed)
+        pip_action = next(action for action in clean.actions if action.type == "pip")
+        self.assertIn("hydra-core>=1.3.2,<1.4", pip_action.packages)
+
+    def test_partial_install_is_reported_as_needs_reinstall(self):
+        self.assertTrue(_requirements_need_reinstall({
+            "details": [
+                {"required": True, "ok": True},
+                {"required": True, "ok": False},
+                {"required": False, "ok": False},
+            ]
+        }))
+        self.assertFalse(_requirements_need_reinstall({
+            "details": [{"required": True, "ok": True}]
+        }))
+        self.assertFalse(_requirements_need_reinstall({
+            "details": [{"required": True, "ok": False}]
+        }))
+
+    def test_needs_reinstall_status_keeps_component_visible(self):
+        status = status_from_installed(
+            component_id="tts:test",
+            installed=False,
+            backend=BackendKind.NONE,
+            ctx={},
+            needs_reinstall=True,
+        )
+
+        self.assertEqual(status.code, ComponentStatusCode.NEEDS_REINSTALL)
+        self.assertTrue(status.installed)
+        self.assertFalse(status.ready)
+
     def test_missing_rvc_file_reports_its_path(self):
         parent = SimpleNamespace(current_model_id=EDGE_TTS_RVC_ONNX_ID)
         model = EdgeTTSRVCOnnxModel(parent, EDGE_TTS_RVC_ONNX_ID)
