@@ -301,6 +301,10 @@ class OmniVoiceModel(IVoiceModel):
         return OmniVoiceInstallSpec.is_installed(model_id, ctx)
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
+        return OmniVoiceInstallSpec.requirements(model_id, ctx)
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: dict[str, Any]) -> InstallPlan:
         return OmniVoiceInstallSpec.build_install_plan(model_id, ctx)
 

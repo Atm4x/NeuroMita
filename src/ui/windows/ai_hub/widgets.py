@@ -260,11 +260,7 @@ class ModelCard(QFrame):
         self.setProperty("incompatible", "true" if (not compatible and not installed) else "false")
         # also expose 'state' for any future styling
         if needs_reinstall:
-            warn_lbl = QLabel(_t("Требуется переустановка", "Reinstall needed"))
-            warn_lbl.setObjectName("AIHubStatusUpdate")
-            warn_lbl.setToolTip(str(status.get("message") or ""))
-            warn_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-            root.addWidget(warn_lbl, 0)
+            self.setProperty("state", "needs_reinstall")
         elif installed:
             self.setProperty("state", "installed")
         elif not compatible:
@@ -381,22 +377,11 @@ class ModelCard(QFrame):
         from .helpers import qicon
 
         if needs_reinstall:
-            fix = QPushButton(_t("Переустановить", "Reinstall"))
-            fix.setObjectName("AIHubCardPrimary")
-            fix_icon = qicon("fa5s.sync", "white")
-            if fix_icon is not None:
-                fix.setIcon(fix_icon)
-            fix.setCursor(Qt.CursorShape.PointingHandCursor)
-            fix.clicked.connect(self._handle_reinstall_click)
-            self._install_btn = fix
-            self._install_btn_text = fix.text()
-            root.addWidget(fix, 0)
-            btn = QPushButton("⋮")
-            btn.setObjectName("AIHubCardMenuBtn")
-            btn.setFixedSize(34, 34)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(self._show_menu)
-            self._menu_btn = btn
+            warn_lbl = QLabel(_t("Требуется переустановка", "Reinstall needed"))
+            warn_lbl.setObjectName("AIHubStatusUpdate")
+            warn_lbl.setToolTip(str(status.get("message") or ""))
+            warn_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            root.addWidget(warn_lbl, 0)
         elif installed:
             if update_available:
                 ok_lbl = QLabel(_t("Обновление", "Update"))
@@ -424,7 +409,24 @@ class ModelCard(QFrame):
         # ---- right: action button or ⋮ menu
         from PyQt6.QtWidgets import QPushButton
 
-        if installed:
+        if needs_reinstall:
+            fix = QPushButton(_t("Переустановить", "Reinstall"))
+            fix.setObjectName("AIHubCardPrimary")
+            fix_icon = qicon("fa5s.sync", "white")
+            if fix_icon is not None:
+                fix.setIcon(fix_icon)
+            fix.setCursor(Qt.CursorShape.PointingHandCursor)
+            fix.clicked.connect(self._handle_reinstall_click)
+            self._install_btn = fix
+            self._install_btn_text = fix.text()
+            root.addWidget(fix, 0)
+            btn = QPushButton("⋮")
+            btn.setObjectName("AIHubCardMenuBtn")
+            btn.setFixedSize(34, 34)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(self._show_menu)
+            self._menu_btn = btn
+        elif installed:
             if update_available:
                 # Голос установлен, но в релизе версия новее — кнопка «Обновить»
                 # запускает обычную установку; build_install_plan сам увидит апдейт

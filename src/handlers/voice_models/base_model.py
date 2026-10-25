@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from core.app_paths import settings_path
 from core.backends import BackendKind
 from core.install_types import InstallPlan
-from core.install_requirements import check_requirements
+from core.install_requirements import InstallRequirement, check_requirements
 from core.installables import (
     ComponentCategory,
     ComponentMetadata,
@@ -173,6 +173,10 @@ class IVoiceModel(abc.ABC):
         raise NotImplementedError
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: Dict[str, Any]) -> list[InstallRequirement] | None:
+        return None
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         raise NotImplementedError
 
@@ -237,8 +241,11 @@ class IVoiceModel(abc.ABC):
         run_ctx = build_runtime_ctx(ctx)
         backend = coerce_backend(self.__class__.required_backend_for_model(self.model_id, run_ctx))
         try:
-            requirement_status = check_requirements(
-                self.__class__.requirements(self.model_id, run_ctx), ctx=run_ctx
+            requirements = self.__class__.requirements(self.model_id, run_ctx)
+            requirement_status = (
+                check_requirements(requirements, ctx=run_ctx)
+                if requirements is not None
+                else {"ok": self.__class__.is_model_installed(self.model_id, run_ctx)}
             )
             installed = bool(requirement_status.get("ok"))
         except Exception as exc:

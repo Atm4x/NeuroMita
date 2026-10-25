@@ -679,6 +679,10 @@ class FishSpeechModel(IVoiceModel):
         return FishSpeechInstallSpec.is_installed(model_id, ctx)
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
+        return FishSpeechInstallSpec.requirements(model_id, ctx)
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         return FishSpeechInstallSpec.build_install_plan(model_id, ctx)
 
