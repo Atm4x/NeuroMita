@@ -102,6 +102,40 @@ class GeminiMessageOrderTests(unittest.TestCase):
         ])
         self.assertEqual(["user", "model"], [c["role"] for c in out["contents"]])
 
+    def test_image_mime_comes_from_the_data_url(self):
+        """PNG не должен уезжать провайдеру под видом image/jpeg."""
+        out = _format([
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ]},
+        ])
+        part = out["contents"][0]["parts"][0]
+        self.assertEqual("image/png", part["inline_data"]["mime_type"])
+        self.assertEqual("AAAA", part["inline_data"]["data"])
+
+    def test_legacy_text_part_key_is_read(self):
+        """Старые сообщения хранят текст в ключе content — он не должен теряться."""
+        out = _format([
+            {"role": "user", "content": [
+                {"type": "text", "content": "<Прикреплённое изображение>\n"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ]},
+        ])
+        parts = out["contents"][0]["parts"]
+        self.assertEqual("<Прикреплённое изображение>\n", parts[0]["text"])
+        self.assertIn("inline_data", parts[1])
+
+    def test_unsupported_image_reference_is_not_silently_dropped(self):
+        out = _format([
+            {"role": "user", "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "https://example.test/a,b.png"}},
+            ]},
+        ])
+        parts = out["contents"][0]["parts"]
+        self.assertEqual(["look", "[image unavailable: unsupported image reference]"], _texts(parts))
+        self.assertFalse(any("inline_data" in p for p in parts))
+
     def test_inline_native_function_payloads_remain_structured(self):
         for content in [
             {"functionCall": {"name": "lookup", "args": {"query": "time"}}},

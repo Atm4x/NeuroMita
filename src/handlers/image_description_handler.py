@@ -14,9 +14,10 @@ Detail level is controlled by IMAGE_DESCRIPTION_DETAIL setting:
 from __future__ import annotations
 from core.error_utils import format_exception
 
-import base64
 import logging
 from typing import Any, List, Optional
+
+from core.image_assets import image_bytes_to_data_url
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +145,12 @@ class ImageDescriptionHandler:
             {"type": "text", "text": seq_text}
         ]
         for img in image_data:
-            if isinstance(img, bytes):
-                b64 = base64.b64encode(img).decode("utf-8")
+            if isinstance(img, (bytes, bytearray)):
+                image_url = image_bytes_to_data_url(bytes(img))
             else:
-                b64 = str(img).split(",", 1)[-1]
-            content_parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                raw = str(img)
+                image_url = raw if raw.startswith("data:") else f"data:image/jpeg;base64,{raw}"
+            content_parts.append({"type": "image_url", "image_url": {"url": image_url}})
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -184,10 +186,11 @@ class ImageDescriptionHandler:
 
         for i, img in enumerate(image_data):
             try:
-                if isinstance(img, bytes):
-                    b64 = base64.b64encode(img).decode("utf-8")
+                if isinstance(img, (bytes, bytearray)):
+                    image_url = image_bytes_to_data_url(bytes(img))
                 else:
-                    b64 = str(img).split(",", 1)[-1]
+                    raw = str(img)
+                    image_url = raw if raw.startswith("data:") else f"data:image/jpeg;base64,{raw}"
 
                 messages = [
                     {"role": "system", "content": system_prompt},
@@ -195,7 +198,7 @@ class ImageDescriptionHandler:
                         "role": "user",
                         "content": [
                             {"type": "text", "text": user_text},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            {"type": "image_url", "image_url": {"url": image_url}},
                         ],
                     },
                 ]

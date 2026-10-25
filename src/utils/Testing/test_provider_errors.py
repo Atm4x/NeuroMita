@@ -153,6 +153,32 @@ class ProviderErrorMappingTests(unittest.TestCase):
         self.assertTrue(payload["retryable"])
         self.assertNotIn("secret-key", payload["url"])
 
+    def test_blocked_response_is_named_instead_of_generic_failure(self):
+        err = build_provider_error(
+            "gemini",
+            payload={"candidates": [{"finishReason": "SAFETY"}]},
+            provider_message="Gemini returned no text; the response was blocked (finishReason=SAFETY).",
+            code="response.blocked",
+            phase="response",
+            url="https://generativelanguage.googleapis.com/v1beta/models",
+        )
+
+        self.assertIn("фильтр", err.friendly_message.lower())
+        self.assertEqual(err.code, "response.blocked")
+        self.assertIn("SAFETY", err.provider_message)
+
+    def test_empty_response_is_named_instead_of_generic_failure(self):
+        err = build_provider_error(
+            "gemini",
+            payload={"candidates": [{"finishReason": "STOP"}]},
+            provider_message="Gemini returned no text (finishReason=STOP).",
+            code="response.empty",
+            phase="response",
+        )
+
+        self.assertIn("пустой", err.friendly_message.lower())
+        self.assertEqual(err.code, "response.empty")
+
 
 if __name__ == "__main__":
     unittest.main()

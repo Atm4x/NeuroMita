@@ -1,7 +1,6 @@
 from __future__ import annotations
 from core.error_utils import format_exception
 
-import base64
 import os
 import uuid
 from typing import Any, Callable
@@ -9,6 +8,7 @@ from typing import Any, Callable
 from PyQt6.QtCore import QTimer
 
 from core.events import Events, get_event_bus
+from core.image_assets import image_bytes_to_data_url
 from domain.conversation_message_ids import ConversationMessageIds
 from core.services import services, use
 from main_logger import logger
@@ -166,6 +166,22 @@ class AppShellController:
         return result
 
     @staticmethod
+    def _attached_images_label(count: int) -> str:
+        """Подпись сообщения без текста.
+
+        Одно фото — единственное число, несколько — «прикреплено N изображений»:
+        согласовывать множественное число с «изображения» нельзя, а количество
+        делает подпись однозначной.
+        """
+        total = max(int(count or 0), 0)
+        if total == 1:
+            return _("<Прикреплённое изображение>", "<Attached image>")
+        return _(
+            "<Прикреплено изображений: {count}>",
+            "<Attached images: {count}>",
+        ).format(count=total)
+
+    @staticmethod
     def _merge_text(
         explicit_text: str, entry_text: str, *, merge_with_entry: bool
     ) -> tuple[str, bool]:
@@ -289,9 +305,7 @@ class AppShellController:
             image_content = [
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64.b64encode(image).decode('utf-8')}"
-                    },
+                    "image_url": {"url": image_bytes_to_data_url(image)},
                 }
                 for image in all_image_data
             ]
@@ -305,10 +319,7 @@ class AppShellController:
                     and not current_image_data
                     and not explicit_image_data
                 ):
-                    label = _(
-                        "<\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>",
-                        "<Attached Images>",
-                    )
+                    label = self._attached_images_label(len(all_image_data))
                 elif (
                     current_image_data or explicit_image_data
                 ) and not staged_image_data:
@@ -316,7 +327,7 @@ class AppShellController:
                         "<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u044d\u043a\u0440\u0430\u043d\u0430>",
                         "<Screen Image>",
                     )
-                image_content.insert(0, {"type": "text", "content": label + "\n"})
+                image_content.insert(0, {"type": "text", "text": label + "\n"})
 
         self._view.render_outgoing_message(
             user_input=user_input,

@@ -247,8 +247,41 @@ def _looks_like_context_window_error(provider_message: str) -> bool:
     )
 
 
-def _friendly_message(status_code: Optional[int], provider_message: str) -> tuple[str, str]:
+def _friendly_message(
+    status_code: Optional[int],
+    provider_message: str,
+    code: Optional[str] = None,
+) -> tuple[str, str]:
     low = (provider_message or "").lower()
+
+    # Ответ без текста (фильтр безопасности, обрезанный кандидат) выглядел в чате
+    # как молчание персонажа. Это ошибка провайдера, и её нужно назвать.
+    if code == "response.blocked":
+        return (
+            _(
+                "Провайдер заблокировал ответ фильтром безопасности. Переформулируйте запрос или смените модель.",
+                "The provider blocked the response with a safety filter. Rephrase the request or switch models.",
+            ),
+            _("Response blocked by the provider.", "Response blocked by the provider."),
+        )
+
+    if code == "response.empty":
+        return (
+            _(
+                "Модель вернула пустой ответ. Повторите запрос или смените модель.",
+                "The model returned an empty response. Retry or switch models.",
+            ),
+            _("Empty response from the model.", "Empty response from the model."),
+        )
+
+    if code == "response.tool_call_unsupported":
+        return (
+            _(
+                "Модель вернула вызов инструмента, который этот провайдер не поддерживает. Смените модель или отключите инструменты.",
+                "The model returned a tool call this provider does not support. Switch models or disable tools.",
+            ),
+            _("Unsupported tool call.", "Unsupported tool call."),
+        )
 
     if (
         "user location is not supported" in low
@@ -446,7 +479,7 @@ def build_provider_error(
     if status_code is None:
         status_code = _extract_status_code(message)
 
-    friendly_message, _ = _friendly_message(status_code, message)
+    friendly_message, _ = _friendly_message(status_code, message, code)
     retryable = bool(status_code in _RETRYABLE_STATUS_CODES)
     retry_after_seconds = _extract_retry_after_seconds(
         response_headers=response_headers,

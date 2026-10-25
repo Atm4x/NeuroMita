@@ -1,4 +1,5 @@
 from core.error_utils import format_exception
+from core.image_assets import image_bytes_to_data_url
 
 import base64
 import datetime
@@ -740,8 +741,7 @@ class AppWindowBase(QMainWindow):
             text = str(record.get("text") or request.get("user_input") or "")
             ui_images = [
                 {
-                    "url": "data:image/jpeg;base64,"
-                    + base64.b64encode(bytes(image)).decode("ascii")
+                    "url": image_bytes_to_data_url(bytes(image)),
                 }
                 for image in (request.get("image_data") or [])
                 if isinstance(image, (bytes, bytearray))

@@ -14,6 +14,7 @@ from core.character_locks import character_lock
 from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
 from core.message_content import MessageContentCodec
+from core.image_assets import image_bytes_to_data_url
 from managers.action_memory import (
     append_requested_actions,
     cap_requested_actions,
@@ -1695,9 +1696,7 @@ class HistoryController(HistoryService):
                             if processed_bytes:
                                 new_content_chunks.append({
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{base64.b64encode(processed_bytes).decode('utf-8')}"
-                                    }
+                                    "image_url": {"url": image_bytes_to_data_url(processed_bytes)},
                                 })
                             else:
                                 logger.info(

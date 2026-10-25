@@ -250,7 +250,8 @@ class SendMessageCaptureTests(unittest.TestCase):
         rendered = view.rendered[0]
         self.assertEqual(rendered["user_input"], "")
         self.assertEqual(rendered["image_content"][0]["type"], "text")
-        self.assertTrue(rendered["image_content"][0]["content"].strip())
+        # Подпись — обычная текстовая часть: content-ключ Gemini читал как пустую строку.
+        self.assertTrue(rendered["image_content"][0]["text"].strip())
         self.assertEqual(view.staged_clear_count, 1)
 
 

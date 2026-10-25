@@ -2,7 +2,6 @@ from core.error_utils import format_exception
 # src/controllers/chat_controller.py
 import os
 import tempfile
-import base64
 import threading
 import uuid
 import datetime
@@ -12,6 +11,7 @@ from main_logger import logger
 from handlers.llm_providers.base import StreamChannel
 from core.cancellation import CancellationToken, OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
+from core.image_assets import image_bytes_to_data_url
 from domain.conversation_message_ids import ConversationMessageIds
 from core.executors import Pools, PoolSaturated, executors
 from core.services import use
@@ -712,7 +712,7 @@ class ChatController(ChatService, GenerationActivityService):
                 img_content = [
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(img).decode('utf-8')}"},
+                        "image_url": {"url": image_bytes_to_data_url(img)},
                         "display_role": img_display_role,
                     }
                     for img in (image_data or [])

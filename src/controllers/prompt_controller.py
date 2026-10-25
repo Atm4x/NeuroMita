@@ -3,10 +3,10 @@ from core.error_utils import format_exception
 from typing import Dict, Any, List, Optional
 import os
 import re
-import base64
 import datetime
 
 from core.services import services, use
+from core.image_assets import DEFAULT_IMAGE_MIME, image_bytes_to_data_url
 from main_logger import logger
 from services.contracts import (
     AppVarsService,
@@ -95,6 +95,7 @@ class PromptController(PromptBuilderService):
         voice_method: str,
         speech_recognition_available: bool,
         vision_state: str,
+        auto_capture: bool | None = None,
         unavailable_effect_fields: tuple[str, ...] = (),
     ) -> Dict[str, str]:
         """Собирает служебное состояние, не попадающее в историю диалога.
@@ -104,6 +105,10 @@ class PromptController(PromptBuilderService):
         ``vision_state`` — эффективное состояние зрения: ``native`` /
         ``description_fallback`` / ``unavailable`` — Мите сообщаем прежде всего,
         может ли она реально получить информацию об изображении.
+        ``auto_capture`` — включён ли автозахват экрана/камеры. Это свойство
+        приложения, а не зрения модели: раньше готовность захвата подменяла
+        способность модели принимать приложенные файлы, и при выключенном
+        автозахвате Мита получала запрет видеть присланное фото.
         ``unavailable_effect_fields`` — те же поля, что исключены из схемы
         (unity-only), берутся из общей таблицы runtime_capabilities.
         """
@@ -170,6 +175,17 @@ class PromptController(PromptBuilderService):
                 "Your sight (image recognition): unavailable. "
                 "You cannot see screenshots or images right now."
             )
+
+        if auto_capture is True:
+            lines.append(
+                "Automatic screen/camera capture: enabled. "
+                "You may capture the screen or your own camera view when it helps."
+            )
+        elif auto_capture is False:
+            lines.append(
+                "Automatic screen/camera capture: disabled. "
+                "You do not capture the screen or your camera view on your own."
+            )
         return {"role": "system", "content": "\n".join(lines)}
 
     @staticmethod
@@ -206,27 +222,44 @@ class PromptController(PromptBuilderService):
             return False
 
     def _resolve_vision_state(self) -> str:
-        """Единое effective vision state (только реальная готовность).
+        """Может ли модель получить содержимое изображения вообще.
 
-        native             — модель настроена принимать изображения напрямую
-                             (ENABLE_IMAGE_ANALYSIS) И конвейер захвата реально
-                             готов доставлять их (feature ``capture``);
+        native             — модель принимает изображения напрямую
+                             (ENABLE_IMAGE_ANALYSIS);
         description_fallback — модель не видит сама, но настроен vision-провайдер,
                              который описывает изображения текстом;
         unavailable        — ни то, ни другое.
 
-        Когда RuntimeFeatureService недоступен (изолированные тесты), полагаемся
-        только на настройки — подтвердить рантайм-готовность нечем.
+        Готовность автозахвата экрана/камеры сюда не входит: приложенный
+        игроком файл доставляется независимо от неё. Раньше ``capture``
+        участвовал в этом решении, и без автозахвата Мита получала в промпте
+        «you cannot see images» при реально приложенном фото.
         """
         if bool(self._get_setting("ENABLE_IMAGE_ANALYSIS", False)):
-            capture_ready = self._feature_ready("capture")
-            if capture_ready is None or capture_ready:
-                return "native"
+            return "native"
         if bool(self._get_setting("IMAGE_DESCRIPTION_ENABLED", False)) and str(
             self._get_setting("IMAGE_DESCRIPTION_PROVIDER", "") or ""
         ).strip():
             return "description_fallback"
         return "unavailable"
+
+    def _resolve_auto_capture_enabled(self) -> bool:
+        """Идёт ли автозахват экрана/камеры — свойство приложения, не зрения.
+
+        Если конвейер захвата не поднялся (нет зависимостей, упал старт),
+        честно сообщаем «выключен», даже когда источники включены настройками.
+        """
+        enabled = any(
+            bool(self._get_setting(key, False))
+            for key in (
+                "ENABLE_SCREEN_ANALYSIS",
+                "ENABLE_CAMERA_CAPTURE",
+                "AUTO_ATTACH_IMAGES",
+            )
+        )
+        if not enabled:
+            return False
+        return self._feature_ready("capture") is not False
 
     def _resolve_voice_enabled(self) -> bool:
         """TTS доступен, если он включён И голосовой конвейер реально готов.
@@ -254,6 +287,7 @@ class PromptController(PromptBuilderService):
             voice_method=str(self._get_setting("VOICEOVER_METHOD", "Local") or "Local"),
             speech_recognition_available=self._resolve_speech_recognition_available(),
             vision_state=self._resolve_vision_state(),
+            auto_capture=self._resolve_auto_capture_enabled(),
             unavailable_effect_fields=tuple(caps.structured_segment_exclude_fields),
         )
 
@@ -1270,13 +1304,17 @@ class PromptController(PromptBuilderService):
         inline_desc_enabled = bool(self._get_setting("IMAGE_INLINE_DESCRIPTION", False)) if image_data else False
 
         for img in image_data:
-            if isinstance(img, bytes):
-                img_b64 = base64.b64encode(img).decode("utf-8")
+            if isinstance(img, (bytes, bytearray)):
+                image_url = image_bytes_to_data_url(bytes(img))
             else:
-                img_b64 = str(img)
+                raw = str(img)
+                image_url = (
+                    raw if raw.startswith("data:")
+                    else f"data:{DEFAULT_IMAGE_MIME};base64,{raw}"
+                )
             user_content_chunks.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                "image_url": {"url": image_url},
             })
 
         if image_data and inline_desc_enabled:

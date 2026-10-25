@@ -1,13 +1,13 @@
 from __future__ import annotations
 from core.error_utils import format_exception
 
-import base64
 import datetime
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from main_logger import logger
+from core.image_assets import image_bytes_to_data_url
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
@@ -240,13 +240,17 @@ class ConversationEventWriter:
             chunks.append({"type": "text", "text": format_tv_observation(tv_observation)})
 
         for img in image_data or []:
-            if isinstance(img, bytes):
-                b64 = base64.b64encode(img).decode("utf-8")
+            if isinstance(img, (bytes, bytearray)):
+                image_url = image_bytes_to_data_url(bytes(img))
             else:
-                b64 = str(img)
+                raw = str(img)
+                image_url = (
+                    raw if raw.startswith("data:")
+                    else f"data:image/jpeg;base64,{raw}"
+                )
             image_chunk = {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                "image_url": {"url": image_url},
             }
             if image_source == "mita_camera":
                 image_chunk["display_role"] = "assistant"

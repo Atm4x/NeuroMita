@@ -2,7 +2,6 @@
 from __future__ import annotations
 from core.error_utils import format_exception
 
-import base64
 import dataclasses
 import json
 import datetime
@@ -19,6 +18,7 @@ from core.cancellation import OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
 from core.executors import Pools, executors
 from core.services import services, use
+from core.image_assets import image_bytes_to_data_url
 from main_logger import logger
 from services.contracts import (
     CharacterRegistry,
@@ -635,13 +635,17 @@ class ModelController(GenerationService, ModelStateService):
             chunks.append({"type": "text", "text": str(user_input)})
 
         for img in image_data or []:
-            if isinstance(img, bytes):
-                b64 = base64.b64encode(img).decode("utf-8")
+            if isinstance(img, (bytes, bytearray)):
+                image_url = image_bytes_to_data_url(bytes(img))
             else:
-                b64 = str(img)
+                raw = str(img)
+                image_url = (
+                    raw if raw.startswith("data:")
+                    else f"data:image/jpeg;base64,{raw}"
+                )
             chunks.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                "image_url": {"url": image_url},
             })
 
         return {
@@ -1216,6 +1220,31 @@ class ModelController(GenerationService, ModelStateService):
             think_text = f"{native}\n\n{think_text}" if think_text else native
         return visible, think_text
 
+    @staticmethod
+    def _image_fallback_decision(*, described: bool, native_vision: bool) -> str:
+        """Что делать с изображениями после попытки текстового описания.
+
+        ``described``     — описание получено, изображения можно заменить;
+        ``keep_images``   — описание не удалось, но модель видит картинки сама;
+        ``withhold_images`` — описание не удалось и модель текстовая: сырые байты
+                            ей бесполезны, вместо них честная заглушка в контексте.
+        """
+        if described:
+            return "described"
+        return "keep_images" if native_vision else "withhold_images"
+
+    @staticmethod
+    def _description_is_usable(text: Any) -> bool:
+        """Пригоден ли текст описания.
+
+        Обработчик описаний возвращает заглушку в квадратных скобках
+        (``[Image 1: description unavailable]``, ``[Scene description unavailable]``),
+        когда vision-провайдер не ответил. Такую заглушку нельзя выдавать за
+        замену изображению.
+        """
+        value = str(text or "").strip()
+        return bool(value) and not value.startswith("[")
+
     def _extract_image_description(self, text: str) -> tuple[str, str | None]:
         """
         Extracts <image_description>...</image_description> block from text.
@@ -1594,27 +1623,60 @@ class ModelController(GenerationService, ModelStateService):
                 )
                 _ctx_preamble_seq = _ctx_preamble_single
 
+            # Описание — замена изображению, поэтому изображения убираем только
+            # когда описание реально получено. Раньше image_data очищался вне
+            # проверки результата: при сбое vision-провайдера основная модель не
+            # получала ни картинку, ни описание и отвечала так, будто вложения нет.
+            described = False
             try:
                 if len(image_data) > 1:
                     with perf_span(trace_id, "generation.image_description", mode="sequence"):
                         seq_desc = self.image_description_handler.describe_sequence(image_data, context_hint=_image_context_hint)
-                    if seq_desc and not seq_desc.startswith("["):
+                    if self._description_is_usable(seq_desc):
                         hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_seq}\n[Scene: {seq_desc}]"
                         image_descriptions = {_detail: seq_desc}
+                        described = True
                         logger.info(f"[ModelController] Non-native sequence mode: {len(image_data)} frames described as one scene.")
                 else:
                     with perf_span(trace_id, "generation.image_description", mode="single"):
                         descriptions = self.image_description_handler.describe(image_data, context_hint=_image_context_hint)
-                    if descriptions:
+                    if descriptions and all(self._description_is_usable(d) for d in descriptions):
                         desc_text = "\n".join(
                             f"[Image {i + 1}: {d}]" for i, d in enumerate(descriptions)
                         )
                         hidden_user_context = f"[Hidden image context]\n{_ctx_preamble_single}\n{desc_text}"
                         image_descriptions = {_detail: "\n".join(descriptions)}
+                        described = True
                         logger.info(f"[ModelController] Non-native image mode: replaced {len(descriptions)} image(s) with text descriptions.")
-                image_data = []  # don't send images to main model
             except Exception as _desc_exc:
                 logger.warning(f"[ModelController] Image description fallback failed: {format_exception(_desc_exc)}")
+
+            outcome = self._image_fallback_decision(
+                described=described,
+                native_vision=bool(self.settings.get("ENABLE_IMAGE_ANALYSIS", False)),
+            )
+            if outcome == "described":
+                image_data = []  # описание получено — основная модель изображения не видит
+            elif outcome == "keep_images":
+                logger.warning(
+                    "[ModelController] Image description unavailable; keeping %s image(s) "
+                    "because the main model accepts images natively.",
+                    len(image_data),
+                )
+            else:
+                _withheld_count = len(image_data)
+                image_data = []  # текстовой модели сырые байты не помогут
+                hidden_user_context = (
+                    "[Hidden image context]\n"
+                    "The Player attached an image, but you cannot see it: automatic "
+                    "image description failed. Do not invent its contents."
+                )
+                image_descriptions = None
+                logger.warning(
+                    "[ModelController] Image description failed for a text-only model: "
+                    "%s image(s) withheld.",
+                    _withheld_count,
+                )
 
         from characters import SecretExposedCharacter
         with character_lock(char_id):

@@ -6,7 +6,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from main_logger import logger
 from core.message_content import MessageContentCodec
-from handlers.llm_providers.errors import build_provider_error, build_stream_error, coerce_provider_error
+from core.image_assets import split_data_url
+from handlers.llm_providers.errors import (
+    LLMProviderError,
+    build_provider_error,
+    build_stream_error,
+    coerce_provider_error,
+)
 from handlers.llm_providers.param_mapper import filter_jsonable_params
 from schemas.structured_response import StructuredResponse
 
@@ -22,6 +28,62 @@ from .base import (
 from .streaming import StreamAccumulator, iter_json_values, iter_sse_data, track_response_body
 from .message_transforms import iter_positioned_messages
 from services.structured_response_capabilities import provider_schema_options
+
+
+_BLOCKED_FINISH_REASONS = frozenset({
+    "SAFETY",
+    "RECITATION",
+    "BLOCKLIST",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "IMAGE_SAFETY",
+})
+
+
+def _empty_response_error(provider: str, response_data, *, url=None, parts=None):
+    """Пустой ответ Gemini — ошибка провайдера, а не реплика персонажа.
+
+    Раньше вместо текста подставлялось ``"..."``, поэтому блокировка фильтром
+    или пустой кандидат выглядели как молчаливая Мита. Здесь остаётся причина
+    (``finishReason`` / ``blockReason``), которую можно показать пользователю.
+    """
+    candidate = (response_data.get("candidates") or [{}])[0] if isinstance(response_data, dict) else {}
+    if not isinstance(candidate, dict):
+        candidate = {}
+    finish_reason = str(candidate.get("finishReason") or "").strip().upper()
+    feedback = response_data.get("promptFeedback") if isinstance(response_data, dict) else None
+    block_reason = str((feedback or {}).get("blockReason") or "").strip().upper()
+
+    has_function_call = any(
+        isinstance(part, dict) and ("functionCall" in part or "functionResponse" in part)
+        for part in (parts or [])
+    )
+
+    if has_function_call:
+        code = "response.tool_call_unsupported"
+        message = (
+            "Gemini returned a function call but no text; "
+            "native tool calls are not bridged for this provider."
+        )
+    elif block_reason or finish_reason in _BLOCKED_FINISH_REASONS:
+        code = "response.blocked"
+        reasons = ", ".join(filter(None, (
+            f"finishReason={finish_reason}" if finish_reason else "",
+            f"blockReason={block_reason}" if block_reason else "",
+        )))
+        message = f"Gemini returned no text; the response was blocked ({reasons})."
+    else:
+        code = "response.empty"
+        message = f"Gemini returned no text (finishReason={finish_reason or 'none'})."
+
+    return build_provider_error(
+        provider,
+        payload=response_data,
+        provider_message=message,
+        code=code,
+        phase="response",
+        url=url,
+    )
 
 
 class GeminiProvider(BaseProvider):
@@ -167,19 +229,35 @@ class GeminiProvider(BaseProvider):
     def _format_content_to_parts(self, content):
         parts = []
         if isinstance(content, str):
-            parts.append({"text": content})
+            if content.strip():
+                parts.append({"text": content})
         elif isinstance(content, list):
             for item in content:
                 if not isinstance(item, dict):
                     continue
                 item_type = MessageContentCodec.part_type(item)
                 if item_type == "text":
-                    parts.append({"text": item.get("text", "")})
+                    # Исторически текст части лежит то в ``text``, то в ``content``.
+                    # Без этого fallback'а старые сообщения давали пустой ``text``.
+                    value = item.get("text")
+                    if value is None:
+                        value = item.get("content", "")
+                    text = str(value or "")
+                    if text.strip():
+                        parts.append({"text": text})
                 elif item_type == "image_url":
-                    image_url = item.get("image_url", {}).get("url", "")
-                    if "," in image_url:
-                        base64_data = image_url.split(",", 1)[1]
-                        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64_data}})
+                    image_url = str((item.get("image_url") or {}).get("url") or "")
+                    parsed = split_data_url(image_url)
+                    if parsed is None:
+                        # Раньше такая часть просто исчезала из запроса.
+                        logger.warning(
+                            "[GeminiProvider] Unsupported image reference dropped from parts: %.80s",
+                            image_url,
+                        )
+                        parts.append({"text": "[image unavailable: unsupported image reference]"})
+                        continue
+                    mime, base64_data = parsed
+                    parts.append({"inline_data": {"mime_type": mime, "data": base64_data}})
                 else:
                     # Незнакомую часть Gemini не примет, но и терять её молча нельзя:
                     # отдаём плейсхолдером (кодек залогирует тип один раз).
@@ -435,7 +513,16 @@ class GeminiProvider(BaseProvider):
                     if t:
                         text_parts_list.append(t)
 
-            response_text = "".join(text_parts_list) or "..."
+            response_text = "".join(text_parts_list)
+            if not response_text.strip():
+                # Раньше здесь подставлялось "...", и заблокированный/пустой ответ
+                # выглядел как реплика Миты. Пусть это будет ошибкой провайдера.
+                raise _empty_response_error(
+                    self.name,
+                    response_data,
+                    url=req.api_url,
+                    parts=parts,
+                )
 
             result = LLMResponse(
                 text=response_text,
@@ -448,6 +535,12 @@ class GeminiProvider(BaseProvider):
             )
             response.close()
             return result
+        except LLMProviderError:
+            try:
+                response.close()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             provider_error = build_provider_error(
                 self.name,
@@ -473,6 +566,7 @@ class GeminiProvider(BaseProvider):
         accumulator = StreamAccumulator(req, provider=self.name, model=req.model)
         response_model = None
         finish_reason = None
+        block_reason = ""
 
         try:
             content_type = str(response.headers.get("content-type") or "").lower()
@@ -518,6 +612,8 @@ class GeminiProvider(BaseProvider):
                     accumulator.set_usage(usage)
                 candidate = (result.get("candidates") or [{}])[0] or {}
                 finish_reason = candidate.get("finishReason") or finish_reason
+                feedback = result.get("promptFeedback") or {}
+                block_reason = str(feedback.get("blockReason") or "") or block_reason
                 parts = (candidate.get("content") or {}).get("parts") or []
                 for part in parts if isinstance(parts, list) else []:
                     if not isinstance(part, dict):
@@ -527,7 +623,20 @@ class GeminiProvider(BaseProvider):
                     else:
                         accumulator.add_text(part.get("text"))
 
-            return accumulator.complete(finish_reason=finish_reason, model=response_model)
+            tracked = accumulator.complete(finish_reason=finish_reason, model=response_model)
+            if not (tracked.text or "").strip() and not (tracked.tool_calls or []):
+                raise _empty_response_error(
+                    self.name,
+                    {
+                        "candidates": [{"finishReason": finish_reason}],
+                        "promptFeedback": {"blockReason": block_reason},
+                        "stream": True,
+                    },
+                    url=str(getattr(response, "url", req.api_url) or req.api_url),
+                )
+            return tracked
+        except LLMProviderError:
+            raise
         except Exception as e:
             # Обрыв/ошибка посреди стрима — не маскируем под успех, кидаем ошибку,
             # чтобы runner ушёл в retry/фоллбэк, а не вернул обрезанный ответ.

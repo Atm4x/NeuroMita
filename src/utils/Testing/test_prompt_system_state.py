@@ -572,6 +572,55 @@ class PromptSystemStateTests(unittest.TestCase):
         settings.clear()
         self.assertEqual(controller._resolve_vision_state(), "unavailable")
 
+    def test_vision_state_ignores_capture_readiness(self):
+        """Готовность автозахвата не делает модель слепой к приложенному файлу.
+
+        Регрессия: при выключенных «По экрану»/«Камере»/автоприкреплении фича
+        capture не поднималась, и [System State] сообщал «you cannot see images»
+        при реально приложенном фото.
+        """
+        controller = PromptController()
+        controller._get_setting = lambda key, default=None: {
+            "ENABLE_IMAGE_ANALYSIS": True,
+        }.get(key, default)
+        controller._feature_ready = lambda _name: False
+
+        self.assertEqual(controller._resolve_vision_state(), "native")
+
+    def test_auto_capture_is_reported_separately_from_sight(self):
+        controller = PromptController()
+        settings = {"ENABLE_IMAGE_ANALYSIS": True}
+        controller._get_setting = lambda key, default=None: settings.get(key, default)
+        controller._feature_ready = lambda _name: True
+
+        self.assertFalse(controller._resolve_auto_capture_enabled())
+        settings["ENABLE_SCREEN_ANALYSIS"] = True
+        self.assertTrue(controller._resolve_auto_capture_enabled())
+        controller._feature_ready = lambda _name: False
+        self.assertFalse(controller._resolve_auto_capture_enabled())
+
+    def test_system_state_keeps_sight_and_capture_as_different_facts(self):
+        message = PromptController._format_system_state_message(
+            remote_only=None,
+            voice_enabled=False,
+            voice_method="Local",
+            speech_recognition_available=False,
+            vision_state="native",
+            auto_capture=False,
+        )
+        text = message["content"]
+        self.assertIn("Your sight (image recognition): available.", text)
+        self.assertIn("Automatic screen/camera capture: disabled.", text)
+
+        message = PromptController._format_system_state_message(
+            remote_only=None,
+            voice_enabled=False,
+            voice_method="Local",
+            speech_recognition_available=False,
+            vision_state="unavailable",
+        )
+        self.assertNotIn("Automatic screen/camera capture:", message["content"])
+
     def test_speech_recognition_unavailable_without_service(self):
         controller = PromptController()
         controller._get_setting = lambda key, default=None: {"MIC_ACTIVE": True}.get(key, default)

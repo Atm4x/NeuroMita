@@ -530,6 +530,86 @@ def test_gemini_stream_error_never_returns_partial_success():
     transport.close()
 
 
+def _gemini_provider_with_json(payload):
+    transport = LLMHttpClient(
+        enable_http2=False,
+        client_factory=lambda _service_id, _http2: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        ),
+    )
+    return GeminiProvider(http_transport=transport), transport
+
+
+def test_gemini_blocked_response_is_an_error_not_a_character_reply():
+    """Раньше пустой кандидат превращался в \"...\" и выглядел как реплика Миты."""
+    provider, transport = _gemini_provider_with_json({
+        "promptFeedback": {"blockReason": "SAFETY"},
+        "candidates": [{"finishReason": "SAFETY"}],
+    })
+    req = LLMRequest(
+        model="gemini-test",
+        messages=[{"role": "user", "content": "hi"}],
+        api_url="https://example.test/v1/models/gemini-test:generateContent?key=secret",
+        provider_name="gemini",
+    )
+
+    with pytest.raises(LLMProviderError) as caught:
+        provider.generate(req)
+
+    assert caught.value.code == "response.blocked"
+    assert "SAFETY" in (caught.value.provider_message or "")
+    transport.close()
+
+
+def test_gemini_empty_candidate_is_a_provider_error():
+    provider, transport = _gemini_provider_with_json({
+        "candidates": [{"content": {"parts": []}, "finishReason": "STOP"}],
+    })
+    req = LLMRequest(
+        model="gemini-test",
+        messages=[{"role": "user", "content": "hi"}],
+        api_url="https://example.test/v1/models/gemini-test:generateContent?key=secret",
+        provider_name="gemini",
+    )
+
+    with pytest.raises(LLMProviderError) as caught:
+        provider.generate(req)
+
+    assert caught.value.code == "response.empty"
+    transport.close()
+
+
+def test_gemini_stream_blocked_reports_the_reason():
+    body = 'data: {"candidates":[{"finishReason":"IMAGE_SAFETY"}]}\n\n'
+    transport = LLMHttpClient(
+        enable_http2=False,
+        client_factory=lambda _service_id, _http2: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text=body,
+                )
+            )
+        ),
+    )
+    provider = GeminiProvider(http_transport=transport)
+    req = LLMRequest(
+        model="gemini-test",
+        messages=[{"role": "user", "content": "hi"}],
+        api_url="https://example.test/v1/models/gemini-test:generateContent?key=secret",
+        provider_name="gemini",
+        stream=True,
+    )
+
+    with pytest.raises(LLMProviderError) as caught:
+        provider.generate(req)
+
+    assert caught.value.code == "response.blocked"
+    assert "IMAGE_SAFETY" in (caught.value.provider_message or "")
+    transport.close()
+
+
 def test_gemini_http_error_preserves_retry_after_header():
     transport = LLMHttpClient(
         enable_http2=False,
