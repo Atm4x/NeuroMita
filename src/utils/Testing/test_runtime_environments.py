@@ -1577,17 +1577,22 @@ def test_backend_candidates_keep_torch_cuda_and_onnx_side_by_side(
     assert onnx.root.is_dir()
 
 
+@pytest.mark.parametrize("gpu_vendor", ["NVIDIA", "AMD", "CPU"])
 def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
     tmp_path: Path,
+    gpu_vendor: str,
 ) -> None:
     manager = RuntimeEnvironmentManager(tmp_path / "Lib")
     specs = manager.core_layer_specs(
         BackendKind.ONNX,
-        {"gpu_vendor": "NVIDIA"},
+        {"gpu_vendor": gpu_vendor},
     )
 
     assert len(specs) == 2
-    assert specs[0].group == "torch-cu128"
+    assert specs[0].group == "torch-cpu"
+    assert "torch.cuda" not in specs[0].capabilities
+    assert not specs[0].extra_args
+    assert all("+cu" not in package for package in specs[0].packages)
     assert specs[1].group == "onnx-dml"
     assert "onnx.dml" in specs[1].capabilities
     assert any(package.startswith("onnxruntime-directml==") for package in specs[1].packages)
@@ -1598,7 +1603,7 @@ def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
         meta={"category": "tts", "item_id": "edge-onnx"},
         requested_specs=("tts-with-rvc-onnx",),
         required_backend=BackendKind.ONNX,
-        backend_context={"gpu_vendor": "NVIDIA"},
+        backend_context={"gpu_vendor": gpu_vendor},
     )
     assert transaction.ensure_core_layers(
         _factory(created),
@@ -1617,6 +1622,31 @@ def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
         str(torch.site_packages),
         str(onnx.site_packages),
     )
+
+
+def test_onnx_runtime_survives_cuda_removal(tmp_path: Path) -> None:
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    factory = _factory([])
+    cuda = manager.ensure_core_layer(
+        manager.core_layer_specs(BackendKind.CUDA)[0],
+        installer_factory=factory, log=lambda _: None,
+    )
+    transaction = manager.begin(
+        meta={"category": "rag", "item_id": "embeddings"},
+        requested_specs=(), required_backend=BackendKind.ONNX,
+        backend_context={"gpu_vendor": "NVIDIA"},
+    )
+    assert transaction.ensure_core_layers(factory, log=lambda _: None)
+    record = transaction.commit()
+    assert cuda is not None and cuda.root.is_dir()
+    assert cuda.layer_id not in record.core_layer_ids
+
+    manager.remove_backend(BackendKind.CUDA)
+
+    assert not cuda.root.exists()
+    assert manager.runtime_paths(record)
+    assert manager.core_paths_for_backend(BackendKind.ONNX, {"gpu_vendor": "NVIDIA"})
+    assert not list(manager.core_root.glob("torch-cu*"))
 
 
 def test_materialized_backend_layer_is_registered_before_gc(tmp_path: Path) -> None:

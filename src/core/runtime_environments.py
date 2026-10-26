@@ -866,11 +866,12 @@ class RuntimeEnvironmentManager:
         layers: list[CoreLayerSpec] = []
 
         if required_backend in (BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX):
-            torch_kind = (
-                BackendKind.CUDA
-                if required_backend == BackendKind.CUDA
-                else service.preferred_torch_kind(context)
-            )
+            if required_backend == BackendKind.ONNX:
+                torch_kind = BackendKind.CPU
+            elif required_backend == BackendKind.CUDA:
+                torch_kind = BackendKind.CUDA
+            else:
+                torch_kind = service.preferred_torch_kind(context)
             cpu_capability = f"torch.cpu@{TORCH_VERSION}"
             cuda_capability = f"torch.cuda@{TORCH_VERSION}+cu128"
             if required_backend == BackendKind.CPU:
