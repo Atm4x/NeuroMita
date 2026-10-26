@@ -12,6 +12,7 @@ import numpy as np
 
 from main_logger import logger
 from managers.settings_manager import SettingsManager
+from managers.rag.local_backend import LAST_TOKEN_MODEL_TYPES
 
 if TYPE_CHECKING:
     import torch
@@ -117,11 +118,7 @@ class EmbeddingModelHandler:
             torch.cuda.empty_cache()
 
     # Decoder-only model types that need last-token pooling instead of CLS
-    _DECODER_TYPES = frozenset({
-        "qwen3", "qwen2", "qwen", "llama", "mistral", "falcon", "gpt2",
-        "gpt_neox", "bloom", "opt", "gemma", "gemma2", "phi", "phi3",
-        "stablelm", "mpt", "rwkv",
-    })
+    _DECODER_TYPES = LAST_TOKEN_MODEL_TYPES
 
     def __init__(self, model_name: str = MODEL_NAME, query_prefix: str = ""):
         self.model_name = model_name

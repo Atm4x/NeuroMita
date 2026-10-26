@@ -15,6 +15,8 @@ from core.installables import ComponentCategory, ComponentMetadata, coerce_backe
 from core.installables.helpers import build_runtime_ctx, noop_plan, status_from_installed
 from handlers.embedding_presets import resolve_full_config
 from managers.rag.pipeline.config import resolve_ce_model
+from managers.rag.local_backend import local_backend, is_lm_reranker as _is_lm_reranker_model
+from managers.rag.onnx_artifacts import artifact_ready
 try:
     from managers.settings_manager import SettingsManager
 except Exception:
@@ -35,11 +37,7 @@ TARGET_CURRENT = "current"
 TRANSFORMERS_SPEC = "transformers>=4.45.2"
 HF_HUB_SPEC = "huggingface-hub"
 BITSANDBYTES_SPEC = "bitsandbytes>=0.43.0"
-
-_LM_RERANKER_PATTERNS = (
-    "qwen3-reranker",
-    "qwen/qwen3-reranker",
-)
+ONNX_RAG_SPECS = ("transformers>=4.51,<5", HF_HUB_SPEC, "optimum-onnx>=0.1,<1", "onnx>=1.16,<2")
 
 # Windows cannot pass arbitrarily large timeouts to the thread wait used by
 # subprocess.communicate().  Keep each individual wait comfortably below that
@@ -69,6 +67,7 @@ def _detect_gpu_vendor(ctx: dict[str, Any] | None = None) -> str:
 
 def _with_gpu_ctx(ctx: dict[str, Any] | None = None) -> dict[str, Any]:
     data = dict(ctx or {})
+    data.setdefault("rag_backend", local_backend(data))
     data["gpu_vendor"] = _detect_gpu_vendor(data)
     return data
 
@@ -85,11 +84,6 @@ def _checkpoints_dir() -> str:
 
 def _cache_marker_path(repo_id: str) -> str:
     return os.path.join(_checkpoints_dir(), "models--" + str(repo_id or "").replace("/", "--"))
-
-
-def _is_lm_reranker_model(model_name: str) -> bool:
-    lower = str(model_name or "").strip().lower()
-    return any(p in lower for p in _LM_RERANKER_PATTERNS)
 
 
 def _local_embed_model_name() -> str:
@@ -194,6 +188,8 @@ def _merge_requirement_status(summary: dict[str, Any], checked: dict[str, Any]) 
 
 
 def _required_backend(ctx: dict[str, Any]) -> BackendKind:
+    if local_backend(ctx) == "onnx":
+        return BackendKind.ONNX
     return get_backend_service().preferred_torch_kind(ctx)
 
 
@@ -208,6 +204,8 @@ def _backend_requirement(ctx: dict[str, Any]) -> InstallRequirement:
 
 
 def _embed_requirements(ctx: dict[str, Any]) -> list[InstallRequirement]:
+    if local_backend(ctx) == "onnx":
+        return _onnx_requirements(ctx)
     return [
         _backend_requirement(ctx),
         InstallRequirement(id="transformers", kind="python_dist", spec=TRANSFORMERS_SPEC, required=True),
@@ -216,6 +214,8 @@ def _embed_requirements(ctx: dict[str, Any]) -> list[InstallRequirement]:
 
 
 def _reranker_requirements(ctx: dict[str, Any], ce_model: str | None = None) -> list[InstallRequirement]:
+    if local_backend(ctx) == "onnx":
+        return _onnx_requirements(ctx)
     ce_model = str(ce_model or "").strip() or resolve_ce_model()
     reqs = [
         _backend_requirement(ctx),
@@ -234,6 +234,32 @@ def _reranker_requirements(ctx: dict[str, Any], ce_model: str | None = None) -> 
             )
         )
     return reqs
+
+
+def _onnx_requirements(ctx: dict[str, Any]) -> list[InstallRequirement]:
+    return [_backend_requirement(ctx)] + [
+        InstallRequirement(id=spec.split(">=")[0], kind="python_dist", spec=spec, required=True)
+        for spec in ONNX_RAG_SPECS
+    ]
+
+
+def _check_model_files(summary: dict, kind: str, model: str, ctx: dict) -> None:
+    if not model:
+        return
+    is_onnx = local_backend(ctx) == "onnx"
+    present = artifact_ready(kind, model) if is_onnx else (
+        os.path.isdir(model) or os.path.isdir(_cache_marker_path(model))
+    )
+    if present:
+        return
+    summary["ok"] = False
+    marker = "embedding_model" if kind == TARGET_EMBEDDINGS else "reranker_model"
+    if marker not in summary["missing_required"]:
+        summary["missing_required"].append(marker)
+    if model not in summary["download_models"]:
+        summary["download_models"].append(model)
+    if is_onnx:
+        summary.setdefault("onnx_exports", []).append((kind, model))
 
 
 def get_install_status(target: str, *, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -263,12 +289,7 @@ def get_install_status(target: str, *, ctx: dict[str, Any] | None = None) -> dic
             summary["needs_local_runtime"] = True
             summary["required_backend"] = _required_backend(ctx).value
             embed_model = _local_embed_model_name()
-            if embed_model and not os.path.isdir(_cache_marker_path(embed_model)):
-                summary["ok"] = False
-                if "embedding_model" not in summary["missing_required"]:
-                    summary["missing_required"].append("embedding_model")
-                if embed_model not in summary["download_models"]:
-                    summary["download_models"].append(embed_model)
+            _check_model_files(summary, TARGET_EMBEDDINGS, embed_model, ctx)
 
             checked = check_requirements(_embed_requirements(ctx), ctx=ctx)
             _merge_requirement_status(summary, checked)
@@ -283,12 +304,7 @@ def get_install_status(target: str, *, ctx: dict[str, Any] | None = None) -> dic
             summary["required"] = True
             summary["needs_local_runtime"] = True
             summary["required_backend"] = _required_backend(ctx).value
-            if not os.path.isdir(_cache_marker_path(ce_model)):
-                summary["ok"] = False
-                if "reranker_model" not in summary["missing_required"]:
-                    summary["missing_required"].append("reranker_model")
-                if ce_model not in summary["download_models"]:
-                    summary["download_models"].append(ce_model)
+            _check_model_files(summary, TARGET_RERANKER, ce_model, ctx)
 
             checked = check_requirements(_reranker_requirements(ctx), ctx=ctx)
             _merge_requirement_status(summary, checked)
@@ -296,7 +312,7 @@ def get_install_status(target: str, *, ctx: dict[str, Any] | None = None) -> dic
                 summary["ok"] = False
 
             use_int8 = bool(SettingsManager.get("RAG_CE_INT8", False))
-            if use_int8 and (not _is_lm_reranker_model(ce_model)) and str(ctx.get("gpu_vendor") or "").upper() == "NVIDIA":
+            if local_backend(ctx) == "torch" and use_int8 and (not _is_lm_reranker_model(ce_model)) and str(ctx.get("gpu_vendor") or "").upper() == "NVIDIA":
                 summary["needs_bitsandbytes"] = True
 
     if not summary["required"]:
@@ -323,7 +339,7 @@ def ensure_runtime_ready(target: str, *, ctx: dict[str, Any] | None = None) -> N
     )
 
 
-def _snapshot_download_action(repo_id: str, *, description: str, progress: int) -> InstallAction:
+def _snapshot_download_action(repo_id: str, *, description: str, progress: int, onnx_kind: str = "") -> InstallAction:
     def _fn(*, pip_installer=None, callbacks=None, ctx=None, **_kwargs) -> bool:
         runtime_ctx = dict(ctx or {})
         python_paths = [
@@ -353,7 +369,16 @@ def _snapshot_download_action(repo_id: str, *, description: str, progress: int) 
             "snapshot_download(repo_id=sys.argv[2], cache_dir=sys.argv[3], "
             "token=(os.environ.get('HF_TOKEN') or None))\n"
         )
+        if onnx_kind:
+            application_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            script = (
+                "import json, os, sys\n"
+                "sys.path[:0] = json.loads(sys.argv[1]) + [" + repr(application_path) + "]\n"
+                "from managers.rag.onnx_artifacts import prepare_artifact\n"
+                "prepare_artifact(" + repr(onnx_kind) + ", sys.argv[2])\n"
+            )
         env = os.environ.copy()
+        env["NEUROMITA_CHECKPOINTS_DIR"] = str(cache_dir)
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["PYTHONPATH"] = os.pathsep.join(python_paths)
@@ -437,11 +462,14 @@ def build_install_plan(
     pip_installer=None,
     callbacks=None,
     timeout_sec: float = 3600.0,
+    ctx: dict[str, Any] | None = None,
 ) -> InstallPlan:
     ctx = _with_gpu_ctx({
+        **dict(ctx or {}),
         "timeout_sec": float(timeout_sec or 3600.0),
-        "libs_dir": os.environ.get("NEUROMITA_LIB_DIR"),
+        "libs_dir": (ctx or {}).get("libs_dir", os.environ.get("NEUROMITA_LIB_DIR")),
     })
+    plan_backend = local_backend(ctx)
     status = get_install_status(target, ctx=ctx)
 
     if not status.get("required"):
@@ -466,7 +494,7 @@ def build_install_plan(
                 type="pip",
                 description=_("Installing local RAG dependencies...", "Installing local RAG dependencies..."),
                 progress=35,
-                packages=[TRANSFORMERS_SPEC, HF_HUB_SPEC],
+                packages=list(ONNX_RAG_SPECS) if local_backend(ctx) == "onnx" else [TRANSFORMERS_SPEC, HF_HUB_SPEC],
             )
         )
 
@@ -480,7 +508,11 @@ def build_install_plan(
             )
         )
 
-    downloads = list(status.get("download_models") or [])
+    downloads = [] if local_backend(ctx) == "onnx" else list(status.get("download_models") or [])
+    for kind, model in status.get("onnx_exports", []):
+        actions.append(_snapshot_download_action(
+            model, description=f"Exporting ONNX model: {model}", progress=65, onnx_kind=kind,
+        ))
     total_downloads = max(1, len(downloads))
     for idx, repo_id in enumerate(downloads):
         start_progress = 65 + int((idx * 25) / total_downloads)
@@ -493,7 +525,7 @@ def build_install_plan(
         )
 
     def _final_check(*, ctx=None, **_kwargs) -> bool:
-        return bool(get_install_status(target, ctx=_with_gpu_ctx(dict(ctx or {}))).get("ok"))
+        return bool(get_install_status(target, ctx=_with_gpu_ctx({**dict(ctx or {}), "rag_backend": plan_backend})).get("ok"))
 
     actions.append(
         InstallAction(
@@ -548,16 +580,12 @@ def model_install_status(kind: str, hf_id: str, *, ctx: dict[str, Any] | None = 
     if not hf_id:
         return summary
 
-    if not os.path.isdir(_cache_marker_path(hf_id)):
-        summary["ok"] = False
-        marker = "reranker_model" if kind == TARGET_RERANKER else "embedding_model"
-        summary["missing_required"].append(marker)
-        summary["download_models"].append(hf_id)
+    _check_model_files(summary, kind, hf_id, ctx)
 
     if kind == TARGET_RERANKER:
         checked = check_requirements(_reranker_requirements(ctx, ce_model=hf_id), ctx=ctx)
         use_int8 = bool(SettingsManager.get("RAG_CE_INT8", False))
-        if use_int8 and (not _is_lm_reranker_model(hf_id)) and str(ctx.get("gpu_vendor") or "").upper() == "NVIDIA":
+        if local_backend(ctx) == "torch" and use_int8 and (not _is_lm_reranker_model(hf_id)) and str(ctx.get("gpu_vendor") or "").upper() == "NVIDIA":
             summary["needs_bitsandbytes"] = True
     else:
         checked = check_requirements(_embed_requirements(ctx), ctx=ctx)
@@ -576,11 +604,14 @@ def build_model_install_plan(
     pip_installer=None,
     callbacks=None,
     timeout_sec: float = 3600.0,
+    ctx: dict[str, Any] | None = None,
 ) -> InstallPlan:
     ctx = _with_gpu_ctx({
+        **dict(ctx or {}),
         "timeout_sec": float(timeout_sec or 3600.0),
-        "libs_dir": os.environ.get("NEUROMITA_LIB_DIR"),
+        "libs_dir": (ctx or {}).get("libs_dir", os.environ.get("NEUROMITA_LIB_DIR")),
     })
+    plan_backend = local_backend(ctx)
     status = model_install_status(kind, hf_id, ctx=ctx)
 
     if not status.get("required"):
@@ -597,7 +628,7 @@ def build_model_install_plan(
                 type="pip",
                 description=_("Installing local RAG dependencies...", "Installing local RAG dependencies..."),
                 progress=35,
-                packages=[TRANSFORMERS_SPEC, HF_HUB_SPEC],
+                packages=list(ONNX_RAG_SPECS) if local_backend(ctx) == "onnx" else [TRANSFORMERS_SPEC, HF_HUB_SPEC],
             )
         )
     if status.get("needs_bitsandbytes"):
@@ -610,7 +641,11 @@ def build_model_install_plan(
             )
         )
 
-    downloads = list(status.get("download_models") or [])
+    downloads = [] if local_backend(ctx) == "onnx" else list(status.get("download_models") or [])
+    for kind, model in status.get("onnx_exports", []):
+        actions.append(_snapshot_download_action(
+            model, description=f"Exporting ONNX model: {model}", progress=65, onnx_kind=kind,
+        ))
     total_downloads = max(1, len(downloads))
     for idx, repo_id in enumerate(downloads):
         start_progress = 65 + int((idx * 25) / total_downloads)
@@ -623,7 +658,7 @@ def build_model_install_plan(
         )
 
     def _final_check(*, ctx=None, **_kwargs) -> bool:
-        return bool(model_install_status(kind, hf_id, ctx=_with_gpu_ctx(dict(ctx or {}))).get("ok"))
+        return bool(model_install_status(kind, hf_id, ctx=_with_gpu_ctx({**dict(ctx or {}), "rag_backend": plan_backend})).get("ok"))
 
     actions.append(
         InstallAction(
@@ -700,6 +735,7 @@ class RagModelInstallableComponent:
             pip_installer=run_ctx.get("pip_installer"),
             callbacks=run_ctx.get("callbacks"),
             timeout_sec=float(run_ctx.get("timeout_sec", 3600.0) or 3600.0),
+            ctx=run_ctx,
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
@@ -752,6 +788,7 @@ class RagInstallableComponent:
             pip_installer=run_ctx.get("pip_installer"),
             callbacks=run_ctx.get("callbacks"),
             timeout_sec=float(run_ctx.get("timeout_sec", 3600.0) or 3600.0),
+            ctx=run_ctx,
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
