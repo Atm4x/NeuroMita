@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -1958,6 +1959,62 @@ class RuntimeEnvironmentManager:
             parent.rmdir()
         except OSError:
             pass
+
+    def remove_backend(self, backend: BackendKind | str) -> tuple[str, ...]:
+        kind = get_backend_service().build_requirement(backend).kind
+        if kind not in (BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX):
+            raise ValueError(f"Unsupported backend removal: {kind}")
+        with self._lock, self.file_lock("core-layer-lifecycle"), self.file_lock("environment-registry"):
+            layers = []
+            for manifest in self.core_root.glob("*/manifest.json"):
+                layer = self.get_core_layer(manifest.parent.name)
+                if layer is None:
+                    continue
+                caps = set(layer.capabilities)
+                matches = (
+                    (kind == BackendKind.ONNX and "onnx.cpu" in caps)
+                    or (kind == BackendKind.CUDA and "torch.cuda" in caps)
+                    or (kind == BackendKind.CPU and "torch.cpu" in caps and "torch.cuda" not in caps)
+                )
+                if matches:
+                    layers.append(layer)
+            removed_ids = {layer.layer_id for layer in layers}
+            records = (*self.active_records(), *self.selected_records())
+            dependents = sorted({
+                record.logical_id for record in records
+                if removed_ids.intersection(record.core_layer_ids)
+            })
+            if dependents:
+                raise RuntimeError(
+                    "Нельзя удалить бэкенд: его используют AI-окружения: "
+                    + ", ".join(dependents)
+                    + ". Сначала удалите или переустановите их для другого бэкенда."
+                )
+            for layer in layers:
+                if (
+                    layer.root.is_symlink()
+                    or bool(getattr(layer.root.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                    or layer.root.resolve().parent != self.core_root.resolve()
+                ):
+                    raise RuntimeError(f"Backend path is outside managed bases: {layer.root}")
+            data = self._load_registry()
+            for layer in layers:
+                try:
+                    shutil.rmtree(layer.root)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Не удалось удалить бэкенд '{layer.layer_id}': {exc}. "
+                        "Закройте использующие его процессы и повторите удаление."
+                    ) from exc
+            for profile in ("backend_profile", "backend_candidates"):
+                entry = data.get(profile) or {}
+                entry["core_layer_ids"] = [
+                    value for value in entry.get("core_layer_ids", ())
+                    if value not in removed_ids
+                ]
+                data[profile] = entry
+            _atomic_json(self.registry_path, data)
+            return tuple(sorted(removed_ids))
 
     def cleanup_unreferenced_core_layers(self) -> None:
         with self._lock, self.file_lock("core-layer-lifecycle"):

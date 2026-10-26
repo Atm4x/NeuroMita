@@ -791,7 +791,7 @@ class InstallController(InstallService):
     ) -> bool:
         _, category, item_id = environment_manager.logical_id_from_meta(ctx["meta"])
         session = nullcontext()
-        if self._environment_service_name(category) is not None:
+        if category == "backend" or self._environment_service_name(category) is not None:
             administration = services().get_optional(AIEngineAdministrationService)
             if administration is None:
                 engine_service = services().get_optional(AIEngineService)

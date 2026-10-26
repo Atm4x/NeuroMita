@@ -4,7 +4,7 @@ from core.error_utils import format_exception
 from typing import Any
 
 from core.backends import BackendKind, get_backend_service
-from core.install_types import InstallPlan
+from core.install_types import InstallAction, InstallPlan
 from core.installables import (
     ComponentCategory,
     ComponentMetadata,
@@ -12,7 +12,7 @@ from core.installables import (
     ComponentStatusCode,
     make_component_id,
 )
-from core.installables.helpers import build_runtime_ctx, noop_plan
+from core.installables.helpers import build_runtime_ctx
 
 
 class BackendInstallableComponent:
@@ -96,7 +96,19 @@ class BackendInstallableComponent:
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
-        return noop_plan("Backend uninstall is managed separately.")
+        def remove(*, callbacks=None, **_kwargs):
+            from core.runtime_environments import runtime_environments
+
+            removed = runtime_environments().remove_backend(self.backend)
+            if callbacks is not None:
+                callbacks.log("Removed backend layers: " + (", ".join(removed) or "none"))
+            return True
+
+        return InstallPlan(
+            actions=[InstallAction(type="call", description="Удаление бэкенда", fn=remove)],
+            environment_managed=False,
+            ok_status="Бэкенд удалён",
+        )
 
     def build_initialize_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan | None:
         return None

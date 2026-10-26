@@ -62,6 +62,91 @@ class _FakeInstaller:
         return True
 
 
+@pytest.mark.parametrize("kind", [BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX])
+def test_backend_removal_deletes_only_requested_family(tmp_path, kind):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layers = {}
+    for backend, group, package, caps in (
+        (BackendKind.CPU, "torch-cpu", "torch==2.7.1", ("torch.cpu",)),
+        (BackendKind.CUDA, "torch-cu128", "torch==2.7.1+cu128", ("torch.cpu", "torch.cuda")),
+        (BackendKind.ONNX, "onnx-dml", "onnxruntime-directml==1.24.4", ("onnx.cpu", "onnx.dml")),
+    ):
+        layers[backend] = manager.ensure_core_layer(
+            CoreLayerSpec(group=group, packages=(package,), capabilities=caps),
+            installer_factory=_factory([]), log=lambda _: None,
+        )
+    manager.promote_backend_profile((layers[kind].layer_id,), cleanup=False)
+    manager.register_backend_candidates(layer.layer_id for layer in layers.values())
+    unrelated = manager.main_core_root / "keep.txt"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("keep")
+
+    assert manager.remove_backend(kind) == (layers[kind].layer_id,)
+    assert not layers[kind].root.exists()
+    assert all(layer.root.exists() for backend, layer in layers.items() if backend != kind)
+    snapshot = manager.registry_snapshot()
+    for profile in ("backend_profile", "backend_candidates"):
+        assert layers[kind].layer_id not in snapshot[profile]["core_layer_ids"]
+    assert unrelated.read_text() == "keep"
+    assert manager.remove_backend(kind) == ()
+
+
+@pytest.mark.parametrize("selected_only", [False, True])
+def test_backend_removal_blocks_installed_and_selected_revisions(tmp_path, monkeypatch, selected_only):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="torch-cu128", packages=("torch==2.7.1+cu128",),
+                      capabilities=("torch.cpu", "torch.cuda")),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
+    transaction = manager.begin(
+        meta={"category": "rag", "item_id": "embeddings"},
+        requested_specs=(), required_backend=BackendKind.CUDA, backend_context={},
+    )
+    transaction.core_layers = [layer]
+    record = transaction.commit()
+    if selected_only:
+        monkeypatch.setattr(manager, "active_records", lambda: ())
+        monkeypatch.setattr(manager, "selected_records", lambda: (record,))
+    before = manager.registry_snapshot()
+
+    with pytest.raises(RuntimeError, match="rag-embeddings"):
+        manager.remove_backend(BackendKind.CUDA)
+
+    assert manager.registry_snapshot() == before
+    assert layer.root.is_dir()
+    assert record.root.is_dir()
+    if selected_only:
+        monkeypatch.setattr(manager, "selected_records", lambda: ())
+    manager.remove_installed(record.logical_id)
+    assert manager.remove_backend(BackendKind.CUDA) == (layer.layer_id,)
+
+
+def test_backend_removal_reports_locked_files(tmp_path, monkeypatch):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="onnx-cpu", packages=("onnxruntime==1.22.0",), capabilities=("onnx.cpu",)),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
+    before = manager.registry_snapshot()
+    monkeypatch.setattr("core.runtime_environments.shutil.rmtree", MagicMock(side_effect=PermissionError("locked")))
+    with pytest.raises(RuntimeError, match="locked"):
+        manager.remove_backend(BackendKind.ONNX)
+    assert manager.registry_snapshot() == before
+    assert layer.root.exists()
+
+
+def test_backend_uninstall_plan_executes_removal(monkeypatch):
+    manager = MagicMock()
+    manager.remove_backend.return_value = ("cuda-layer",)
+    monkeypatch.setattr("core.runtime_environments.runtime_environments", lambda: manager)
+    plan = BackendInstallableComponent(BackendKind.CUDA).build_uninstall_plan()
+    assert plan.required_backend is None
+    assert plan.environment_managed is False
+    assert plan.actions[0].fn() is True
+    manager.remove_backend.assert_called_once_with(BackendKind.CUDA)
+
+
 def _factory(created: list[_FakeInstaller]):
     def create(target: str):
         installer = _FakeInstaller(target)
