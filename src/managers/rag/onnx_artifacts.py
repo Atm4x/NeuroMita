@@ -41,10 +41,27 @@ def artifact_ready(kind: str, model_name: str) -> bool:
         return False
 
 
+def _enable_directml_runtime_detection() -> None:
+    """Teach optimum that the DirectML runtime is installed.
+
+    ``optimum`` looks for distribution metadata named ``onnxruntime`` (or a
+    short list of variants) and does not recognise ``onnxruntime-directml``.
+    The module itself is importable, so verify it and replace that false
+    negative before the exporter validates the graph it just produced.
+    """
+    try:
+        import onnxruntime  # noqa: F401
+        from optimum.utils import import_utils
+    except Exception:
+        return
+    import_utils._onnxruntime_available = True
+
+
 def prepare_artifact(kind: str, model_name: str) -> None:
     """Run only in the installer's disposable subprocess, never on a query."""
     if artifact_ready(kind, model_name):
         return
+    _enable_directml_runtime_detection()
     from optimum.exporters.onnx import main_export
     from transformers import AutoTokenizer
 

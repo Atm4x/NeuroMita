@@ -74,6 +74,29 @@ def test_export_manifest_checks_external_weights(onnx_settings):
     assert not onnx_artifacts.artifact_ready("embeddings", "owner/model")
 
 
+def test_export_recognises_directml_distribution(monkeypatch):
+    import_utils = SimpleNamespace(_onnxruntime_available=False)
+    utils_package = SimpleNamespace(import_utils=import_utils)
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(__version__="1.24.4"))
+    monkeypatch.setitem(sys.modules, "optimum", SimpleNamespace(utils=utils_package))
+    monkeypatch.setitem(sys.modules, "optimum.utils", utils_package)
+    monkeypatch.setitem(sys.modules, "optimum.utils.import_utils", import_utils)
+
+    onnx_artifacts._enable_directml_runtime_detection()
+
+    assert import_utils._onnxruntime_available is True
+
+
+def test_export_keeps_runtime_flag_when_module_import_fails(monkeypatch):
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    modules = SimpleNamespace(_onnxruntime_available=False)
+    monkeypatch.setitem(sys.modules, "optimum.utils.import_utils", modules)
+
+    onnx_artifacts._enable_directml_runtime_detection()
+
+    assert modules._onnxruntime_available is False
+
+
 def _fake_runtime(monkeypatch, providers):
     sessions = []
 
