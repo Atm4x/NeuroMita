@@ -1980,16 +1980,10 @@ class RuntimeEnvironmentManager:
                     layers.append(layer)
             removed_ids = {layer.layer_id for layer in layers}
             records = (*self.active_records(), *self.selected_records())
-            dependents = sorted({
+            dependents = {
                 record.logical_id for record in records
                 if removed_ids.intersection(record.core_layer_ids)
-            })
-            if dependents:
-                raise RuntimeError(
-                    "Нельзя удалить бэкенд: его используют AI-окружения: "
-                    + ", ".join(dependents)
-                    + ". Сначала удалите или переустановите их для другого бэкенда."
-                )
+            }
             for layer in layers:
                 if (
                     layer.root.is_symlink()
@@ -1998,14 +1992,6 @@ class RuntimeEnvironmentManager:
                 ):
                     raise RuntimeError(f"Backend path is outside managed bases: {layer.root}")
             data = self._load_registry()
-            for layer in layers:
-                try:
-                    shutil.rmtree(layer.root)
-                except OSError as exc:
-                    raise RuntimeError(
-                        f"Не удалось удалить бэкенд '{layer.layer_id}': {exc}. "
-                        "Закройте использующие его процессы и повторите удаление."
-                    ) from exc
             for profile in ("backend_profile", "backend_candidates"):
                 entry = data.get(profile) or {}
                 entry["core_layer_ids"] = [
@@ -2013,7 +1999,39 @@ class RuntimeEnvironmentManager:
                     if value not in removed_ids
                 ]
                 data[profile] = entry
-            _atomic_json(self.registry_path, data)
+            selection = data.setdefault("runtime_selection", {})
+            for slot, value in tuple(selection.items()):
+                ref = self._selection_ref(value)
+                if ref is not None and ref.logical_id in dependents:
+                    selection.pop(slot, None)
+            moved = []
+            quarantine = self.staging_root / f"removed-backend-{kind.value}-{uuid.uuid4().hex}"
+            try:
+                if layers:
+                    quarantine.mkdir(parents=True)
+                for layer in layers:
+                    destination = quarantine / layer.root.name
+                    layer.root.rename(destination)
+                    moved.append((layer.root, destination))
+                _atomic_json(self.registry_path, data)
+            except Exception:
+                for original, destination in reversed(moved):
+                    destination.rename(original)
+                if quarantine.exists():
+                    quarantine.rmdir()
+                raise
+            if dependents:
+                logger.info("Backend removed; detached AI environments: " + ", ".join(sorted(dependents)))
+            for pending in self.staging_root.glob(f"removed-backend-{kind.value}-*"):
+                if pending.is_symlink() or pending.resolve().parent != self.staging_root.resolve():
+                    raise RuntimeError(f"Backend cleanup path is outside staging: {pending}")
+                try:
+                    shutil.rmtree(pending)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Бэкенд отключён, но не удалось удалить файлы: {pending}. "
+                        "Закройте использующие его процессы и повторите удаление."
+                    ) from exc
             return tuple(sorted(removed_ids))
 
     def cleanup_unreferenced_core_layers(self) -> None:

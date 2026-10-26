@@ -92,7 +92,7 @@ def test_backend_removal_deletes_only_requested_family(tmp_path, kind):
 
 
 @pytest.mark.parametrize("selected_only", [False, True])
-def test_backend_removal_blocks_installed_and_selected_revisions(tmp_path, monkeypatch, selected_only):
+def test_backend_removal_detaches_but_preserves_models(tmp_path, monkeypatch, selected_only):
     manager = RuntimeEnvironmentManager(tmp_path / "Lib")
     layer = manager.ensure_core_layer(
         CoreLayerSpec(group="torch-cu128", packages=("torch==2.7.1+cu128",),
@@ -105,21 +105,23 @@ def test_backend_removal_blocks_installed_and_selected_revisions(tmp_path, monke
     )
     transaction.core_layers = [layer]
     record = transaction.commit()
+    manager.promote_runtime_selection(
+        {"rag:embeddings": {"logical_id": record.logical_id, "revision_id": record.revision_id}},
+        manager.runtime_composition(records=(record,)), cleanup=False,
+    )
     if selected_only:
         monkeypatch.setattr(manager, "active_records", lambda: ())
         monkeypatch.setattr(manager, "selected_records", lambda: (record,))
-    before = manager.registry_snapshot()
-
-    with pytest.raises(RuntimeError, match="rag-embeddings"):
-        manager.remove_backend(BackendKind.CUDA)
-
-    assert manager.registry_snapshot() == before
-    assert layer.root.is_dir()
+    assert manager.remove_backend(BackendKind.CUDA) == (layer.layer_id,)
+    assert not manager.runtime_selection()
+    assert not layer.root.exists()
     assert record.root.is_dir()
+    assert manager.active(record.logical_id) is not None
+    context = manager.component_context(category="rag", item_id="embeddings", require_runtime=False)
+    assert context["missing_backend"]["family"] == "torch"
     if selected_only:
         monkeypatch.setattr(manager, "selected_records", lambda: ())
-    manager.remove_installed(record.logical_id)
-    assert manager.remove_backend(BackendKind.CUDA) == (layer.layer_id,)
+    assert manager.remove_backend(BackendKind.CUDA) == ()
 
 
 def test_backend_removal_reports_locked_files(tmp_path, monkeypatch):
@@ -128,12 +130,28 @@ def test_backend_removal_reports_locked_files(tmp_path, monkeypatch):
         CoreLayerSpec(group="onnx-cpu", packages=("onnxruntime==1.22.0",), capabilities=("onnx.cpu",)),
         installer_factory=_factory([]), log=lambda _: None,
     )
+    with monkeypatch.context() as m:
+        m.setattr("core.runtime_environments.shutil.rmtree", MagicMock(side_effect=PermissionError("locked")))
+        with pytest.raises(RuntimeError, match="Бэкенд отключён"):
+            manager.remove_backend(BackendKind.ONNX)
+    assert not layer.root.exists()
+    assert list(manager.staging_root.glob("removed-backend-onnx-*"))
+    assert manager.remove_backend(BackendKind.ONNX) == ()
+    assert not list(manager.staging_root.glob("removed-backend-onnx-*"))
+
+
+def test_backend_removal_restores_paths_on_registry_failure(tmp_path, monkeypatch):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="onnx-cpu", packages=("onnxruntime==1.22.0",), capabilities=("onnx.cpu",)),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
     before = manager.registry_snapshot()
-    monkeypatch.setattr("core.runtime_environments.shutil.rmtree", MagicMock(side_effect=PermissionError("locked")))
-    with pytest.raises(RuntimeError, match="locked"):
+    monkeypatch.setattr("core.runtime_environments._atomic_json", MagicMock(side_effect=OSError("registry locked")))
+    with pytest.raises(OSError, match="registry locked"):
         manager.remove_backend(BackendKind.ONNX)
+    assert layer.root.is_dir()
     assert manager.registry_snapshot() == before
-    assert layer.root.exists()
 
 
 def test_backend_uninstall_plan_executes_removal(monkeypatch):
