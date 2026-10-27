@@ -28,6 +28,7 @@ from services.contracts import (
     GenerationActivityService,
     AudioStateService,
     CaptureService,
+    DesktopWatchService,
     GuiInteractionService,
     InstallService,
     LocalVoiceService,
@@ -93,6 +94,7 @@ class MainController:
         self.embedding_controller = None
         self.reranker_controller = None
         self.capture_controller = None
+        self.desktop_watch_controller = None
         self.reminder_controller = None
         self.speech_controller = None
         self.graph_controller = None
@@ -421,6 +423,25 @@ class MainController:
         )
         feature_manager.register(
             FeatureSpec(
+                name="desktop_watch",
+                setting_keys=(
+                    "DESKTOP_WATCH_ENABLED",
+                    "DESKTOP_MODE_ACTIVE",
+                    "ENABLE_IMAGE_ANALYSIS",
+                ),
+                enabled=lambda settings: bool(
+                    settings.get("DESKTOP_MODE_ACTIVE", False)
+                )
+                and bool(settings.get("DESKTOP_WATCH_ENABLED", True))
+                and bool(settings.get("ENABLE_IMAGE_ANALYSIS", True)),
+                factory=self._create_desktop_watch_controller,
+                provided_services=(DesktopWatchService,),
+                shutdown=lambda controller: controller.shutdown(),
+                priority=61,
+            )
+        )
+        feature_manager.register(
+            FeatureSpec(
                 name="reminders",
                 setting_keys=("REMINDERS_ENABLED",),
                 enabled=lambda settings: bool(settings.get("REMINDERS_ENABLED", True)),
@@ -551,6 +572,12 @@ class MainController:
         self.capture_controller = controller
         return controller
 
+    def _create_desktop_watch_controller(self):
+        from controllers.desktop_watch_controller import DesktopWatchController
+
+        controller = DesktopWatchController()
+        self.desktop_watch_controller = controller
+        return controller
     def _create_reminder_controller(self):
         from controllers.reminder_controller import ReminderController
 
