@@ -5,6 +5,7 @@ from importlib import import_module
 from typing import List, Optional
 
 from main_logger import logger
+from utils import _
 from handlers.llm_providers.base import BaseProvider, LLMRequest, LLMResponse
 from handlers.llm_providers.message_preprocessor import preprocess_messages_for_provider
 from handlers.llm_providers.message_transforms import apply_transforms
@@ -73,6 +74,19 @@ class ProviderManager:
                 req.stream = False
 
     def generate(self, req: LLMRequest) -> LLMResponse:
+        if str(req.protocol_id or '').startswith('opencode_'):
+            from presets.opencode import model_family
+            go = req.protocol_id.startswith('opencode_go_')
+            family = req.protocol_id.rsplit('_', 1)[-1]
+            if model_family(req.model, go=go) != family:
+                raise LLMProviderError(
+                    provider='OpenCode', friendly_message=_(
+                        'Эта модель OpenCode использует другой или неподдерживаемый формат API. '
+                        'Загрузите модели для выбранного шаблона OpenCode.',
+                        'This OpenCode model uses a different or unsupported API format. '
+                        'Load models for the selected OpenCode template.'),
+                    code='opencode.model_api_mismatch', retryable=False, phase='request',
+                )
         if not req.provider_name:
             logger.error("Protocol-driven routing requires provider_name in request")
             raise RuntimeError("No provider can handle this request")

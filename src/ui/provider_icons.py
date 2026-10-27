@@ -17,6 +17,8 @@ def template_provider(name: str, protocol_id: str = "") -> str:
 
 
 def protocol_provider(protocol_id: str) -> str:
+    if protocol_id.startswith(('opencode_zen_', 'opencode_go_')):
+        return 'opencode'
     return {
         "google_gemini_default": "gemini",
         "openai_compatible_default": "",
@@ -42,6 +44,7 @@ def provider_icon(provider: str):
         color = {"openrouter": "#c8ff00", "groq": "#f43e01"}.get(str(provider).lower())
         return svg_icon("providers/" + name, color=color)
     names = {
+        "opencode": ("fa5s.terminal", "#e8edf5"),
         "gemini": ("fa5b.google", "#4285f4"),
         "google": ("fa5b.google", "#4285f4"),
         "openai": ("fa6b.openai", "#e8edf5"),

@@ -1,6 +1,8 @@
 # src/presets/api_protocols.py
 from __future__ import annotations
 
+from presets.opencode import protocol_data as opencode_protocols
+
 
 class Dialects:
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
@@ -152,3 +154,5 @@ API_PROTOCOLS_DATA = [
     },
 
 ]
+
+API_PROTOCOLS_DATA.extend(opencode_protocols())

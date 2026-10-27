@@ -54,6 +54,14 @@ _AUTH_DESCRIPTORS = {
 def describe_protocol(protocol_id: str) -> ProviderDescriptor:
     proto = next((p for p in API_PROTOCOLS_DATA if p['id'] == protocol_id), {})
     mode = str((proto.get('auth') or {}).get('mode') or 'none')
+    if protocol_id.startswith(('opencode_zen_', 'opencode_go_')):
+        from presets.opencode import CONSOLE_NOTICE, GO_NOTICE, CONSOLE_URL
+        return ProviderDescriptor(
+            str(proto.get('provider') or ''), mode,
+            action_label=('Получить модели', 'Load models'),
+            subscription_notice=GO_NOTICE if protocol_id.startswith('opencode_go_') else CONSOLE_NOTICE,
+            usage_dashboard_url=CONSOLE_URL,
+        )
     return ProviderDescriptor(str(proto.get('provider') or ''), mode, **_AUTH_DESCRIPTORS.get(mode, {}))
 
 
