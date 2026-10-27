@@ -6,6 +6,7 @@ from .actions.get_music_beats import GetMusicBeatsAction
 from .actions.speech_state import SpeechStateAction
 from .actions.asr_ptt_state import AsrPttStateAction
 from .actions.hello import HelloAction
+from .actions.desktop_state import DesktopStateAction
 
 
 def build_action_registry() -> ActionRegistry:
@@ -17,4 +18,5 @@ def build_action_registry() -> ActionRegistry:
     reg.register("speech_state", SpeechStateAction())
     reg.register("asr_ptt_state", AsrPttStateAction())
     reg.register("hello", HelloAction())
+    reg.register("desktop_state", DesktopStateAction())
     return reg

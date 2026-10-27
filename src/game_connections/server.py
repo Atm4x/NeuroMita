@@ -272,6 +272,16 @@ class ChatServerNew:
         for key in stale_dialogue_keys:
             self._last_sent_dialogue_text.pop(key, None)
 
+    def _deactivate_desktop_mode(self) -> None:
+        from core.services import services
+        from services.contracts import SettingsService
+
+        settings = services().get_optional(SettingsService)
+        if settings is None or not settings.get("DESKTOP_MODE_ACTIVE", False):
+            return
+
+        settings.set("DESKTOP_MODE_ACTIVE", False)
+        logger.info("[Desktop] overlay closed - desktop mode off")
     async def process_request(self, request: Dict[str, Any], client_id: str):
         if not isinstance(request, dict):
             writer = self._writer_for(client_id)
@@ -469,6 +479,7 @@ class ChatServerNew:
 
     # Роль игры: только она вправе принимать ход игрока.
     GAME_ROLE = "game"
+    DESKTOP_ROLE = "desktop"
     # Версия протокола, которую сервер объявляет в ответ на рукопожатие.
     PROTOCOL_VERSION = 1
 
