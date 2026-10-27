@@ -36,7 +36,7 @@ class PresetModelSettingsController(QObject):
             self.dialect = dialect
         self._render(document)
 
-    def set_dialect(self, dialect, suggested=""):
+    def set_dialect(self, dialect, suggested="", *, preserve_values=False):
         if dialect == self.dialect and not suggested:
             return
         document = self.form.document()
@@ -45,7 +45,7 @@ class PresetModelSettingsController(QObject):
         same_dialect = dialect == self.dialect
         self.dialect = dialect
         identifier = self.service.default_id(dialect, suggested)
-        updated = self.service.create(identifier)
+        updated = self.service.change_schema(document, identifier, dialect) if preserve_values and document is not None else self.service.create(identifier)
         if same_dialect and document is not None and "sparse_response" in document:
             updated["sparse_response"] = document["sparse_response"]
         self._render(updated)

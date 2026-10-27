@@ -536,6 +536,9 @@ class ApiPresetsController(ApiPresetService):
 
         protocol_id = str(raw.get("protocol_id", "") or "").strip()
 
+        from presets.opencode import canonical_template_id
+        base = canonical_template_id(base)
+
         url = str(raw.get("url", "") or "")
         template = self.templates.get(base)
         if template and not template.url_editable:
@@ -814,9 +817,15 @@ class ApiPresetsController(ApiPresetService):
             reg = get_protocol_registry()
             d = reg.pick_default()
             pid = d.id if d else ""
+        if pid.startswith(("opencode_zen_", "opencode_go_")):
+            from presets.opencode import route_model
+            pid = route_model(pid, up.default_model or (tpl.default_model if tpl else ""))["protocol_id"]
         return pid
 
     def _build_effective_preset_dict(self, preset_id: int) -> Optional[Dict[str, Any]]:
+        from presets.opencode import canonical_template_id
+        if preset_id not in self.presets:
+            preset_id = canonical_template_id(preset_id)
         if preset_id in self.templates:
             result = asdict(self.templates[preset_id])
             result["known_models"] = self._known_models_for_template(self.templates[preset_id])
@@ -874,7 +883,8 @@ class ApiPresetsController(ApiPresetService):
             "openrouter_routing": p.openrouter_routing or {},
             "fallbacks": [dict(fb) for fb in (p.fallbacks or [])],
         }
-        return result
+        from presets.opencode import resolve_preset
+        return resolve_preset(result)
 
     @classmethod
     def _is_mistral_template(cls, tpl: Optional[ApiTemplate]) -> bool:
@@ -1009,11 +1019,19 @@ class ApiPresetsController(ApiPresetService):
             except Exception:
                 base = None
 
+        from presets.opencode import canonical_template_id, resolve_preset
+        base = canonical_template_id(base)
+
         name = str(data.get("name") or f"Preset {preset_id}")
 
         from managers.protocol_registry import get_protocol_registry
         template = self.templates.get(base) if base is not None else None
         protocol_id = (template.protocol_id if template else data.get("protocol_id")) or "openai_compatible_default"
+        selected = resolve_preset({
+            "protocol_id": protocol_id,
+            "default_model": data.get("default_model") or (self.presets.get(preset_id).default_model if preset_id in self.presets else "") or (template.default_model if template else ""),
+        })
+        protocol_id = selected["protocol_id"]
         protocol = get_protocol_registry().get(protocol_id)
         if protocol is None:
             raise ValueError(f"API protocol is unavailable: {protocol_id}")
@@ -1021,7 +1039,7 @@ class ApiPresetsController(ApiPresetService):
         existing = self.presets.get(preset_id)
         document = data.get("model_settings", existing.model_settings if existing else None)
         if document is None:
-            suggested = (template.settings_schema_id if template else "") or str(getattr(protocol, "settings_schema_id", "") or "")
+            suggested = selected.get("settings_schema_id") or (template.settings_schema_id if template else "") or str(getattr(protocol, "settings_schema_id", "") or "")
             schema_id = self.model_settings_service.default_id(dialect, suggested)
             if data.get("generation_overrides") or data.get("model_profile_overrides"):
                 legacy_preset = asdict(template) if template else {}
@@ -1029,6 +1047,8 @@ class ApiPresetsController(ApiPresetService):
                 document = self.model_settings_service.for_preset(legacy_preset, dialect)
             else:
                 document = self.model_settings_service.create(schema_id)
+        if protocol_id.startswith(("opencode_zen_", "opencode_go_")):
+            document = self.model_settings_service.for_preset({"protocol_id": protocol_id, "model_settings": document}, dialect)
         self.model_settings_service.compile(document, dialect)
         _, document = self.model_settings_service.resolve(document, dialect)
         from copy import deepcopy
@@ -1607,6 +1627,11 @@ class ApiPresetsController(ApiPresetService):
                     else:
                         success = True
                         message = _("Подключение успешно", "Connection successful")
+                    if protocol_id.startswith(("opencode_zen_", "opencode_go_")):
+                        message = _(
+                            "Публичный каталог загружен. Совместимых моделей: {count}. Ключ, баланс и подписка не проверены; проверьте генерацию в песочнице. Бесплатные модели Zen могут вернуть ограничение доступа или квоты (403/429).",
+                            "Public catalog loaded. Compatible models: {count}. Key, balance and subscription were not validated; test generation in the sandbox. Zen free models may return access or quota restrictions (403/429).",
+                        ).format(count=len(models))
                 except json.JSONDecodeError:
                     success = False
                     message = _(

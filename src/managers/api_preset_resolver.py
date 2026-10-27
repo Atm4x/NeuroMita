@@ -71,6 +71,9 @@ class ApiPresetResolver:
             preset_id = self._pick_fallback_preset_id()
             preset = self._load_preset_full(preset_id)
 
+        from presets.opencode import resolve_preset
+        preset = resolve_preset(preset or {}, model_override or None)
+
         reg = get_protocol_registry()
 
         # Resolve protocol

@@ -1,4 +1,8 @@
 def apply_filter(filter_fn: str, data: dict) -> dict:
+    if filter_fn.startswith(("opencode_zen_", "opencode_go_")):
+        from presets.opencode import filter_models
+        _, plan, family = filter_fn.split("_", 2)
+        return filter_models(data, family=family, go=plan == "go")
     if filter_fn == "filter_generate_content":
         return filter_generate_content(data)
     if filter_fn == "mistral_filter":

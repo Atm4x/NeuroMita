@@ -42,7 +42,10 @@ class EditorMixin:
     def _refresh_model_settings_dialect(self) -> None:
         protocol = self._protocols.get(self._current_protocol_id_ui()) or {}
         dialect = str(protocol.get("dialect") or "openai_chat_completions")
-        self.model_settings_controller.set_dialect(dialect)
+        if str(protocol.get('id') or '').startswith(('opencode_zen_', 'opencode_go_')):
+            self.model_settings_controller.set_dialect(dialect, preserve_values=True)
+        else:
+            self.model_settings_controller.set_dialect(dialect)
 
     def _read_openrouter_routing(self) -> dict:
         v = self.view
@@ -187,6 +190,14 @@ class EditorMixin:
 
             if url_tpl:
                 model = str(v.api_model_row.text() or "")
+                template_protocol = str((tpl or {}).get('protocol_id') or '')
+                if template_protocol.startswith(('opencode_zen_', 'opencode_go_')):
+                    from presets.opencode import route_model
+                    route = route_model(template_protocol, model.strip())
+                    url_tpl = route['url']
+                    was_blocked = v.protocol_row.combo.blockSignals(True)
+                    v.protocol_row.set_current_by_data(route['protocol_id'])
+                    v.protocol_row.combo.blockSignals(was_blocked)
                 try:
                     new_url = url_tpl.format(model=model) if "{model}" in url_tpl else url_tpl
                 except Exception:
