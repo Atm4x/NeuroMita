@@ -312,6 +312,10 @@ class MainController:
         ), SQLiteRestorationJournal(DatabaseManager().get_connection))
         services().register(SessionRestoration, restoration, replace=True)
         restoration.recover()
+        from infrastructure.timeline.unity_sessions import SQLiteUnitySessions
+        from services.unity_sessions import UnitySessions
+        services().register(UnitySessions, UnitySessions(restoration,
+            SQLiteUnitySessions(DatabaseManager().get_connection)), replace=True)
         logger.notify("ModelController успешно инициализирован.")
 
         self.chat_controller = self._build_component(

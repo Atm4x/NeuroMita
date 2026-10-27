@@ -52,6 +52,11 @@ class SQLiteTimelineRepository:
                 raise InvalidTimelineOperation("Unsupported timeline schema version")
             conn.commit()
 
+    def list_branches(self) -> tuple[Branch, ...]:
+        with self._connection() as conn:
+            return tuple(Branch(**dict(row)) for row in conn.execute(
+                "SELECT * FROM timeline_branches ORDER BY session_id, branch_id"))
+
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         conn = self._factory()

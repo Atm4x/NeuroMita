@@ -21,6 +21,9 @@ class TimelineRepository(Protocol):
     def get_branch(self, branch_id: str) -> Branch:
         """Return explicit branch metadata independently of workspace selection."""
 
+    def list_branches(self) -> tuple[Branch, ...]:
+        """Return retained session and branch identities without loading event payloads."""
+
     def append(
         self, branch_id: str, events: Sequence[EventDraft], *,
         expected_head: int, idempotency_key: str,

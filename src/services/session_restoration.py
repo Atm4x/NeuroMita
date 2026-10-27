@@ -67,7 +67,7 @@ class SessionRestoration:
         for participant in self.participants:
             stack.enter_context(participant.paused())
 
-    def checkpoint(self, *, key: str | None = None, label: str = ""):
+    def checkpoint(self, *, key: str | None = None, label: str = "", suspend_reason: str = ""):
         if self.runtime.turn is not None:
             raise InvalidTimelineOperation("Full snapshot coordination must run outside a model turn")
         with self.runtime.state.exclusive(), ExitStack() as stack:
@@ -79,6 +79,9 @@ class SessionRestoration:
             if receipt is not None:
                 if receipt.command != command or len(receipt.events) != 1 or receipt.events[0].kind is not EventKind.CHECKPOINT:
                     raise TimelineConflict("Session checkpoint key was reused for a different command")
+                if suspend_reason:
+                    self.runtime.state.invalidate()
+                    self.runtime.state.poison(suspend_reason)
                 return receipt.events[0]
             self._paused(stack)
             snapshot = self._capture()
@@ -86,8 +89,31 @@ class SessionRestoration:
             with self.runtime.writing() as timeline:
                 draft = timeline.draft(EventKind.CHECKPOINT, {"snapshot": snapshot.to_dict(), "label": label},
                                        observers=(), key=operation_key)
-                return timeline.append((draft,), expected_head=timeline.branch.head_sequence,
-                                       key=operation_key, command=command)[0]
+                result = timeline.append((draft,), expected_head=timeline.branch.head_sequence,
+                                         key=operation_key, command=command)[0]
+            if suspend_reason:
+                self.runtime.state.invalidate()
+                self.runtime.state.poison(suspend_reason)
+            return result
+
+    def resume_branch(self, branch_id: str, checkpoint_id: str) -> JsonDocument:
+        if self.runtime.turn is not None:
+            raise InvalidTimelineOperation("Branch resume must run outside a model turn")
+        with self.runtime.state.exclusive():
+            if self.journal.pending(self.runtime.workspace_name) is not None:
+                raise StateUnavailable("An unfinished restore must be recovered first")
+            target = SessionTimeline(self.runtime.repository, branch_id)
+            checkpoint = target.event(checkpoint_id)
+            if checkpoint.kind is not EventKind.CHECKPOINT:
+                raise InvalidTimelineOperation("Resume requires a full checkpoint")
+            if any(event.kind is not EventKind.CHECKPOINT for event in target.events(after=checkpoint.sequence)):
+                raise InvalidTimelineOperation("Resume cannot mix an older snapshot with a later timeline")
+            desired = JsonDocument(checkpoint.payload.to_dict().get("snapshot"))
+            states = self._validate(desired)
+            if frozenset(desired.to_dict()["presence"]) != target.present():
+                raise InvalidTimelineOperation("Snapshot presence differs from the resumed world")
+            source = SessionTimeline(self.runtime.repository, self.runtime.selection.branch_id)
+            return self._transition(source, target, desired, states)
 
     def restore(self, checkpoint_id: str, *, branch_id: str | None = None,
                 checkpoint_branch_id: str | None = None) -> JsonDocument:
