@@ -39,11 +39,20 @@ New sessions currently inherit the current mutable state with an independent
 conversation timeline. A pristine-new-game policy requires a separate explicit
 initial snapshot; it is not represented as a fake reset here.
 
+`reconnect` reopens a retained local Unity snapshot after application restart.
+It accepts the usual operation identity, `expected_branch_id` and `snapshot`.
+With `kind=resume` it restores both processes to the matching joint checkpoint
+without another branch. If later semantic events exist, this is rejected before
+admission; `kind=fork` explicitly retains that future and restores a child instead.
+Ordinary application restoration cannot bypass a pending joint operation.
+
 Only checkpoints with a retained Unity descriptor are offered for joint restore.
 Old Python-only checkpoints remain valid for their existing callers. No participant
 manifest is silently changed. Resume rejects a snapshot preceding later semantic
 events, preventing old mutable state from being mixed with a newer history.
 
-Focused verification: `test_unity_sessions.py` (8 tests),
+Focused verification: `test_unity_sessions.py` (11 tests),
 `test_session_restoration.py` (20 tests), `test_timeline_architecture.py` (2 tests).
 These checks do not constitute Unity Play Mode or a live two-process test.
+The complete `test_*timeline*.py` selection passes 79/79 in the project's existing
+`.venv`; system Python lacks several dependencies required by that wider suite.

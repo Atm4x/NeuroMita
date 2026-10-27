@@ -124,5 +124,33 @@ class UnitySessionTests(unittest.TestCase):
         self.call("commit", operation_id="fork")
         with self.assertRaises(TimelineConflict): self.call("abort", operation_id="fork")
 
+    def test_reconnect_restores_python_state_with_the_saved_world(self):
+        prepared = self.prepare("save")
+        self.finish("save")
+        self.cell.value = "unsaved"
+        self.call("reconnect", operation_id="reload", expected_branch_id=self.runtime.selection.branch_id,
+                  snapshot=prepared["target"]["snapshot"])
+        self.finish("reload")
+        self.assertEqual(self.cell.value, "original")
+        self.assertEqual(len(self.runtime.repository.list_branches()), 1)
+
+    def test_reconnect_rejects_old_world_and_allows_explicit_fork_preserving_future(self):
+        prepared = self.prepare("save")
+        self.finish("save")
+        self.runtime.timeline.join("A", key="joined-after-save")
+        values = dict(expected_branch_id=self.runtime.selection.branch_id, snapshot=prepared["target"]["snapshot"])
+        with self.assertRaises(InvalidTimelineOperation): self.call("reconnect", operation_id="reload", **values)
+        self.assertIsNone(self.store.pending("desktop"))
+        self.call("reconnect", operation_id="reload-fork", kind="fork", **values)
+        self.finish("reload-fork")
+        self.assertEqual(len(self.runtime.repository.list_branches()), 2)
+
+    def test_other_application_restore_cannot_bypass_the_joint_transition(self):
+        prepared = self.prepare("save")
+        with self.assertRaises(StateUnavailable): self.runtime.checkpoint()
+        with self.assertRaises(StateUnavailable): self.runtime.restore(prepared["source"]["checkpoint_id"])
+        with self.assertRaises(StateUnavailable): self.runtime.start_session(inherit_current=True)
+        self.finish("save")
+
 
 if __name__ == "__main__": unittest.main()

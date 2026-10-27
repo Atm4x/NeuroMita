@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from contextvars import ContextVar
 import re
-from threading import RLock
+from threading import RLock, get_ident
 from uuid import NAMESPACE_URL, uuid5
 
-from domain.timeline import InvalidTimelineOperation, TimelineConflict
+from domain.timeline import EventKind, InvalidTimelineOperation, TimelineConflict
+from core.state_barrier import StateUnavailable
 
 
 class UnitySessions:
@@ -15,6 +17,8 @@ class UnitySessions:
         self.restoration, self.store = restoration, store
         self.runtime = restoration.runtime
         self._lock = RLock()
+        self._control_owner = ContextVar("unity_session_control", default=None)
+        self.restoration.transition_guard = self._admit_restoration
         if store.pending(self.runtime.workspace_name):
             self.runtime.state.poison("Unity session transition requires reconciliation")
 
@@ -40,7 +44,18 @@ class UnitySessions:
         UnitySessions._identity(value["snapshot_id"])
         return dict(value)
 
+    def _admit_restoration(self):
+        if self._control_owner.get() != get_ident() and self.store.pending(self.runtime.workspace_name):
+            raise StateUnavailable("A joint Unity transition owns session restoration")
+
     def handle(self, request):
+        token = self._control_owner.set(get_ident())
+        try:
+            return self._handle(request)
+        finally:
+            self._control_owner.reset(token)
+
+    def _handle(self, request):
         if request.get("protocol_version") != 1:
             raise InvalidTimelineOperation("Unsupported Unity session protocol")
         with self._lock:
@@ -58,9 +73,13 @@ class UnitySessions:
                 return self.catalog()
             operation_id = self._identity(request.get("operation_id"))
             operation = self.store.operation(operation_id)
+            if command == "reconnect":
+                return self._reconnect(operation_id, request, operation)
             if command == "prepare":
                 return self._prepare(operation_id, request, operation)
             if operation is None:
+                if command == "status":
+                    return {"operation_id": operation_id, "state": "unknown"}
                 raise InvalidTimelineOperation("Unknown Unity operation")
             if command == "status":
                 return operation
@@ -79,6 +98,39 @@ class UnitySessions:
                         self.runtime.state.recovered()
                 return operation
             raise InvalidTimelineOperation("Unknown Unity session command")
+
+    def _reconnect(self, operation_id, request, operation):
+        intent = {key: value for key, value in request.items() if key not in {"req_id", "action", "client_role"}}
+        if operation:
+            if operation["intent"] != intent:
+                raise TimelineConflict("Operation identity was reused for another intent")
+            return operation
+        if self.store.pending(self.runtime.workspace_name) or self.runtime.state.poisoned:
+            raise TimelineConflict("Recover the pending operation first")
+        branch = self.runtime.timeline.branch
+        if request.get("expected_branch_id") != branch.branch_id:
+            raise TimelineConflict("The saved world belongs to another active branch")
+        snapshot = self._snapshot(request.get("snapshot"))
+        checkpoints = self.store.checkpoints(branch.branch_id)
+        target = next((item for item in checkpoints if item["snapshot"] == snapshot), None)
+        if target is None:
+            raise InvalidTimelineOperation("The saved world has no joint Python checkpoint")
+        kind = request.get("kind", "resume")
+        if kind not in {"resume", "fork"}:
+            raise InvalidTimelineOperation("Reconnect requires resume or fork")
+        if kind == "resume" and any(event.kind is not EventKind.CHECKPOINT for event in
+                self.runtime.timeline.events(after=target["sequence"])):
+            raise InvalidTimelineOperation("The last saved world precedes later events; fork it to retain that future")
+        target_branch = branch.branch_id if kind == "resume" else uuid5(NAMESPACE_URL, "unity-branch:" + operation_id).hex
+        operation = {"operation_id": operation_id, "workspace": self.runtime.workspace_name, "state": "prepared",
+                     "intent": intent, "kind": kind, "reconnect": True, "source_branch_id": branch.branch_id,
+                     "target_branch_id": target_branch, "target_session_id": branch.session_id,
+                     "source_snapshot": snapshot, "source": target, "target": target}
+        with self.runtime.state.exclusive():
+            self.store.put_operation(operation)
+            self.runtime.state.invalidate()
+            self.runtime.state.poison("Saved Unity world is being reconnected")
+        return operation
 
     def catalog(self):
         names = self.store.names()
@@ -145,7 +197,8 @@ class UnitySessions:
             self.store.put_operation(operation)
         checkpoint = self.restoration.checkpoint(key="unity:" + operation_id,
             label=str(request.get("label") or "Контрольная точка")[:120],
-            suspend_reason="Unity session operation awaits confirmation")
+            suspend_reason="Unity session operation awaits confirmation",
+            expected_branch_id=operation["source_branch_id"])
         source = {"checkpoint_id": checkpoint.event_id, "branch_id": checkpoint.branch_id,
                   "sequence": checkpoint.sequence, "label": checkpoint.payload.to_dict()["label"],
                   "snapshot": operation["source_snapshot"]}
@@ -177,7 +230,7 @@ class UnitySessions:
             raise TimelineConflict("Selection differs from the pending transition")
         if kind == "checkpoint":
             pass
-        elif self.runtime.selection.branch_id == branch_id:
+        elif self.runtime.selection.branch_id == branch_id and kind != "resume":
             pass  # Python journal recovery already committed this selection.
         elif kind == "fork":
             self.restoration.restore(target["checkpoint_id"], branch_id=branch_id,
@@ -203,7 +256,7 @@ class UnitySessions:
             return operation
         if operation["state"] not in {"prepared", "preparing"}:
             raise TimelineConflict("An applied transition must be completed, not cancelled")
-        if "source" in operation:
+        if "source" in operation and not operation.get("reconnect"):
             self.restoration.resume_branch(operation["source_branch_id"], operation["source"]["checkpoint_id"])
         operation["state"] = "aborted"
         self.store.put_operation(operation)

@@ -27,6 +27,7 @@ class SessionRestoration:
         self.runtime = runtime
         self.participants = tuple(participants)
         self.journal = journal
+        self.transition_guard = None
         keys = [participant.key for participant in self.participants]
         if not keys or any(not isinstance(key, str) or not key for key in keys) or len(set(keys)) != len(keys):
             raise ValueError("Snapshot participants require unique, nonempty keys")
@@ -67,10 +68,18 @@ class SessionRestoration:
         for participant in self.participants:
             stack.enter_context(participant.paused())
 
-    def checkpoint(self, *, key: str | None = None, label: str = "", suspend_reason: str = ""):
+    def _admit_transition(self):
+        if self.transition_guard is not None:
+            self.transition_guard()
+
+    def checkpoint(self, *, key: str | None = None, label: str = "", suspend_reason: str = "",
+                   expected_branch_id: str | None = None):
         if self.runtime.turn is not None:
             raise InvalidTimelineOperation("Full snapshot coordination must run outside a model turn")
         with self.runtime.state.exclusive(), ExitStack() as stack:
+            self._admit_transition()
+            if expected_branch_id is not None and self.runtime.selection.branch_id != expected_branch_id:
+                raise TimelineConflict("The source branch changed before checkpoint admission")
             if self.journal.pending(self.runtime.workspace_name) is not None:
                 raise StateUnavailable("An unfinished restore must be recovered first")
             operation_key = f"session-save:{key or new_id()}"
@@ -100,6 +109,7 @@ class SessionRestoration:
         if self.runtime.turn is not None:
             raise InvalidTimelineOperation("Branch resume must run outside a model turn")
         with self.runtime.state.exclusive():
+            self._admit_transition()
             if self.journal.pending(self.runtime.workspace_name) is not None:
                 raise StateUnavailable("An unfinished restore must be recovered first")
             target = SessionTimeline(self.runtime.repository, branch_id)
@@ -120,6 +130,7 @@ class SessionRestoration:
         if self.runtime.turn is not None:
             raise InvalidTimelineOperation("Full snapshot coordination must run outside a model turn")
         with self.runtime.state.exclusive():
+            self._admit_transition()
             if self.journal.pending(self.runtime.workspace_name) is not None:
                 raise StateUnavailable("An unfinished restore must be recovered first")
             source = SessionTimeline(self.runtime.repository, self.runtime.selection.branch_id)
@@ -143,6 +154,7 @@ class SessionRestoration:
         if (initial_snapshot is None) == (not inherit_current):
             raise InvalidTimelineOperation("Choose one initial-state policy: initial_snapshot or inherit_current=True")
         with self.runtime.state.exclusive():
+            self._admit_transition()
             if self.journal.pending(self.runtime.workspace_name) is not None:
                 raise StateUnavailable("An unfinished restore must be recovered first")
             states = self._validate(initial_snapshot) if initial_snapshot is not None else None
