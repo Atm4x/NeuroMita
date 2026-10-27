@@ -6,7 +6,9 @@ import re
 from threading import RLock, get_ident
 from uuid import NAMESPACE_URL, uuid5
 
-from domain.timeline import EventKind, InvalidTimelineOperation, TimelineConflict
+from domain.timeline import EventKind, InvalidTimelineOperation, JsonDocument, TimelineConflict, TimelineNotFound
+from .session_timeline import SessionTimeline
+from .unity_timeline import UnityTimelineIngress
 from core.state_barrier import StateUnavailable
 
 
@@ -33,6 +35,12 @@ class UnitySessions:
         if not isinstance(value, str) or not value.strip() or len(value) > 120:
             raise InvalidTimelineOperation("A name must contain 1 to 120 characters")
         return value.strip()
+
+    @staticmethod
+    def _legacy_id(value):
+        if not isinstance(value, str) or not value.strip() or len(value) > 128 or any(ord(c) < 32 for c in value):
+            raise InvalidTimelineOperation("Invalid legacy save identity")
+        return value
 
     @staticmethod
     def _snapshot(value):
@@ -161,11 +169,18 @@ class UnitySessions:
             if kind not in {"checkpoint", "fork", "resume", "new_session"}:
                 raise InvalidTimelineOperation("Unsupported transition kind")
             snapshot = self._snapshot(request.get("snapshot"))
+            events = request.get("runtime_events", {})
+            if (not isinstance(events, dict) or len(events) > 128 or any(
+                    not isinstance(character, str) or not character or len(character) > 128
+                    or not isinstance(messages, list) or len(messages) > 30
+                    or any(not isinstance(message, str) or len(message) > 600 for message in messages)
+                    for character, messages in events.items())):
+                raise InvalidTimelineOperation("Invalid buffered Unity events")
             if request.get("name") is not None:
                 self._name(request["name"])
             legacy = request.get("legacy_save_id")
             if legacy:
-                self._identity(legacy)
+                self._legacy_id(legacy)
                 bound = self.store.legacy_branch(legacy)
                 if bound and bound != source.branch_id:
                     raise TimelineConflict("This legacy save belongs to another Python branch")
@@ -181,7 +196,7 @@ class UnitySessions:
                     raise InvalidTimelineOperation("Resume requires the last joint checkpoint of a branch")
                 if kind == "fork" and selected_id and target is None:
                     raise InvalidTimelineOperation("Unknown joint checkpoint")
-                if target:
+                if target and (kind == "resume" or selected_id):
                     target_session = self.runtime.repository.get_branch(target["branch_id"]).session_id
                 if kind == "resume":
                     target_branch = selected
@@ -198,7 +213,7 @@ class UnitySessions:
         checkpoint = self.restoration.checkpoint(key="unity:" + operation_id,
             label=str(request.get("label") or "Контрольная точка")[:120],
             suspend_reason="Unity session operation awaits confirmation",
-            expected_branch_id=operation["source_branch_id"])
+            expected_branch_id=operation["source_branch_id"], before_capture=lambda: self._ingest_events(operation))
         source = {"checkpoint_id": checkpoint.event_id, "branch_id": checkpoint.branch_id,
                   "sequence": checkpoint.sequence, "label": checkpoint.payload.to_dict()["label"],
                   "snapshot": operation["source_snapshot"]}
@@ -210,7 +225,7 @@ class UnitySessions:
         self.store.put_operation(operation)
         legacy = request.get("legacy_save_id")
         if legacy:
-            self.store.bind_legacy(self._identity(legacy), source["branch_id"])
+            self.store.bind_legacy(self._legacy_id(legacy), source["branch_id"])
             branch = self.runtime.repository.get_branch(source["branch_id"])
             if legacy == "default" and branch.session_id not in self.store.names():
                 self.store.rename(branch.session_id, "Песочница")
@@ -223,13 +238,31 @@ class UnitySessions:
             raise TimelineConflict("Transition is not prepared")
         operation["state"] = "applying"
         self.store.put_operation(operation)
+        try:
+            if self.restoration.journal.pending(self.runtime.workspace_name) is not None:
+                self.restoration.recover()
+                self.runtime.state.poison("Unity transition still awaits acknowledgment")
+            with self.runtime.state.bind(self.runtime.state.current_ticket()):
+                self._apply_python(operation)
+        except Exception:
+            if (self.restoration.journal.pending(self.runtime.workspace_name) is None
+                    and self.runtime.selection.branch_id == operation["source_branch_id"]):
+                operation["state"] = "prepared"
+                self.store.put_operation(operation)
+                self.runtime.state.poison("Unity transition failed and can be retried or cancelled")
+            raise
+        operation["state"] = "committed"
+        self.store.put_operation(operation)
+        return operation
+
+    def _apply_python(self, operation):
         kind = operation["kind"]
         target = operation["target"]
         branch_id = operation["target_branch_id"]
         if self.runtime.selection.branch_id not in {operation["source_branch_id"], branch_id}:
             raise TimelineConflict("Selection differs from the pending transition")
         if kind == "checkpoint":
-            pass
+            self.restoration.resume_branch(branch_id, target["checkpoint_id"])
         elif self.runtime.selection.branch_id == branch_id and kind != "resume":
             pass  # Python journal recovery already committed this selection.
         elif kind == "fork":
@@ -238,7 +271,21 @@ class UnitySessions:
         elif kind == "resume":
             self.restoration.resume_branch(branch_id, target["checkpoint_id"])
         else:
-            self.restoration.start_session(inherit_current=True, session_id=operation["target_session_id"], branch_id=branch_id)
+            checkpoint = self.runtime.repository.get_event(target["branch_id"], target["checkpoint_id"])
+            snapshot = JsonDocument(checkpoint.payload.to_dict()["snapshot"])
+            try:
+                existing = self.runtime.repository.get_branch(branch_id)
+            except TimelineNotFound:
+                existing = None
+            if existing is not None and existing.head_sequence:
+                initial = next(event for event in SessionTimeline(self.runtime.repository, branch_id).events()
+                               if event.kind is EventKind.CHECKPOINT)
+                if JsonDocument(initial.payload.to_dict()["snapshot"]) != snapshot:
+                    raise TimelineConflict("The new session has a different initial snapshot")
+                self.restoration.resume_branch(branch_id, initial.event_id)
+            else:
+                self.restoration.start_session(initial_snapshot=snapshot,
+                    session_id=operation["target_session_id"], branch_id=branch_id)
         if kind in {"fork", "new_session"}:
             with self.runtime.state.bind(self.runtime.state.current_ticket()):
                 checkpoint = self.restoration.checkpoint(key="unity-target:" + operation["operation_id"], label="Начало ветки")
@@ -247,15 +294,15 @@ class UnitySessions:
             self.store.rename(branch_id, self._name(operation["intent"].get("name") or "Ответвление"))
             if kind == "new_session":
                 self.store.rename(operation["target_session_id"], self._name(operation["intent"].get("name") or "Новая история"))
-        operation["state"] = "committed"
-        self.store.put_operation(operation)
-        return operation
 
     def _abort(self, operation):
         if operation["state"] == "aborted":
             return operation
         if operation["state"] not in {"prepared", "preparing"}:
             raise TimelineConflict("An applied transition must be completed, not cancelled")
+        if operation["state"] == "preparing":
+            with self.runtime.state.exclusive():
+                self._ingest_events(operation)
         if "source" in operation and not operation.get("reconnect"):
             self.restoration.resume_branch(operation["source_branch_id"], operation["source"]["checkpoint_id"])
         operation["state"] = "aborted"
@@ -263,3 +310,12 @@ class UnitySessions:
         with self.runtime.state.bind(self.runtime.state.current_ticket()), self.runtime.state.exclusive():
             self.runtime.state.recovered()
         return operation
+
+    def _ingest_events(self, operation):
+        if self.runtime.selection.branch_id != operation["source_branch_id"]:
+            raise TimelineConflict("Buffered world events belong to another branch")
+        ingress = UnityTimelineIngress(self.runtime)
+        for character, messages in operation["intent"].get("runtime_events", {}).items():
+            if messages:
+                ingress.ingest({"req_id": "checkpoint-events:" + operation["operation_id"] + ":" + character,
+                                "type": "world_events", "context": {"runtime_events": messages}}, character, [character])

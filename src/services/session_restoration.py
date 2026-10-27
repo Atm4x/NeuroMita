@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from typing import Iterable
+from typing import Callable, Iterable
 
 from domain.timeline import EventKind, InvalidTimelineOperation, JsonDocument, TimelineConflict, new_id
 from domain.timeline.models import observer_ids
@@ -73,7 +73,7 @@ class SessionRestoration:
             self.transition_guard()
 
     def checkpoint(self, *, key: str | None = None, label: str = "", suspend_reason: str = "",
-                   expected_branch_id: str | None = None):
+                   expected_branch_id: str | None = None, before_capture: Callable[[], None] | None = None):
         if self.runtime.turn is not None:
             raise InvalidTimelineOperation("Full snapshot coordination must run outside a model turn")
         with self.runtime.state.exclusive(), ExitStack() as stack:
@@ -92,6 +92,8 @@ class SessionRestoration:
                     self.runtime.state.invalidate()
                     self.runtime.state.poison(suspend_reason)
                 return receipt.events[0]
+            if before_capture is not None:
+                before_capture()
             self._paused(stack)
             snapshot = self._capture()
             self._validate(snapshot)

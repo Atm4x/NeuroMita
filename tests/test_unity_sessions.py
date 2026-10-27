@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -24,7 +25,10 @@ class Cell:
     def capture(self): return JsonDocument({"value": self.value})
     def validate(self, state):
         if set(state.to_dict()) != {"value"}: raise ValueError("Invalid cell")
-    def apply(self, state, *, branch_id): self.value = state.to_dict()["value"]
+    def apply(self, state, *, branch_id):
+        self.value = state.to_dict()["value"]
+        if self.value in getattr(self, "fail_values", set()):
+            raise RuntimeError("Injected participant failure")
 
 
 class UnitySessionTests(unittest.TestCase):
@@ -151,6 +155,53 @@ class UnitySessionTests(unittest.TestCase):
         with self.assertRaises(StateUnavailable): self.runtime.restore(prepared["source"]["checkpoint_id"])
         with self.assertRaises(StateUnavailable): self.runtime.start_session(inherit_current=True)
         self.finish("save")
+
+    def test_commit_retains_the_prepared_mutable_state_for_new_sessions_and_checkpoints(self):
+        self.prepare("save")
+        self.cell.value = "advanced-outside-the-barrier"
+        self.finish("save")
+        self.assertEqual(self.cell.value, "original")
+        self.prepare("new", "new_session")
+        self.cell.value = "advanced-again"
+        self.finish("new")
+        self.assertEqual(self.cell.value, "original")
+
+    def test_new_session_retry_resumes_its_initialized_world_after_journal_admission_failure(self):
+        self.prepare("new", "new_session")
+        with patch.object(self.service.restoration.journal, "begin", side_effect=RuntimeError("journal unavailable")):
+            with self.assertRaises(RuntimeError): self.call("commit", operation_id="new")
+        self.assertEqual(self.call("status", operation_id="new")["state"], "prepared")
+        self.finish("new")
+        self.assertEqual(len(self.runtime.repository.list_branches()), 2)
+
+    def test_compensated_apply_failure_can_be_cancelled_without_unblocking_an_inconsistent_world(self):
+        root = self.runtime.selection.branch_id
+        self.prepare("fork", "fork")
+        child = self.finish("fork")["target_branch_id"]
+        self.cell.value = "child"
+        self.prepare("to-root", "resume", target_branch_id=root)
+        self.finish("to-root")
+        self.prepare("to-child", "resume", target_branch_id=child)
+        self.cell.fail_values = {"child"}
+        with self.assertRaises(RuntimeError): self.call("commit", operation_id="to-child")
+        self.assertEqual(self.call("status", operation_id="to-child")["state"], "prepared")
+        self.assertEqual(self.cell.value, "original")
+        with self.assertRaises(StateUnavailable): self.runtime.capture()
+        self.call("abort", operation_id="to-child")
+        self.assertEqual(self.runtime.selection.branch_id, root)
+        self.runtime.capture()
+
+    def test_pending_world_events_are_recorded_once_before_the_joint_checkpoint(self):
+        operation = self.prepare("events", runtime_events={"A": ["Player opened the door."]})
+        source = self.runtime.timeline
+        events = tuple(source.events())
+        world = [event for event in events if event.kind.value == "UnityEvent"]
+        self.assertEqual(len(world), 1)
+        self.assertLess(world[0].sequence, operation["source"]["sequence"])
+        self.assertEqual(world[0].observers, frozenset({"A"}))
+        self.prepare("events", runtime_events={"A": ["Player opened the door."]})
+        self.finish("events")
+        self.assertEqual(sum(event.kind.value == "UnityEvent" for event in source.events()), 1)
 
 
 if __name__ == "__main__": unittest.main()

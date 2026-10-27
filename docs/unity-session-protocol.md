@@ -16,6 +16,9 @@ and `name`; names never become filesystem paths.
    has exactly `snapshot_id`, `sha256`, `version=1`, and `scene`. Optional fields
    are `target_branch_id`, `checkpoint_id`, `name`, `label`, `legacy_save_id`.
    Python captures its full source checkpoint and suspends state admission.
+   Optional `runtime_events` maps known character identities to their buffered
+   string events. These are published through the existing Unity ingress under
+   exclusive state ownership before capture, with stable retry receipts.
    The response contains the source and target checkpoint/Unity descriptors.
 3. Unity validates and applies the target world while remaining suspended.
 4. `commit` with the operation identity applies Python state through the existing
@@ -51,7 +54,7 @@ Old Python-only checkpoints remain valid for their existing callers. No particip
 manifest is silently changed. Resume rejects a snapshot preceding later semantic
 events, preventing old mutable state from being mixed with a newer history.
 
-Focused verification: `test_unity_sessions.py` (11 tests),
+Focused verification: `test_unity_sessions.py` (15 tests),
 `test_session_restoration.py` (20 tests), `test_timeline_architecture.py` (2 tests).
 These checks do not constitute Unity Play Mode or a live two-process test.
 The complete `test_*timeline*.py` selection passes 79/79 in the project's existing
