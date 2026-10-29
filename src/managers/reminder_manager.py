@@ -8,6 +8,7 @@ import os
 import tempfile
 import threading
 import math
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from managers.character_scoped_service import CharacterScopedService
@@ -87,11 +88,18 @@ class ReminderManager(CharacterScopedService):
         with state.lock:
             if state.loaded:
                 return
+            next_number = 1
             if os.path.exists(state.filename):
                 try:
                     with open(state.filename, "r", encoding="utf-8") as source:
                         loaded = json.load(source)
-                    state.reminders = list(loaded) if isinstance(loaded, list) else []
+                    if isinstance(loaded, list):
+                        state.reminders = list(loaded)
+                    elif isinstance(loaded, dict) and loaded.get("schema_version") == 1:
+                        state.reminders = list(loaded["reminders"])
+                        next_number = int(loaded["next_number"])
+                    else:
+                        raise ValueError("Unsupported reminder storage format")
                 except Exception as exc:
                     logger.error(
                         f"[ReminderManager] Failed to load {state.filename}: {format_exception(exc)}"
@@ -105,7 +113,7 @@ class ReminderManager(CharacterScopedService):
                 for item in state.reminders
                 if isinstance(item, dict)
             ]
-            state.last_reminder_number = max(valid_ids, default=0) + 1
+            state.last_reminder_number = max(next_number, max(valid_ids, default=0) + 1)
             state.loaded = True
 
             if not os.path.exists(state.filename):
@@ -114,7 +122,7 @@ class ReminderManager(CharacterScopedService):
                     f"[ReminderManager] Created new reminders file: {state.filename}"
                 )
 
-    def _save_state(self, state: _ReminderState) -> None:
+    def _save_state(self, state: _ReminderState, *, strict: bool = False) -> None:
         directory = os.path.dirname(state.filename)
         os.makedirs(directory, exist_ok=True)
         fd, temp_path = tempfile.mkstemp(
@@ -124,7 +132,8 @@ class ReminderManager(CharacterScopedService):
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as target:
-                json.dump(state.reminders, target, ensure_ascii=False, indent=4)
+                json.dump({"schema_version": 1, "reminders": state.reminders,
+                           "next_number": state.last_reminder_number}, target, ensure_ascii=False, indent=4)
                 target.flush()
                 os.fsync(target.fileno())
             os.replace(temp_path, state.filename)
@@ -136,6 +145,58 @@ class ReminderManager(CharacterScopedService):
                 os.unlink(temp_path)
             except OSError:
                 pass
+            if strict:
+                raise
+
+    def snapshot(self) -> dict:
+        state = self._state()
+        with state.lock:
+            remaining = {}
+            for reminder in state.reminders:
+                if reminder.get("kind") == "timer":
+                    due = datetime.datetime.fromisoformat(reminder["due_iso"])
+                    remaining[str(reminder["N"])] = max(0.0, (due - datetime.datetime.now(due.tzinfo)).total_seconds())
+            return {"reminders": deepcopy(state.reminders), "next_number": state.last_reminder_number,
+                    "timer_remaining": remaining}
+
+    @staticmethod
+    def validate_snapshot(snapshot: dict) -> None:
+        if not isinstance(snapshot, dict) or set(snapshot) != {"reminders", "next_number", "timer_remaining"}:
+            raise ValueError("Invalid reminder snapshot")
+        if (not isinstance(snapshot["reminders"], list) or type(snapshot["next_number"]) is not int
+                or not isinstance(snapshot["timer_remaining"], dict)):
+            raise ValueError("Invalid reminder sequence")
+        numbers = set()
+        for reminder in snapshot["reminders"]:
+            if (not isinstance(reminder, dict) or type(reminder.get("N")) is not int or reminder["N"] < 1
+                    or reminder["N"] in numbers or not isinstance(reminder.get("text"), str)
+                    or reminder.get("kind", "reminder") not in {"reminder", "timer"}
+                    or not isinstance(reminder.get("due_iso"), str)):
+                raise ValueError("Invalid or duplicate reminder")
+            datetime.datetime.fromisoformat(reminder["due_iso"])
+            numbers.add(reminder["N"])
+        if snapshot["next_number"] <= max(numbers, default=0):
+            raise ValueError("Reminder number would be reused")
+        timers = {str(reminder["N"]) for reminder in snapshot["reminders"] if reminder.get("kind") == "timer"}
+        if set(snapshot["timer_remaining"]) != timers or any(type(value) not in {int, float} or not math.isfinite(value) or value < 0
+                for value in snapshot["timer_remaining"].values()):
+            raise ValueError("Invalid timer countdown snapshot")
+
+    def restore_snapshot(self, snapshot: dict) -> None:
+        self.validate_snapshot(snapshot)
+        state = self._state()
+        with state.lock:
+            reminders = deepcopy(snapshot["reminders"])
+            for reminder in reminders:
+                if reminder.get("kind") == "timer":
+                    due = datetime.datetime.fromisoformat(reminder["due_iso"])
+                    due = datetime.datetime.now(due.tzinfo) + datetime.timedelta(seconds=snapshot["timer_remaining"][str(reminder["N"])])
+                    reminder["due_iso"] = due.isoformat("T", "microseconds")
+            replacement = _ReminderState(state.filename, reminders, snapshot["next_number"], True)
+            self._save_state(replacement, strict=True)
+            state.reminders = replacement.reminders
+            state.last_reminder_number = replacement.last_reminder_number
+        self._notify_changed()
 
     def load_reminders(self):
         state = self._state()
@@ -222,7 +283,7 @@ class ReminderManager(CharacterScopedService):
         with state.lock:
             for reminder in state.reminders:
                 try:
-                    due_dt = datetime.datetime.fromisoformat(reminder["due_iso"])
+                    due_dt = self._local_deadline(reminder["due_iso"])
                     if due_dt <= now:
                         due.append(reminder.copy())
                 except Exception as exc:
@@ -238,12 +299,17 @@ class ReminderManager(CharacterScopedService):
         with state.lock:
             for reminder in state.reminders:
                 try:
-                    due_dt = datetime.datetime.fromisoformat(reminder["due_iso"])
+                    due_dt = self._local_deadline(reminder["due_iso"])
                 except Exception:
                     continue
                 if earliest is None or due_dt < earliest:
                     earliest = due_dt
         return earliest
+
+    @staticmethod
+    def _local_deadline(value: str):
+        due = datetime.datetime.fromisoformat(value)
+        return due.astimezone().replace(tzinfo=None) if due.tzinfo is not None else due
 
     def dismiss_reminder(self, n: int) -> bool:
         return self.delete_reminder(n)

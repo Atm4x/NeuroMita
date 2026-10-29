@@ -6,7 +6,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.events import Events
-from core.services import use
+from core.services import services, use
+from services.unity_timeline import UnityTimelineIngress
 from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
@@ -391,6 +392,15 @@ class CreateTaskAction:
                     {"character_id": str(character_id or "")},
                 )
         event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
+
+        timeline_ingress = services().get_optional(UnityTimelineIngress)
+        if timeline_ingress is not None:
+            timeline_event_id = await asyncio.to_thread(
+                timeline_ingress.ingest, request, str(character_id), list(participants or []),
+            )
+            req_id = request.get("req_id")
+            if timeline_event_id:
+                game_state_payload["_timeline_event_id"] = timeline_event_id
 
         if server._should_block_event(event_type):
             await server._send_aborted_update(ctx.client_id, event_type, character_id, req_id=req_id)

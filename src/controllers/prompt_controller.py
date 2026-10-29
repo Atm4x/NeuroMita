@@ -28,6 +28,7 @@ from services.runtime_capabilities import runtime_capabilities
 from services.structured_response_capabilities import StructuredResponseCapabilities
 from domain.world_character_relations import get_world_character_context
 from managers.mini_game_session_registry import mini_game_sessions
+from services.conversation_timeline import ConversationTimeline
 
 _TYPE_MAP = {"float": "number", "double": "number", "int": "integer",
              "bool": "boolean", "str": "string", "string": "string"}
@@ -729,6 +730,8 @@ class PromptController(PromptBuilderService):
 
     @classmethod
     def _build_shared_minigame_context(cls, current_character_id: str) -> Optional[Dict[str, str]]:
+        if services().is_registered(ConversationTimeline):
+            return None
         sessions = mini_game_sessions().snapshot()
         other_sessions = [
             session

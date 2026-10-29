@@ -76,6 +76,10 @@ class MainController:
         self.startup_mode = self._normalize_startup_mode(startup_mode)
         self.backend_enabled = self.startup_mode in {"full", "headless"}
         self.headless = self.startup_mode == "headless"
+        from core.state_barrier import StateBarrier
+        self.session_state_barrier = StateBarrier()
+        if self.backend_enabled:
+            services().register(StateBarrier, self.session_state_barrier, replace=True)
 
         self.dialog_active = False
         self._close_lock = threading.Lock()
@@ -265,10 +269,55 @@ class MainController:
         )
         logger.notify("CharacterController успешно инициализирован.")
 
+        from infrastructure.timeline.bootstrap import bootstrap_timeline
+        from managers.database_manager import DatabaseManager
+        from services.conversation_timeline import ConversationTimeline
+        from services.timeline_runtime import SessionTimelineRuntime
+
+        character_manager = self.character_controller.character_manager
+        conversation_timeline = self._build_component(
+            "session_timeline", lambda: bootstrap_timeline(
+                DatabaseManager(), character_manager.resources, character_manager.get_all_characters(),
+                state=self.session_state_barrier,
+            ),
+        )
+        services().register(ConversationTimeline, conversation_timeline, replace=True)
+        services().register(SessionTimelineRuntime, conversation_timeline.runtime, replace=True)
+        conversation_timeline.runtime.activate(conversation_timeline.runtime.selection.branch_id)
+        from services.unity_timeline import UnityTimelineIngress
+
+        services().register(UnityTimelineIngress, UnityTimelineIngress(conversation_timeline.runtime), replace=True)
+        from infrastructure.timeline.context import SQLiteContextSummaries
+        from services.timeline_context import TimelineContext
+
+        services().register(TimelineContext, TimelineContext(
+            conversation_timeline, SQLiteContextSummaries(DatabaseManager().get_connection),
+        ), replace=True)
+
         self.model_controller = self._build_component(
             "model", lambda: ModelController(self.settings)
         )
         services().register(ModelStateService, self.model_controller, replace=True)
+        from infrastructure.timeline.character_state import SQLiteCharacterState
+        from infrastructure.timeline.restoration import SQLiteRestorationJournal
+        from managers.session_state_participants import CharacterRuntimeSnapshot, GamesSnapshot, ModelContextSnapshot
+        from services.session_restoration import SessionRestoration
+
+        def live_variables(identity):
+            character = character_manager.get_loaded_character(identity)
+            return dict(character.variables) if character is not None else None
+
+        restoration = SessionRestoration(conversation_timeline.runtime, (
+            SQLiteCharacterState(DatabaseManager().get_connection, character_manager.get_all_characters, live_variables),
+            GamesSnapshot(character_manager, conversation_timeline.runtime),
+            CharacterRuntimeSnapshot(character_manager, conversation_timeline), ModelContextSnapshot(self.model_controller),
+        ), SQLiteRestorationJournal(DatabaseManager().get_connection))
+        services().register(SessionRestoration, restoration, replace=True)
+        restoration.recover()
+        from infrastructure.timeline.unity_sessions import SQLiteUnitySessions
+        from services.unity_sessions import UnitySessions
+        services().register(UnitySessions, UnitySessions(restoration,
+            SQLiteUnitySessions(DatabaseManager().get_connection)), replace=True)
         logger.notify("ModelController успешно инициализирован.")
 
         self.chat_controller = self._build_component(

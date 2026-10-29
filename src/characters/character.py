@@ -5,6 +5,7 @@ import os
 import threading
 from typing import Dict, List, Any, Optional
 import json
+from copy import deepcopy
 
 from DSL.path_resolver import LocalPathResolver
 from DSL.post_dsl_engine import PostDslInterpreter
@@ -17,6 +18,7 @@ from domain.dialogue_identity import DialogueActorKind
 from services.contracts import AppVarsService, HistoryService, SettingsService
 
 from managers.game_manager import GameManager
+from core.state_barrier import state_operation
 from managers.memory_manager import is_island
 from schemas.structured_response import StructuredResponse
 
@@ -180,6 +182,16 @@ class Character:
         self.set_variable("playingGame", False)
         self.set_variable("game_id", None)
         self.game_manager = GameManager(self)
+        self._initial_session_variables = deepcopy(self.variables)
+
+    @state_operation
+    def restore_session_runtime(self, variables: dict, app_vars: dict, *, initialize_defaults: bool = False):
+        initial = deepcopy(self._initial_session_variables) if initialize_defaults else {}
+        initial.update(deepcopy(variables))
+        self.variables = initial
+        self.app_vars = deepcopy(app_vars)
+        self._dirty_vars.clear()
+        self.history_epoch += 1
 
     def bind_resource_manager(self, manager) -> None:
         self._resource_manager = manager
@@ -210,6 +222,7 @@ class Character:
     def working_state(self):
         return self._resources().working_state_for(self.char_id, self.storage_name)
 
+    @state_operation(wait=True)
     def ensure_runtime_loaded(self) -> None:
         if self._runtime_loaded:
             return
@@ -261,6 +274,7 @@ class Character:
     def get_variable(self, name: str, default: Any = None) -> Any:
         return self.variables.get(name, default)
 
+    @state_operation
     def set_variable(self, name: str, value: Any):
         if isinstance(value, str):
             val_lower = value.lower()
@@ -285,6 +299,7 @@ class Character:
         self.variables[name] = value
         self._dirty_vars.add(name)
 
+    @state_operation
     def flush_variables(self):
         """Batch-write all dirty variables to DB in a single transaction."""
         if not self._dirty_vars:
@@ -1023,6 +1038,7 @@ class Character:
             memory_pattern, memory_processor, response, flags=re.DOTALL
         ).strip()
 
+    @state_operation
     def reload_character_data(self):
         logger.info(
             f"[{self.char_id}] Reloading character data from disk (config + history)."
@@ -1070,6 +1086,7 @@ class Character:
 
     # region History
 
+    @state_operation
     def load_history(self):
         """Loads variables from history into self.variables.
         This is called after defaults and overrides are set during __init__.
@@ -1097,6 +1114,7 @@ class Character:
         history_data = {"messages": messages, "variables": self.variables.copy()}
         self.history_manager.save_history(history_data)
 
+    @state_operation
     def clear_history(self):
         logger.info(f"[{self.char_id}] Clearing history and resetting state.")
 
@@ -1210,6 +1228,7 @@ class Character:
 
         return display_str.strip()
 
+    @state_operation
     def update_app_vars(self, app_vars: Dict[str, Any]):
         """Обновляет переменные программы для исползования в логике DSL"""
         self.app_vars = app_vars.copy()

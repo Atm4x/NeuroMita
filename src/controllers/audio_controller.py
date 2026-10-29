@@ -9,7 +9,10 @@ from main_logger import logger
 from presets.local_voice_models import LOCAL_VOICE_MODELS
 from core.events import get_event_bus, Events, Event
 from core.performance_trace import perf_mark, perf_span, performance_traces
-from core.services import use
+from core.services import services, use
+from core.cancellation import CancellationToken, OperationCancelledError
+from core.state_barrier import StateLease, StateUnavailable, state_job, state_operation
+from services.timeline_runtime import SessionTimelineRuntime
 from services.contracts import (
     AudioStateService,
     GameLinkService,
@@ -63,6 +66,7 @@ class AudioController(AudioStateService):
             Events.Audio.SET_WAITING_ANSWER, self._on_set_waiting_answer, weak=False
         )
 
+    @state_operation(wait=True)
     def _set_mita_speaking(self, active: bool):
         """Сообщить, что Мита начала/закончила говорить (открытое окно)."""
         try:
@@ -73,19 +77,54 @@ class AudioController(AudioStateService):
             pass
 
     def is_waiting_answer(self) -> bool:
-        return bool(getattr(self, "waiting_answer", False))
+        lease = getattr(self, "_waiting_lease", None)
+        return bool(getattr(self, "waiting_answer", False)) and (lease is None or lease.current)
+
+    def _cancel_voice_scope(self, token):
+        if getattr(self, "_active_voice_token", None) is token:
+            self.waiting_answer = False
+            self._active_voice_token = None
+            self._waiting_lease = None
+            self._set_mita_speaking(False)
+            self.event_bus.emit(Events.GUI.HIDE_MITA_VOICING)
+
+    def _voice_scope_current(self, lease, cancellation):
+        return ((lease is None or lease.current) and (cancellation is None or not cancellation.cancelled)
+                and getattr(self, "_active_voice_token", cancellation) is cancellation)
+
+    @staticmethod
+    def _require_voice_scope(lease, cancellation):
+        if lease is not None:
+            lease.require_current()
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+
+    async def _run_voice_scope(self, operation, character_id, cancellation):
+        runtime = services().get_optional(SessionTimelineRuntime)
+        try:
+            if runtime is None:
+                await operation
+            else:
+                turn = runtime.capture(character_id=str(character_id or ""))
+                with runtime.turn_scope(turn, cancellation=cancellation):
+                    await operation
+        finally:
+            operation.close()
 
     def _on_get_waiting_answer(self, event: Event):
-        return self.waiting_answer
+        return self.is_waiting_answer()
 
+    @state_operation(wait=True)
     def _on_set_waiting_answer(self, event: Event):
         self.waiting_answer = (event.data or {}).get("waiting", False)
+        self._waiting_lease = StateLease.capture() if self.waiting_answer else None
 
     def get_speaker_text(self):
         if self.settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
             return self.textSpeakerMiku
         return self.textSpeaker
 
+    @state_operation(wait=True)
     def _update_task_failed_voiceover(self, task_uid: str, error: BaseException | str | VoiceFailure):
         failure = classify_voice_failure(error)
         diagnostic = format_exception(error) if isinstance(error, BaseException) else str(error)
@@ -109,6 +148,7 @@ class AudioController(AudioStateService):
         speaker = str(speaker or "").strip()
         return speaker.lstrip("/") if speaker else ""
 
+    @state_operation(wait=True)
     def _emit_show_voicing(self, voice_profile, speaker, message_id=None):
         """Показывает статус «Озвучивает…». Вызывать в момент фактического
         старта воспроизведения, а не при приёме запроса на синтез. message_id —
@@ -122,7 +162,12 @@ class AudioController(AudioStateService):
             },
         )
 
+    @state_job
+    @state_operation(wait=True)
     def _on_voiceover_requested(self, event: Event):
+        lease = StateLease.capture()
+        if lease is not None:
+            lease.require_current()
         data = event.data or {}
         text = data.get("text", "")
         task_uid = data.get("task_uid")
@@ -169,12 +214,16 @@ class AudioController(AudioStateService):
             return
 
         self.waiting_answer = True
+        cancellation = CancellationToken()
+        cancellation.add_cancel_callback(lambda: self._cancel_voice_scope(cancellation))
+        self._active_voice_token = cancellation
+        self._waiting_lease = lease
         self.voiceover_method = self.settings.get("VOICEOVER_METHOD", "Local")
 
         try:
             if self.voiceover_method == "TG":
                 logger.info(f"Используем Telegram (Silero/Miku) для озвучки: {speaker}")
-                loop_service.run(
+                loop_service.run(self._run_voice_scope(
                     self.run_send_and_receive(
                         text_for_voice,
                         original_text,
@@ -182,11 +231,12 @@ class AudioController(AudioStateService):
                         task_uid,
                         message_id=message_id,
                         trace_id=trace_id,
-                    )
-                )
+                        state_lease=lease, cancellation=cancellation,
+                    ), character_id, cancellation,
+                ))
 
             elif self.voiceover_method in {"Local", "API"}:
-                loop_service.run(
+                loop_service.run(self._run_voice_scope(
                     self._synthesize_and_deliver(
                         text_for_voice,
                         original_text,
@@ -196,8 +246,9 @@ class AudioController(AudioStateService):
                         message_id=message_id,
                         trace_id=trace_id,
                         method=self.voiceover_method,
-                    )
-                )
+                        state_lease=lease, cancellation=cancellation,
+                    ), character_id, cancellation,
+                ))
 
             else:
                 logger.warning(f"Неизвестный метод озвучки: {self.voiceover_method}")
@@ -246,7 +297,10 @@ class AudioController(AudioStateService):
         task_uid=None,
         message_id=None,
         trace_id=None,
+        state_lease=None,
+        cancellation=None,
     ):
+        state_lease = state_lease or StateLease.capture()
         logger.info("Попытка получить фразу (Telegram)")
 
         logger.notify(f"Отправка на озвучку в Telegram текста: {voice_text[:50]}...")
@@ -255,10 +309,12 @@ class AudioController(AudioStateService):
         trace_error_stage = ""
         trace_error_type = ""
         try:
+            self._require_voice_scope(state_lease, cancellation)
             with perf_span(trace_id, "tts.telegram", method="telegram"):
                 voiceover_path = await use(TelegramService).send_voice(
                     voice_text, speaker_command, 0
                 )
+            self._require_voice_scope(state_lease, cancellation)
             if voiceover_path:
                 perf_mark(trace_id, "tts.ready")
             logger.notify(voiceover_path)
@@ -275,6 +331,9 @@ class AudioController(AudioStateService):
                         "result": {"voiceover_path": voiceover_path},
                     },
                 )
+        except (StateUnavailable, OperationCancelledError):
+            trace_status = "cancelled"
+            trace_error_stage = "session"
         except Exception as e:
             trace_status = "error"
             trace_error_stage = "tts.telegram"
@@ -285,7 +344,8 @@ class AudioController(AudioStateService):
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, e)
         finally:
-            self.waiting_answer = False
+            if self._voice_scope_current(state_lease, cancellation):
+                self.waiting_answer = False
             if trace_id:
                 performance_traces().finish(
                     trace_id,
@@ -293,7 +353,8 @@ class AudioController(AudioStateService):
                     error_stage=trace_error_stage,
                     error_type=trace_error_type,
                 )
-            self.event_bus.emit(Events.GUI.HIDE_MITA_VOICING)
+            if self._voice_scope_current(state_lease, cancellation):
+                self.event_bus.emit(Events.GUI.HIDE_MITA_VOICING)
 
         logger.info("Завершение получения фразы (Telegram)")
 
@@ -307,13 +368,17 @@ class AudioController(AudioStateService):
         message_id: Optional[str] = None,
         trace_id: Optional[str] = None,
         method: str = "Local",
+        state_lease=None,
+        cancellation=None,
     ):
+        state_lease = state_lease or StateLease.capture()
         trace_status = "ok"
         trace_error_stage = ""
         trace_error_type = ""
         result_path = None
         delivered_to_game = False
         try:
+            self._require_voice_scope(state_lease, cancellation)
             with perf_span(trace_id, "tts.synthesis", method=method.lower()):
                 if method == "API":
                     result_path = await use(RemoteVoiceService).synthesize(
@@ -325,6 +390,7 @@ class AudioController(AudioStateService):
                         character_id=character_id,
                         voice_profile=voice_profile,
                     )
+            self._require_voice_scope(state_lease, cancellation)
             if result_path:
                 perf_mark(trace_id, "tts.ready")
 
@@ -373,6 +439,8 @@ class AudioController(AudioStateService):
                                 ),
                                 volume=self._local_playback_volume(),
                                 raise_errors=method == "API",
+                                **({"state_lease": state_lease} if state_lease is not None else {}),
+                                **({"cancellation": cancellation} if cancellation is not None else {}),
                             )
                     except Exception as playback_error:
                         trace_error_stage = "audio.playback"
@@ -380,10 +448,14 @@ class AudioController(AudioStateService):
                         raise
                     perf_mark(trace_id, "audio.playback_complete")
                 finally:
-                    self._set_mita_speaking(False)
+                    if self._voice_scope_current(state_lease, cancellation):
+                        self._set_mita_speaking(False)
             else:
                 logger.info("Озвучка в локальном чате отключена.")
 
+        except (StateUnavailable, OperationCancelledError):
+            trace_status = "cancelled"
+            trace_error_stage = "session"
         except Exception as e:
             trace_status = "error"
             trace_error_stage = trace_error_stage or f"tts.{method.lower()}"
@@ -400,9 +472,10 @@ class AudioController(AudioStateService):
                     pass
                 except OSError:
                     logger.warning("[RemoteVoice] Failed to remove audio file")
-            if method == "API":
+            if method == "API" and self._voice_scope_current(state_lease, cancellation):
                 self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
-            self.waiting_answer = False
+            if self._voice_scope_current(state_lease, cancellation):
+                self.waiting_answer = False
             if trace_id:
                 performance_traces().finish(
                     trace_id,
@@ -410,7 +483,8 @@ class AudioController(AudioStateService):
                     error_stage=trace_error_stage,
                     error_type=trace_error_type,
                 )
-            self.event_bus.emit(Events.GUI.HIDE_MITA_VOICING)
+            if self._voice_scope_current(state_lease, cancellation):
+                self.event_bus.emit(Events.GUI.HIDE_MITA_VOICING)
 
     def _local_playback_volume(self) -> int:
         """Громкость воспроизведения озвучки в питоне (в процентах, 0..200)."""

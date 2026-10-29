@@ -19,6 +19,8 @@ class ReminderController:
     CHECK_INTERVAL_SEC = 30
 
     def __init__(self, settings, character_resources=None):
+        from core.state_barrier import current_state_barrier
+        self._state_owner = current_state_barrier()
         self.settings = settings
         self.character_resources = character_resources
         self.event_bus = get_event_bus()
@@ -131,6 +133,11 @@ class ReminderController:
         return getattr(character, "reminder_system", None) if character else None
 
     def _check_and_fire_reminders(self):
+        from core.state_barrier import state_access, external_state_operation
+        with external_state_operation(getattr(self, "_state_owner", None)), state_access():
+            self._fire_current_reminders()
+
+    def _fire_current_reminders(self):
         registry = use(CharacterRegistry)
         for character_id in registry.all_ids():
             reminder_system = self._reminder_system_for(character_id)

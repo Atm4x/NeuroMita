@@ -9,7 +9,7 @@ from concurrent.futures import Future
 from itertools import count
 from typing import Optional, Dict, Any, Set, Callable
 from main_logger import logger
-from core.events import get_event_bus, Events
+from core.events import get_event_bus
 from core.task_supervisor import task_supervisor
 from managers.task_manager import TaskStatus
 import uuid
@@ -42,6 +42,8 @@ class ChatServerNew:
     """
 
     def __init__(self, host='127.0.0.1', port=12345):
+        from core.state_barrier import current_state_barrier
+        self._state_owner = current_state_barrier()
         self.host = host
         self.port = port
 
@@ -283,6 +285,11 @@ class ChatServerNew:
         settings.set("DESKTOP_MODE_ACTIVE", False)
         logger.info("[Desktop] overlay closed - desktop mode off")
     async def process_request(self, request: Dict[str, Any], client_id: str):
+        from core.state_barrier import external_state_operation
+        with external_state_operation(getattr(self, "_state_owner", None)):
+            await self._process_request_in_world(request, client_id)
+
+    async def _process_request_in_world(self, request: Dict[str, Any], client_id: str):
         if not isinstance(request, dict):
             writer = self._writer_for(client_id)
             if writer:
@@ -358,7 +365,8 @@ class ChatServerNew:
         writer = self._writer_for(client_id)
         if writer is None:
             return False
-        message ={"type": "task_update", "uid": task.uid, "status": task.status.value, "body": task.to_dict()}
+        body = task.to_dict()
+        message ={"type": "task_update", "uid": task.uid, "status": body.get("status", task.status.value), "body": body}
         return await self.send_json(writer, message)
 
     async def send_json(self, writer: asyncio.StreamWriter, data: Dict[str, Any]) -> bool:

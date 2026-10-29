@@ -218,7 +218,8 @@ class HistoryManager(CharacterScopedService):
                 )
 
         try:
-            self._get_embed_executor().submit(_bulk_embed_job)
+            from core.state_barrier import bind_state_job
+            self._get_embed_executor().submit(bind_state_job(_bulk_embed_job))
         except Exception as e:
             logger.warning(
                 f"[HistoryManager] Failed to schedule embeddings batch (ignored): {format_exception(e)}",
@@ -1057,17 +1058,18 @@ class HistoryManager(CharacterScopedService):
     # ---------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------
-    def load_variables(self, keys: Iterable[str]) -> dict[str, Any]:
-        """Read selected persisted variables without loading conversation history."""
-        names = tuple(dict.fromkeys(str(key) for key in keys))
-        if not names:
+    def load_variables(self, keys: Iterable[str] | None = None) -> dict[str, Any]:
+        """Read persisted variables without loading conversation history."""
+        names = tuple(dict.fromkeys(str(key) for key in keys)) if keys is not None else None
+        if names == ():
             return {}
         conn = self.db.get_connection()
         try:
-            placeholders = ",".join("?" for _ in names)
+            placeholders = ",".join("?" for _ in names) if names is not None else ""
+            selected = f" AND key IN ({placeholders})" if names is not None else ""
             rows = conn.execute(
-                f"SELECT key, value FROM variables WHERE character_id = ? AND key IN ({placeholders})",
-                (self.storage_key, *names),
+                f"SELECT key, value FROM variables WHERE character_id = ?{selected}",
+                (self.storage_key, *(names or ())),
             ).fetchall()
             values = {}
             for key, value in rows:
@@ -1110,6 +1112,25 @@ class HistoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+        messages = self._decode_history_rows(rows, select_cols)
+        return {
+            "fixed_parts": [],
+            "messages": messages,
+            "temp_context": [],
+            "variables": variables,
+        }
+
+    def export_timeline_history(self) -> list[dict]:
+        """Read every retained fact, including archived rows, for the timeline import."""
+        columns = self._history_select_columns()
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(columns)} FROM history WHERE character_id=? "
+                f"{self._history_not_deleted_clause()} ORDER BY id", (self.storage_key,),
+            ).fetchall()
+        return self._decode_history_rows(rows, columns)
+
+    def _decode_history_rows(self, rows, select_cols: list[str]) -> list[dict]:
         messages: list[dict] = []
         for row in rows:
             rd = dict(zip(select_cols, row))
@@ -1130,12 +1151,7 @@ class HistoryManager(CharacterScopedService):
             msg = self._normalize_loaded_message(msg)
             messages.append(msg)
 
-        return {
-            "fixed_parts": [],
-            "messages": messages,
-            "temp_context": [],
-            "variables": variables,
-        }
+        return messages
 
     def save_history(self, data):
         messages = [msg for msg in (data.get("messages", []) or []) if isinstance(msg, dict)]
@@ -1320,6 +1336,31 @@ class HistoryManager(CharacterScopedService):
         row_id = self._insert_history_row(msg=message, is_active=1)
         self._schedule_message_embedding(row_id, message)
         return row_id
+
+    def replace_timeline_cache(self, messages: list[dict]) -> None:
+        """Rebuild disposable SQL/RAG rows from one authoritative branch projection."""
+        if not self._history_cols:
+            self._refresh_history_columns()
+        committed = []
+        with self._write_lock:
+            connection = self.db.get_connection()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("UPDATE history SET is_active=0, is_deleted=1, embedding=NULL WHERE character_id=?",
+                                   (self.storage_key,))
+                cursor = connection.cursor()
+                for message in messages:
+                    row_id = self._insert_history_row_tx(cursor, msg=message, is_active=1, dedupe=False)
+                    text = self._extract_text_for_embedding(message.get("content"))
+                    if row_id and text:
+                        committed.append((row_id, text))
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        self._schedule_history_embeddings(committed)
 
     def update_variable(self, key, value):
         conn = self.db.get_connection()

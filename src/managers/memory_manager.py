@@ -4,6 +4,7 @@ import logging
 import datetime
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+from core.state_barrier import bind_state_job
 from typing import Callable, Optional, Tuple, List, Set, ClassVar
 
 from managers.database_manager import DatabaseManager
@@ -74,6 +75,9 @@ class MemoryManager(CharacterScopedService):
     def total_characters(self, value: int) -> None:
         self._total_characters[self.character_id] = max(0, int(value or 0))
 
+    def invalidate_snapshot_cache(self) -> None:
+        self._total_characters.pop(self.character_id, None)
+
     @property
     def rag(self):
         key = self.character_id
@@ -135,7 +139,7 @@ class MemoryManager(CharacterScopedService):
                     thread_name_prefix="rag-embed-mem",
                 )
                 cls._EMBED_EXECUTOR = executor
-            executor.submit(job)
+            executor.submit(bind_state_job(job))
             return True
 
     # ------------------------------------------------------------------
