@@ -22,6 +22,9 @@ class DesktopWatchController(DesktopWatchService):
     """
 
     _SETTING_KEYS = frozenset({
+        "DESKTOP_WATCH_ENABLED",
+        "ENABLE_IMAGE_ANALYSIS",
+        "DESKTOP_MODE_ACTIVE",
         "DESKTOP_WATCH_INTERVAL",
         "DESKTOP_WATCH_QUALITY",
         "DESKTOP_WATCH_FRAME_WIDTH",
@@ -35,36 +38,45 @@ class DesktopWatchController(DesktopWatchService):
         self.event_bus = get_event_bus()
         self._capture = ScreenCapture()
         self._profile = profile_from_settings(self.settings)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._desktop_state: dict = {}
         self._settings_subscription = self.settings.subscribe(
             self._on_setting_changed, keys=self._SETTING_KEYS
         )
         self.start()
 
+    def _capture_allowed(self) -> bool:
+        return (self.settings.get("ENABLE_IMAGE_ANALYSIS", True) is True
+                and self.settings.get("DESKTOP_WATCH_ENABLED", True) is True
+                and self.settings.get("DESKTOP_MODE_ACTIVE", False) is True
+                and self.desktop_state().get("watching_screen") is True)
+
     def start(self) -> bool:
-        if not self.settings.get("ENABLE_IMAGE_ANALYSIS", True):
-            logger.info("[DesktopWatch] обработка изображений отключена — наблюдение не запускается")
-            return False
-        if self._capture.is_running():
-            return True
-        self._profile = profile_from_settings(self.settings)
-        self._capture.start_capture(
-            interval_seconds=self._profile.interval_seconds,
-            quality=self._profile.quality,
-            fps=1,
-            max_history_frames=self._profile.history_limit,
-            max_transfer_frames=self._profile.transfer_limit,
-            capture_width=self._profile.width,
-            capture_height=self._profile.height,
-        )
-        logger.info(f"[DesktopWatch] фоновое наблюдение запущено: {self._profile.describe()}")
-        return self._capture.is_running()
+        with self._lock:
+            if not self._capture_allowed():
+                logger.info("[DesktopWatch] обработка изображений отключена — наблюдение не запускается")
+                return False
+            if self._capture.is_running():
+                return True
+            self._profile = profile_from_settings(self.settings)
+            self._capture.start_capture(
+                interval_seconds=self._profile.interval_seconds,
+                quality=self._profile.quality,
+                fps=1,
+                max_history_frames=self._profile.history_limit,
+                max_transfer_frames=self._profile.transfer_limit,
+                capture_width=self._profile.width,
+                capture_height=self._profile.height,
+            )
+            logger.info(f"[DesktopWatch] фоновое наблюдение запущено: {self._profile.describe()}")
+            return self._capture.is_running()
 
     def stop(self) -> None:
-        if self._capture.is_running():
-            self._capture.stop_capture()
-            logger.info("[DesktopWatch] фоновое наблюдение остановлено")
+        with self._lock:
+            if self._capture.is_running():
+                self._capture.stop_capture()
+                logger.info("[DesktopWatch] фоновое наблюдение остановлено")
+            self._capture.clear_history()
 
     def shutdown(self) -> None:
         try:
@@ -78,25 +90,33 @@ class DesktopWatchController(DesktopWatchService):
         return self._profile
 
     def is_watching(self) -> bool:
-        return self._capture.is_running()
+        return self._capture_allowed() and self._capture.is_running()
 
     def desktop_frames(self, limit: int = 1) -> List[Any]:
+        if not self._capture_allowed():
+            return []
         count = max(1, min(int(limit), self._profile.transfer_limit))
         return list(self._capture.get_recent_frames(count))
 
     def capture_desktop_now(self, limit: int = 1) -> List[Any]:
+        if not self._capture_allowed():
+            return []
         frames = self.desktop_frames(limit)
         if frames:
             return frames
         frame = self._capture.capture_one_shot(
             self._profile.quality, self._profile.width, self._profile.height
         )
-        return [frame] if frame else []
+        return [frame] if frame and self._capture_allowed() else []
 
     def apply_desktop_state(self, state: Any) -> dict:
         desktop = normalize_desktop_context(state)
         with self._lock:
             self._desktop_state = desktop
+        if self._capture_allowed():
+            self.start()
+        else:
+            self.stop()
         return desktop
 
     def desktop_state(self) -> dict:

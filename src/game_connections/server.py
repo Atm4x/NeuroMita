@@ -264,7 +264,17 @@ class ChatServerNew:
     def _forget_client_state(self, client_id: str) -> None:
         with self._clients_lock:
             self.active_connections.pop(client_id, None)
-            self.client_roles.pop(client_id, None)
+            was_desktop = self.client_roles.pop(client_id, None) == self.DESKTOP_ROLE
+            desktop_alive = any(role == self.DESKTOP_ROLE for role in self.client_roles.values())
+        if was_desktop:
+            requested = self.set_desktop_watch_request(client_id, False)
+            from core.services import services
+            from services.contracts import DesktopWatchService
+            watch = services().get_optional(DesktopWatchService)
+            if watch is not None:
+                watch.apply_desktop_state({"watching_screen": requested})
+            if not desktop_alive:
+                self._deactivate_desktop_mode()
         self.client_tasks.pop(client_id, None)
         self.last_participants.pop(client_id, None)
         stale_dialogue_keys = [
@@ -273,6 +283,15 @@ class ChatServerNew:
         ]
         for key in stale_dialogue_keys:
             self._last_sent_dialogue_text.pop(key, None)
+
+    def set_desktop_watch_request(self, client_id, requested):
+        with self._clients_lock:
+            if not hasattr(self, "_desktop_watch_requests"):
+                self._desktop_watch_requests = {}
+            self._desktop_watch_requests.pop(client_id, None)
+            if requested and self.client_roles.get(client_id) == self.DESKTOP_ROLE:
+                self._desktop_watch_requests[client_id] = True
+            return any(self._desktop_watch_requests.values())
 
     def _deactivate_desktop_mode(self) -> None:
         from core.services import services

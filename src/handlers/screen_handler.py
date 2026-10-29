@@ -31,6 +31,7 @@ class ScreenCapture:
     def __init__(self):
         self._running = False
         self._thread = None
+        self._stop_event = threading.Event()
         self._latest_frame = None # Оставляем для совместимости, но будем использовать _frame_history
         self._frame_history = [] # Список для хранения последних кадров
         self._max_history_frames = 1 # Максимальное количество кадров в истории
@@ -72,7 +73,7 @@ class ScreenCapture:
             return
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
-        if self._running:
+        if self._running or (self._thread is not None and self._thread.is_alive()):
             logger.warning("Захват экрана уже запущен.")
             return
 
@@ -85,6 +86,7 @@ class ScreenCapture:
         self._capture_width = max(1, capture_width) # Минимальная ширина 1
         self._capture_height = max(1, capture_height) # Минимальная высота 1
 
+        self._stop_event.clear()
         self._running = True
         self._thread = task_supervisor().start_thread(
             self, "screen-capture", self._capture_loop, replace=True
@@ -96,7 +98,9 @@ class ScreenCapture:
             logger.warning("Захват экрана не запущен.")
             return
 
-        self._running = False
+        with self._lock:
+            self._running = False
+            self._stop_event.set()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=3.0)
             if self._thread.is_alive():
@@ -124,7 +128,7 @@ class ScreenCapture:
                     # --- Определение монитора для захвата ---
                     if not sct.monitors:
                         logger.error("mss: Мониторы не найдены. Пропуск захвата.")
-                        time.sleep(self._interval_seconds * 2)  # Ожидание
+                        self._stop_event.wait(self._interval_seconds * 2)  # Ожидание
                         continue
 
                     # sct.monitors[0] - это bounding box всех мониторов.
@@ -193,6 +197,8 @@ class ScreenCapture:
                     current_frame_bytes = byte_arr.getvalue()
 
                     with self._lock:  # Блокировка для обновления истории кадров
+                        if not self._running:
+                            break
                         self._frame_history.append(current_frame_bytes)
                         if len(self._frame_history) > self._max_history_frames:
                             self._frame_history.pop(0)
@@ -208,7 +214,7 @@ class ScreenCapture:
                                 f"Достигнуто максимальное количество ошибок ({self._max_errors}). Остановка захвата экрана.")
                             self._running = False
 
-                time.sleep(self._interval_seconds)
+                self._stop_event.wait(self._interval_seconds)
 
     def get_latest_frame(self) -> bytes | None:
         """Возвращает последний захваченный кадр в формате JPEG байтов (для совместимости)."""
@@ -216,6 +222,11 @@ class ScreenCapture:
             if self._frame_history:
                 return self._frame_history[-1]
             return None
+
+    def clear_history(self):
+        with self._lock:
+            self._frame_history.clear()
+            self._latest_frame = None
 
     def get_recent_frames(self, limit: int) -> list[bytes]:
         """Возвращает список последних захваченных кадров в формате JPEG байтов."""

@@ -12,8 +12,8 @@ class DesktopStateAction:
     """Состояние desktop-оверлея: позиция окна, активность, включена ли слежка.
 
     Оверлей присылает его при подключении, при изменениях и раз в несколько
-    секунд как heartbeat. Само подключение с ролью desktop включает режим
-    рабочего стола, из-за чего в Python поднимается фоновое наблюдение.
+    секунд как heartbeat. Захват требует явного watching_screen и разрешений
+    настроек; подключение само по себе его не запускает.
     """
 
     async def handle(self, request: Dict[str, Any], ctx: RequestContext) -> None:
@@ -22,13 +22,14 @@ class DesktopStateAction:
         state = payload if isinstance(payload, dict) else request
 
         settings = services().get_optional(SettingsService)
-        watch = services().get_optional(DesktopWatchService)
 
         if settings is not None and not settings.get("DESKTOP_MODE_ACTIVE", False):
             settings.set("DESKTOP_MODE_ACTIVE", True)
             logger.info("[Desktop] оверлей подключился — режим рабочего стола активен")
 
-        desktop = watch.apply_desktop_state(state) if watch is not None else {}
+        watch = services().get_optional(DesktopWatchService)
+        effective = server.set_desktop_watch_request(ctx.client_id, state.get("watching_screen") is True)
+        desktop = watch.apply_desktop_state({**state, "watching_screen": effective}) if watch is not None else {}
         await server.send_json(ctx.writer, {
             "type": "desktop_state_ack",
             "desktop_state": desktop,
