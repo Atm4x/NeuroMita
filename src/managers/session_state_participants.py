@@ -159,3 +159,42 @@ class GamesSnapshot:
             mini_game_sessions().stop(identity)
         for session in data["public_sessions"]:
             mini_game_sessions().restore_snapshot(MiniGamePublicSession(**session))
+
+
+class CatalogSnapshotParticipant:
+    """Bind each character-state owner to the same durable virtual roster."""
+
+    def __init__(self, participant, manager):
+        self.participant, self.manager = participant, manager
+        self.key, self.version = participant.key, participant.version
+
+    def paused(self):
+        return self.participant.paused()
+
+    def capture(self):
+        data = self.participant.capture().to_dict()
+        data["_cartridges"] = self.manager.capture_cartridge_definitions()
+        return JsonDocument(data)
+
+    def validation_dependencies(self, state):
+        self._unpack(state)
+        return {"character_catalog": state.to_dict().get("_cartridges", [])}
+
+    def _unpack(self, state):
+        data = state.to_dict()
+        try:
+            definitions = self.manager.validate_cartridge_definitions(data.pop("_cartridges", []))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise InvalidTimelineOperation("Invalid snapshot cartridge definitions") from exc
+        return definitions, JsonDocument(data)
+
+    def validate(self, state):
+        definitions, data = self._unpack(state)
+        with self.manager.snapshot_roster_scope(definitions):
+            self.participant.validate(data)
+
+    def apply(self, state, *, branch_id):
+        self.validate(state)
+        definitions, data = self._unpack(state)
+        self.manager.restore_cartridge_definitions(definitions)
+        self.participant.apply(data, branch_id=branch_id)

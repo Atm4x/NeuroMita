@@ -300,7 +300,7 @@ class MainController:
         services().register(ModelStateService, self.model_controller, replace=True)
         from infrastructure.timeline.character_state import SQLiteCharacterState
         from infrastructure.timeline.restoration import SQLiteRestorationJournal
-        from managers.session_state_participants import CharacterRuntimeSnapshot, GamesSnapshot, ModelContextSnapshot
+        from managers.session_state_participants import CharacterRuntimeSnapshot, GamesSnapshot, ModelContextSnapshot, CatalogSnapshotParticipant
         from services.session_restoration import SessionRestoration
 
         def live_variables(identity):
@@ -308,9 +308,12 @@ class MainController:
             return dict(character.variables) if character is not None else None
 
         restoration = SessionRestoration(conversation_timeline.runtime, (
-            SQLiteCharacterState(DatabaseManager().get_connection, character_manager.get_all_characters, live_variables),
-            GamesSnapshot(character_manager, conversation_timeline.runtime),
-            CharacterRuntimeSnapshot(character_manager, conversation_timeline), ModelContextSnapshot(self.model_controller),
+            CatalogSnapshotParticipant(SQLiteCharacterState(DatabaseManager().get_connection,
+                character_manager.get_all_characters, live_variables,
+                retired_character_ids=character_manager.retired_cartridge_ids), character_manager),
+            CatalogSnapshotParticipant(GamesSnapshot(character_manager, conversation_timeline.runtime), character_manager),
+            CatalogSnapshotParticipant(CharacterRuntimeSnapshot(character_manager, conversation_timeline), character_manager),
+            ModelContextSnapshot(self.model_controller),
         ), SQLiteRestorationJournal(DatabaseManager().get_connection))
         services().register(SessionRestoration, restoration, replace=True)
         restoration.recover()

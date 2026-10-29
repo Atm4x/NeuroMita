@@ -17,10 +17,11 @@ class SQLiteCharacterState:
     _ENTITY_FIELDS = frozenset({"name", "entity_type", "mention_count", "first_seen", "last_seen", "is_protected", "access_count"})
     _RELATION_FIELDS = frozenset({"predicate", "confidence", "created_at", "is_protected", "subject", "object"})
 
-    def __init__(self, connection_factory, character_ids, live_variables=lambda _identity: None):
+    def __init__(self, connection_factory, character_ids, live_variables=lambda _identity: None, retired_character_ids=lambda: ()):
         self._factory = connection_factory
         self._character_ids = character_ids
         self._live_variables = live_variables
+        self._retired_character_ids = retired_character_ids
 
     def paused(self):
         return nullcontext()
@@ -154,7 +155,10 @@ class SQLiteCharacterState:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 tables = self._tables(connection)
-                for identity, character in state.to_dict()["characters"].items():
+                characters = state.to_dict()["characters"]
+                for identity in self._retired_character_ids():
+                    characters.setdefault(identity, {"variables": {}, "memories": [], "graph": {"entities": [], "relations": [], "aliases": []}})
+                for identity, character in characters.items():
                     for table in ("variables", "memories", "embeddings", "sentence_embeddings", "graph_processed_messages", "graph_relations"):
                         if table in tables:
                             connection.execute(f"DELETE FROM {table} WHERE character_id=?", (identity,))

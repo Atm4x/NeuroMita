@@ -53,6 +53,7 @@ class SessionRestoration:
         if not isinstance(components, dict) or set(components) != {participant.key for participant in self.participants}:
             raise InvalidTimelineOperation("Snapshot participants differ from the active application")
         states = {}
+        dependencies = {}
         for participant in self.participants:
             component = components[participant.key]
             if (not isinstance(component, dict) or set(component) != {"version", "state"}
@@ -61,6 +62,11 @@ class SessionRestoration:
                 raise InvalidTimelineOperation(f"Unsupported snapshot for {participant.key}")
             state = JsonDocument(component.get("state"))
             participant.validate(state)
+            dependency_reader = getattr(participant, "validation_dependencies", None)
+            for name, value in (dependency_reader(state) if dependency_reader else {}).items():
+                if name in dependencies and dependencies[name] != value:
+                    raise InvalidTimelineOperation(f"Snapshot owners disagree on {name}")
+                dependencies[name] = value
             states[participant.key] = state
         return states
 
