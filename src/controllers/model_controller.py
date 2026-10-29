@@ -2369,10 +2369,15 @@ class ModelController(GenerationService, ModelStateService):
         # Apply and snapshot character state in a short critical section. Tool
         # execution and any follow-up provider request happen after this lock.
         with _timeline_effect_scope(self), character_lock(char_id):
-            char.process_structured_response(
+            normalized = char.process_structured_response(
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
             )
+            if normalized is not None:
+                from schemas.structured_response import StructuredResponse
+                if not isinstance(normalized, StructuredResponse):
+                    raise TypeError("Character postprocessing must return StructuredResponse or None")
+                structured = normalized
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
