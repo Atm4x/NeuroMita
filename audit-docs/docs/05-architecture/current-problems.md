@@ -1,0 +1,130 @@
+# Дефекты, риски и компромиссы: накопительный реестр
+
+Это аудит фактического поведения, не список исправлений исходников. Приоритеты/решение владельца будут определяться после функционального прохода. Размер класса и Python как язык сами по себе дефектами не считаются.
+
+| ID | Класс вывода | Источник и фактическое поведение | Нарушение/риск | Принцип для новой модели |
+|---|---|---|---|---|
+| ISSUE-001 | Дефект SQL statement, статически подтверждён | memory_manager.py:1236 apply_ttl_cleanup access_weighted выбирает candidates с character filter, но batch UPDATE `WHERE eternal_id IN (...)` без character_id | Eternal ids повторяются у разных персонажей; забывание может затронуть чужие воспоминания | Scope входит в ключ и каждую mutation; проверка изоляции на двух персонажах |
+| ISSUE-002 | Дефект миграционного predicate, изолированная проверка | database_manager.py timestamp migration GLOB с `_`; sample date не совпадает, correct Unix wildcard совпадает | Старый timestamp не нормализуется этой ветвью | Версионные миграции с реальными fixture layouts; [проверка](../03-runtime/persistence.md) |
+| ISSUE-003 | Несогласованный return contract | MemoryManager.add_memory skip_if_exists возвращает SQLite id, обычная ветвь eternal_id | Caller может обратиться к другому logical memory N | Разные типы идентификаторов, единый return contract |
+| ISSUE-004 | Доказанная потеря error result | HistoryManager.save_history ловит SQL failure без failure return; ChatController._on_load_snapshot затем reload/log success | Ложное впечатление успешного восстановления | Result commit/failure проходит до UI; mutation effects наблюдаемы |
+| ISSUE-005 | Доказанная потеря persistence outcome | ReminderManager._save_state проглатывает disk errors; add/delete возвращают успех | In-memory schedule расходится с restart state | Durable commit подтверждается до successful result |
+| ISSUE-006 | Несогласованные storage identities | MemoryManager.purge_deleted выбирает memories.id для embeddings.source_id, но RAGManager.update_memory_embedding пишет eternal_id | Может не удалить embedding deleted memory либо удалить embedding другого N того же персонажа при совпадении чисел | Единая typed source identity и проверяемая referential cleanup |
+| ISSUE-007 | Дефект error path, статически подтверждён | asr_service.py:300/304/311 `_start_live_internal` использует mic_index, не определённый ни параметром, ни local/global | Startup timeout и отдельные startup failures могут маскироваться NameError | Error paths проверяются отдельно; device identity передаётся явно |
+| ISSUE-008 | Потеря conversion outcome | telegram_handler.py:281 await AudioConverter.convert_to_wav, bool не проверяется; далее source удаляется и возвращается WAV path | FFmpeg failure может удалить доступное исходное audio и дать несуществующий output как результат | Typed successful artifact после проверки conversion; source cleanup после commit |
+| ISSUE-009 | Ложный voice success | TelegramBotHandler timeout возвращает None; AudioController.run_send_and_receive публикует SUCCESS без проверки path | Task сообщает success без audio | Единый Result voice backend, отсутствие artifact является отдельным outcome |
+| RISK-001 | Архитектурный риск частичного turn | Character effects применяются до history commit и tool continuation; multi-recipient history пишет отдельно | Cancellation/error не откатывает всё; часть персонажей может не сохранить turn | Определить commit boundary и partial outcomes; не переносить случайную атомарность |
+| RISK-002 | Риск потери scheduled event | ReminderController dismiss после EventBus.try_emit acceptance | Генерация может быть отклонена позднее | Acknowledged application admission/processing policy |
+| RISK-003 | Риск cleanup при partial bootstrap | GuiBackendLoader получает controller только после успешного MainController.__init__ | Уже созданные ресурсы при constructor exception могут остаться без local cleanup owner | Owned startup scope + rollback; fault injection каждого этапа |
+| RISK-004 | Неодинаковый reset contract | CharacterManager.clear_all_histories для loaded/unloaded использует разный набор операций | Сохранённые variables могут пережить reset незагруженного персонажа | Reset через одну предметную операцию независимо от materialization |
+| RISK-005 | Пробел version invalidation | Summary epoch повышается clear_history; edit/delete/import paths этого не делают | Старый background result может не соответствовать изменённому источнику | Source revision охватывает все релевантные mutations |
+| RISK-006 | Side effect чтения | get_memory_message_blocks вызывает room-making forgetting | При ровно полной capacity чтение может забыть один факт без insert | Отделить query/projection от budget mutation |
+| RISK-007 | Stale vector cache | faiss_index cache проверяет COUNT; single embedding update не меняет count и не вызывает invalidate | Edited content получает score по прежнему vector | Source/index revision и invalidation по mutation |
+| RISK-008 | Late graph write после reset | GraphController extraction/store не проверяет history epoch после LLM | Старый graph data может появиться после очистки | Conditional commit derived data по source revision |
+| RISK-009 | Delivery complete раньше application acceptance | ServerController complete_delivery после send_json/drain; Unity может reject context/version, сетевого ACK нет | Persistent retry result удаляется до подтверждённого принятия игрой | Выбранная end-to-end гарантия и idempotent ACK/result receipt |
+| RISK-010 | Stale settings application | Unity SettingsUpdateHandler async parse, ServerSettings присваивает incoming revision без lower-revision guard; stats применяются отдельно раньше | Старый snapshot может заменить новый после перестановки callbacks | Version/session fencing на commit всей projection |
+| RISK-011 | Captured runtime event изменяется без revision | Unity RuntimeContextBuffer.Add duplicate повышает Count на прежнем id; Commit удаляет captured ids | Occurrence после Capture может исчезнуть как будто была в старом snapshot | Revision/immutable events либо commit только captured count |
+| RISK-012 | Clean rebuild без сохранения прежней среды | InstallController.run_task clean remove_installed до новой staging transaction | Failure rebuild оставляет модель без прежней installed revision | Отличать destructive rebuild от transactional replacement и показывать outcome |
+| RISK-013 | Parse provenance не является общей effect policy | Repaired response сохраняет commands/intents; ModelController применяет ordinary effects без trust gate, Unity trust metadata не читает; schema validators могут менять payload при trusted=true | Consumer может ошибочно считать trusted строгой payload validation, а repaired — speech-only | Явные stages normalization/validation/authorization/execution и per-effect repair policy; [проверка](../03-runtime/structured-response-contract.md) |
+| ISSUE-010 | Несогласованный screenshot contract | ChatPanelViewModel._capture_screen итерирует frames[0] вместо list[bytes], затем bytes(int) | Ручная screenshot кнопка stage-ит byte-derived buffers вместо целого кадра | Typed frame/image contract; [разбор](../01-functional/images-and-capture.md) |
+| RISK-014 | Cleanup не различает недоступную DB и отсутствие references | image_cleanup._collect_referenced_paths ловит DB exception и возвращает partial/empty set, delete_orphaned_images считает остальные files сиротами | Ошибка сканирования может разрешить удаление ещё используемых картинок | Удаление только после полного успешного reference scan; [разбор](../01-functional/images-and-capture.md) |
+| RISK-015 | Shared mutable tool character scope | Один ChatModel.tool_manager; set_char_context меняет shared _char_id перед run, generation gate per-character | Concurrent персонажи могут подменить scope памяти/напоминаний друг другу | Immutable per-operation context; [разбор](../01-functional/tools-and-web.md) |
+| RISK-016 | Beat cache без settings/algorithm identity | SHA256 audio file — единственный lookup key, version/backend/min_confidence не проверяются | После смены backend/threshold возвращается старый timeline | Cache identity/source provenance; [разбор](../01-functional/music-beats.md) |
+| RISK-017 | Поздняя публикация ленты другого repository | NewsReleasesStore.set_repository очищает cache; get_news_releases записывает после network без repository fence | Результат прежнего update contour может заменить новый cache | Request/source revision перед commit; [разбор](../02-ui/navigation-gallery-and-help.md) |
+| TRADEOFF-001 | Обоснованный компромисс | LLM runner после cancellation может abandon daemon worker вместо физического stop | Освобождает логический slot, но HTTP thread может жить до завершения | Bounded abandoned resource policy и transport cancellation; async не равен remote rollback |
+| TRADEOFF-002 | Обоснованный компромисс с потерей полноты | Compression local fallback ограничивает число/длину сообщений | Anchor может покрыть больше, чем полноценно пересказано | Явная provenance/quality и recoverable source coverage |
+
+Для ISSUE-001 пока не выполнялся end-to-end TTL тест, но отсутствующий scope в SQL и локальная семантика eternal_id непосредственно видны в коде. Факт ущерба конкретным данным пользователя не утверждается. Исследование не исправляет эти места.
+
+## Проверки архитектурного ревью
+
+Дополнительные findings Python functional pass (статический анализ, destructive operations не запускались):
+
+| ID | Наблюдение | Последствие / проектное требование |
+|---|---|---|
+| RISK-018 | DB viewer cell/batch/delete и JSON import меняют source напрямую без общей invalidation | Stale embeddings/cache/summary/runtime state; единая mutation/revision policy. [Данные](../01-functional/data-maintenance.md) |
+| RISK-019 | Graph manual extraction помечает message processed и при ошибке/пустом результате; delete-all не очищает processed ledger | Skip-existing может исключить retry/rebuild; различать attempts/success/source version. [Данные](../01-functional/data-maintenance.md) |
+| RISK-020 | Memory dedup embeddings JOIN без model_id, dominant dimension недостаточна для model space identity | Сравнение разных моделей/duplicate rows; model-aware candidate policy. [Данные](../01-functional/data-maintenance.md) |
+| RISK-021 | Recovery/migration backup использует copy2 главного DB файла; SQL snapshot/WAL coordination не найдены | Полнота online backup не доказана; recovery artifact должен проверяться. [Совместимость](../01-functional/compatibility-imports.md) |
+| RISK-022 | Voice settings write возвращает error, GUI проверяет только errors; install/uninstall wrapper не переносит admission bool | UI может обновиться как при успехе или ждать не принятую операцию; typed outcome propagation. [Голос](../02-ui/voice-controls.md) |
+| RISK-023 | SerialDispatcher queue.put предшествует increment _queued | Worker может завершить раньше increment; stale pending/wait_idle timeout. Статический interleaving, не воспроизведён. [Runtime](../03-runtime/background-tasks-and-events.md) |
+
+На каждую mutation спросить: чей это scope, какой version источника, где commit, кто получает failure, кто отменяет фоновые jobs и какие побочные эффекты уже необратимы. Эти вопросы применимы и к новой Python, и к Rust системе; язык не решает их автоматически.
+
+## Дополнение: provider, ASR, asset lifecycle, release (2026-10-30)
+
+| ID | Классификация | Наблюдение и доказательство | Возможный ущерб / проверка |
+|---|---|---|---|
+| ISSUE-011 | Несогласованность статического installed predicate | `GigaAMOnnxRecognizer.is_installed` проверяет Python requirements, но не required model weights при наличии model install manifest (`src/handlers/asr_models/gigaam_onnx_recognizer.py:195-202`); общий installer пропускает install, если status.ready | Ложно `already_installed` при отсутствующей модели; offline fixture с установленными deps и пустым model path. [Детали](../01-functional/asr-rag-beat-install-plans.md) |
+| ISSUE-012 | Фактически не реализованная операция | `RagInstallableComponent` и model-specific component `build_uninstall_plan` возвращают no-op `RAG uninstall is not implemented yet` (`src/managers/rag/install_spec.py:705-706,757-758`) | Удаление из UI может не соответствовать удалению файлов; сохранить требование реального удаления или явно `unsupported`, не копировать no-op. [Детали](../01-functional/asr-rag-beat-install-plans.md) |
+| RISK-024 | Неполная проверка assets | `install_controller.py:496-505` считает существующий ненулевой download path готовым без SHA/структурной проверки; RAG HF cache readiness проверяет marker directory | Stale/corrupt/partial downloaded artifact может блокировать повторную загрузку; нужен declared verified artifact status. [Installer](../03-runtime/installer-recovery-and-uninstall.md), [RAG](../01-functional/asr-rag-beat-install-plans.md) |
+| RISK-025 | Неоднозначный success голосового удаления | Individual voice bundle cleanup игнорирует возвращаемый `False` от remove operation, тогда как aggregate path собирает outcomes (`src/installables/voice_assets.py`) | UI/task log может сообщить success, хотя некоторые файлы не удалены. [Voice bundles](../01-functional/voice-asset-distribution.md) |
+| RISK-026 | Частичное обновление ассетов | Voice bundle extraction staged, но перенос в destination осуществляется пофайлово; обычный HTTP installer может оставить `.part` при error; на `force=True` старый файл удаляется до нового успешного download | Инвариант «полный комплект версии или прежняя версия» не обеспечивается общим контрактом всех installables; тест частичного отказа. [Voice assets](../01-functional/voice-asset-distribution.md), [Downloader](../03-runtime/installer-recovery-and-uninstall.md) |
+| RISK-027 | Разные понятия транзакционной замены | Обычная managed install может rollback staging/revision, clean reinstall сначала уничтожает old revision (`install_controller.py:1345-1355`); native updater отдельно активирует zipapp после выхода | Нельзя обещать одинаковые rollback guarantees при reinstall, update, uninstall; UX должен различать destructive и recoverable операции. [Installer](../03-runtime/installer-recovery-and-uninstall.md) |
+| RISK-028 | Bootstrap boundary and release completeness | `build.py` формирует pyz и копирует scripts/assets, но full archive contract требует также embedded `libs/python/python.exe` (`src/release_contract.py:23-33,244-271`) | Build output может не удовлетворять release validator без separate embedded runtime stage; необходимо проверять полную supply chain. [Build](../03-runtime/build-and-release-distribution.md) |
+| RISK-029 | Семантическая loss/protocol switching | `responses/request.py` преобразует assistant image блок в user item; Chat Completions/Responses используют разные способы history/tool replay; HTTP400 schema downgrade повторяет transport | При provider switch/history replay возможно изменение role/meaning; golden fixtures с multimodal history и tool identity. [Protocols](../03-runtime/openai-protocol-state-machines.md) |
+
+Статусы намеренно различают **источник непосредственно подтверждает поведение** и **реальный ущерб, который пока лишь возможен**. Эти риски не требуют мигрировать старые баги как признаки функционального паритета.
+
+`RISK-030` — `ModelPricingManager.resolve_for_preset` кеширует цену по `(protocol_id, model)`, не по `api_url`/account (`src/managers/model_pricing_manager.py:185-203`). Для одинаковых model IDs на разных compatible endpoints возникает **возможность** неверного pricing context; без воспроизведения не объявлять дефектом реальных данных. [Доказательство и тест](../01-functional/token-budget-and-pricing.md).
+
+`RISK-031` — `_last_token_stats` хранится глобально в `ModelController`, тогда как estimate пересчитывается по current character; UI last request потенциально принадлежит другому персонажу. Кроме того, `CALCULATE_COST`/Sandbox переводят unknown `None` в `0.0`, но chat UI скрывает неизвестную стоимость (`model_controller.py:992-1154`, `sandbox_page_view_model.py:250-272`). Требуется явно принять глобальность last usage и zero/unknown semantics. [Доказательство](../01-functional/token-budget-and-pricing.md).
+
+
+`RISK-032` — разные источники значения checkpoints: `core.app_paths.checkpoints_dir()` нормализует relative `NEUROMITA_CHECKPOINTS_DIR` от `base_dir`, тогда как `managers/rag/install_spec._checkpoints_dir` и `handlers/ai_engine/rag_runtime._checkpoints_dir` возвращают raw env value; fallback RAG использует `sys.executable` вместо project base. Это **статически доказанное расхождение path policy**, не подтверждённый пользовательский incident. [Paths и тесты](../03-runtime/filesystem-paths-and-native-loaders.md).
+
+`RISK-033` — некоторые Windows native model loaders не принимают non-ASCII path и требуют существующий ASCII short path. При 8.3 disabled GigaAM SentencePiece/Silero VAD могут отказаться загрузить модель независимо от корректности Rust/Qt GUI. Это **platform limitation**, не повод переписывать сам inference. [Paths](../03-runtime/filesystem-paths-and-native-loaders.md).
+
+`RISK-034` — HOI4 bridge содержит демонстрационные game hooks (`on_declare_war/on_focus_complete` с пустыми `events`) и `dummy_ai_logic`; прямой Core registration не найден. Нельзя незаметно объявлять этот прототип готовым игровым интеграционным requirement. [HOI4](../01-functional/hoi4-standalone-prototype.md).
+
+`RISK-035` — `HttpClientRegistry` переиспользует client по service_id, не сверяя повторные options/factory, `release` закрывает client при нуле references без проверки ongoing request/stream. Это **потенциальный lifecycle/config risk**, не динамически воспроизведённая race. [HTTP audit](../03-runtime/network-client-ownership-and-errors.md).
+
+`RISK-036` — network error sanitizer удаляет стандартные credential query keys, но произвольные secret path/header/custom query keys не могут считаться автоматически закрытыми. Перед публичными diagnostic uploads требуется отдельная политика redaction. [HTTP audit](../03-runtime/network-client-ownership-and-errors.md).
+
+## Дополнение: настройки / конфиденциальность / typed service lifecycle
+
+| ID | Класс | Факт источника | Риск/проверка |
+|---|---|---|---|
+| RISK-037 | Секреты в export | `api_presets_controller.py:77-101,1168-1196` строит effective preset и сериализует без key filtering; `api_presets_controller.py:793-798` также хранит ключи в plaintext | Экспорт может раскрывать API key/reserve keys при пересылке. Это **проверенный формат**, не свидетельство компрометации. [Settings](../01-functional/settings-storage-and-migrations.md) |
+| RISK-038 | Разные outcomes in-memory vs durable | `api_presets_controller.py:1128-1165`: delete/save-order игнорируют результат `_save_presets` | Сообщение success может предшествовать перезапуску с прежним состоянием. Нужен injected I/O failure. [Settings](../01-functional/settings-storage-and-migrations.md) |
+| RISK-039 | Shutdown writer overlap | `settings_manager.py:227-253`: `join(timeout=2)` и затем final `_write_file`, без file lock в этом method | Concurrent writing одной `.tmp` возможно, если worker ещё выполняет I/O; только статический race risk. [Settings](../01-functional/settings-storage-and-migrations.md) |
+| RISK-040 | Shallow mutable preferences | `settings_registry.py:82-101,103-171` даёт mutable nested значения без deep copy и revision только через set/update | Callers могут обойти notifications/save. Подтверждена модель, не frequency инцидентов. [Settings](../01-functional/settings-storage-and-migrations.md) |
+| TRADEOFF-003 | Optimistic UI mirror | `settings_binding.py:50-72,190-203` сразу показывает изменение и откатывает только synchronous service error | Быстрый UI при наличии позднего дискового отказа, который не отменяет local commit. Нужен explicit durable status. [Typed bridge](../03-runtime/typed-services-and-settings-observers.md) |
+
+`HIDE_PRIVATE` прямо назван UI masking (`general_settings.py:163-175`); нельзя считать его криптографической защитой. ChatGPT Plan accounts в DPAPI отделены от обычных API presets и должны рассматриваться как две разные текущие политики хранения.
+
+## Новые статические риски: интерфейс и maintenance
+
+| ID | Source-grounded факт | Возможный риск/эксперимент |
+|---|---|---|
+| `RISK-041` | `EntityGC` применяет последовательные изменения, сообщает counters по плану, когда реальный rowcount может отличаться; GUI cancel не останавливает worker автоматически | Partial transaction / false summary; [graph](../01-functional/graph-maintenance-and-entity-lifecycle.md) |
+| `RISK-042` | Sandbox выключение game interactions одновременно задаёт `IGNORE_GAME_REQUESTS=True` и `GAME_BLOCK_LEVEL="All events"`, повторное включение очищает только первое | После toggle-on часть событий может оставаться заблокирована; статический источник `sandbox_page.py:957-975`; [Sandbox](../02-ui/sandbox-page-functional-contract.md) |
+| `RISK-043` | Chat media одновременно представлены UI bytes и temp `.png` staging; удаление одной миниатюры не подтверждает удаление соответствующего temp | Orphan temp cleanup / duplicate ownership; send реально использует UI bytes. [Composer](../02-ui/chat-composer-and-attachments.md) |
+| `RISK-044` | Удаление до delivery `message_id` и history/stream snapshots используют разные локальные состояния с bounded 256 caches | Stale menus/history replay eviction risks; не воспроизводили. [Chat](../02-ui/chat-stream-history-and-message-actions.md) |
+| `RISK-045` | `message_renderer.py:346-348` проверяет truthy `SHOW_STRUCTURED_IN_GUI` для `role=structured`; другие ветви используют `_is_struct_off` | `"Выкл"` truthy: возможный показ отключённых structured blocks при достижимом role. [Structured UI](../02-ui/structured-ai-results-presentation.md) |
+| `RISK-046` | `PhotoGallery.ensure_directory` без `parents=True`; stat-based thumbnail cache, gallery viewer snapshot отдельно от текущего списка | Ошибка при отсутствии parent, stale image metadata и removed-photo in viewer; [Gallery](../02-ui/gallery-lifecycle-and-photo-viewer.md) |
+| `RISK-047` | `purge_deleted_data` обрабатывает персонажей последовательно, продолжает после ошибок, затем VACUUM и summary | Partial destructive maintenance необходимо показывать отдельно от successful all; [Character UI](../02-ui/character-library-and-maintenance-actions.md) |
+
+Все `RISK-*` описывают подтверждённую структуру условий/веток; реальные инциденты, частота и runtime user impact НЕ проверялись.
+
+`RISK-048` — `NewsPageViewModel` применяет результата `run_coalesced` к текущему state без собственной repository generation проверки; сочетание с `NewsReleasesStore` требует runtime fault fixture при смене `UPDATE_CONTOUR`. Это не доказательство stale response в живом UI. [News](../02-ui/news-and-logs-live-ui-contracts.md).
+
+`TRADEOFF-004` — LogsPage обновляет последние 64 KiB/500 строк раз в 2 сек, пока видна; в отличие от stream subscription это bounded и дешёвое чтение, но перерезанная UTF-8 последовательность может выдать replacement, а старые строки отсутствуют в viewport. [Logs](../02-ui/news-and-logs-live-ui-contracts.md).
+
+`RISK-049` — многокомпонентное обновление в Home может иметь `python_applied=True` при отмене/ошибке последующего Unity шага. ViewModel сохраняет pending restart и показывает modal prompt (`home_page_view_model.py:612-662`), то есть **частичный commit подтверждён алгоритмом**. Обязателен различимый UI result `partial`/per-component outcomes; нельзя ошибочно обещать атомарность. [Home](../02-ui/home-launcher-update-and-game-state.md).
+
+`RISK-050` — Wiki headings используют ASCII-only `_slugify_heading` (`wiki_page.py:168-172`); для чисто русских заголовков получается пустой ID, а `_markdown_to_html` назначает remaining IDs последовательным HTML headings (`:203-220`). Поэтому возможна потеря/сдвиг anchor navigation. Подтверждённый regex/model risk, UI runtime не тестировался. [Wiki](../02-ui/wiki-navigation-localization-and-anchors.md).
+
+## Подтверждения нового прохода (без преждевременного выбора архитектуры)
+
+`RISK-051` **Воспроизведённый дефект данных:** GUI full clear Graph удаляет `graph_entities`, `graph_relations`, `graph_entity_aliases`, но не `graph_processed_messages`; `skip_existing` исключает эти IDs. Факт воспроизведён на временной SQLite с реальным `GraphStore`. [Описание, источники и repro](../01-functional/graph-extraction-ledger-and-clear-consistency.md).
+
+`RISK-052` **Статически подтверждённый defect candidate:** после failed LLM extraction pipeline может пометить сообщение processed; подтверждение конкретных remote errors и ретраев ещё требуется. [Graph ledger](../01-functional/graph-extraction-ledger-and-clear-consistency.md).
+
+`RISK-053` **Воспроизведённый identity mismatch:** `MemoryManager.purge_deleted` удаляет derived memory vectors по SQLite `id`, тогда как RAG store связывает их по `eternal_id`. Результат: orphan embedding и потенциальное присоединение к новой памяти. Локальное SQL join воспроизведено; реальный ANN retrieval не исполнялся. [Memory purge](../01-functional/memory-purge-embedding-identity-regression.md).
+
+`RISK-054` **Atomicity risk, не воспроизведённый сбой:** history_epoch защищает stale summary update, но сброс variables/memory/history/graph не является общей транзакцией. [Reset](../01-functional/character-reset-epoch-and-storage-consistency.md).
+
+`RISK-055` **Миграционная граница:** AI worker RAG service импортирует Python `managers` и `core`, несмотря на subprocess separation. Само наличие импортов — подтверждённый факт, не дефект; риск возникает только при удалении прежнего Python host без выделения импортируемых контрактов. [Worker import](../04-dependencies/ai-worker-python-core-import-boundaries.md).
+
+`RISK-056` **Cache/recovery risk (статический):** factory import error в LazyInstallableRegistry запоминается до invalidate/refresh; каталог может оставаться доступен как metadata, в то время как реализация и status недоступны. Корректность восстановления после обновления env требует runtime теста. [Catalog](../01-functional/installable-catalog-lazy-registry-and-status.md).
