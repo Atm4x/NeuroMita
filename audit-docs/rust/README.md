@@ -39,6 +39,8 @@ GenerationPreset содержит типизированный ProviderTemplate.
 
 Авторизация Gemini соответствует исходному Python-протоколу google_gemini_default: ключ передаётся как URL query-параметр ?key=..., без x-goog-api-key/Authorization. Значение кодируется URL builder. Authenticated URL не сохраняется в trace, ключ скрывается в Debug, transport errors формируются через without_url().
 
+HTTP-клиент reqwest собирается с json, rustls, http2 и system-proxy. Системный прокси Windows/macOS подхватывается автоматически; переменные окружения прокси также учитываются. HTTP/2 согласовывается с сервером, HTTP/1.1 остаётся доступен. Локальный адрес прокси не зашит в код. Изменения системного прокси после создания клиента требуют пересоздания клиента.
+
 Нет каталога, CRUD, ротации и fallback пресетов. В точке сборки явно задаётся шаблон; начальные параметры Gemini: temperature 0.7, max output tokens 2048, timeout 60 секунд.
 
 ChatApi предоставляет reply/react/initiate/send и возвращает RequestHandle. Есть Pending, Processing(Text/Voice), Finished с типизированным исходом и Cancelled.
@@ -97,7 +99,7 @@ ChatApi::trace(id) возвращает активный или недавно �
 
 Локальные тесты не требуют сети/ключа. contracts.rs проверяет настройки, IO/retry, binding, at, семантические обращения, озвучку/частичный результат/отмену, эффекты, TCP test/status/settings, повтор и фрагментированный ввод. vertical_slice.rs проверяет настоящий HTTP-адаптер формата Gemini через локальный сервер.
 
-Ignored live_gemini.rs запускается только с явными NEUROMITA_LIVE_GEMINI_PRESET_FILE и NEUROMITA_LIVE_GEMINI_PRESET_ID. Сделанная попытка не получила HTTP-ответа из-за недоступности Google; независимый curl также завершился connect timeout. Ключ не выводился и не изменялся. Повторный запуск требует среды с доступом к API.
+Ignored live_gemini.rs запускается только с явными NEUROMITA_LIVE_GEMINI_PRESET_FILE и NEUROMITA_LIVE_GEMINI_PRESET_ID. Проверка 2026-11-01 с пресетом Main / gemini-3.6-flash прошла за 1,99 секунды: ответ «Готово.». Переменные HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY были очищены только в тестовом процессе; использовался системный Windows-прокси. Ранний TCP timeout был вызван отсутствием system-proxy в нашей сборке reqwest. Отдельная проверка без ключа согласовала HTTP/2 с тем же хостом. Ключ не выводился, не сохранялся и не изменялся.
 
 Нет тяжёлой SessionTimeline реализации, БД и crash recovery, Slint/TUI renderer, tools, мультимодальности, стриминга токенов и реального TTS-движка. Сейчас реализованы обсуждённые связи и минимальные исполняемые контракты.
 

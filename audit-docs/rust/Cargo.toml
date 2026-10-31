@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.89"
 
 [dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "system-proxy"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"

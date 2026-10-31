@@ -24,6 +24,7 @@ Read [minimal-contracts](../future/minimal-contracts.md) and [checklist](../futu
 - MessageHandler owns sequential execution per character; different characters run concurrently. No LLM await under global locks.
 - GenerationPreset contains typed ProviderTemplate. Gemini wire/URL/auth are inside generation/gemini, not in common application/presenter code.
 - Gemini authentication matches the original Python google_gemini_default: URL query parameter key, not x-goog-api-key. Keep URL encoding and redaction; never log the authenticated request URL.
+- reqwest explicitly enables json, rustls, http2 and system-proxy. Reuse the provider's Client; Windows/macOS system proxy and proxy environment variables are supported. Do not hardcode a machine's proxy address. System proxy changes require rebuilding the Client.
 - Generation returns ProposedResponse with effects. Request lifecycle and internal acceptance phase are separate. Cancellation competes atomically with entry into Accepting; effects precede Finished and the next request.
 - Independent GuiPresenter exposes commands and bindable settings; frontend bindings only translate input/output. No Slint dependency yet.
 - ServerLifecycle owns TCP clients and routes commands to Api. It is generic across client implementations.
@@ -48,7 +49,9 @@ Tests initialize static Api once per test process; do not add many parallel inte
 
 ## Live provider status
 
-One live Gemini attempt used an explicit local fixture, read by tests/live_gemini.rs. No credential is in the repository. It failed before an HTTP response; independent curl to Google's API host also timed out. Do not infer invalid credentials or rotate anything.
+Live Gemini passed on 2026-11-01 using the explicitly selected Main preset / gemini-3.6-flash, read by tests/live_gemini.rs: answer «Готово.» in 1.99 seconds. HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY were cleared in the test process; reqwest automatically used the Windows system proxy. No credential is in the repository.
+
+The previous TCP timeout came from disabling reqwest defaults without re-enabling system-proxy. Python HTTPX already read the Windows registry proxy through trust_env/getproxies. The corrected Rust build explicitly enables system-proxy and http2. A separate keyless GET to the same API host negotiated HTTP/2 (the root path returned the expected 404).
 
 To opt into another live run, provide NEUROMITA_LIVE_GEMINI_PRESET_FILE and NEUROMITA_LIVE_GEMINI_PRESET_ID for an explicitly selected local JSON fixture, then run:
 
@@ -60,7 +63,6 @@ The fixture is a legacy test-data source only. Production code uses typed preset
 
 ## Remaining work / deliberate limits
 
-- Re-run live Gemini in a network environment that reaches Google.
 - Real TTS engine, Slint/TUI frontend, tools and multimodal/streamed token handling are not implemented; ports and settings contracts are present.
 - Timeline is a Vec with one branch and minimal at; no database, forks/checkpoint recovery or durable effect transaction.
 - RequestTrace is bounded memory diagnostics. No durable DB trace or cross-restart request recovery.
@@ -77,4 +79,4 @@ Implementation/vendor commit e87d392ca327f3e6f50302051458498af0e84bb5 was pushed
 
 Subsequent Gemini auth fix matches Python's query key contract. Validation after that fix: 9 local tests passed, Clippy/rustfmt passed; HTTP fixture asserts query authentication and absence of auth headers.
 
-The live fixture was retried after the query-auth fix with the same explicit preset. It still failed before an HTTP response (transport error); credentials/model validity remain unconfirmed. The authenticated URL was not printed or persisted.
+After enabling system-proxy/http2, live Gemini passed without proxy environment overrides. Nine local tests, Clippy with -D warnings and rustfmt passed. Cargo.lock and vendor now include 179 packages, including HTTP/2 and Windows/macOS proxy dependencies. The authenticated URL was not printed or persisted.
