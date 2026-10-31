@@ -23,6 +23,7 @@ Read [minimal-contracts](../future/minimal-contracts.md) and [checklist](../futu
 - One owned Character per CharacterHandler mailbox; immutable definition and mutable state. CharacterRegistry exposes handles.
 - MessageHandler owns sequential execution per character; different characters run concurrently. No LLM await under global locks.
 - GenerationPreset contains typed ProviderTemplate. Gemini wire/URL/auth are inside generation/gemini, not in common application/presenter code.
+- Gemini authentication matches the original Python google_gemini_default: URL query parameter key, not x-goog-api-key. Keep URL encoding and redaction; never log the authenticated request URL.
 - Generation returns ProposedResponse with effects. Request lifecycle and internal acceptance phase are separate. Cancellation competes atomically with entry into Accepting; effects precede Finished and the next request.
 - Independent GuiPresenter exposes commands and bindable settings; frontend bindings only translate input/output. No Slint dependency yet.
 - ServerLifecycle owns TCP clients and routes commands to Api. It is generic across client implementations.
@@ -73,3 +74,7 @@ Keep working toward the user's contracts rather than copying Python architecture
 Target branch: codex/rust-core-contracts on origin. Final pushed commit is reported in the chat; check git log and the checklist for delivered state.
 
 Implementation/vendor commit e87d392ca327f3e6f50302051458498af0e84bb5 was pushed and matched the remote ref. A following documentation-only commit records this delivery. Final local validation: 8 tests passed, one opt-in live test ignored, Clippy and rustfmt passed; all 168 vendor package checksums verified. Existing untracked build archives were deliberately left out.
+
+Subsequent Gemini auth fix matches Python's query key contract. Validation after that fix: 9 local tests passed, Clippy/rustfmt passed; HTTP fixture asserts query authentication and absence of auth headers.
+
+The live fixture was retried after the query-auth fix with the same explicit preset. It still failed before an HTTP response (transport error); credentials/model validity remain unconfirmed. The authenticated URL was not printed or persisted.

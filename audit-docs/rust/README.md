@@ -37,6 +37,8 @@ YOUR_GEMINI_MODEL — доступный вам model ID. Стартовый с�
 
 GenerationPreset содержит типизированный ProviderTemplate. Текущий адаптер — GeminiProvider с GeminiTemplate. URL, авторизация, wire format и обработка ответа находятся в generation/gemini. Общий GenerationProvider не предполагает HTTP или Gemini.
 
+Авторизация Gemini соответствует исходному Python-протоколу google_gemini_default: ключ передаётся как URL query-параметр ?key=..., без x-goog-api-key/Authorization. Значение кодируется URL builder. Authenticated URL не сохраняется в trace, ключ скрывается в Debug, transport errors формируются через without_url().
+
 Нет каталога, CRUD, ротации и fallback пресетов. В точке сборки явно задаётся шаблон; начальные параметры Gemini: temperature 0.7, max output tokens 2048, timeout 60 секунд.
 
 ChatApi предоставляет reply/react/initiate/send и возвращает RequestHandle. Есть Pending, Processing(Text/Voice), Finished с типизированным исходом и Cancelled.

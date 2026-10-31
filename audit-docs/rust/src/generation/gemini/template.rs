@@ -1,13 +1,13 @@
 use std::{fmt, sync::Arc, time::Duration};
 
-use reqwest::{Url, header::HeaderValue};
+use reqwest::Url;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum PresetError {
     #[error("model must be a nonempty Gemini model identifier")]
     Model,
-    #[error("API key must be a nonempty valid HTTP header value")]
+    #[error("API key must be nonempty without whitespace or control characters")]
     ApiKey,
     #[error("endpoint must be HTTPS, or loopback HTTP, without credentials, query or fragment")]
     Endpoint,
@@ -58,7 +58,7 @@ impl GenerationSettings {
 pub struct GeminiTemplate {
     endpoint: Url,
     model: Arc<str>,
-    api_key: HeaderValue,
+    api_key: Arc<str>,
     settings: GenerationSettings,
 }
 
@@ -116,15 +116,17 @@ impl GeminiTemplate {
         {
             return Err(PresetError::Endpoint);
         }
-        if api_key.trim().is_empty() {
+        if api_key.is_empty()
+            || api_key
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+        {
             return Err(PresetError::ApiKey);
         }
-        let mut api_key = HeaderValue::from_str(api_key).map_err(|_| PresetError::ApiKey)?;
-        api_key.set_sensitive(true);
         Ok(Self {
             endpoint,
             model: Arc::from(model),
-            api_key,
+            api_key: Arc::from(api_key),
             settings,
         })
     }
@@ -135,13 +137,13 @@ impl GeminiTemplate {
     pub fn settings(&self) -> &GenerationSettings {
         &self.settings
     }
-    pub(crate) fn api_key(&self) -> HeaderValue {
-        self.api_key.clone()
-    }
     pub(crate) fn request_url(&self) -> Url {
-        self.endpoint
+        let mut url = self
+            .endpoint
             .join(&format!("models/{}:generateContent", self.model))
-            .expect("validated Gemini model path")
+            .expect("validated Gemini model path");
+        url.query_pairs_mut().append_pair("key", &self.api_key);
+        url
     }
 }
 
@@ -162,5 +164,21 @@ mod tests {
         );
         let template = GeminiTemplate::google("model", "private-test-key", settings).unwrap();
         assert!(!format!("{template:?}").contains("private-test-key"));
+    }
+
+    #[test]
+    fn query_auth_encodes_the_key_once_and_keeps_debug_redacted() {
+        let key = "test+key/&?=#";
+        let settings = GenerationSettings::new(0.7, 1, Duration::from_secs(1)).unwrap();
+        let template = GeminiTemplate::google("test-model", key, settings.clone()).unwrap();
+        let url = template.request_url();
+        assert_eq!(url.path(), "/v1beta/models/test-model:generateContent");
+        let pairs: Vec<_> = url.query_pairs().collect();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "key");
+        assert_eq!(pairs[0].1, key);
+        assert!(url.fragment().is_none());
+        assert!(!format!("{template:?}").contains(key));
+        assert!(GeminiTemplate::google("test-model", "key\n", settings).is_err());
     }
 }

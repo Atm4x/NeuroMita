@@ -116,11 +116,9 @@ async fn serve(mut stream: TcpStream, calls: mpsc::UnboundedSender<Call>) {
                 .then(|| value.trim().parse().unwrap())
         })
         .unwrap();
-    assert!(
-        header
-            .to_ascii_lowercase()
-            .contains("x-goog-api-key: test-key")
-    );
+    assert!(!header.to_ascii_lowercase().contains("x-goog-api-key:"));
+    assert!(!header.to_ascii_lowercase().contains("authorization:"));
+    assert!(path.contains(":generateContent?key=test-key "));
     while bytes.len() < boundary + size {
         let mut chunk = [0; 4096];
         let count = stream.read(&mut chunk).await.unwrap();
@@ -251,7 +249,7 @@ async fn presenter_to_provider_observation_cancellation_and_commit() {
     let first_call = server.next().await;
     assert_eq!(
         first_call.path,
-        "POST /v1beta/models/test-model:generateContent HTTP/1.1"
+        "POST /v1beta/models/test-model:generateContent?key=test-key HTTP/1.1"
     );
     assert_eq!(user_texts(&first_call.body), ["first"]);
     assert_eq!(first_call.body["generationConfig"]["candidateCount"], 1);

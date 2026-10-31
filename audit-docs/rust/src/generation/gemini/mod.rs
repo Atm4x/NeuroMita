@@ -30,7 +30,6 @@ impl GeminiProvider {
         let mut response = self
             .client
             .post(template.request_url())
-            .header("x-goog-api-key", template.api_key())
             .timeout(template.settings().timeout())
             .json(&body)
             .send()
