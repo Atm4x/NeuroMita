@@ -71,3 +71,5 @@ Keep working toward the user's contracts rather than copying Python architecture
 ## Git delivery
 
 Target branch: codex/rust-core-contracts on origin. Final pushed commit is reported in the chat; check git log and the checklist for delivered state.
+
+Implementation/vendor commit e87d392ca327f3e6f50302051458498af0e84bb5 was pushed and matched the remote ref. A following documentation-only commit records this delivery. Final local validation: 8 tests passed, one opt-in live test ignored, Clippy and rustfmt passed; all 168 vendor package checksums verified. Existing untracked build archives were deliberately left out.
