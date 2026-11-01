@@ -158,3 +158,52 @@ def test_go_catalog_includes_deepseek_alongside_responses_models():
         {'id': 'grok-4.7'}, {'id': 'gemini-4-argon'}, {'id': 'claude-haiku-5-5'},
     ]})['models']
     assert [m['id'] for m in models] == ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'grok-4.7', 'gemini-4-argon']
+
+
+def test_fallback_model_override_adapts_token_limit_without_mutating_source(tmp_path):
+    from managers.api_preset_resolver import ApiPresetResolver
+    service = ModelSettingsService(SchemaRepository(tmp_path / 'schemas'))
+    document = service.create('openai-compatible')
+    document['values']['max_tokens'] = 1
+    document['enabled'] = ['max_tokens']
+    preset = {**template_data()[1], 'key': 'test-key', 'model_settings': document}
+    primary = {**preset, 'fallbacks': [{'preset_id': 101, 'model': 'grok-4.7'}]}
+    resolver = ApiPresetResolver({}, None, model_settings_service=service)
+    resolver._load_preset_full = Mock(side_effect=lambda pid: primary if pid == 100 else preset)
+    chain = resolver.resolve_chain(100)
+    assert len(chain) == 2
+    assert chain[0].native_parameters == {'max_tokens': 1}
+    assert chain[1].native_parameters == {'max_output_tokens': 16}
+    assert document['values']['max_tokens'] == 1
+    assert document['enabled'] == ['max_tokens']
+
+
+def test_schema_adaptation_resets_invalid_enum(tmp_path):
+    service = ModelSettingsService(SchemaRepository(tmp_path / 'schemas'))
+    document = service.create('openai-compatible')
+    document['values']['reasoning_effort'] = 'unavailable'
+    document['enabled'] = ['reasoning_effort']
+    adapted = service.change_schema(document, 'openai-responses', 'openai_responses', validate_values=True)
+    assert 'reasoning_effort' not in adapted['enabled']
+    assert service.compile(adapted, 'openai_responses') == {}
+    assert document['values']['reasoning_effort'] == 'unavailable'
+
+
+def test_schema_adaptation_clamps_custom_range_and_disables_exclusive_conflicts(tmp_path):
+    from copy import deepcopy
+    from model_settings.schema import SettingsSchema
+    service = ModelSettingsService(SchemaRepository(tmp_path / 'schemas'))
+    definition = deepcopy(service.repository.get('openai-responses').data)
+    definition['id'] = 'review-target'
+    for field in definition['fields']:
+        if field['id'] in {'temperature', 'top_p'}:
+            field['exclusive_group'] = 'sampling'
+    service.repository.install(SettingsSchema.from_dict(definition))
+    document = service.create('openai-compatible')
+    document['values'].update(temperature=2.5, top_p=0.5)
+    document['enabled'] = ['temperature', 'top_p']
+    adapted = service.change_schema(document, 'review-target', 'openai_responses', validate_values=True)
+    assert adapted['values']['temperature'] == 2
+    assert adapted['enabled'] == []
+    assert service.compile(adapted, 'openai_responses') == {}
+    assert document['values']['temperature'] == 2.5

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QDialog
 
@@ -17,11 +19,13 @@ class PresetModelSettingsController(QObject):
         self.form = form
         self.service = service or ModelSettingsService()
         self.dialect = "openai_chat_completions"
+        self._dialect_documents = {}
         form.import_requested.connect(self.import_definition)
         form.export_requested.connect(self.export_definition)
         form.edit_requested.connect(self.edit_definition)
 
     def load(self, preset, dialect, settings=None, *, provider=""):
+        self._dialect_documents.clear()
         self.dialect = dialect
         document = self.service.for_preset(preset, dialect, settings)
         document.setdefault("sparse_response", provider == "chatgpt_plan")
@@ -32,20 +36,33 @@ class PresetModelSettingsController(QObject):
         self.form.load(schema, normalized)
 
     def restore(self, document, dialect=None):
+        self._dialect_documents.clear()
         if dialect is not None:
             self.dialect = dialect
         self._render(document)
 
     def set_dialect(self, dialect, suggested="", *, preserve_values=False):
+        if not preserve_values:
+            self._dialect_documents.clear()
         if dialect == self.dialect and not suggested:
             return
         document = self.form.document()
         if document is not None and dialect == self.dialect and document["schema_id"] == suggested:
             return
         same_dialect = dialect == self.dialect
+        if preserve_values and document is not None:
+            self._dialect_documents[self.dialect] = deepcopy(document)
+        else:
+            self._dialect_documents.clear()
         self.dialect = dialect
         identifier = self.service.default_id(dialect, suggested)
-        updated = self.service.change_schema(document, identifier, dialect) if preserve_values and document is not None else self.service.create(identifier)
+        cached = self._dialect_documents.get(dialect) if preserve_values and not suggested else None
+        if cached is not None:
+            updated = deepcopy(cached)
+        elif preserve_values and document is not None:
+            updated = self.service.change_schema(document, identifier, dialect, validate_values=True)
+        else:
+            updated = self.service.create(identifier)
         if same_dialect and document is not None and "sparse_response" in document:
             updated["sparse_response"] = document["sparse_response"]
         self._render(updated)
