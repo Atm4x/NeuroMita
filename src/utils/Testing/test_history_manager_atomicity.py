@@ -45,6 +45,32 @@ class _ConnectionProxy:
 
 
 class HistoryManagerAtomicityTests(unittest.TestCase):
+    def test_presentation_metadata_is_scoped_and_cannot_replace_timeline_content(self) -> None:
+        self.hm.rag = None
+        self.hm.add_messages([
+            {"message_id": "out:1", "role": "assistant", "content": "answer", "thinking": "thought"},
+            {"message_id": "out:2", "role": "assistant", "content": "old answer", "thinking": "old thought"},
+        ])
+        originals = [
+            {"message_id": "out:1", "role": "assistant", "content": "answer"},
+            {"message_id": "out:2", "role": "assistant", "content": "edited answer"},
+            {"message_id": "out:3", "role": "assistant", "content": "timeline only"},
+        ]
+        enriched = self.hm.with_presentation_metadata(originals)
+        self.assertEqual(enriched[0]["thinking"], "thought")
+        self.assertNotIn("thinking", enriched[1])
+        self.assertNotIn("thinking", originals[0])
+        self.assertEqual([m["content"] for m in enriched], [m["content"] for m in originals])
+        self.assertNotIn("thinking", self.hm.bind("other").with_presentation_metadata(originals)[0])
+
+    def test_timeline_cache_rebuild_preserves_reasoning_across_reopen(self) -> None:
+        self.hm.rag = None
+        message = {"message_id": "out:1", "role": "assistant", "content": "answer"}
+        self.hm.add_message(dict(message, thinking="thought"))
+        self.hm.replace_timeline_cache([message])
+        reopened = HistoryManager(storage_name="Test", character_id="char:test")
+        self.assertEqual(reopened.with_presentation_metadata([message])[0]["thinking"], "thought")
+
     def test_timeline_export_retains_archived_facts_and_excludes_deleted_rows(self) -> None:
         self.hm.rag = None
         rows = self.hm.add_messages([

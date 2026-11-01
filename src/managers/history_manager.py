@@ -1120,6 +1120,33 @@ class HistoryManager(CharacterScopedService):
             "variables": variables,
         }
 
+    def with_presentation_metadata(self, messages: Iterable[dict]) -> list[dict]:
+        """Attach stored reasoning without letting cache rows define conversation facts."""
+        result = [dict(message) for message in messages]
+        identities = list(dict.fromkeys(
+            str(message["message_id"]) for message in result if message.get("message_id")
+        ))
+        stored = {}
+        columns = ["id", "role", "content", "meta_data", "message_id", "thinking"]
+        with self.db.connection() as conn:
+            for start in range(0, len(identities), 400):
+                batch = identities[start:start + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT {', '.join(columns)} FROM history "
+                    f"WHERE character_id=? AND message_id IN ({placeholders}) "
+                    "AND thinking IS NOT NULL AND thinking != '' ORDER BY id",
+                    (self.storage_key, *batch),
+                ).fetchall()
+                for message in self._decode_history_rows(rows, columns):
+                    stored[str(message["message_id"])] = message
+        for message in result:
+            cached = stored.get(str(message.get("message_id") or ""))
+            if (cached and cached.get("content") == message.get("content")
+                    and not message.get("thinking")):
+                message["thinking"] = cached["thinking"]
+        return result
+
     def export_timeline_history(self) -> list[dict]:
         """Read every retained fact, including archived rows, for the timeline import."""
         columns = self._history_select_columns()
@@ -1343,6 +1370,7 @@ class HistoryManager(CharacterScopedService):
             self._refresh_history_columns()
         committed = []
         with self._write_lock:
+            messages = self.with_presentation_metadata(messages)
             connection = self.db.get_connection()
             try:
                 connection.execute("BEGIN IMMEDIATE")

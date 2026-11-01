@@ -20,6 +20,26 @@ from ui.windows.app_window_base import AppWindowBase
 from core.events import Events
 
 
+@pytest.mark.parametrize("prepend", [False, True])
+@pytest.mark.parametrize("show_thinking", [False, True])
+def test_history_reasoning_is_adjacent_to_its_answer(prepend, show_thinking):
+    rows = []
+    def insert(_context, *, role, content, insert_at_start=False, **_kwargs):
+        if insert_at_start:
+            rows.insert(0, role)
+        else:
+            rows.append(role)
+    window = SimpleNamespace(
+        _chat_presentation=SimpleNamespace(is_message_deleted=lambda **_kwargs: False),
+        _chat_render_context=object(), _get_setting=lambda *_args: show_thinking,
+    )
+    with patch("ui.windows.app_window_base.message_renderer.insert_message", side_effect=insert):
+        AppWindowBase._render_history_entry(window, {
+            "role": "assistant", "content": "answer", "thinking": "thought", "message_id": "out:1",
+        }, character_id="A", insert_at_start=prepend)
+    assert rows == (["think", "assistant"] if show_thinking else ["assistant"])
+
+
 def test_first_lazy_chat_mount_requests_history_without_prior_pending_load():
     window = SimpleNamespace(chat_window=object(), _pending_history_payload=None,
         _chat_history_load_pending=False, load_chat_history=Mock(), update_token_count=Mock())

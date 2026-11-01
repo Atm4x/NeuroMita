@@ -26,11 +26,16 @@ class TimelineHistoryView:
     def _messages(self) -> list[dict]:
         return list(self.conversation.messages(self.character_id, before_turn=False))
 
+    def _presentation_messages(self, messages) -> list[dict]:
+        messages = list(self.conversation.content.materialize(messages))
+        enrich = getattr(self.cache, "with_presentation_metadata", None)
+        return enrich(messages) if callable(enrich) else messages
+
     def load_history(self) -> dict:
         load_variables = getattr(self.cache, "load_variables", None)
         result = ({"fixed_parts": [], "temp_context": [], "variables": load_variables()}
                   if callable(load_variables) else self.cache.load_history())
-        result["messages"] = list(self.conversation.content.materialize(self._messages()))
+        result["messages"] = self._presentation_messages(self._messages())
         return result
 
     def get_total_messages_count(self) -> int:
@@ -39,9 +44,9 @@ class TimelineHistoryView:
     def get_recent_messages(self, limit: int = 50, offset: int = 0) -> list[dict]:
         if limit <= 0 or offset < 0:
             return []
-        return list(self.conversation.content.materialize(self.conversation.history_queries.page(
+        return self._presentation_messages(self.conversation.history_queries.page(
             self.conversation.runtime.timeline.branch_id, self.character_id, limit=limit, offset=offset,
-        )))
+        ))
 
     def contains_message_id(self, message_id: str) -> bool:
         return self.conversation.history_queries.contains(

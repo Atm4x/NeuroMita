@@ -59,6 +59,34 @@ class HistoryViewTests(unittest.TestCase):
         self.cache.messages = [self.message(3, "cache-only")]
         self.assertEqual([message["content"] for message in self.view.load_history()["messages"]], ["1", "2"])
 
+    def test_persisted_reasoning_stays_with_answers_after_refresh_and_paging(self):
+        from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
+
+        messages = [dict(self.message(i), role="assistant", speaker="A", thinking=f"thought {i}")
+                    for i in (1, 2)]
+        self.view.add_messages(messages)
+        def enrich(rows):
+            metadata = {m["message_id"]: m["thinking"] for m in self.cache.messages}
+            return [dict(m, thinking=metadata[m["message_id"]]) for m in rows]
+        self.cache.with_presentation_metadata = enrich
+        coordinator = ChatPresentationCoordinator()
+        for message in messages:
+            coordinator.record_live(ChatRenderCommand(
+                role="think", content=message["thinking"], character_id="A", message_id=message["message_id"],
+            ), current_character_id="A")
+        for _ in range(2):
+            ticket = coordinator.begin_history_load("A")
+            history = self.view.get_recent_messages()
+            plan = coordinator.plan_history_projection(
+                request_id=ticket.request_id, response_character_id="A", current_character_id="A",
+                history_messages=history,
+            )
+            self.assertEqual(plan.replay, ())
+            self.assertEqual([m["thinking"] for m in history], ["thought 1", "thought 2"])
+        self.assertEqual(self.view.get_recent_messages(1, 1)[0]["thinking"], "thought 1")
+        self.assertEqual(self.view.load_history()["messages"][1]["thinking"], "thought 2")
+        self.assertNotIn("thinking", self.conversation.messages("A")[0])
+
     def test_canonical_history_does_not_read_disposable_message_rows(self):
         self.view.add_message(self.message(1))
         self.cache.load_variables = lambda: {"mood": 5}
