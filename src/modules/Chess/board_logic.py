@@ -9,8 +9,9 @@ PIECE_SYMBOLS = {
 
 
 class PureBoardLogic:
-    def __init__(self):
+    def __init__(self, on_move=None):
         self.board = chess.Board()
+        self.on_move = on_move
 
     def reset_board(self, fen=None):
         if fen:
@@ -24,6 +25,22 @@ class PureBoardLogic:
 
     def get_fen(self):
         return self.board.fen()
+
+    def snapshot(self):
+        return {"root_fen": self.board.root().fen(en_passant="fen", promoted=True),
+                "moves": [move.uci() for move in self.board.move_stack],
+                "fen": self.board.fen(en_passant="fen", promoted=True)}
+
+    def restore_snapshot(self, state):
+        if (not isinstance(state, dict) or set(state) != {"root_fen", "moves", "fen"}
+                or not isinstance(state["moves"], list) or not all(isinstance(move, str) for move in state["moves"])):
+            raise ValueError("Invalid chess position snapshot")
+        board = chess.Board(state["root_fen"])
+        for move in state["moves"]:
+            board.push(chess.Move.from_uci(move))
+        if board.fen(en_passant="fen", promoted=True) != state["fen"]:
+            raise ValueError("Chess move history does not match the saved position")
+        self.board = board
 
     def get_turn(self):
         return self.board.turn
@@ -97,7 +114,10 @@ class PureBoardLogic:
             move = chess.Move.from_uci(uci_move_str)
             if move in self.board.legal_moves:
                 san_move_str = self.board.san(move)
+                mover = self.board.turn
                 self.board.push(move)
+                if self.on_move is not None:
+                    self.on_move(uci_move_str, san_move_str, mover)
                 return True, f"Ход {san_move_str} (UCI: {uci_move_str}) сделан.", san_move_str
             else:
                 promotion_move_options = [
@@ -118,8 +138,11 @@ class PureBoardLogic:
         """Cheat: делает ход без проверки легальности."""
         try:
             move = chess.Move.from_uci(uci_move_str)
+            mover = self.board.turn
+            san = self.board.san(move) if move in self.board.legal_moves else uci_move_str
             self.board.push(move)
-            san = self.board.san(move)
+            if self.on_move is not None:
+                self.on_move(uci_move_str, san, mover)
             return True, f"Чит-ход {san} (UCI: {uci_move_str}).", san
         except (ValueError, AssertionError):
             return False, f"Невозможный чит-ход: {uci_move_str}", None

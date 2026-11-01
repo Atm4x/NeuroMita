@@ -19,8 +19,9 @@ from main_logger import logger
 
 TEXT_PART = "text"
 IMAGE_PART = "image_url"
+IMAGE_REFERENCE_PART = "image_ref"
 
-_known_types = frozenset({TEXT_PART, IMAGE_PART})
+_known_types = frozenset({TEXT_PART, IMAGE_PART, IMAGE_REFERENCE_PART})
 _reported_unknown: set[str] = set()
 _report_lock = threading.Lock()
 
@@ -64,7 +65,7 @@ class MessageContentCodec:
     @classmethod
     def placeholder(cls, part: Dict[str, Any]) -> str:
         part_type = cls.part_type(part)
-        if part_type == IMAGE_PART:
+        if part_type in {IMAGE_PART, IMAGE_REFERENCE_PART}:
             return "[image]"
         if not part_type:
             return ""

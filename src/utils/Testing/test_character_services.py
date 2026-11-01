@@ -94,6 +94,8 @@ class CharacterServiceTests(unittest.TestCase):
             self.assertEqual(history_a.load_variables(["attitude", "boredom"]), {"attitude": 84, "boredom": 7})
             self.assertEqual(history_b.load_variables(["attitude"]), {"attitude": 41})
             self.assertEqual(history_a.load_variables([]), {})
+            self.assertEqual(history_a.load_variables(), {"attitude": 84, "boredom": 7, "unrelated": 123})
+            self.assertEqual(history_b.load_variables(), {"attitude": 41})
         finally:
             resources.shutdown()
 

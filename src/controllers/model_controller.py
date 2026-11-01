@@ -1,6 +1,7 @@
 # src/controllers/model_controller.py
 from __future__ import annotations
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 
 import base64
 import dataclasses
@@ -9,6 +10,8 @@ import datetime
 import re
 import copy
 import threading
+from contextlib import nullcontext
+from core.state_barrier import state_operation
 from types import SimpleNamespace
 from typing import Optional, Any
 
@@ -51,6 +54,7 @@ from services.structured_response_capabilities import (
 )
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
+from services.conversation_timeline import ConversationTimeline
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
     structured_response_to_result_dict,
@@ -152,6 +156,17 @@ def _strip_graph_tag(text: str) -> tuple[str, Optional[str]]:
     return clean, json_str
 
 
+def _assert_timeline_current(controller) -> None:
+    timeline = getattr(getattr(controller, "event_writer", None), "timeline", None)
+    if timeline is not None:
+        timeline.runtime.assert_current()
+
+
+def _timeline_effect_scope(controller):
+    timeline = getattr(getattr(controller, "event_writer", None), "timeline", None)
+    return timeline.runtime.writing() if timeline is not None else nullcontext()
+
+
 class ModelController(GenerationService, ModelStateService):
     """
     ModelController:
@@ -201,7 +216,10 @@ class ModelController(GenerationService, ModelStateService):
         self._temporary_system_infos: dict[str, list[dict]] = {}
         self._temporary_system_infos_lock = threading.Lock()
 
-        self.event_writer = ConversationEventWriter(character_ref_resolver=self._get_character_ref)
+        self.event_writer = ConversationEventWriter(
+            character_ref_resolver=self._get_character_ref,
+            timeline=services().get_optional(ConversationTimeline),
+        )
         self.ui_projector = HistoryUiProjector(
             resolve_name=lambda cid: str(
                 getattr(self._get_character_ref(cid), "display_name", "") or cid
@@ -303,6 +321,55 @@ class ModelController(GenerationService, ModelStateService):
     # Game state / temp system infos
     # ---------------------------------------------------------------------
 
+    @state_operation
+    def snapshot_session_context(self) -> dict:
+        from domain.timeline import JsonDocument
+        with self._game_states_lock, self._temporary_system_infos_lock:
+            return JsonDocument({
+                "game_states": {key: dataclasses.asdict(value) for key, value in self._game_states_by_character_id.items()},
+                "shared_world_info": self._shared_world_info,
+                "temporary_system_infos": self._temporary_system_infos,
+            }).to_dict()
+
+    @staticmethod
+    def validate_session_context(data: dict):
+        from domain.timeline import JsonDocument
+        JsonDocument(data)
+        if set(data) != {"game_states", "shared_world_info", "temporary_system_infos"} or not all(isinstance(value, dict) for value in data.values()):
+            raise ValueError("Invalid model context snapshot")
+        for value in data["game_states"].values():
+            if not isinstance(value, dict) or set(value) != set(GameState.__dataclass_fields__):
+                raise ValueError("Invalid observed world state")
+            if (type(value["distance"]) not in {int, float} or type(value["roomPlayer"]) is not int
+                    or type(value["roomMita"]) is not int or any(not isinstance(item, str) for key, item in value.items()
+                        if key not in {"distance", "roomPlayer", "roomMita"})):
+                raise ValueError("Invalid observed world field types")
+        if (not data["shared_world_info"].keys() <= {"roomPlayer", "worldPlayer"}
+                or ("roomPlayer" in data["shared_world_info"] and type(data["shared_world_info"]["roomPlayer"]) is not int)
+                or ("worldPlayer" in data["shared_world_info"] and not isinstance(data["shared_world_info"]["worldPlayer"], str))):
+            raise ValueError("Invalid shared world observation")
+        for messages in data["temporary_system_infos"].values():
+            if not isinstance(messages, list) or not all(isinstance(message, dict) and set(message) == {"role", "content"}
+                    and message["role"] == "system" and isinstance(message["content"], str) for message in messages):
+                raise ValueError("Invalid temporary system context")
+
+    @state_operation
+    def restore_session_context(self, data: dict):
+        self.validate_session_context(data)
+        with self._game_states_lock, self._temporary_system_infos_lock:
+            self._game_states_by_character_id = {key: GameState(**value) for key, value in data["game_states"].items()}
+            self._shared_world_info = dict(data["shared_world_info"])
+            self._temporary_system_infos = {key: [dict(message) for message in messages]
+                                            for key, messages in data["temporary_system_infos"].items()}
+            self._last_token_stats = {}
+        with self._context_snapshot_lock:
+            self._context_snapshot_cache.clear()
+        self.total_messages_in_history = 0
+        self.loaded_messages_offset = 0
+        self.loading_more_history = False
+        self._history_character_id = ""
+
+    @state_operation
     def _on_set_game_data(self, event: Event):
         data = event.data or {}
         if not isinstance(data, dict):
@@ -328,6 +395,7 @@ class ModelController(GenerationService, ModelStateService):
             result["shared_world_info"] = dict(self._shared_world_info)
             return result
 
+    @state_operation
     def _on_add_temporary_system_info(self, event: Event):
         data = event.data or {}
         content = data.get("content", "")
@@ -348,6 +416,7 @@ class ModelController(GenerationService, ModelStateService):
         with self._temporary_system_infos_lock:
             return list(self._temporary_system_infos.get(character_id, ()))
 
+    @state_operation
     def _consume_temporary_system_infos(self, character_id: str, reserved: list[dict]) -> None:
         if not character_id or not reserved:
             return
@@ -925,6 +994,7 @@ class ModelController(GenerationService, ModelStateService):
     # Token counting / cost
     # ---------------------------------------------------------------------
 
+    @state_operation
     def _record_context_snapshot(self, character_id: str, event_type: str, messages: list[dict]) -> None:
         """Record the assembled request without retaining image payloads."""
         if not character_id or not isinstance(messages, list):
@@ -1348,7 +1418,20 @@ class ModelController(GenerationService, ModelStateService):
             if request.cancellation is not None:
                 request.cancellation.raise_if_cancelled()
             perf_mark(request.trace_id, "generation.character_lock_acquired")
-            return self._generate_chat_serialized(request, char)
+            timeline = getattr(self.event_writer, "timeline", None)
+            if timeline is None:
+                return self._generate_chat_serialized(request, char)
+            runtime = timeline.runtime
+            with runtime.turn_scope(
+                request.timeline_turn or runtime.capture(character_id=str(char.char_id)),
+                cancellation=request.cancellation,
+            ):
+                policy = request.policy or resolve_policy(model_event_type=request.event_type)
+                if not policy.write_to_history:
+                    return self._generate_chat_serialized(request, char)
+                turn = self.event_writer.begin_turn(request, str(char.char_id))
+                with runtime.turn_scope(turn):
+                    return self._generate_chat_serialized(request, char)
 
     def _generate_chat_serialized(self, request: ChatGenerationRequest, char) -> Optional[ChatGenerationResult]:
         if request.dialogue is not None and not hasattr(request.dialogue, "participants"):
@@ -1380,6 +1463,7 @@ class ModelController(GenerationService, ModelStateService):
         char_id = getattr(char, "char_id", "") or ""
         char_name = getattr(char, "display_name", "") or ""
         is_game_master = char_id.casefold() == "gamemaster"
+        character_profile = runtime_profile_for(char)
 
         rag_context = ""
         core_memory_context_text = ""
@@ -1387,6 +1471,7 @@ class ModelController(GenerationService, ModelStateService):
             request.cancellation.raise_if_cancelled()
         if (
             not is_game_master
+            and character_profile.rag_enabled
             and bool(self.settings.get("RAG_ENABLED", False))
             and policy.react_level != 1
         ):
@@ -1399,7 +1484,7 @@ class ModelController(GenerationService, ModelStateService):
         # Core-memory triggers (e.g. the code 23 easter egg) are exact hooks:
         # they fire on precise player input, independent of RAG availability or
         # embedding similarity of a two-digit message.
-        if not is_game_master:
+        if not is_game_master and character_profile.core_memory_enabled:
             try:
                 from managers.core_memory_triggers import core_memory_context
                 core_memory_context_text = core_memory_context(user_input, character_id=char_id)
@@ -1420,7 +1505,7 @@ class ModelController(GenerationService, ModelStateService):
             or game_state.get("worldPlayer")
             or ""
         ).strip()
-        character_world_context = get_world_context_text(
+        character_world_context = "" if character_profile.scene_context_key else get_world_context_text(
             character_id=char_id,
             world_id=character_world,
         )
@@ -1471,12 +1556,13 @@ class ModelController(GenerationService, ModelStateService):
         except Exception as e:
             logger.warning(f"[ModelController] Failed to resolve preset capabilities: {format_exception(e)}")
 
-        if is_game_master:
+        if is_game_master or character_profile.requires_structured_output:
             effective_capabilities["structured_output"] = True
 
         _tools_on = (
             bool(self.settings.get("TOOLS_ON", True))
             and not is_game_master
+            and character_profile.tools_enabled
             and bool(effective_capabilities.get("tools_prompt_enabled", True))
             and int(self.settings.get("TOOL_MAX_DEPTH", 2)) > 0
         )
@@ -1810,6 +1896,7 @@ class ModelController(GenerationService, ModelStateService):
                     error_details=error_details,
                 )
 
+            _assert_timeline_current(self)
             raw_text = llm_response.text
             effective_capabilities['tool_mode'] = (llm_response.raw or {}).get(
                 'tool_mode', effective_capabilities.get('tool_mode'),
@@ -1888,7 +1975,7 @@ class ModelController(GenerationService, ModelStateService):
                     and bool(self.settings.get("GRAPH_EXTRACTION_INLINE", False))):
                 visible_raw, inline_graph_json = _strip_graph_tag(visible_raw)
 
-            with character_lock(char_id):
+            with _timeline_effect_scope(self), character_lock(char_id):
                 with perf_span(trace_id, "generation.nlp_postprocess"):
                     processed = char.process_response_nlp_commands(
                         visible_raw,
@@ -2021,6 +2108,9 @@ class ModelController(GenerationService, ModelStateService):
                 rag_limit = int(self.settings.get("RAG_MAX_RESULTS", 8))
                 rag_thr = float(self.settings.get("RAG_SIM_THRESHOLD", 0.4))
                 results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
+                conversation = services().get_optional(ConversationTimeline)
+                if conversation is not None:
+                    results = conversation.filter_retrieval(char_id, results)
                 forgotten_count = rag.get_forgotten_count()
 
                 if results:
@@ -2161,6 +2251,7 @@ class ModelController(GenerationService, ModelStateService):
     ) -> Optional[ChatGenerationResult]:
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
+        _assert_timeline_current(self)
         try:
             with perf_span(trace_id, "generation.structured_postprocess", stage="parse"):
                 parse_outcome = parse_structured_response_with_meta(
@@ -2277,11 +2368,16 @@ class ModelController(GenerationService, ModelStateService):
 
         # Apply and snapshot character state in a short critical section. Tool
         # execution and any follow-up provider request happen after this lock.
-        with character_lock(char_id):
-            char.process_structured_response(
+        with _timeline_effect_scope(self), character_lock(char_id):
+            normalized = char.process_structured_response(
                 structured,
                 save_as_missed=self.settings.get("SAVE_MISSED_MEMORY", False),
             )
+            if normalized is not None:
+                from schemas.structured_response import StructuredResponse
+                if not isinstance(normalized, StructuredResponse):
+                    raise TypeError("Character postprocessing must return StructuredResponse or None")
+                structured = normalized
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
@@ -2568,6 +2664,8 @@ class ModelController(GenerationService, ModelStateService):
         if native_tool_call is not None:
             history_task_uid = f"{task_uid or req_id or char_id}:native:{native_tool_call['id']}"
             first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
+        else:
+            history_task_uid = f"{task_uid or req_id or char_id}:tool:{tool_depth}"
 
         def persist_tool_turn(history_data):
             nonlocal first_assistant_message_id
@@ -2621,6 +2719,7 @@ class ModelController(GenerationService, ModelStateService):
         # Execute the tool
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
+        _assert_timeline_current(self)
         logger.info(f"[ModelController] Executing tool '{tool_name}' with args: {tool_args}")
         self.model.tool_manager.set_char_context(char_id)
         try:

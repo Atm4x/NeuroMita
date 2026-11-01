@@ -16,6 +16,9 @@ class ManagedCharacterRegistry(CharacterRegistry):
             return None
         return self._manager.get_character(str(character_id))
 
+    def register_cartridges(self, definitions) -> None:
+        self._manager.register_cartridges(definitions)
+
     def all_ids(self) -> List[str]:
         return list(self._manager.get_all_characters())
 

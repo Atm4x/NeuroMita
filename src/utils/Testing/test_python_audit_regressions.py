@@ -132,6 +132,23 @@ def test_failed_reminder_commit_preserves_memory_and_disk(tmp_path, monkeypatch,
     assert not list(tmp_path.rglob("*.tmp"))
 
 
+def test_reminder_counter_survives_deleting_latest_record_and_reopening(tmp_path, monkeypatch):
+    from managers.reminder_manager import ReminderManager
+
+    monkeypatch.setenv("NEUROMITA_HISTORIES_DIR", str(tmp_path))
+    manager = ReminderManager("A")
+    manager._notify_changed = Mock()
+    manager.add_reminder("first", "2099-01-01T12:00:00")
+    latest = manager.add_reminder("latest", "2099-01-01T13:00:00")
+    manager.delete_reminder(latest)
+    reopened = ReminderManager("A")
+    reopened._notify_changed = Mock()
+    assert reopened.add_reminder("next", "2099-01-01T14:00:00") == latest + 1
+    document = json.loads(Path(manager.filename).read_text(encoding="utf-8"))
+    assert document["schema_version"] == 1
+    assert document["next_number"] == latest + 2
+
+
 @pytest.mark.parametrize("failure", ["missing", "invalid_db", "invalid_metadata"])
 def test_image_cleanup_never_deletes_when_references_are_unreadable(tmp_path, monkeypatch, failure):
     from utils.image_cleanup import delete_orphaned_images
@@ -278,9 +295,10 @@ def test_telegram_voice_success_requires_a_real_artifact(tmp_path, artifact):
     if artifact in ("empty", "valid"):
         path.write_bytes(b"voice" if artifact == "valid" else b"")
     provider = SimpleNamespace(send_voice=AsyncMock(return_value=str(path) if path else None))
-    controller = SimpleNamespace(event_bus=Mock(), _emit_show_voicing=Mock(), _update_task_failed_voiceover=Mock(), waiting_answer=True)
+    controller = SimpleNamespace(event_bus=Mock(), _emit_show_voicing=Mock(), _update_task_failed_voiceover=Mock(),
+                                 _require_voice_scope=Mock(), _voice_scope_current=lambda *_: True, waiting_answer=True)
     with patch.object(module, "use", return_value=provider):
-        asyncio.run(module.AudioController.run_send_and_receive(controller, "voice", "original", "speaker", task_uid="task"))
+        asyncio.run(module.AudioController.run_send_and_receive(controller, "voice", "original", "speaker", task_uid="task", state_lease=object()))
     statuses = [call.args[1]["status"] for call in controller.event_bus.emit.call_args_list if call.args[0] == Events.Task.UPDATE_TASK_STATUS]
     if artifact == "valid":
         assert statuses == [TaskStatus.SUCCESS]

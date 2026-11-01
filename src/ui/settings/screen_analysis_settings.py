@@ -69,6 +69,33 @@ def setup_screen_analysis_controls(gui, parent_layout, *, runtime_options_view_m
         {'label': _('Заголовок искл. окна', 'Excluded Window Title'), 'key': 'EXCLUDE_WINDOW_TITLE', 'type': 'entry', 'default': ''},
     ]
     create_settings_section(gui, parent_layout, _("Настройки анализа экрана", "Screen Analysis Settings"), screen_analysis_config, icon_name="fa6s.display")
+    desktop_mode_config = [
+        {
+            'label': _('Мита на рабочем столе: фоновое наблюдение за экраном, пока запущен режим -desktop.',
+                       'Mita on the desktop: background screen observation while the -desktop mode runs.'),
+            'type': 'text',
+        },
+        {'label': _('Следить за рабочим столом', 'Watch the desktop'), 'key': 'DESKTOP_WATCH_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
+         'tooltip': _(
+             'Пока открыт режим «Мита на рабочем столе», Python раз в N секунд снимает экран в свой буфер кадров.\n'
+             'Кадры сами никуда не отправляются — Мита получает их только когда решает отреагировать.\n'
+             'Нагрузка сопоставима с ТВ-просмотром и ниже его: там кадр снимается примерно раз в 2.5 с во время видео,\n'
+             'здесь — один кадр в 15 с.\n'
+             'Окно самой Миты в кадр не попадает: Unity исключает его из захвата.',
+             'While the desktop mode is open, Python grabs the screen into its frame buffer every N seconds.\n'
+             'Frames are never sent on their own: Mita gets them only when she decides to react.\n'
+             'The load is comparable to TV observation and lower: TV samples a frame about every 2.5 s during playback,\n'
+             'this samples one frame every 15 s.\n'
+             "Mita's own window is excluded from the capture by Unity."
+         )},
+        {'label': _('Интервал наблюдения (сек)', 'Watch interval (sec)'), 'key': 'DESKTOP_WATCH_INTERVAL', 'type': 'entry', 'default': '15.0', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_float_positive},
+        {'label': _('Качество JPEG (%)', 'JPEG quality (%)'), 'key': 'DESKTOP_WATCH_QUALITY', 'type': 'entry', 'default': '40', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_positive_integer},
+        {'label': _('Ширина кадра', 'Frame width'), 'key': 'DESKTOP_WATCH_FRAME_WIDTH', 'type': 'entry', 'default': '512', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_positive_integer},
+        {'label': _('Высота кадра', 'Frame height'), 'key': 'DESKTOP_WATCH_FRAME_HEIGHT', 'type': 'entry', 'default': '384', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_positive_integer},
+        {'label': _('Кадров в буфере', 'Frames in buffer'), 'key': 'DESKTOP_WATCH_HISTORY_LIMIT', 'type': 'entry', 'default': '3', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_positive_integer},
+        {'label': _('Кадров на реакцию', 'Frames per reaction'), 'key': 'DESKTOP_WATCH_TRANSFER_LIMIT', 'type': 'entry', 'default': '1', 'depends_on': 'DESKTOP_WATCH_ENABLED', 'validation': gui.validate_positive_integer},
+    ]
+    create_settings_section(gui, parent_layout, _("Мита на рабочем столе", "Mita on the Desktop"), desktop_mode_config, icon_name="fa6s.desktop")
 
     # Вторая CollapsibleSection
     camera_analysis_config = [

@@ -3,7 +3,8 @@ import time
 import copy
 from enum import Enum
 from typing import Dict, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from core.state_barrier import StateLease, state_operation
 from threading import Lock
 from main_logger import logger
 
@@ -30,8 +31,11 @@ class Task:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     revision: int = 0
+    _state_lease: StateLease | None = field(default=None, repr=False, compare=False)
     
     def to_dict(self) -> Dict[str, Any]:
+        if self._state_lease is not None and not self._state_lease.current:
+            return self.snapshot().to_dict()
         return {
             "uid": self.uid,
             "status": self.status.value,
@@ -46,16 +50,18 @@ class Task:
 
     def snapshot(self) -> "Task":
         """Detached immutable-by-convention copy for asynchronous delivery."""
+        obsolete = self._state_lease is not None and not self._state_lease.current
         return Task(
             uid=self.uid,
-            status=self.status,
+            status=TaskStatus.CANCELLED if obsolete else self.status,
             type=self.type,
             data=copy.deepcopy(self.data),
             created_at=self.created_at,
             updated_at=self.updated_at,
-            result=copy.deepcopy(self.result),
-            error=self.error,
-            revision=self.revision,
+            result=None if obsolete else copy.deepcopy(self.result),
+            error="Session state changed" if obsolete else self.error,
+            revision=self.revision + int(obsolete),
+            _state_lease=None if obsolete else self._state_lease,
         )
 
 
@@ -66,6 +72,7 @@ class TaskManager:
         self._cleanup_interval = 3600
         self._last_cleanup = time.time()
         
+    @state_operation(wait=True)
     def create_task(self, task_type: str, data: Dict[str, Any]) -> Task:
         with self._lock:
             uid = str(uuid.uuid4())
@@ -77,7 +84,8 @@ class TaskManager:
                 type=task_type,
                 data=copy.deepcopy(data),
                 created_at=current_time,
-                updated_at=current_time
+                updated_at=current_time,
+                _state_lease=StateLease.capture(),
             )
             
             self._tasks[uid] = task
@@ -87,6 +95,7 @@ class TaskManager:
             
             return task.snapshot()
     
+    @state_operation(wait=True)
     def update_task_status(
         self,
         uid: str,
@@ -100,6 +109,8 @@ class TaskManager:
                 return None
 
             task = self._tasks[uid]
+            if task._state_lease is not None and not task._state_lease.current:
+                return task.snapshot()
             task.status = status
             task.updated_at = time.time()
             task.revision += 1

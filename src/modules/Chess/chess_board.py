@@ -752,14 +752,19 @@ class ChessGuiTkinter(QMainWindow):
 
     def _request_mita_reaction(self, uci_move, san_move):
         """Send only accepted player moves, and only for the current match."""
-        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({
+            event = {
                 "event": "player_chess_move",
                 "uci": str(uci_move),
                 "san": str(san_move),
-            })
+                "react": bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked()),
+            }
+            source = getattr(self.game_controller, "last_move_event", None)
+            if source and source.get("uci") == str(uci_move):
+                event.update({key: source[key] for key in ("semantic_id", "mover", "ply")})
+            self.reaction_queue.put(event)
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess reaction: {format_exception(exc)}")
 
@@ -776,10 +781,11 @@ class ChessGuiTkinter(QMainWindow):
             print(f"GUI Error: Could not queue manual Mita chess turn request: {format_exception(exc)}")
 
     def _request_game_over_reaction(self, outcome, choice=None, *, result=None):
-        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
             event = {"event": "player_game_over", "outcome": str(outcome or "")}
+            event["react"] = bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked())
             if result:
                 event["result"] = result
             if choice:
@@ -832,16 +838,17 @@ class ChessGuiTkinter(QMainWindow):
             event.ignore()
 
     def _request_game_closed_reaction(self):
-        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_closed"})
+            self.reaction_queue.put({"event": "player_game_closed",
+                                     "react": bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked())})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess close reaction: {format_exception(exc)}")
 
 def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiprocessing.Queue,
                           initial_elo: int, player_is_white_gui: bool, is_auto: bool = False,
-                          is_cheat: bool = False, reaction_queue=None):
+                          is_cheat: bool = False, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
     print(f"CONSOLE (chess_board_process): >>> ЗАПУСК. ELO: {initial_elo}, Белый: {player_is_white_gui}, auto={is_auto}, cheat={is_cheat}")
     
     app_instance_ref = {"instance": None} 
@@ -900,7 +907,8 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
             board_update_cb_gui=_proxy_update_board,
             game_over_cb_gui=_proxy_game_over,
             is_auto=is_auto,
-            is_cheat=is_cheat
+            is_cheat=is_cheat,
+            semantic_event_queue=reaction_queue,
         )
         print(f"CONSOLE (chess_board_process): [STAGE 1] ChessGameController создан.")
 
@@ -920,7 +928,48 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
         print(f"CONSOLE (chess_board_process): [STAGE 3] ChessGuiTkinter (окно) СОЗДАНО.")
 
         print(f"CONSOLE (chess_board_process): [STAGE 4] Вызов game_controller.new_game()...")
-        game_controller.new_game() 
+        from modules.session_snapshot import GameSnapshotEndpoint, GameStateQueue, validate_game_state
+        game_controller.state_queue = GameStateQueue(state_q)
+
+        def capture_snapshot():
+            return {"board": game_controller.board_logic.snapshot(), "elo": game_controller.current_maia_elo,
+                    "player_is_white": game_controller.player_is_white_in_gui, "is_auto": game_controller.is_auto,
+                    "is_cheat": game_controller.is_cheat, "react_enabled": app.mita_reaction_checkbox.isChecked(),
+                    "engine_pending": game_controller.engine_move_pending}
+
+        def apply_snapshot(state):
+            validate_game_state("chess", state)
+            game_controller.board_logic.restore_snapshot(state["board"])
+            game_controller.player_is_white_in_gui = state["player_is_white"]
+            game_controller.is_auto, game_controller.is_cheat = state["is_auto"], state["is_cheat"]
+            if game_controller.current_maia_elo != state["elo"]:
+                game_controller.change_engine_elo(state["elo"])
+            game_controller.last_move_event = None
+            game_controller.restore_engine_work(state["engine_pending"])
+            while True:
+                try:
+                    gui_event_queue.get_nowait()
+                except queue.Empty:
+                    break
+            app.is_auto = state["is_auto"]
+            app.mita_reaction_checkbox.setChecked(state["react_enabled"])
+            if game_controller.board_update_cb_gui:
+                game_controller.board_update_cb_gui()
+            game_controller._send_state_to_main_process()
+
+        def pause_session(paused):
+            game_controller.set_session_paused(paused)
+            app.setEnabled(not paused)
+
+        endpoint = GameSnapshotEndpoint(snapshot_queue, reaction_queue, capture_snapshot, apply_snapshot,
+                                        pause_session, game_controller.state_queue)
+        if initial_snapshot is None:
+            game_controller.new_game()
+        else:
+            game_controller.state_queue.generation = 1
+            apply_snapshot(initial_snapshot)
+            endpoint.paused = True
+            pause_session(True)
         print(f"CONSOLE (chess_board_process): [STAGE 4] game_controller.new_game() ВЫПОЛНЕН.")
 
         timer = QTimer()
@@ -932,11 +981,17 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 timer.stop()
                 qt_app.quit()
                 return
+
+            game_controller.process_engine_results()
                 
             try:
                 if command_q: 
                     command = command_q.get_nowait()
                     if command:
+                        if endpoint.handle(command):
+                            return
+                        if endpoint.paused and command.get("action") not in {"get_state", "stop_gui_process"}:
+                            return
                         print(f"CONSOLE (chess_board_process): [LOOP] Получена команда: {command}")
                         if command.get("action") == "stop_gui_process": 
                             print(f"CONSOLE (chess_board_process): [LOOP] Команда stop_gui_process, выход из цикла.")

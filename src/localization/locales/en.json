@@ -1,4 +1,5 @@
 {
+  "2D Мита": "2D Mita",
   "Локальное IPC-управление": "Local IPC control",
   "Локальный IPC принимает только явно разрешённые команды на 127.0.0.1.": "Local IPC accepts only explicitly allowed commands on 127.0.0.1.",
   "Порт локального IPC": "Local IPC port",

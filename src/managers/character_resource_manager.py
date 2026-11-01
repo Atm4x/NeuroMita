@@ -125,6 +125,17 @@ class CharacterResourceManager:
                     descriptor.prompt_set_path,
                 )
                 self._history_views[descriptor.character_id] = view
+            from core.services import services
+            from services.conversation_timeline import ConversationTimeline
+            from managers.timeline_history_view import TimelineHistoryView
+
+            conversation = services().get_optional(ConversationTimeline)
+            if isinstance(view, TimelineHistoryView) and view.conversation is not conversation:
+                view = view.cache
+                self._history_views[descriptor.character_id] = view
+            if conversation is not None and not isinstance(view, TimelineHistoryView):
+                view = TimelineHistoryView(descriptor.character_id, view, conversation)
+                self._history_views[descriptor.character_id] = view
             return view
 
     def memory_for(self, character_id: str, storage_name: str = ""):

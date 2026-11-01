@@ -11,6 +11,7 @@ CHARACTER_DISPLAY_NAMES = {
     "Sleepy": ("Сонная Мита", "Sleepy Mita"),
     "Ghost": ("Призрачная Мита", "Ghostly Mita"),
     "Creepy": ("Жуткая Мита", "Creepy Mita"),
+    "TwoD": ("2D Мита", "2D Mita"),
     "GameMaster": ("Мастер игры", "Game Master"),
 }
 

@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from core.task_supervisor import task_supervisor
 from core.trace_context import current_trace_id, trace_scope
+from core.state_barrier import StateUnavailable, bind_state_job, state_job
 from main_logger import logger
 
 
@@ -68,7 +69,7 @@ class SerialDispatcher:
             return False
         lane = self._queues[self._lane_index(key)]
         item = _DispatchItem(
-            callback=callback,
+            callback=bind_state_job(state_job(callback)),
             args=args,
             kwargs=kwargs,
             description=str(description or getattr(callback, "__qualname__", str(callback))),
@@ -149,6 +150,8 @@ class SerialDispatcher:
                 with trace_scope(item.trace_id):
                     try:
                         item.callback(*item.args, **item.kwargs)
+                    except StateUnavailable:
+                        logger.debug("Discarded obsolete session callback '%s'", item.description)
                     except BaseException as exc:
                         logger.error(
                             f"Serial task '{item.description}' failed in '{self._name}': {format_exception(exc)}",

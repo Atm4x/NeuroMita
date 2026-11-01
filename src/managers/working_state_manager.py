@@ -7,6 +7,7 @@ chat clears it, and restarting the application starts a fresh session.
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
 from typing import Any
 
 from managers.character_scoped_service import CharacterScopedService
@@ -79,6 +80,28 @@ class WorkingStateManager(CharacterScopedService):
     def clear(self) -> None:
         with self._lock:
             self._states.pop(self.storage_key, None)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return deepcopy(self._states.get(self.storage_key, {}))
+
+    @classmethod
+    def validate_snapshot(cls, state: dict) -> None:
+        allowed = {field for field, _label in cls._FIELDS}
+        if not isinstance(state, dict) or not state.keys() <= allowed:
+            raise ValueError("Invalid working-state fields")
+        for field, value in state.items():
+            if ((field == "focus" and not isinstance(value, str))
+                    or (field != "focus" and (not isinstance(value, list) or not all(isinstance(item, str) for item in value)))):
+                raise ValueError("Invalid working-state value")
+
+    def restore_snapshot(self, state: dict) -> None:
+        self.validate_snapshot(state)
+        with self._lock:
+            if state:
+                self._states[self.storage_key] = deepcopy(state)
+            else:
+                self._states.pop(self.storage_key, None)
 
     def format_for_prompt(self) -> str:
         with self._lock:

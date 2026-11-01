@@ -114,6 +114,8 @@ class _BoundedPool:
         return self._submit_reserved(fn, args, kwargs)
 
     def _submit_reserved(self, fn: Callable, args: tuple, kwargs: dict) -> Future:
+        from core.state_barrier import bind_state_job, state_job
+        fn = bind_state_job(state_job(fn))
         trace_id = current_trace_id()
 
         def invoke():

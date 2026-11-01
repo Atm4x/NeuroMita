@@ -22,8 +22,9 @@ class GetTaskStatusAction:
 
         response = task.to_dict()
 
-        if task.status == TaskStatus.SUCCESS and task.result:
-            audio_path = task.result.get("voiceover_path", "") if isinstance(task.result, dict) else ""
+        if response.get("status", task.status.value) == TaskStatus.SUCCESS.value and response.get("result", task.result):
+            result = response.get("result", task.result)
+            audio_path = result.get("voiceover_path", "") if isinstance(result, dict) else ""
             if audio_path:
                 response.setdefault("result", {})["audio_path"] = audio_path
 

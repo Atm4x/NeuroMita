@@ -25,6 +25,7 @@ from core.remote_voice import (
     RemoteVoiceTemplate,
 )
 from domain.audio_input import ASRInputDevice, AudioInputCatalog
+from domain.timeline.models import TimelineTurn
 
 # ---------------------------------------------------------------------------
 # Настройки
@@ -382,6 +383,10 @@ class AppVarsService(ABC):
 
 
 class CharacterRegistry(ABC):
+    def register_cartridges(self, definitions) -> None:
+        """Install validated virtual character definitions without changing the selected Mita."""
+        raise NotImplementedError("This character registry does not support cartridges")
+
     def stats_of(self, character_id: str) -> Dict[str, float]:
         """Read statistics without materializing a character runtime."""
         return {"attitude": 60.0, "boredom": 10.0, "stress": 5.0}
@@ -799,6 +804,9 @@ class ChatGenerationRequest:
     participants: List[str] = field(default_factory=list)
     req_id: Optional[str] = None
     origin_message_id: Optional[str] = None
+    timeline_event_id: Optional[str] = None
+    timeline_initiate: bool = False
+    timeline_turn: TimelineTurn | None = None
     task_uid: Optional[str] = None
     policy: Optional[RequestPolicy] = None
     disable_history_compression: bool = False
@@ -975,7 +983,8 @@ class ChatService(ABC):
         self,
         *,
         character_id: str,
-        instruction: str,
+        instruction: str = "",
+        event_id: str | None = None,
         visible: bool = True,
         sender: str = "Player",
         participants: Optional[List[str]] = None,
@@ -1010,6 +1019,22 @@ class CaptureService(ABC):
     @abstractmethod
     def camera_capture_active(self) -> bool: ...
 
+
+class DesktopWatchService(ABC):
+    @abstractmethod
+    def is_watching(self) -> bool: ...
+
+    @abstractmethod
+    def desktop_frames(self, limit: int = 1) -> List[Any]: ...
+
+    @abstractmethod
+    def capture_desktop_now(self, limit: int = 1) -> List[Any]: ...
+
+    @abstractmethod
+    def apply_desktop_state(self, state: Any) -> dict: ...
+
+    @abstractmethod
+    def prompt_block(self) -> str: ...
 
 class AudioStateService(ABC):
     @abstractmethod

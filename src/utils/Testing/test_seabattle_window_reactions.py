@@ -96,8 +96,10 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
             window.mita_reaction_checkbox.setChecked(False)
             engine.current_player = engine.player_id
             window.on_opponent_board_click(1, 0, Qt.MouseButton.LeftButton)
-            with self.assertRaises(queue.Empty):
-                reaction_queue.get_nowait()
+            fact = reaction_queue.get_nowait()
+            self.assertEqual(fact["event"], "player_target_selected")
+            self.assertFalse(fact["react"])
+            self.assertTrue(reaction_queue.empty())
         finally:
             window.close()
 
@@ -135,13 +137,16 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
                                 window.process_commands()
 
             self.assertEqual(order, ["state", "reaction"])
+            shot = reaction_queue.get_nowait()
+            self.assertEqual(shot["event"], "mita_shot")
+            self.assertFalse(shot["react"])
             event = reaction_queue.get_nowait()
             self.assertEqual(event["event"], "player_game_over")
             self.assertEqual(event["winner"], window.game.mita_id)
         finally:
             window.close()
 
-    def test_last_ship_emits_only_game_over_with_correct_winner(self) -> None:
+    def test_last_ship_retains_shot_and_game_over_with_only_one_optional_reaction(self) -> None:
         for player_wins in (True, False):
             for enabled in (True, False):
                 with self.subTest(player_wins=player_wins, enabled=enabled):
@@ -165,10 +170,14 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
                         while not states.empty():
                             snapshots.append(states.get_nowait())
                         self.assertEqual(snapshots[-1]["phase"], "game_over")
-                        if enabled:
-                            event = reactions.get_nowait()
-                            self.assertEqual(event["event"], "player_game_over")
-                            self.assertEqual(event["winner"], engine.current_player)
+                        shot = reactions.get_nowait()
+                        self.assertEqual(shot["event"], "player_target_selected" if player_wins else "mita_shot")
+                        self.assertEqual(shot["coord"], "A1")
+                        self.assertFalse(shot["react"])
+                        event = reactions.get_nowait()
+                        self.assertEqual(event["event"], "player_game_over")
+                        self.assertEqual(event["winner"], engine.current_player)
+                        self.assertEqual(event["react"], enabled)
                         self.assertTrue(reactions.empty())
                     finally:
                         window.close()

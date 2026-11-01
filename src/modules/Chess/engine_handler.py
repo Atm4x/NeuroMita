@@ -229,13 +229,20 @@ def setup_maia_weights(maia_elo: int):
 class ChessGameController:
     def __init__(self, initial_elo: int, player_is_white_gui: bool,
                  state_q: queue.Queue, status_update_cb_gui, board_update_cb_gui, game_over_cb_gui,
-                 is_auto: bool = False, is_cheat: bool = False):
-        self.board_logic = PureBoardLogic()
+                 is_auto: bool = False, is_cheat: bool = False, semantic_event_queue=None):
+        self.semantic_event_queue = semantic_event_queue
+        self.last_move_event = None
+        self.board_logic = PureBoardLogic(on_move=self._publish_move_fact)
         self.engine = None
         self.current_maia_elo = initial_elo
         self.current_maia_weights_path = None
         self.player_is_white_in_gui = player_is_white_gui
         self.engine_is_thinking = False
+        self._engine_results = queue.Queue()
+        self._engine_generation = 0
+        self._engine_worker = None
+        self._session_paused = False
+        self._resume_engine_pending = False
         self.is_engine_enabled_for_moves = True
         self.state_queue = state_q
         self.status_update_cb_gui = status_update_cb_gui
@@ -245,6 +252,22 @@ class ChessGameController:
         self.is_auto = is_auto    # True = Maia ходит сама, False = LLM выбирает ходы
         self.is_cheat = is_cheat  # True = разрешены чит-команды
         self._send_status_to_gui_if_possible(f"Контроллер инициализирован. ELO: {self.current_maia_elo}")
+
+    def _publish_move_fact(self, uci, san, mover):
+        from uuid import uuid4
+
+        event = {
+            "event": "chess_move", "semantic_id": uuid4().hex,
+            "uci": uci, "san": san, "ply": len(self.board_logic.board.move_stack),
+            "mover": "Player" if mover == self.player_is_white_in_gui else "Character",
+            "react": False,
+        }
+        self.last_move_event = event
+        if self.semantic_event_queue is not None:
+            try:
+                self.semantic_event_queue.put(dict(event))
+            except (OSError, ValueError):
+                print("Could not publish an accepted chess move to the session host")
 
     def _send_status_to_gui_if_possible(self, message: str):
         if self.status_update_cb_gui:
@@ -333,6 +356,7 @@ class ChessGameController:
             return False
 
     def new_game(self, fen=None, player_is_white_gui_override=None):
+        self.restore_engine_work()
         print(f"CONSOLE (ChessGameController new_game): Начало новой игры. FEN: {fen}, Override white: {player_is_white_gui_override}")
         self.board_logic.reset_board(fen)
         if player_is_white_gui_override is not None:
@@ -446,101 +470,77 @@ class ChessGameController:
             self._send_state_to_main_process(error_move=uci_move_str, error_message=message)
             return False
 
-    def request_engine_move_auto(self): # Вызывается, когда LLM присылает <RequestBestChessMove!>
-        print("CONSOLE (ChessGameController request_engine_move_auto): Запрос хода у движка (по команде LLM).")
-        if not self.engine:
-            print("CONSOLE (ChessGameController request_engine_move_auto): Отмена - движок не инициализирован.")
-            self._send_status_to_gui_if_possible("Ошибка: движок Maia не инициализирован для хода.")
-            self._send_state_to_main_process(error="Maia engine not initialized for best move request.")
-            return
-        if self.engine_is_thinking:
-            print("CONSOLE (ChessGameController request_engine_move_auto): Отмена - движок уже думает.")
-            self._send_status_to_gui_if_possible("Движок Maia уже думает.")
-            # Состояние не меняем, LLM получит его позже или уже имеет.
-            return
+    @property
+    def engine_move_pending(self):
+        return self.engine_is_thinking or self._resume_engine_pending
 
-        if not self._is_controlled_side_turn():
-            msg = "LLM запросил ход Maia, но сейчас не очередь ИИ."
-            print(f"CONSOLE (ChessGameController request_engine_move_auto): Отмена - {msg}")
-            self._send_status_to_gui_if_possible(msg)
-            self._send_state_to_main_process(error=msg)
+    def set_session_paused(self, paused):
+        self._session_paused = bool(paused)
+
+    def restore_engine_work(self, pending=False):
+        """Invalidate running analysis without allowing it to mutate the restored board."""
+        self._engine_generation += 1
+        self.engine_is_thinking = False
+        self._resume_engine_pending = bool(pending)
+
+    def process_engine_results(self):
+        """Apply accepted analysis results only from the GUI owner thread."""
+        if self._session_paused:
             return
-
-        self.engine_is_thinking = True
-        self._send_status_to_gui_if_possible(f"Maia (ELO {self.current_maia_elo}) думает (по запросу LLM)...")
-        current_board_fen_for_engine = self.board_logic.get_fen()
-
-        def _think():
-            engine_san_move = "N/A"
-            engine_uci_move = None
-            error_during_think = None
+        while True:
             try:
-                print(f"CONSOLE (ChessGameController _think): Поток _think запущен. FEN: {current_board_fen_for_engine}")
-                thread_board = chess.Board(current_board_fen_for_engine) 
-                if not self.engine: 
-                    print("CONSOLE (ChessGameController _think): ОШИБКА - self.engine is None в потоке _think.")
-                    error_during_think = "Engine became None in thinking thread"
-                    return # Выход из _think
+                generation, position, engine, move, error = self._engine_results.get_nowait()
+            except queue.Empty:
+                break
+            if generation != self._engine_generation:
+                continue
+            self.engine_is_thinking = False
+            if engine is not self.engine or position != self.board_logic.snapshot():
+                continue
+            if error is not None:
+                if isinstance(error, chess.engine.EngineTerminatedError):
+                    self.engine = None
+                self._send_status_to_gui_if_possible(f"Ошибка Maia: {format_exception(error)}")
+                self._send_state_to_main_process(error=format_exception(error))
+            elif move is not None:
+                self.force_llm_or_engine_move(move, is_llm_decision=False)
+            else:
+                self._send_state_to_main_process(error="Maia did not return a move")
+        if self._resume_engine_pending and (self._engine_worker is None or not self._engine_worker.is_alive()):
+            self._resume_engine_pending = False
+            self.request_engine_move_auto()
 
-                result = self.engine.play(thread_board, chess.engine.Limit(time=self.think_time))
-                if result.move:
-                    engine_uci_move = result.move.uci()
-                    engine_san_move = thread_board.san(result.move)
-                    print(f"CONSOLE (ChessGameController _think): Движок предложил ход: {engine_san_move} (UCI: {engine_uci_move})")
-                    
-                    # Этот ход будет применен к основной доске из основного потока GUI (или контроллера)
-                    # после того как _think завершится, чтобы избежать проблем с многопоточностью tkinter
-                    # Вместо этого, мы просто сигнализируем, что ход найден.
-                    # Применение хода произойдет в finally блоке, если не было ошибок
-                else:
-                    self._send_status_to_gui_if_possible("Maia не смогла сделать ход (result.move is None).")
-                    print("CONSOLE (ChessGameController _think): Maia не смогла сделать ход (result.move is None).")
-                    error_during_think = "Maia could not make a move (result.move is None)"
+    def request_engine_move_auto(self):
+        """Compute on a detached board; queue the result for GUI-thread admission."""
+        if self._session_paused or self.engine_is_thinking:
+            return
+        if not self.engine or not self._is_controlled_side_turn() or self.board_logic.is_game_over()[0]:
+            return
+        if self._engine_worker is not None and self._engine_worker.is_alive():
+            self._resume_engine_pending = True
+            return
+        self._engine_generation += 1
+        generation = self._engine_generation
+        position = self.board_logic.snapshot()
+        board = self.board_logic.board.copy(stack=True)
+        engine, think_time = self.engine, self.think_time
+        self.engine_is_thinking = True
+        self._send_status_to_gui_if_possible(f"Maia (ELO {self.current_maia_elo}) думает...")
 
-            except chess.engine.EngineTerminatedError as ete:
-                self._send_status_to_gui_if_possible("Критическая ошибка: Движок неожиданно завершил работу.")
-                print(f"CONSOLE (ChessGameController _think): ОШИБКА - Движок Lc0 завершил работу: {format_exception(ete)}", exc_info=True)
-                self.engine = None 
-                error_during_think = f"Engine terminated during thinking: {format_exception(ete)}"
-            except Exception as e:
-                self._send_status_to_gui_if_possible(f"Ошибка во время хода движка: {format_exception(e)}. Проверьте консоль.")
-                print(f"CONSOLE (ChessGameController _think): ОШИБКА во время хода движка: {format_exception(e)}", exc_info=True)
-                error_during_think = f"Engine thinking error: {format_exception(e)}"
-            finally:
-                self.engine_is_thinking = False # Сбрасываем флаг в любом случае
-                print(f"CONSOLE (ChessGameController _think): Поток _think завершен. SAN движка: {engine_san_move}, UCI: {engine_uci_move}, Ошибка: {error_during_think}")
+        def compute():
+            move, error = None, None
+            try:
+                result = engine.play(board, chess.engine.Limit(time=think_time))
+                move = result.move.uci() if result.move is not None else None
+            except Exception as exc:
+                error = exc
+            self._engine_results.put((generation, position, engine, move, error))
 
-                if error_during_think:
-                    self._send_status_to_gui_if_possible(f"Maia: Ошибка при обдумывании хода: {error_during_think}")
-                    self._send_state_to_main_process(error=error_during_think)
-                    if self.board_update_cb_gui: self.board_update_cb_gui() # Обновить доску на случай, если статус изменился
-                elif engine_uci_move:
-                    # Применяем ход здесь, так как _think завершен
-                    success_apply, msg_apply, _ = self.board_logic.make_move(engine_uci_move)
-                    if success_apply:
-                         self._send_status_to_gui_if_possible(f"Maia: {engine_san_move}")
-                         if self.board_update_cb_gui: self.board_update_cb_gui()
-                         if not self._check_and_handle_game_over(moved_by="Maia", san_move=engine_san_move):
-                             self._send_state_to_main_process() # Отправляем состояние после успешного хода Maia
-                    else:
-                         error_msg_apply = f"Maia: ОШИБКА применения собственного хода {engine_uci_move} ({msg_apply})"
-                         self._send_status_to_gui_if_possible(error_msg_apply)
-                         print(f"CONSOLE (ChessGameController _think finally): КРИТИЧЕСКАЯ ОШИБКА: {error_msg_apply}")
-                         self._send_state_to_main_process(error=error_msg_apply, error_move=engine_uci_move)
-                         if self.board_update_cb_gui: self.board_update_cb_gui()
-                else: # No error, but no move either (should have been caught by error_during_think)
-                    no_move_msg = "Maia не вернула ход после обдумывания."
-                    self._send_status_to_gui_if_possible(no_move_msg)
-                    self._send_state_to_main_process(error=no_move_msg)
-                    if self.board_update_cb_gui: self.board_update_cb_gui()
-
-
-        task_supervisor().start_thread(
-            self,
-            "chess-engine-think",
-            _think,
-            replace=True,
-        )
+        try:
+            self._engine_worker = task_supervisor().start_thread(self, "chess-engine-think", compute)
+        except BaseException:
+            self.engine_is_thinking = False
+            raise
 
     def _check_and_handle_game_over(self, moved_by="", san_move="", error_during_move=None):
         is_over, outcome_message = self.board_logic.is_game_over()
@@ -614,6 +614,7 @@ class ChessGameController:
             print(f"CONSOLE (ChessGameController _send_state_to_main_process): ОШИБКА отправки состояния в state_queue: {format_exception(e)}", exc_info=True)
 
     def shutdown_engine_process(self):
+        self.restore_engine_work()
         print("CONSOLE (ChessGameController shutdown_engine_process): Запрос на остановку движка.")
         task_supervisor().cancel_owner(self, timeout=1.0)
         if self.engine:

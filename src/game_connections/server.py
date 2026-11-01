@@ -9,7 +9,7 @@ from concurrent.futures import Future
 from itertools import count
 from typing import Optional, Dict, Any, Set, Callable
 from main_logger import logger
-from core.events import get_event_bus, Events
+from core.events import get_event_bus
 from core.task_supervisor import task_supervisor
 from managers.task_manager import TaskStatus
 import uuid
@@ -42,6 +42,8 @@ class ChatServerNew:
     """
 
     def __init__(self, host='127.0.0.1', port=12345):
+        from core.state_barrier import current_state_barrier
+        self._state_owner = current_state_barrier()
         self.host = host
         self.port = port
 
@@ -262,7 +264,17 @@ class ChatServerNew:
     def _forget_client_state(self, client_id: str) -> None:
         with self._clients_lock:
             self.active_connections.pop(client_id, None)
-            self.client_roles.pop(client_id, None)
+            was_desktop = self.client_roles.pop(client_id, None) == self.DESKTOP_ROLE
+            desktop_alive = any(role == self.DESKTOP_ROLE for role in self.client_roles.values())
+        if was_desktop:
+            requested = self.set_desktop_watch_request(client_id, False)
+            from core.services import services
+            from services.contracts import DesktopWatchService
+            watch = services().get_optional(DesktopWatchService)
+            if watch is not None:
+                watch.apply_desktop_state({"watching_screen": requested})
+            if not desktop_alive:
+                self._deactivate_desktop_mode()
         self.client_tasks.pop(client_id, None)
         self.last_participants.pop(client_id, None)
         stale_dialogue_keys = [
@@ -272,7 +284,31 @@ class ChatServerNew:
         for key in stale_dialogue_keys:
             self._last_sent_dialogue_text.pop(key, None)
 
+    def set_desktop_watch_request(self, client_id, requested):
+        with self._clients_lock:
+            if not hasattr(self, "_desktop_watch_requests"):
+                self._desktop_watch_requests = {}
+            self._desktop_watch_requests.pop(client_id, None)
+            if requested and self.client_roles.get(client_id) == self.DESKTOP_ROLE:
+                self._desktop_watch_requests[client_id] = True
+            return any(self._desktop_watch_requests.values())
+
+    def _deactivate_desktop_mode(self) -> None:
+        from core.services import services
+        from services.contracts import SettingsService
+
+        settings = services().get_optional(SettingsService)
+        if settings is None or not settings.get("DESKTOP_MODE_ACTIVE", False):
+            return
+
+        settings.set("DESKTOP_MODE_ACTIVE", False)
+        logger.info("[Desktop] overlay closed - desktop mode off")
     async def process_request(self, request: Dict[str, Any], client_id: str):
+        from core.state_barrier import external_state_operation
+        with external_state_operation(getattr(self, "_state_owner", None)):
+            await self._process_request_in_world(request, client_id)
+
+    async def _process_request_in_world(self, request: Dict[str, Any], client_id: str):
         if not isinstance(request, dict):
             writer = self._writer_for(client_id)
             if writer:
@@ -348,7 +384,8 @@ class ChatServerNew:
         writer = self._writer_for(client_id)
         if writer is None:
             return False
-        message ={"type": "task_update", "uid": task.uid, "status": task.status.value, "body": task.to_dict()}
+        body = task.to_dict()
+        message ={"type": "task_update", "uid": task.uid, "status": body.get("status", task.status.value), "body": body}
         return await self.send_json(writer, message)
 
     async def send_json(self, writer: asyncio.StreamWriter, data: Dict[str, Any]) -> bool:
@@ -469,6 +506,7 @@ class ChatServerNew:
 
     # Роль игры: только она вправе принимать ход игрока.
     GAME_ROLE = "game"
+    DESKTOP_ROLE = "desktop"
     # Версия протокола, которую сервер объявляет в ответ на рукопожатие.
     PROTOCOL_VERSION = 1
 

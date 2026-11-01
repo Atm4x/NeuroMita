@@ -32,7 +32,8 @@ class ChatAPI:
     def react(
         *,
         character_id: str,
-        instruction: str,
+        instruction: str = "",
+        event_id: str | None = None,
         visible: bool = True,
         sender: str = "Player",
         participants: Optional[List[str]] = None,
@@ -40,6 +41,7 @@ class ChatAPI:
         return use(ChatService).react(
             character_id=character_id,
             instruction=instruction,
+            event_id=event_id,
             visible=visible,
             sender=sender,
             participants=participants,

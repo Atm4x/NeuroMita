@@ -595,7 +595,7 @@ class AppWindowBase(QMainWindow):
         self._history_load_inflight = False
         self._history_load_request_id = ""
 
-    def _render_history_entry(self, entry: dict, *, character_id: str) -> None:
+    def _render_history_entry(self, entry: dict, *, character_id: str, insert_at_start: bool = False) -> None:
         if self._chat_presentation.is_message_deleted(
             message_id=str(entry.get("message_id") or ""), character_id=character_id,
         ):
@@ -609,22 +609,21 @@ class AppWindowBase(QMainWindow):
         context_snapshot_id = entry.get("context_snapshot_id")
         thinking_text = entry.get("thinking")
         show_think_in_gui = bool(self._get_setting("SHOW_THINK_IN_GUI", False))
+        rows = []
         if role == "assistant" and thinking_text and show_think_in_gui:
             speaker = entry.get("speaker", "")
-            message_renderer.insert_message(
-                self._chat_render_context,
-                "think",
-                [
+            rows.append(dict(
+                role="think",
+                content=[
                     {"type": "meta", "speaker": speaker},
                     {"type": "text", "text": thinking_text.strip()},
                 ],
                 message_time=message_time,
                 character_id=character_id,
-            )
-        message_renderer.insert_message(
-            self._chat_render_context,
-            role,
-            content,
+            ))
+        rows.append(dict(
+            role=role,
+            content=content,
             message_time=message_time,
             structured_data=structured_data,
             message_id=message_id,
@@ -633,7 +632,11 @@ class AppWindowBase(QMainWindow):
             sample_id=sample_id,
             context_snapshot_id=context_snapshot_id,
             delivery_error=str(entry.get("delivery_error") or ""),
-        )
+        ))
+        for row in reversed(rows) if insert_at_start else rows:
+            message_renderer.insert_message(
+                self._chat_render_context, insert_at_start=insert_at_start, **row,
+            )
 
     def _on_history_loaded(self, data: dict):
         chat_window = getattr(self, "chat_window", None)
@@ -1166,28 +1169,10 @@ class AppWindowBase(QMainWindow):
         old_value = scrollbar.value()
         old_max = scrollbar.maximum()
         for entry in reversed(messages_to_prepend):
-            if self._chat_presentation.is_message_deleted(
-                message_id=str(entry.get("message_id") or ""), character_id=character_id,
-            ):
-                continue
-            role = entry["role"]
-            content = entry["content"]
-            message_time = entry.get("time", "???")
-            structured_data = entry.get("structured_data")
-            message_id = entry.get("message_id")
-            sample_id = entry.get("sample_id")
-            message_renderer.insert_message(
-                self._chat_render_context,
-                role,
-                content,
+            self._render_history_entry(
+                entry,
                 insert_at_start=True,
-                message_time=message_time,
-                structured_data=structured_data,
-                message_id=message_id,
                 character_id=character_id,
-                ui_images=entry.get("_ui_images") or [],
-                sample_id=sample_id,
-                context_snapshot_id=entry.get("context_snapshot_id"),
             )
         QTimer.singleShot(
             0, lambda: scrollbar.setValue(scrollbar.maximum() - old_max + old_value)
