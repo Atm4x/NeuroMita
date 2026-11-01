@@ -1324,9 +1324,18 @@ class InstallController(InstallService):
                     backend_context=dict(result.get("backend_context") or {}),
                     environment_id=result.get("environment_id"),
                     environment_managed=bool(result.get("environment_managed", True)),
+                    unsupported_reason=str(result.get("unsupported_reason") or ""),
                 )
 
             if isinstance(result, InstallPlan):
+                if result.unsupported_reason:
+                    cb.status(_("Операция не поддерживается", "Operation not supported"))
+                    cb.log(result.unsupported_reason)
+                    self._emit(
+                        Events.Install.TASK_FAILED,
+                        base_payload({"ok": False, "error": result.unsupported_reason, "error_code": "unsupported_operation"}),
+                    )
+                    return False
                 op = str(meta.get("op") or "install").strip().lower()
                 managed = bool(environment_candidate and result.environment_managed)
 
