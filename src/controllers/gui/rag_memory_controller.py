@@ -1605,7 +1605,7 @@ def _build_combine_config(self) -> list:
     ]
 
 
-def _build_cross_encoder_config(self) -> list:
+def _build_cross_encoder_config(self, rag_install_view_model) -> list:
     return [
         {'label': _("Cross-encoder (реранкер)", "Cross-encoder (reranker)"), 'type': 'subsection',
          'depends_on': 'RAG_ENABLED'},
@@ -1658,7 +1658,7 @@ def _build_cross_encoder_config(self) -> list:
              '0 = disabled (old behaviour). Recommended: 150.')},
         {'type': 'button_group', 'buttons': [
             {'label': _('Обновить статус', 'Refresh status'),
-             'command': lambda: _refresh_rag_install_status(self)},
+             'command': lambda: _refresh_rag_install_status(rag_install_view_model)},
         ]},
 
         {'type': 'end'},
@@ -1817,7 +1817,7 @@ def build_rag_section(
         _build_keyword_config(self) +
         _build_fts_config(self) +
         _build_combine_config(self) +
-        _build_cross_encoder_config(self) +
+        _build_cross_encoder_config(self, rag_install_view_model) +
         _build_rag_logging_config(self)
     )
     rag_section = create_settings_section(self, parent,
