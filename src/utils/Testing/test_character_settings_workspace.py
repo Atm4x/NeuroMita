@@ -13,6 +13,26 @@ from controllers.gui.character_settings_logic import (
 
 
 class CharacterSettingsWorkspaceTest(unittest.TestCase):
+    def test_twod_name_has_translation_in_every_ui_language(self):
+        from localization import LANGUAGE_DISPLAY_NAMES, _read_bundled
+        from ui.character_names import character_display_name, retranslate_character_list
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+
+        library = QListWidget()
+        item = QListWidgetItem("2D Mita", library)
+        item.setData(Qt.ItemDataRole.UserRole, "TwoD")
+        item.setData(Qt.ItemDataRole.UserRole + 2, "2D Mita")
+        for language in LANGUAGE_DISPLAY_NAMES:
+            with self.subTest(language=language):
+                expected = "2D Мита" if language == "RU" else _read_bundled(language).get("2D Мита")
+                self.assertTrue(expected, f"Missing TwoD translation: {language}")
+                with patch("localization._current_language", return_value=language):
+                    self.assertEqual(character_display_name("TwoD", "2D Mita"), expected)
+                    retranslate_character_list(library)
+                    self.assertEqual(item.text(), expected)
+                    self.assertEqual(item.data(Qt.ItemDataRole.UserRole), "TwoD")
+
     def setUp(self):
         language = patch("localization._current_language", return_value="EN")
         language.start()

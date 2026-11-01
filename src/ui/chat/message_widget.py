@@ -32,6 +32,7 @@ AVATAR_MAP = {
     "Mila":           "mila.png",
     "Creepy Mita":    "creepy.png",
     "Sleepy Mita":    "sleepy.png",
+    "2D Mita":        "twod.png",
     "GameMaster":     "gamemaster.png",
 }
 
@@ -57,6 +58,8 @@ _AVATAR_ALIASES.update({
     "mila": "mila.png",
     "creepy": "creepy.png",
     "sleepy": "sleepy.png",
+    "twod": "twod.png",
+    "twodmita": "twod.png",
     "gamemaster": "gamemaster.png",
 })
 
