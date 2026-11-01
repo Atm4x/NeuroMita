@@ -92,13 +92,14 @@ def test_timestamp_repair_runs_after_broken_v1_was_marked(database):
         for value in ("30.10.2026 18:32:00", "30.10.2026 18:32", "18:32", "2026-10-30T18:32:00", "2026-10-30 18:32:00"):
             conn.execute("INSERT INTO history(character_id, role, content, timestamp) VALUES ('A','user','test',?)", (value,))
         database._mark_migration(conn.cursor(), "history_timestamp_iso_v1")
+        database._mark_migration(conn.cursor(), "history_timestamp_iso_v2")
         conn.execute("DELETE FROM schema_migrations WHERE name=?", (database._MIGRATION_TIMESTAMP_NORMALIZATION,))
         conn.commit()
     database._upgrade_schema()
     with database.connection() as conn:
         dates = [row[0] for row in conn.execute("SELECT timestamp FROM history ORDER BY id")]
     assert dates[:2] == ["2026-10-30 18:32:00"] * 2
-    assert dates[2].endswith(" 18:32:00")
+    assert dates[2] == "18:32"
     assert dates[3:] == ["2026-10-30 18:32:00"] * 2
     database._upgrade_schema()
     with database.connection() as conn:
@@ -144,8 +145,8 @@ def test_image_cleanup_never_deletes_when_references_are_unreadable(tmp_path, mo
         db_path.write_bytes(b"not a database")
     elif failure == "invalid_metadata":
         with sqlite3.connect(db_path) as conn:
-            conn.execute("CREATE TABLE history(meta_data TEXT)")
-            conn.execute("INSERT INTO history VALUES ('broken JSON')")
+            conn.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, meta_data TEXT)")
+            conn.execute("INSERT INTO history(meta_data) VALUES ('broken JSON')")
     with pytest.raises(RuntimeError, match="references"):
         delete_orphaned_images()
     assert image.read_bytes() == b"image"
@@ -161,8 +162,8 @@ def test_image_cleanup_keeps_referenced_files_and_removes_real_orphans(tmp_path,
     used.write_bytes(b"keep")
     orphan.write_bytes(b"remove")
     with sqlite3.connect(tmp_path / "world.db") as conn:
-        conn.execute("CREATE TABLE history(meta_data TEXT)")
-        conn.execute("INSERT INTO history VALUES (?)", (json.dumps({"multimodal_parts": [{"image_url": {"url": str(used)}}]}),))
+        conn.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, meta_data TEXT)")
+        conn.execute("INSERT INTO history(meta_data) VALUES (?)", (json.dumps({"multimodal_parts": [{"image_url": {"url": str(used)}}]}),))
     assert delete_orphaned_images() == (1, 6)
     assert used.exists() and not orphan.exists()
 
@@ -247,8 +248,9 @@ def test_unsupported_rag_removal_does_not_report_success(component):
     from managers.rag.install_spec import RagInstallableComponent, RagModelInstallableComponent
 
     target = RagModelInstallableComponent("embeddings", "test/model") if component == "model" else RagInstallableComponent("embeddings")
-    with pytest.raises(NotImplementedError, match="not supported"):
-        target.build_uninstall_plan()
+    plan = target.build_uninstall_plan()
+    assert plan.unsupported_reason
+    assert plan.actions == [] and not plan.environment_managed
 
 
 @pytest.mark.parametrize("error", [TimeoutError(), RuntimeError("")])

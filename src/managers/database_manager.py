@@ -25,7 +25,7 @@ class DatabaseManager:
 
     # Required for concurrent QtSql reads while sqlite3 writes
     _BUSY_TIMEOUT_MS: int = 5000
-    _MIGRATION_TIMESTAMP_NORMALIZATION = "history_timestamp_iso_v2"
+    _MIGRATION_TIMESTAMP_NORMALIZATION = "history_timestamp_iso_v3"
     _MIGRATION_MESSAGE_ID_UNIQUE = "history_message_id_unique_v1"
     _MIGRATION_DIALOGUE_SENDER_IDENTITY = "history_dialogue_sender_identity_v1"
 
@@ -803,13 +803,11 @@ class DatabaseManager:
                                 WHEN timestamp GLOB '??.??.???? ??:??' THEN
                                     substr(timestamp, 7, 4) || '-' || substr(timestamp, 4, 2) || '-' ||
                                     substr(timestamp, 1, 2) || ' ' || substr(timestamp, 12, 5) || ':00'
-                                WHEN timestamp GLOB '??:??' THEN date('now', 'localtime') || ' ' || timestamp || ':00'
                                 ELSE replace(timestamp, 'T', ' ')
                             END
                         WHERE timestamp IS NOT NULL AND TRIM(timestamp) != ''
                           AND (
                               timestamp GLOB '??.??.???? ??:??*'
-                              OR timestamp GLOB '??:??'
                               OR instr(timestamp, 'T') > 0
                           )
                         """

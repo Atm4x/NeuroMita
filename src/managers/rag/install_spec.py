@@ -764,7 +764,10 @@ class RagModelInstallableComponent:
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
-        raise NotImplementedError("RAG model removal is not supported; no files were deleted.")
+        return InstallPlan(actions=[], environment_managed=False, unsupported_reason=_(
+            "Удаление RAG-моделей пока не поддерживается. Файлы не удалены.",
+            "RAG model removal is not supported yet. No files were deleted.",
+        ))
 
     def build_initialize_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan | None:
         return None
@@ -817,7 +820,10 @@ class RagInstallableComponent:
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
-        raise NotImplementedError("RAG model removal is not supported; no files were deleted.")
+        return InstallPlan(actions=[], environment_managed=False, unsupported_reason=_(
+            "Удаление RAG-моделей пока не поддерживается. Файлы не удалены.",
+            "RAG model removal is not supported yet. No files were deleted.",
+        ))
 
     def build_initialize_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan | None:
         return None

@@ -52,22 +52,32 @@ def _collect_referenced_paths(db_path: Path) -> set[str]:
     that are referenced in any message's meta_data.
     """
     referenced: set[str] = set()
+    history_id = None
     try:
         with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
-            cur = conn.execute("SELECT meta_data FROM history WHERE meta_data IS NOT NULL")
-            for (meta_raw,) in cur:
+            cur = conn.execute("SELECT id, meta_data FROM history WHERE meta_data IS NOT NULL")
+            for history_id, meta_raw in cur:
                 if not meta_raw:
                     continue
                 meta = json.loads(meta_raw)
-                for part in meta.get("multimodal_parts") or []:
+                if not isinstance(meta, dict):
+                    raise ValueError("Invalid message metadata")
+                parts = meta.get("multimodal_parts")
+                if parts is None:
+                    parts = []
+                if not isinstance(parts, list):
+                    raise ValueError("Invalid multimodal parts")
+                for part in parts:
                     if not isinstance(part, dict):
                         raise ValueError("Invalid multimodal image reference")
                     url = (part.get("image_url") or {}).get("url", "")
                     if url and not str(url).startswith("data:") and not str(url).startswith("http"):
                         referenced.add(os.path.normcase(os.path.abspath(str(url))))
     except Exception as e:
-        logger.warning(f"[image_cleanup] Failed to scan DB {db_path}: {format_exception(e)}")
-        raise RuntimeError("Image cleanup stopped: image references could not be fully read") from e
+        location = f" in history.id={history_id}" if history_id is not None else ""
+        message = f"Image cleanup stopped: image references could not be fully read{location} ({type(e).__name__})"
+        logger.warning(f"[image_cleanup] {message}; DB: {db_path}")
+        raise RuntimeError(message) from e
     return referenced
 
 
