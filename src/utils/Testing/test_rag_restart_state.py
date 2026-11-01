@@ -41,6 +41,34 @@ def _restarted(ok: bool, error: str = "") -> Event:
     return Event("ai.service_restarted", {"service": "rag", "ok": ok, "error": error})
 
 
+def test_dependency_conflict_stops_retries_and_preserves_engine_diagnostics(monkeypatch):
+    import controllers.embedding_controller as module
+    from managers.rag.install_spec import DEPENDENCY_CONFLICT_PREFIX
+    from types import SimpleNamespace
+
+    ctrl = _controller()
+    ctrl.settings = {"RAG_ENABLED": True, "RAG_VECTOR_SEARCH_ENABLED": True}
+    ctrl._provider_name = lambda: "local"
+    ctrl._should_warmup = lambda: True
+    calls = []
+    message = DEPENDENCY_CONFLICT_PREFIX + " transformers 5.17.0; try split"
+
+    def activate(*args, **kwargs):
+        calls.append(kwargs)
+        kwargs["diagnostics"].append(message)
+        return False
+
+    monkeypatch.setattr(module, "use", lambda *args: SimpleNamespace(
+        get_engine=lambda: SimpleNamespace(activate_environment=activate),
+    ))
+    monkeypatch.setattr(module, "resolve_model_settings", lambda: {"hf_name": "owner/model", "query_prefix": ""})
+    monkeypatch.setattr(module.time, "sleep", lambda *args: (_ for _ in ()).throw(AssertionError("must not retry")))
+    ctrl._warmup_local_backend()
+    assert len(calls) == 1
+    assert ctrl.readiness().state is ModelState.ERROR
+    assert message in ctrl.readiness().error
+
+
 def test_failed_restart_without_previous_error_becomes_error():
     ctrl = _controller()
     assert ctrl.readiness().failed is False

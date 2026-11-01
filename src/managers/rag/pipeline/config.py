@@ -408,6 +408,10 @@ class RAGConfig:
 # ── Default values for all SettingsManager RAG keys ──────────────────────
 # Used by the "Reset RAG defaults" button in the UI.
 RAG_DEFAULTS: dict[str, object] = {
+    "RAG_LOCAL_BACKEND": "torch",
+    "RAG_ONNX_DEVICE": "auto",
+    "RAG_EMBED_TIMEOUT_SEC": 60,
+    "RAG_RERANK_TIMEOUT_SEC": 0,
     "RAG_ENABLED": True,
     "RAG_PIPELINE_PRESET": "Keyword+FTS only",
     "RAG_EMBED_MODEL": "Qwen3-Embedding-0.6B (600M, 2025)",

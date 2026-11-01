@@ -154,6 +154,47 @@ def test_tts_uninstall_refuses_cleanup_when_worker_cannot_stop(monkeypatch):
     controller._execute_plan.assert_not_called()
 
 
+@pytest.mark.parametrize("can_stop", [True, False])
+def test_backend_uninstall_requires_stopped_workers(monkeypatch, can_stop):
+    from core.backends import BackendKind
+    from core.backends.installable_component import BackendInstallableComponent
+
+    engine = Administration(can_stop=can_stop)
+    registry = Mock()
+    registry.get_optional.side_effect = lambda contract: engine if contract is AIEngineAdministrationService else None
+    monkeypatch.setattr("controllers.install_controller.services", lambda: registry)
+    manager = Mock()
+    manager.logical_id_from_meta.return_value = ("backend-cuda", "backend", "cuda")
+    monkeypatch.setattr("core.runtime_environments.runtime_environments", lambda: manager)
+
+    def remove(kind):
+        assert kind == BackendKind.CUDA
+        assert engine.suspended
+        engine.order.append("delete")
+        return ("cuda-layer",)
+
+    manager.remove_backend.side_effect = remove
+    controller = object.__new__(InstallController)
+    callbacks = Mock()
+    controller._execute_plan = lambda plan, **kwargs: plan.actions[0].fn(callbacks=callbacks)
+    plan = BackendInstallableComponent(BackendKind.CUDA).build_uninstall_plan()
+
+    def uninstall():
+        return controller._uninstall_plan(
+            plan, environment_manager=manager, active_environment=None, managed=False,
+            pip_installer=Mock(), callbacks=callbacks,
+            ctx={"meta": {"category": "backend", "item_id": "cuda"}}, timeout=15,
+        )
+
+    if can_stop:
+        assert uninstall()
+        assert engine.order == ["stop", "delete", "resume"]
+    else:
+        with pytest.raises(RuntimeError, match="could not be stopped"):
+            uninstall()
+        manager.remove_backend.assert_not_called()
+
+
 def test_missing_backend_is_inspectable_but_cannot_be_executed(tmp_path, monkeypatch):
     manager = RuntimeEnvironmentManager(tmp_path / "Lib")
     transaction = manager.begin(

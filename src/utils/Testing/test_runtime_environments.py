@@ -62,6 +62,109 @@ class _FakeInstaller:
         return True
 
 
+@pytest.mark.parametrize("kind", [BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX])
+def test_backend_removal_deletes_only_requested_family(tmp_path, kind):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layers = {}
+    for backend, group, package, caps in (
+        (BackendKind.CPU, "torch-cpu", "torch==2.7.1", ("torch.cpu",)),
+        (BackendKind.CUDA, "torch-cu128", "torch==2.7.1+cu128", ("torch.cpu", "torch.cuda")),
+        (BackendKind.ONNX, "onnx-dml", "onnxruntime-directml==1.24.4", ("onnx.cpu", "onnx.dml")),
+    ):
+        layers[backend] = manager.ensure_core_layer(
+            CoreLayerSpec(group=group, packages=(package,), capabilities=caps),
+            installer_factory=_factory([]), log=lambda _: None,
+        )
+    manager.promote_backend_profile((layers[kind].layer_id,), cleanup=False)
+    manager.register_backend_candidates(layer.layer_id for layer in layers.values())
+    unrelated = manager.main_core_root / "keep.txt"
+    unrelated.parent.mkdir(parents=True, exist_ok=True)
+    unrelated.write_text("keep")
+
+    assert manager.remove_backend(kind) == (layers[kind].layer_id,)
+    assert not layers[kind].root.exists()
+    assert all(layer.root.exists() for backend, layer in layers.items() if backend != kind)
+    snapshot = manager.registry_snapshot()
+    for profile in ("backend_profile", "backend_candidates"):
+        assert layers[kind].layer_id not in snapshot[profile]["core_layer_ids"]
+    assert unrelated.read_text() == "keep"
+    assert manager.remove_backend(kind) == ()
+
+
+@pytest.mark.parametrize("selected_only", [False, True])
+def test_backend_removal_detaches_but_preserves_models(tmp_path, monkeypatch, selected_only):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="torch-cu128", packages=("torch==2.7.1+cu128",),
+                      capabilities=("torch.cpu", "torch.cuda")),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
+    transaction = manager.begin(
+        meta={"category": "rag", "item_id": "embeddings"},
+        requested_specs=(), required_backend=BackendKind.CUDA, backend_context={},
+    )
+    transaction.core_layers = [layer]
+    record = transaction.commit()
+    manager.promote_runtime_selection(
+        {"rag:embeddings": {"logical_id": record.logical_id, "revision_id": record.revision_id}},
+        manager.runtime_composition(records=(record,)), cleanup=False,
+    )
+    if selected_only:
+        monkeypatch.setattr(manager, "active_records", lambda: ())
+        monkeypatch.setattr(manager, "selected_records", lambda: (record,))
+    assert manager.remove_backend(BackendKind.CUDA) == (layer.layer_id,)
+    assert not manager.runtime_selection()
+    assert not layer.root.exists()
+    assert record.root.is_dir()
+    assert manager.active(record.logical_id) is not None
+    context = manager.component_context(category="rag", item_id="embeddings", require_runtime=False)
+    assert context["missing_backend"]["family"] == "torch"
+    if selected_only:
+        monkeypatch.setattr(manager, "selected_records", lambda: ())
+    assert manager.remove_backend(BackendKind.CUDA) == ()
+
+
+def test_backend_removal_reports_locked_files(tmp_path, monkeypatch):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="onnx-cpu", packages=("onnxruntime==1.22.0",), capabilities=("onnx.cpu",)),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
+    with monkeypatch.context() as m:
+        m.setattr("core.runtime_environments.shutil.rmtree", MagicMock(side_effect=PermissionError("locked")))
+        with pytest.raises(RuntimeError, match="Бэкенд отключён"):
+            manager.remove_backend(BackendKind.ONNX)
+    assert not layer.root.exists()
+    assert list(manager.staging_root.glob("removed-backend-onnx-*"))
+    assert manager.remove_backend(BackendKind.ONNX) == ()
+    assert not list(manager.staging_root.glob("removed-backend-onnx-*"))
+
+
+def test_backend_removal_restores_paths_on_registry_failure(tmp_path, monkeypatch):
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    layer = manager.ensure_core_layer(
+        CoreLayerSpec(group="onnx-cpu", packages=("onnxruntime==1.22.0",), capabilities=("onnx.cpu",)),
+        installer_factory=_factory([]), log=lambda _: None,
+    )
+    before = manager.registry_snapshot()
+    monkeypatch.setattr("core.runtime_environments._atomic_json", MagicMock(side_effect=OSError("registry locked")))
+    with pytest.raises(OSError, match="registry locked"):
+        manager.remove_backend(BackendKind.ONNX)
+    assert layer.root.is_dir()
+    assert manager.registry_snapshot() == before
+
+
+def test_backend_uninstall_plan_executes_removal(monkeypatch):
+    manager = MagicMock()
+    manager.remove_backend.return_value = ("cuda-layer",)
+    monkeypatch.setattr("core.runtime_environments.runtime_environments", lambda: manager)
+    plan = BackendInstallableComponent(BackendKind.CUDA).build_uninstall_plan()
+    assert plan.required_backend is None
+    assert plan.environment_managed is False
+    assert plan.actions[0].fn() is True
+    manager.remove_backend.assert_called_once_with(BackendKind.CUDA)
+
+
 def _factory(created: list[_FakeInstaller]):
     def create(target: str):
         installer = _FakeInstaller(target)
@@ -1474,17 +1577,22 @@ def test_backend_candidates_keep_torch_cuda_and_onnx_side_by_side(
     assert onnx.root.is_dir()
 
 
+@pytest.mark.parametrize("gpu_vendor", ["NVIDIA", "AMD", "CPU"])
 def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
     tmp_path: Path,
+    gpu_vendor: str,
 ) -> None:
     manager = RuntimeEnvironmentManager(tmp_path / "Lib")
     specs = manager.core_layer_specs(
         BackendKind.ONNX,
-        {"gpu_vendor": "NVIDIA"},
+        {"gpu_vendor": gpu_vendor},
     )
 
     assert len(specs) == 2
-    assert specs[0].group == "torch-cu128"
+    assert specs[0].group == "torch-cpu"
+    assert "torch.cuda" not in specs[0].capabilities
+    assert not specs[0].extra_args
+    assert all("+cu" not in package for package in specs[0].packages)
     assert specs[1].group == "onnx-dml"
     assert "onnx.dml" in specs[1].capabilities
     assert any(package.startswith("onnxruntime-directml==") for package in specs[1].packages)
@@ -1495,7 +1603,7 @@ def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
         meta={"category": "tts", "item_id": "edge-onnx"},
         requested_specs=("tts-with-rvc-onnx",),
         required_backend=BackendKind.ONNX,
-        backend_context={"gpu_vendor": "NVIDIA"},
+        backend_context={"gpu_vendor": gpu_vendor},
     )
     assert transaction.ensure_core_layers(
         _factory(created),
@@ -1514,6 +1622,31 @@ def test_onnx_runtime_pins_numpy_and_keeps_torch_first_in_shared_paths(
         str(torch.site_packages),
         str(onnx.site_packages),
     )
+
+
+def test_onnx_runtime_survives_cuda_removal(tmp_path: Path) -> None:
+    manager = RuntimeEnvironmentManager(tmp_path / "Lib")
+    factory = _factory([])
+    cuda = manager.ensure_core_layer(
+        manager.core_layer_specs(BackendKind.CUDA)[0],
+        installer_factory=factory, log=lambda _: None,
+    )
+    transaction = manager.begin(
+        meta={"category": "rag", "item_id": "embeddings"},
+        requested_specs=(), required_backend=BackendKind.ONNX,
+        backend_context={"gpu_vendor": "NVIDIA"},
+    )
+    assert transaction.ensure_core_layers(factory, log=lambda _: None)
+    record = transaction.commit()
+    assert cuda is not None and cuda.root.is_dir()
+    assert cuda.layer_id not in record.core_layer_ids
+
+    manager.remove_backend(BackendKind.CUDA)
+
+    assert not cuda.root.exists()
+    assert manager.runtime_paths(record)
+    assert manager.core_paths_for_backend(BackendKind.ONNX, {"gpu_vendor": "NVIDIA"})
+    assert not list(manager.core_root.glob("torch-cu*"))
 
 
 def test_materialized_backend_layer_is_registered_before_gc(tmp_path: Path) -> None:
