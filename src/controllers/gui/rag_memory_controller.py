@@ -605,7 +605,8 @@ def _delete_all_graph_data(gui) -> None:
     with db.connection() as conn:
         entity_count = 0
         relation_count = 0
-        for tbl, col in (("graph_entities", None), ("graph_relations", None)):
+        processed_count = 0
+        for tbl in ("graph_entities", "graph_relations", "graph_processed_messages"):
             exists = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
             ).fetchone()
@@ -613,10 +614,12 @@ def _delete_all_graph_data(gui) -> None:
                 cnt = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
                 if tbl == "graph_entities":
                     entity_count = cnt
-                else:
+                elif tbl == "graph_relations":
                     relation_count = cnt
+                else:
+                    processed_count = cnt
 
-    if entity_count == 0 and relation_count == 0:
+    if entity_count == 0 and relation_count == 0 and processed_count == 0:
         QMessageBox.information(
             gui, _("Граф", "Graph"),
             _("Граф пуст, удалять нечего.", "Graph is already empty.")
@@ -627,9 +630,9 @@ def _delete_all_graph_data(gui) -> None:
         gui,
         _("Удалить весь граф?", "Delete all graph data?"),
         _(
-            f"Будет удалено {entity_count} сущностей и {relation_count} связей для всех персонажей.\n"
+            f"Будет удалено {entity_count} сущностей, {relation_count} связей и {processed_count} отметок обработки для всех персонажей.\n"
             "Это действие необратимо. Продолжить?",
-            f"This will delete {entity_count} entities and {relation_count} relations for all characters.\n"
+            f"This will delete {entity_count} entities, {relation_count} relations and {processed_count} processing records for all characters.\n"
             "This action cannot be undone. Continue?"
         ),
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -639,7 +642,7 @@ def _delete_all_graph_data(gui) -> None:
         return
 
     with db.connection() as conn:
-        for tbl in ("graph_relations", "graph_entity_aliases", "graph_entities"):
+        for tbl in ("graph_relations", "graph_entity_aliases", "graph_entities", "graph_processed_messages"):
             exists = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (tbl,)
             ).fetchone()
@@ -650,8 +653,8 @@ def _delete_all_graph_data(gui) -> None:
     QMessageBox.information(
         gui, _("Готово", "Done"),
         _(
-            f"Удалено {entity_count} сущностей и {relation_count} связей.",
-            f"Deleted {entity_count} entities and {relation_count} relations."
+            f"Удалено {entity_count} сущностей, {relation_count} связей и {processed_count} отметок обработки.",
+            f"Deleted {entity_count} entities, {relation_count} relations and {processed_count} processing records."
         )
     )
 

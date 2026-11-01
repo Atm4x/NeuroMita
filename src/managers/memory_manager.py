@@ -588,7 +588,7 @@ class MemoryManager(CharacterScopedService):
             with self.db.connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT id, is_deleted, is_forgotten FROM memories WHERE character_id=? AND content=? LIMIT 1",
+                    "SELECT eternal_id, is_deleted, is_forgotten FROM memories WHERE character_id=? AND content=? LIMIT 1",
                     (self.storage_key, str(content)),
                 )
                 row = cur.fetchone()
@@ -597,8 +597,8 @@ class MemoryManager(CharacterScopedService):
                     if is_deleted or is_forgotten:
                         # Восстанавливаем удалённое/забытое воспоминание вместо создания дубля
                         cur.execute(
-                            "UPDATE memories SET is_deleted=0, is_forgotten=0, priority=? WHERE id=?",
-                            (priority, mem_id),
+                            "UPDATE memories SET is_deleted=0, is_forgotten=0, priority=? WHERE character_id=? AND eternal_id=?",
+                            (priority, self.storage_key, mem_id),
                         )
                         conn.commit()
                         self._calculate_total_characters()
@@ -1328,8 +1328,8 @@ class MemoryManager(CharacterScopedService):
                             chunk = to_forget[i:i + BATCH]
                             ph = ",".join("?" * len(chunk))
                             conn.execute(
-                                f"UPDATE memories SET is_forgotten=1 WHERE eternal_id IN ({ph})",
-                                chunk,
+                                f"UPDATE memories SET is_forgotten=1 WHERE character_id=? AND eternal_id IN ({ph})",
+                                [self.storage_key, *chunk],
                             )
                         total += len(to_forget)
 
@@ -1393,14 +1393,11 @@ class MemoryManager(CharacterScopedService):
         with self.db.connection() as conn:
             cur = conn.cursor()
             for emb_table in ("embeddings", "sentence_embeddings"):
-                try:
-                    cur.execute(
-                        f"DELETE FROM {emb_table} WHERE source_table='memories' AND character_id=?"
-                        " AND source_id IN (SELECT id FROM memories WHERE character_id=? AND is_deleted=1)",
-                        (self.storage_key, self.storage_key),
-                    )
-                except Exception as e:
-                    logging.warning(f"[MemoryManager] purge_deleted: {emb_table} cleanup failed: {format_exception(e)}")
+                cur.execute(
+                    f"DELETE FROM {emb_table} WHERE source_table='memories' AND character_id=?"
+                    " AND source_id IN (SELECT eternal_id FROM memories WHERE character_id=? AND is_deleted=1)",
+                    (self.storage_key, self.storage_key),
+                )
             cur.execute(
                 "DELETE FROM memories WHERE character_id=? AND is_deleted=1",
                 (self.storage_key,),

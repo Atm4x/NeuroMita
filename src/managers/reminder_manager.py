@@ -114,7 +114,7 @@ class ReminderManager(CharacterScopedService):
                     f"[ReminderManager] Created new reminders file: {state.filename}"
                 )
 
-    def _save_state(self, state: _ReminderState) -> None:
+    def _save_state(self, state: _ReminderState, *, reminders: list[dict] | None = None) -> None:
         directory = os.path.dirname(state.filename)
         os.makedirs(directory, exist_ok=True)
         fd, temp_path = tempfile.mkstemp(
@@ -124,7 +124,7 @@ class ReminderManager(CharacterScopedService):
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as target:
-                json.dump(state.reminders, target, ensure_ascii=False, indent=4)
+                json.dump(state.reminders if reminders is None else reminders, target, ensure_ascii=False, indent=4)
                 target.flush()
                 os.fsync(target.fileno())
             os.replace(temp_path, state.filename)
@@ -136,6 +136,11 @@ class ReminderManager(CharacterScopedService):
                 os.unlink(temp_path)
             except OSError:
                 pass
+            raise
+
+    def _commit_schedule(self, state: _ReminderState, reminders: list[dict], next_number: int) -> None:
+        self._save_state(state, reminders=reminders)
+        state.reminders, state.last_reminder_number = reminders, next_number
 
     def load_reminders(self):
         state = self._state()
@@ -172,17 +177,14 @@ class ReminderManager(CharacterScopedService):
         state = self._state()
         with state.lock:
             new_id = state.last_reminder_number
-            state.last_reminder_number += 1
-            state.reminders.append(
-                {
-                    "N": new_id,
-                    "text": text,
-                    "due_iso": due_iso,
-                    "created_iso": datetime.datetime.now().isoformat("T", "seconds"),
-                    "kind": kind,
-                }
-            )
-            self._save_state(state)
+            reminder = {
+                "N": new_id,
+                "text": text,
+                "due_iso": due_iso,
+                "created_iso": datetime.datetime.now().isoformat("T", "seconds"),
+                "kind": kind,
+            }
+            self._commit_schedule(state, [*state.reminders, reminder], new_id + 1)
             logger.info(
                 f"[ReminderManager] Added reminder #{new_id}, due={due_iso}: {text[:60]}"
             )
@@ -203,8 +205,9 @@ class ReminderManager(CharacterScopedService):
         with state.lock:
             for index, reminder in enumerate(state.reminders):
                 if int(reminder.get("N", -1)) == int(n):
-                    del state.reminders[index]
-                    self._save_state(state)
+                    self._commit_schedule(
+                        state, state.reminders[:index] + state.reminders[index + 1:], state.last_reminder_number
+                    )
                     logger.info(f"[ReminderManager] Deleted reminder #{n}")
                     break
             else:
@@ -251,9 +254,7 @@ class ReminderManager(CharacterScopedService):
     def clear_reminders(self) -> None:
         state = self._state()
         with state.lock:
-            state.reminders.clear()
-            state.last_reminder_number = 1
-            self._save_state(state)
+            self._commit_schedule(state, [], 1)
         self._notify_changed()
 
     def get_reminders_formatted(self) -> str:

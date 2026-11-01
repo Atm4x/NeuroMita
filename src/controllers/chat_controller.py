@@ -9,6 +9,7 @@ import datetime
 from typing import Any
 
 from main_logger import logger
+from utils import getTranslationVariant as _
 from handlers.llm_providers.base import StreamChannel
 from core.cancellation import CancellationToken, OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
@@ -1867,3 +1868,7 @@ class ChatController(ChatService, GenerationActivityService):
             logger.info(f"[ChatController] Snapshot загружен из {file_path}")
         except Exception as e:
             logger.error(f"[ChatController] Ошибка загрузки snapshot: {format_exception(e)}", exc_info=True)
+            self.event_bus.emit(Events.GUI.SHOW_ERROR_MESSAGE, {
+                "title": "Snapshot",
+                "message": _("Не удалось загрузить snapshot.", "Failed to load snapshot."),
+            })

@@ -93,7 +93,8 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         }
 
         with patch.object(self.hm, "_insert_history_row_tx", side_effect=failing_insert):
-            self.hm.save_history(replacement)
+            with self.assertRaises(HistoryBatchWriteError):
+                self.hm.save_history(replacement)
 
         loaded = self.hm.load_history()
         self.assertEqual([m["content"] for m in loaded["messages"]], ["old"])

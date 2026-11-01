@@ -1211,6 +1211,8 @@ class ApiPresetsController(ApiPresetService):
         if state:
             preset_dict.update(state)
 
+        preset_dict.pop("key", None)
+        preset_dict.pop("reserve_keys", None)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(preset_dict, f, indent=2, ensure_ascii=False)
         return True

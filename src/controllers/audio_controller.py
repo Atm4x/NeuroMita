@@ -259,6 +259,8 @@ class AudioController(AudioStateService):
                 voiceover_path = await use(TelegramService).send_voice(
                     voice_text, speaker_command, 0
                 )
+            if not voiceover_path or not os.path.isfile(voiceover_path) or os.path.getsize(voiceover_path) == 0:
+                raise RuntimeError("Telegram voiceover did not produce an audio file")
             if voiceover_path:
                 perf_mark(trace_id, "tts.ready")
             logger.notify(voiceover_path)

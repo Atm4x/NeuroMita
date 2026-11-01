@@ -297,18 +297,21 @@ class ASRService:
             self._task = None
             if isinstance(exc, asyncio.TimeoutError):
                 message = (
-                    f"Микрофон {mic_index} не передал аудиоданные за 10 секунд; "
+                    f"Микрофон {selection.name or selection.index} не передал аудиоданные за 10 секунд; "
                     "устройство или аудиодрайвер не отвечает"
                 )
             else:
-                message = format_exception(exc).strip() or f"Не удалось запустить микрофон {mic_index}"
+                message = (
+                    f"Не удалось запустить микрофон {selection.name or selection.index}: "
+                    f"{format_exception(exc)}"
+                )
             raise RuntimeError(message) from exc
 
         if self._task.done() or not self._active:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
             raise RuntimeError(
-                f"ASR audio capture on microphone {mic_index} stopped during startup"
+                f"ASR audio capture on microphone {selection.name or selection.index} stopped during startup"
             )
 
         self.emit_event("status", {"running": True})

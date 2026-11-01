@@ -279,7 +279,9 @@ class TelegramBotHandler:
                 wav_path = os.path.join(os.path.dirname(file_path), f"{base_name}.wav")
                 absolute_wav_path = os.path.abspath(wav_path)
 
-                await AudioConverter.convert_to_wav(sound_absolute_path, absolute_wav_path)
+                converted = await AudioConverter.convert_to_wav(sound_absolute_path, absolute_wav_path)
+                if not converted or not os.path.isfile(absolute_wav_path) or os.path.getsize(absolute_wav_path) == 0:
+                    raise RuntimeError("Telegram voice conversion did not produce a WAV file")
 
                 try:
                     os.remove(sound_absolute_path)

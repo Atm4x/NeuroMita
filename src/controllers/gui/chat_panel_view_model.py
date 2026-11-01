@@ -309,7 +309,7 @@ class ChatPanelViewModel(IntentViewModel[ChatPanelState]):
             frames = list(capture.capture_screen(1) or [])
             if not frames:
                 return ()
-            return tuple(bytes(item) for item in (frames[0] or []) if item)
+            return tuple(bytes(frame) for frame in frames if frame)
 
         def applied(images: tuple[bytes, ...]) -> None:
             if not images:
