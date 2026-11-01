@@ -1,0 +1,35 @@
+name: Session timeline source Git bundle
+on:
+  push:
+    branches:
+      - bridge/session-timeline-export-20261101
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build verified source branch bundle
+        shell: bash
+        env:
+          TARGET_SHA: 5f3d061f523d9abefa6a264bb2953048a935fa65
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/session-timeline:refs/remotes/origin/session-timeline'
+          test "$(git rev-parse refs/remotes/origin/session-timeline)" = "$TARGET_SHA"
+          git branch export/session-timeline "$TARGET_SHA"
+          git bundle create session-timeline.bundle refs/heads/export/session-timeline
+          git bundle verify session-timeline.bundle
+          git bundle list-heads session-timeline.bundle
+          sha256sum session-timeline.bundle > session-timeline.bundle.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neuromita-python-session-timeline-git-bundle
+          path: |
+            session-timeline.bundle
+            session-timeline.bundle.sha256
+          retention-days: 2
