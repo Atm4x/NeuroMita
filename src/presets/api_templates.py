@@ -1,5 +1,7 @@
 # src/presets/api_templates.py
 
+from presets.opencode import template_data as opencode_templates
+
 API_TEMPLATES_DATA = [
     {
         "id": 1,
@@ -397,3 +399,6 @@ API_TEMPLATES_DATA = [
         "key_url": "",
     },
 ]
+
+# Keep ChatGPT Plan as the final built-in for its existing selection contract.
+API_TEMPLATES_DATA[-1:-1] = opencode_templates()

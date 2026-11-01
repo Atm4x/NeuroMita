@@ -15,6 +15,8 @@ class RAGService:
 
     async def handle(self, method: str, payload: dict):
         m = str(method or "").strip().lower()
+        backend = str(payload.get("local_backend") or "torch")
+        device = str(payload.get("onnx_device") or "auto")
 
         if m == "ping":
             return True
@@ -23,7 +25,7 @@ class RAGService:
             model_name = str(payload.get("model_name") or "").strip()
             query_prefix = str(payload.get("query_prefix") or "")
             return await get_scheduler().run(
-                Priority.BULK, self._warmup_embeddings_sync, model_name, query_prefix
+                Priority.BULK, self._warmup_embeddings_sync, model_name, query_prefix, backend, device
             )
 
         if m == "warmup_reranker":
@@ -32,6 +34,8 @@ class RAGService:
                 Priority.BULK,
                 self._warmup_reranker_sync,
                 model_name,
+                backend,
+                device,
             )
 
         if m == "get_embeddings":
@@ -51,6 +55,8 @@ class RAGService:
                 query_prefix,
                 prefix,
                 batch_size,
+                backend,
+                device,
             )
 
         if m == "rerank":
@@ -72,11 +78,13 @@ class RAGService:
                 alpha,
                 early_exit_score,
                 total_candidates,
+                backend,
+                device,
             )
 
         if m == "get_reranker_status":
             model_name = str(payload.get("model_name") or "").strip()
-            return await asyncio.to_thread(self._reranker_status_sync, model_name)
+            return await asyncio.to_thread(self._reranker_status_sync, model_name, backend, device)
 
         raise RuntimeError(f"Unknown rag method: {method}")
 
@@ -90,10 +98,12 @@ class RAGService:
         alpha: float,
         early_exit_score: float,
         total_candidates: int,
+        backend: str = "torch",
+        device: str = "auto",
     ):
         from handlers.ai_engine.rag_runtime import WorkerCrossEncoderReranker
 
-        reranker = WorkerCrossEncoderReranker.get(model_name)
+        reranker = WorkerCrossEncoderReranker.get(model_name, backend, device)
         return reranker.rerank_payload(
             query,
             candidates,
@@ -104,29 +114,39 @@ class RAGService:
         )
 
     @staticmethod
-    def _reranker_status_sync(model_name: str):
+    def _reranker_status_sync(model_name: str, backend: str = "torch", device: str = "auto"):
         from handlers.ai_engine.rag_runtime import WorkerCrossEncoderReranker
 
-        return WorkerCrossEncoderReranker.status(model_name)
+        return WorkerCrossEncoderReranker.status(model_name, backend, device)
 
-    def _warmup_embeddings_sync(self, model_name: str, query_prefix: str) -> bool:
-        from handlers.embedding_handler import EmbeddingModelHandler
+    def _embedding_handler(self, model_name: str, query_prefix: str, backend: str, device: str):
         from managers.rag.install_spec import TARGET_EMBEDDINGS, ensure_runtime_ready
 
-        ensure_runtime_ready(TARGET_EMBEDDINGS)
-        EmbeddingModelHandler.shared(
+        ensure_runtime_ready(TARGET_EMBEDDINGS, ctx={"rag_backend": backend})
+        if backend == "onnx":
+            from handlers.ai_engine.rag_onnx import OnnxEmbeddingHandler
+
+            return OnnxEmbeddingHandler.shared(model_name, query_prefix, device)
+        if backend != "torch":
+            raise ValueError(f"Unknown local RAG backend: {backend}")
+        from handlers.embedding_handler import EmbeddingModelHandler
+
+        return EmbeddingModelHandler.shared(
             model_name=model_name,
             query_prefix=query_prefix,
         )
+
+    def _warmup_embeddings_sync(self, model_name: str, query_prefix: str, backend: str = "torch", device: str = "auto") -> bool:
+        self._embedding_handler(model_name, query_prefix, backend, device)
         return True
 
     @staticmethod
-    def _warmup_reranker_sync(model_name: str) -> bool:
+    def _warmup_reranker_sync(model_name: str, backend: str = "torch", device: str = "auto") -> bool:
         from handlers.ai_engine.rag_runtime import WorkerCrossEncoderReranker
 
         if not model_name:
             raise ValueError("RAG reranker model name is required")
-        return bool(WorkerCrossEncoderReranker.get(model_name)._ensure_loaded())
+        return bool(WorkerCrossEncoderReranker.get(model_name, backend, device)._ensure_loaded())
 
     def _get_embeddings_sync(
         self,
@@ -135,15 +155,10 @@ class RAGService:
         query_prefix: str,
         prefix: str,
         batch_size,
+        backend: str = "torch",
+        device: str = "auto",
     ):
-        from handlers.embedding_handler import EmbeddingModelHandler
-        from managers.rag.install_spec import TARGET_EMBEDDINGS, ensure_runtime_ready
-
-        ensure_runtime_ready(TARGET_EMBEDDINGS)
-        handler = EmbeddingModelHandler.shared(
-            model_name=model_name,
-            query_prefix=query_prefix,
-        )
+        handler = self._embedding_handler(model_name, query_prefix, backend, device)
         bs = 32
         try:
             if batch_size is not None:

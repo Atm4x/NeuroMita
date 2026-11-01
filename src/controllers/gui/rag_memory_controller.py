@@ -1058,12 +1058,41 @@ def _build_rag_core_config(self) -> list:
     return [
         {'label': _('RAG и память', 'RAG & Memory'), 'type': 'subsection'},
 
+        {'label': _('Бэкенд локального RAG', 'Local RAG backend'),
+         'key': 'RAG_LOCAL_BACKEND', 'type': 'combobox', 'default': 'torch',
+         'options': ['torch', 'onnx'],
+         'tooltip': _('ONNX: после выбора установите модели через AI Hub и перезапустите приложение. '
+                      'Первый экспорт модели выполняется на CPU и требует дополнительного места.',
+                      'ONNX: install the models through AI Hub after selecting it, then restart the app. '
+                      'The first model export runs on CPU and needs additional disk space.')},
+        {'label': _('Устройство ONNX для RAG', 'RAG ONNX device'),
+         'key': 'RAG_ONNX_DEVICE', 'type': 'combobox', 'default': 'auto',
+         'options': ['auto', 'dml', 'cpu'],
+         'tooltip': _('auto: DirectML, если доступен, иначе CPU. dml: требовать DirectML. '
+                      'Используется для эмбеддингов и реранкера при выборе ONNX.',
+                      'auto: DirectML when available, otherwise CPU. dml: require DirectML. '
+                      'Applies to embeddings and the reranker when ONNX is selected.')},
+
         {'label': _('Включить RAG (требует перезагрузки)', 'Enable RAG (requires restart)'),
          'key': 'RAG_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
          'tooltip': _('Включает систему RAG. Если выключено, модель эмбеддингов не загружается, '
                       'а также полностью отключается граф знаний (экстракция и запись).',
                       'Enables the RAG system. If disabled, the embedding model is not loaded '
                       'and the knowledge graph (extraction and writes) is fully disabled.')},
+        {'label': _('Таймаут эмбеддингов RAG, сек.', 'RAG embedding timeout, sec.'),
+         'key': 'RAG_EMBED_TIMEOUT_SEC', 'type': 'entry', 'default': 60,
+         'validation': self.validate_positive_integer,
+         'tooltip': _('От 1 до 3600 секунд, включая ожидание в очереди. Применяется к обоим локальным '
+                      'бэкендам и запасному обработчику. Для фоновых пакетов ожидание может быть дольше.',
+                      '1 to 3600 seconds, including queue time. Applies to both local backends '
+                      'and the fallback handler. Background batches may wait longer.')},
+        {'label': _('Таймаут реранкера RAG, сек. (0 — авто)', 'RAG reranker timeout, sec. (0 = auto)'),
+         'key': 'RAG_RERANK_TIMEOUT_SEC', 'type': 'entry', 'default': 0,
+         'validation': self.validate_positive_integer_or_zero,
+         'tooltip': _('От 1 до 3600 секунд. 0: автоматически, по числу кандидатов. '
+                      'Новые таймауты применяются к следующим запросам без перезапуска.',
+                      '1 to 3600 seconds. 0: automatic, based on candidate count. '
+                      'New timeouts apply to subsequent requests without restarting.')},
         {'label': _('Искать в памяти', 'Search in memory'),
          'key': 'RAG_SEARCH_MEMORY', 'type': 'checkbutton', 'default_checkbutton': True,
          'depends_on': 'RAG_ENABLED'},
@@ -1576,7 +1605,7 @@ def _build_combine_config(self) -> list:
     ]
 
 
-def _build_cross_encoder_config(self) -> list:
+def _build_cross_encoder_config(self, rag_install_view_model) -> list:
     return [
         {'label': _("Cross-encoder (реранкер)", "Cross-encoder (reranker)"), 'type': 'subsection',
          'depends_on': 'RAG_ENABLED'},
@@ -1629,7 +1658,7 @@ def _build_cross_encoder_config(self) -> list:
              '0 = disabled (old behaviour). Recommended: 150.')},
         {'type': 'button_group', 'buttons': [
             {'label': _('Обновить статус', 'Refresh status'),
-             'command': lambda: _refresh_rag_install_status(self)},
+             'command': lambda: _refresh_rag_install_status(rag_install_view_model)},
         ]},
 
         {'type': 'end'},
@@ -1788,7 +1817,7 @@ def build_rag_section(
         _build_keyword_config(self) +
         _build_fts_config(self) +
         _build_combine_config(self) +
-        _build_cross_encoder_config(self) +
+        _build_cross_encoder_config(self, rag_install_view_model) +
         _build_rag_logging_config(self)
     )
     rag_section = create_settings_section(self, parent,

@@ -46,6 +46,11 @@ class ProtocolsMixin:
     def _current_protocol_id_ui(self) -> str:
         v = self.view
         pid = v.protocol_row.current_data()
+        template = getattr(self, '_active_template', None) or {}
+        template_pid = str(template.get('protocol_id') or '')
+        if template_pid.startswith(('opencode_zen_', 'opencode_go_')):
+            from presets.opencode import route_model
+            return route_model(template_pid, str(v.api_model_row.text() or '').strip())['protocol_id']
         return str(pid or "").strip()
 
     def _populate_protocol_combo(self) -> None:

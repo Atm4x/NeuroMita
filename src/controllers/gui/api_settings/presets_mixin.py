@@ -227,6 +227,8 @@ class PresetsMixin:
             self._protocol_overrides = deepcopy(overrides) if isinstance(overrides, dict) else {}
 
             model = str(state.get("model") or preset.get("default_model") or "")
+            from presets.opencode import resolve_preset
+            preset = resolve_preset(preset, model)
             key = str(state.get("key") or preset.get("key") or "")
             reserve_keys = state.get("reserve_keys", preset.get("reserve_keys", []))
             if not isinstance(reserve_keys, list):

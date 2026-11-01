@@ -145,6 +145,16 @@ See the [local voice guide](LocalVoiceInstallationEn.md). If the model does not 
 
 See the [RAG and knowledge graph guide](RAG_Guide_EN.md).
 
+### RAG dependency version conflict
+
+`RAG dependency version conflict` means that a package is installed, but its selected version does not meet RAG's requirements. For example, in a shared process, a Whisper environment with Transformers 5 can conflict with ONNX RAG, which requires Transformers 4. The log shows the detected version and requirement.
+
+1. Open **Settings → AI Engine → Process mode** and select **Isolated processes (split)** to separate model environments.
+2. Wait for the AI processes to restart and RAG to finish warming up.
+3. If split is already enabled or the error remains, reinstall the selected RAG model environment through **AI Hub**.
+
+After this conflict, automatic warmup retries stop until settings change, a model is installed, or RAG restarts successfully. `RAG backend is not installed` refers to missing dependencies: install them through AI Hub.
+
 ## How to report a problem
 
 If these suggestions do not help, contact the [NeuroMita Discord](https://discord.gg/Tu5MPFxM4P). A useful report includes:

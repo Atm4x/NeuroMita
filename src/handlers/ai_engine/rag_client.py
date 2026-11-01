@@ -19,8 +19,11 @@ def _call(method: str, payload: Optional[dict] = None, *, timeout_sec: float = 3
     engine = get_engine()
     if engine is None:
         raise RuntimeError("AI engine not available")
-    future = engine.call("rag", method, payload or {})
-    return future.result(timeout=max(1.0, float(timeout_sec or 0.0)))
+    from managers.rag.local_backend import request_backend_options
+
+    timeout = max(1.0, float(timeout_sec or 0.0))
+    future = engine.call("rag", method, {**(payload or {}), **request_backend_options()}, timeout=timeout)
+    return future.result(timeout=timeout)
 
 
 def warmup_embeddings(model_name: str, query_prefix: str = "", *, timeout_sec: float = 3600.0) -> bool:
@@ -50,7 +53,9 @@ def get_embeddings(
     "bulk" — фоновая индексация, уступает hot в очереди к устройству."""
     n = len(texts or [])
     if timeout_sec is None:
-        timeout_sec = max(30.0, min(3600.0, float(max(1, n)) * 20.0))
+        from managers.rag.request_timeouts import embedding_timeout
+
+        timeout_sec = max(embedding_timeout(), min(3600.0, float(max(1, n)) * 20.0))
     res = _call(
         "get_embeddings",
         {
@@ -79,7 +84,9 @@ def rerank_candidates(
 ) -> dict[str, Any]:
     n = len(candidates or [])
     if timeout_sec is None:
-        timeout_sec = max(30.0, min(3600.0, float(max(1, n)) * 10.0))
+        from managers.rag.request_timeouts import reranker_timeout
+
+        timeout_sec = reranker_timeout(n)
     res = _call(
         "rerank",
         {

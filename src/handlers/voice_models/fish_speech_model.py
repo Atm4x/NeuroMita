@@ -360,7 +360,8 @@ class FishSpeechInstallSpec:
         mid = str(model_id)
         backend_kind = cls.required_backend(mid, ctx)
         compat_warning = rvc_python_compat_error("tts-with-rvc") if mid == "medium+low" else None
-        if cls.is_installed(mid, ctx):
+        clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+        if not clean and cls.is_installed(mid, ctx):
             return InstallPlan(
                 actions=[],
                 already_installed=True,

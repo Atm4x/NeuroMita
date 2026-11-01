@@ -71,6 +71,101 @@ def add_preset(backend, editor, name, models):
     return identifier
 
 
+def test_opencode_model_switch_updates_url_schema_and_survives_reload(catalog_editor):
+    backend, editor = catalog_editor
+    identifier = backend.save_custom({'name': 'OpenCode', 'base': 17, 'default_model': 'grok-4.7'})
+    editor.custom_presets_list_items[identifier] = CustomPresetListItem(identifier, 'OpenCode')
+    editor.load_preset_async(identifier)
+    assert editor._current_protocol_id_ui() == 'opencode_go_responses'
+    assert editor.model_settings_controller.dialect == 'openai_responses'
+    editor.view.api_model_row.set_text('deepseek-v4.1-flash')
+    editor._on_field_changed()
+    assert editor._current_protocol_id_ui() == 'opencode_go_chat'
+    assert editor.view.api_url_row.text().endswith('/openai/v1/chat/completions')
+    assert editor.model_settings_controller.dialect == 'openai_chat_completions'
+    document = editor.view.model_settings_form.document()
+    assert backend.save_custom({'id': identifier, 'name': 'OpenCode', 'base': 17,
+                                'default_model': 'deepseek-v4.1-flash', 'model_settings': document}) == identifier
+    editor.load_preset_async(identifier)
+    assert editor._current_protocol_id_ui() == 'opencode_go_chat'
+    editor.view.api_model_row.set_text('gemini-4-argon')
+    editor._on_field_changed()
+    assert editor.model_settings_controller.dialect == 'gemini_generate_content'
+    assert editor.view.api_url_row.text().endswith('/models/gemini-4-argon:generateContent')
+
+
+def test_opencode_typing_preserves_gemini_settings(catalog_editor):
+    backend, editor = catalog_editor
+    identifier = backend.save_custom({'name': 'Gemini', 'base': 17, 'default_model': 'gemini-4-argon'})
+    editor.custom_presets_list_items[identifier] = CustomPresetListItem(identifier, 'Gemini')
+    editor.load_preset_async(identifier)
+    document = editor.view.model_settings_form.document()
+    document['values']['thinking_level'] = 'high'
+    document['enabled'] = ['thinking_level']
+    editor.model_settings_controller.restore(document)
+    for model in ('', 'g', 'ge', 'gemini-', 'gemini-3.8-flash'):
+        editor.view.api_model_row.set_text(model)
+        editor._on_field_changed()
+    actual = editor.view.model_settings_form.document()
+    assert actual == document
+    assert editor.model_settings_controller.dialect == 'gemini_generate_content'
+
+
+def test_opencode_roundtrip_keeps_custom_schema_and_resets_between_presets(catalog_editor):
+    backend, editor = catalog_editor
+    identifier = backend.save_custom({'name': 'Responses', 'base': 17, 'default_model': 'grok-4.7'})
+    editor.custom_presets_list_items[identifier] = CustomPresetListItem(identifier, 'Responses')
+    editor.load_preset_async(identifier)
+    service = backend.model_settings_service
+    document = editor.view.model_settings_form.document()
+    schema, _ = service.resolve(document, 'openai_responses')
+    definition = deepcopy(schema.data)
+    definition['fields'].append({'id': 'seed', 'path': ['seed'], 'type': 'integer', 'default': 42})
+    document = service.customize(document, definition, 'openai_responses')
+    document['values']['reasoning_effort'] = 'xhigh'
+    document['enabled'] = ['reasoning_effort', 'seed']
+    editor.model_settings_controller.restore(document)
+    document = editor.view.model_settings_form.document()
+    for model in ('gemini-4-argon', 'grok-4.7'):
+        editor.view.api_model_row.set_text(model)
+        editor._on_field_changed()
+    assert editor.view.model_settings_form.document() == document
+    editor.load_preset_async(identifier)
+    for model in ('gemini-4-argon', 'grok-4.7'):
+        editor.view.api_model_row.set_text(model)
+        editor._on_field_changed()
+    assert 'seed' not in editor.view.model_settings_form.document()['values']
+
+
+def test_old_opencode_template_preserves_key_and_model(catalog_editor):
+    backend, editor = catalog_editor
+    old = backend._user_preset_from_dict({'id': 1999, 'name': 'Existing Go', 'base': 18,
+        'protocol_id': 'opencode_go_responses', 'default_model': 'grok-4.7', 'key': 'keep-me'})
+    assert old.base == 17
+    assert old.key == 'keep-me'
+    backend.presets[old.id] = old
+    effective = backend.get_full(old.id)
+    assert effective['base'] == 17
+    assert effective['protocol_id'] == 'opencode_go_responses'
+    assert effective['url'].endswith('/openai/v1/responses')
+    assert effective['filter_fn'] == 'opencode_go_all'
+    assert effective['key'] == 'keep-me'
+    assert backend.get_full(18)['id'] == 17
+
+
+def test_opencode_badges_show_paid_zen_and_single_subscription(catalog_editor):
+    from PyQt6.QtCore import Qt
+    from ui.settings.api_settings.widgets import ProviderDelegate
+    backend, editor = catalog_editor
+    delegate = ProviderDelegate(editor.view.template_combo)
+    meta = backend.list_meta()['builtin']
+    delegate.set_presets_meta(meta)
+    for identifier in (14, 17):
+        index = editor.view.template_combo.model().index(editor.view.template_combo.findData(identifier), 0)
+        assert index.data(Qt.ItemDataRole.UserRole) == identifier
+        assert len(delegate._badges(index)) == 1
+
+
 def test_catalogs_belong_to_presets_and_survive_reload(catalog_editor):
     backend, editor = catalog_editor
     template_models = deepcopy(backend.templates[9].known_models)

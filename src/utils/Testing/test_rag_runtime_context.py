@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pytest
 
 import managers.rag.install_spec as install_spec
 from managers.rag.install_spec import TARGET_EMBEDDINGS, ensure_runtime_ready
@@ -65,3 +66,30 @@ def test_ensure_runtime_ready_raises_with_original_message(monkeypatch, tmp_path
         raised = True
         assert "backend_cuda" in str(exc)
     assert raised
+
+
+def test_version_conflict_names_versions_and_suggests_split(monkeypatch, tmp_path):
+    _set_worker_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(install_spec, "get_install_status", lambda *args, **kwargs: {
+        "required": True, "ok": False, "missing_required": ["transformers"],
+        "details": [{"id": "transformers", "kind": "python_dist", "required": True, "ok": False,
+                     "extra": {"version": "5.17.0", "spec": "transformers>=4.51,<5"}}],
+    })
+    with pytest.raises(RuntimeError) as error:
+        ensure_runtime_ready(TARGET_EMBEDDINGS)
+    message = str(error.value)
+    assert install_spec.DEPENDENCY_CONFLICT_PREFIX in message
+    assert "5.17.0" in message and "transformers>=4.51,<5" in message
+    assert "split" in message and "AI Engine" in message
+    assert "not installed" not in message
+
+
+def test_missing_package_keeps_installation_error(monkeypatch, tmp_path):
+    _set_worker_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(install_spec, "get_install_status", lambda *args, **kwargs: {
+        "required": True, "ok": False, "missing_required": ["transformers"],
+        "details": [{"id": "transformers", "kind": "python_dist", "required": True, "ok": False,
+                     "extra": {"version": None, "spec": "transformers>=4.51,<5"}}],
+    })
+    with pytest.raises(RuntimeError, match="not installed: transformers"):
+        ensure_runtime_ready(TARGET_EMBEDDINGS)

@@ -302,7 +302,8 @@ class F5TTSInstallSpec:
         backend_kind = cls.required_backend(mid, ctx)
         lang = cls.variant(mid)
         compat_warning = rvc_python_compat_error(cls._rvc_package_spec(ctx)) if cls.is_rvc(mid) else None
-        if cls.is_installed(mid, ctx):
+        clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+        if not clean and cls.is_installed(mid, ctx):
             return InstallPlan(
                 required_backend=backend_kind,
                 backend_context=dict(ctx),

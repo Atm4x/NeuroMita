@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any, Mapping
 
 from .repository import SchemaRepository
-from .schema import SchemaError, SettingsSchema
+from .schema import SchemaError, SettingsSchema, parse_value
 
 
 class ModelSettingsService:
@@ -91,6 +91,10 @@ class ModelSettingsService:
 
     def for_preset(self, preset: Mapping[str, Any], dialect: str, settings: Any = None) -> dict[str, Any]:
         document = preset.get("model_settings")
+        if str(preset.get('protocol_id') or '').startswith(('opencode_zen_', 'opencode_go_')) and isinstance(document, dict):
+            definition = document.get('schema_override') or self.repository.get(document['schema_id']).data
+            if definition.get('dialect') != dialect:
+                document = self.change_schema(document, self.default_id(dialect), dialect, validate_values=True)
         if document is not None:
             override = document.get('schema_override') if isinstance(document, dict) else None
             if (dialect == 'openai_responses' and isinstance(override, dict)
@@ -108,7 +112,8 @@ class ModelSettingsService:
         from .migration import migrate_generation_settings
         return migrate_generation_settings(self, preset, dialect, settings)
 
-    def change_schema(self, document: dict, identifier: str, dialect: str) -> dict:
+    def change_schema(self, document: dict, identifier: str, dialect: str, *, validate_values: bool = False) -> dict:
+        """Transfer fields; optional adaptation clamps ranges and disables incompatible values."""
         schema = self.repository.get(identifier)
         self.check_dialect(schema, dialect)
         updated = self.create(identifier)
@@ -119,6 +124,26 @@ class ModelSettingsService:
             if key in old_values:
                 updated["values"][key] = deepcopy(old_values[key])
         updated["enabled"] = [key for key in old_enabled if key in updated["values"]]
+        if validate_values:
+            for field in schema.fields:
+                key = field["id"]
+                value, issue = parse_value(field, updated["values"][key])
+                if issue and issue.code == "range":
+                    unbounded = {name: constraint for name, constraint in field.items() if name not in {"minimum", "maximum"}}
+                    value, _ = parse_value(unbounded, updated["values"][key])
+                    if field.get("minimum") is not None:
+                        value = max(value, field["minimum"])
+                    if field.get("maximum") is not None:
+                        value = min(value, field["maximum"])
+                    value, issue = parse_value(field, value)
+                if issue:
+                    updated["values"][key] = deepcopy(field["default"])
+                    if key in updated["enabled"]:
+                        updated["enabled"].remove(key)
+                else:
+                    updated["values"][key] = value
+            for key in schema.validate(updated["values"], updated["enabled"]):
+                updated["enabled"].remove(key)
         if document.get("support_overrides"):
             updated["support_overrides"] = deepcopy(document["support_overrides"])
         if "sparse_response" in document:

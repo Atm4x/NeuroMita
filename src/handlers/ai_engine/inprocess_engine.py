@@ -13,7 +13,7 @@ class InProcessAIEngine(AIEngineService):
 
     Выполняет rag-методы прямо в текущем процессе через те же ``RAGService._*_sync``
     обработчики, что и worker, — поэтому векторы/реранк идентичны боевым. Пригоден
-    только там, где backend (torch/transformers) импортируется напрямую (Venv).
+    только там, где backend импортируется напрямую из окружения Python.
 
     В боевом приложении НЕ используется: там в ServiceRegistry регистрируется
     настоящий ``AIEngineController`` с worker-процессами.
@@ -59,6 +59,8 @@ class InProcessAIEngine(AIEngineService):
             raise RuntimeError(f"InProcessAIEngine: сервис '{service}' не поддерживается")
 
         rag = self._rag_service()
+        backend = str(payload.get("local_backend") or "torch")
+        device = str(payload.get("onnx_device") or "auto")
 
         if m == "ping":
             return True
@@ -73,6 +75,8 @@ class InProcessAIEngine(AIEngineService):
                 query_prefix,
                 prefix,
                 payload.get("batch_size"),
+                backend,
+                device,
             )
 
         if m == "rerank":
@@ -85,19 +89,23 @@ class InProcessAIEngine(AIEngineService):
                 float(payload.get("alpha") or 0.0),
                 float(payload.get("early_exit_score") or 0.0),
                 int(payload.get("total_candidates") or len(candidates)),
+                backend,
+                device,
             )
 
         if m == "get_reranker_status":
-            return rag._reranker_status_sync(str(payload.get("model_name") or "").strip())
+            return rag._reranker_status_sync(str(payload.get("model_name") or "").strip(), backend, device)
 
         if m == "warmup_embeddings":
             return rag._warmup_embeddings_sync(
                 str(payload.get("model_name") or "").strip(),
                 str(payload.get("query_prefix") or ""),
+                backend,
+                device,
             )
 
         if m == "warmup_reranker":
-            return rag._warmup_reranker_sync(str(payload.get("model_name") or "").strip())
+            return rag._warmup_reranker_sync(str(payload.get("model_name") or "").strip(), backend, device)
 
         raise RuntimeError(f"InProcessAIEngine: неизвестный rag-метод '{method}'")
 

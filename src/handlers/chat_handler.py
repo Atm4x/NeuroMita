@@ -354,6 +354,11 @@ class ChatModel:
                 if session_id:
                     req.extra["openrouter_session_id"] = session_id
             _last_req[0] = req
+            if str(preset_settings.protocol_id or '').startswith('opencode_go_'):
+                from utils.opencode_session import session_id as opencode_session_id
+                req.headers['x-opencode-session'] = opencode_session_id(
+                    str(context_character_id or ''), str(context_character_name or ''),
+                )
             _char = None
             # The Sandbox context viewer is a normal user-facing diagnostic,
             # not a debug-only feature. Its fallback file must therefore be
