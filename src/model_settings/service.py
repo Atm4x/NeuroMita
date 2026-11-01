@@ -91,6 +91,10 @@ class ModelSettingsService:
 
     def for_preset(self, preset: Mapping[str, Any], dialect: str, settings: Any = None) -> dict[str, Any]:
         document = preset.get("model_settings")
+        if str(preset.get('protocol_id') or '').startswith(('opencode_zen_', 'opencode_go_')) and isinstance(document, dict):
+            definition = document.get('schema_override') or self.repository.get(document['schema_id']).data
+            if definition.get('dialect') != dialect:
+                document = self.change_schema(document, self.default_id(dialect), dialect)
         if document is not None:
             override = document.get('schema_override') if isinstance(document, dict) else None
             if (dialect == 'openai_responses' and isinstance(override, dict)

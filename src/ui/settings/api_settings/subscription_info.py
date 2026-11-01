@@ -35,7 +35,7 @@ class SubscriptionInfo(QFrame):
     def _refresh_link(label):
         label.setText(
             f'<a href="{label.property("dashboardUrl") or ""}" style="color: {THEME["link"]};">'
-            + str(_('Управление использованием ChatGPT', 'Manage ChatGPT usage')) + '</a>'
+            + str(_('Управление использованием', 'Manage usage')) + '</a>'
         )
 
     def configure(self, descriptor):
