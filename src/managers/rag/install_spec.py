@@ -38,6 +38,7 @@ TRANSFORMERS_SPEC = "transformers>=4.45.2"
 HF_HUB_SPEC = "huggingface-hub"
 BITSANDBYTES_SPEC = "bitsandbytes>=0.43.0"
 ONNX_RAG_SPECS = ("transformers>=4.51,<5", HF_HUB_SPEC, "optimum-onnx>=0.1,<1", "onnx>=1.16,<2")
+DEPENDENCY_CONFLICT_PREFIX = "RAG dependency version conflict:"
 
 # Windows cannot pass arbitrarily large timeouts to the thread wait used by
 # subprocess.communicate().  Keep each individual wait comfortably below that
@@ -333,6 +334,28 @@ def ensure_runtime_ready(target: str, *, ctx: dict[str, Any] | None = None) -> N
         return
 
     missing = list(status.get("missing_required") or [])
+    conflicts = []
+    from packaging.requirements import Requirement
+
+    for item in status.get("details") or []:
+        if item.get("ok") or not item.get("required") or item.get("kind") != "python_dist":
+            continue
+        extra = item.get("extra") or {}
+        version, spec = extra.get("version"), extra.get("spec")
+        if version and spec and not Requirement(spec).specifier.contains(version, prereleases=True):
+            conflicts.append(f"{item.get('id')}: {version} (required {spec})")
+    if conflicts:
+        raise RuntimeError(
+            DEPENDENCY_CONFLICT_PREFIX + " " + "; ".join(conflicts) + ". "
+            + _(
+                "В общем процессе (shared) зависимости моделей могут конфликтовать. "
+                "Попробуйте режим «Изолированные процессы (split)» в настройках AI Engine. "
+                "Если split уже включён, переустановите окружение модели через AI Hub.",
+                "Model dependencies can conflict in the shared process. "
+                "Try Isolated processes (split) in AI Engine settings. "
+                "If split is already enabled, reinstall the model environment through AI Hub.",
+            )
+        )
     detail = ", ".join(missing) if missing else "unknown"
     raise RuntimeError(
         _("RAG backend is not installed: {items}", "RAG backend is not installed: {items}").format(items=detail)

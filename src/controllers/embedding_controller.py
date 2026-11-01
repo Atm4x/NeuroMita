@@ -175,6 +175,8 @@ class EmbeddingController(EmbeddingService):
         self._set_state(ModelState.ERROR, reason)
 
     def _warmup_local_backend(self) -> None:
+        from managers.rag.install_spec import DEPENDENCY_CONFLICT_PREFIX
+
         # AI engine может подняться позже контроллера, а первый запуск модели —
         # тянуть веса с HF (~минуты). Поэтому ретраим до готовности движка, чтобы
         # прогрев состоялся в фоне, а не сорвался из-за стартовой гонки.
@@ -187,6 +189,9 @@ class EmbeddingController(EmbeddingService):
                 # force: фоновый прогрев — единственный путь выхода из ошибки,
                 # запросу пользователя ждать мёртвый рантайм нельзя.
                 if self._ensure_local_backend(force=True):
+                    return
+                state, error, _ = self._snapshot()
+                if state is ModelState.ERROR and DEPENDENCY_CONFLICT_PREFIX in error:
                     return
             except Exception:
                 pass
@@ -247,6 +252,7 @@ class EmbeddingController(EmbeddingService):
         activate = getattr(engine, "activate_environment", None) if engine is not None else None
         if not callable(activate):
             raise RuntimeError("AI engine not available")
+        diagnostics: list[str] = []
         if not activate(
             "rag",
             "embeddings",
@@ -260,8 +266,10 @@ class EmbeddingController(EmbeddingService):
                 **request_backend_options(),
             },
             validation_timeout=3600.0,
+            diagnostics=diagnostics,
         ):
-            raise RuntimeError("RAG embeddings environment could not be initialized")
+            detail = "\n".join(diagnostics)
+            raise RuntimeError(detail or "RAG embeddings environment could not be initialized")
 
     def _invalidate_runtime(self, *, reason: str) -> None:
         """Конфигурация эмбеддингов изменилась — прогретая модель больше не та.

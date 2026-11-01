@@ -20,6 +20,7 @@ class OnnxTextModel:
         if not artifact_ready(kind, model_name):
             raise RuntimeError(f"Install the ONNX export for {model_name} through AI Hub first")
         root = artifact_dir(kind, model_name)
+        self.config = json.loads((root / "config.json").read_text(encoding="utf-8"))
         available = ort.get_available_providers()
         use_dml = device != "cpu" and "DmlExecutionProvider" in available
         if device == "dml" and not use_dml:
@@ -29,7 +30,11 @@ class OnnxTextModel:
         if use_dml:
             options.enable_mem_pattern = False
             options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-            providers = [(self.provider, {"device_id": 0}), "CPUExecutionProvider"]
+            provider_options = {"device_id": 0}
+            if self.config.get("model_type") == "qwen3":
+                # Avoid the Qwen3 native crash with ORT 1.24.4 DirectML metacommands.
+                provider_options["disable_metacommands"] = "True"
+            providers = [(self.provider, provider_options), "CPUExecutionProvider"]
         else:
             providers = [self.provider]
             if device == "auto":
@@ -40,8 +45,11 @@ class OnnxTextModel:
         self.tokenizer = AutoTokenizer.from_pretrained(root, local_files_only=True, trust_remote_code=True)
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.config = json.loads((root / "config.json").read_text(encoding="utf-8"))
         self._lock = Lock()
+        tokens = self.tokenizer(["RAG warmup"], padding=True, truncation=True, return_tensors="np", max_length=512)
+        output = self.predict(tokens, "last_hidden_state" if kind == "embeddings" else "logits")
+        if not output.size or not np.isfinite(output).all():
+            raise RuntimeError(f"RAG ONNX warmup produced invalid output for {model_name}")
         logger.info(f"[RAG][ONNX] Loaded '{model_name}' ({kind}); provider={self.provider}; path={root}")
 
     def predict(self, tokens: dict, output_name: str) -> np.ndarray:

@@ -147,8 +147,72 @@ def test_directml_session_and_left_padding_pooling(onnx_settings, monkeypatch):
     np.testing.assert_allclose(vectors[0], [0.6, 0.8])
     assert sessions[0].options.enable_mem_pattern is False
     assert sessions[0].options.execution_mode == "sequential"
-    assert sessions[0].providers[0] == ("DmlExecutionProvider", {"device_id": 0})
+    assert sessions[0].providers[0] == ("DmlExecutionProvider", {
+        "device_id": 0, "disable_metacommands": "True",
+    })
     np.testing.assert_array_equal(sessions[0].inputs["position_ids"], [[0, 0, 1]])
+
+
+@pytest.mark.parametrize("kind", ["embeddings", "reranker"])
+@pytest.mark.parametrize("device", ["dml", "auto"])
+def test_qwen_directml_warmup_executes_before_model_is_ready(onnx_settings, monkeypatch, kind, device):
+    _artifact(kind, "owner/qwen")
+    sessions = _fake_runtime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    model = OnnxTextModel(kind, "owner/qwen", device)
+    assert sessions[0].inputs is not None
+    assert model.provider in sessions[0].get_providers()
+    assert sessions[0].providers[0][1]["disable_metacommands"] == "True"
+
+
+@pytest.mark.parametrize("device,model_type", [("cpu", "qwen3"), ("dml", "bert")])
+def test_qwen_workaround_does_not_change_other_execution_paths(onnx_settings, monkeypatch, device, model_type):
+    _artifact("embeddings", "owner/model", {"hidden_size": 2, "model_type": model_type})
+    sessions = _fake_runtime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    OnnxTextModel("embeddings", "owner/model", device)
+    expected = [("DmlExecutionProvider", {"device_id": 0}), "CPUExecutionProvider"] if device == "dml" else ["CPUExecutionProvider"]
+    assert sessions[0].providers == expected
+
+
+@pytest.mark.parametrize("bad_output", [np.array([]), np.array([np.nan]), np.array([np.inf])])
+def test_warmup_rejects_invalid_outputs(onnx_settings, monkeypatch, bad_output):
+    _artifact("embeddings", "owner/model")
+    _fake_runtime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setattr(sys.modules["onnxruntime"].InferenceSession, "run", lambda *args: [bad_output])
+    with pytest.raises(RuntimeError, match="warmup produced invalid output"):
+        OnnxTextModel("embeddings", "owner/model", "dml")
+
+
+def test_failed_inference_cannot_pass_worker_warmup(onnx_settings, monkeypatch):
+    from handlers.ai_engine.services.rag_service import RAGService
+
+    _artifact("embeddings", "owner/model")
+    _fake_runtime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setattr(install_spec, "ensure_runtime_ready", lambda *args, **kwargs: None)
+    monkeypatch.setattr(OnnxEmbeddingHandler, "_shared", None)
+
+    def fail(*args):
+        raise RuntimeError("DirectML inference failed")
+
+    monkeypatch.setattr(sys.modules["onnxruntime"].InferenceSession, "run", fail)
+    with pytest.raises(RuntimeError, match="DirectML inference failed"):
+        RAGService(emit_event=lambda *args: None)._warmup_embeddings_sync("owner/model", "", "onnx", "dml")
+    assert OnnxEmbeddingHandler._shared is None
+
+
+def test_failed_reranker_inference_cannot_be_reported_loaded(onnx_settings, monkeypatch):
+    _artifact("reranker", "Qwen/Qwen3-Reranker-0.6B")
+    _fake_runtime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+    monkeypatch.setattr(install_spec, "ensure_runtime_ready", lambda *args, **kwargs: None)
+
+    def fail(*args):
+        raise RuntimeError("DirectML inference failed")
+
+    monkeypatch.setattr(sys.modules["onnxruntime"].InferenceSession, "run", fail)
+    reranker = WorkerCrossEncoderReranker("Qwen/Qwen3-Reranker-0.6B", "onnx", "dml")
+    result = reranker.rerank_payload("query", [{"content": "text"}], top_k=1,
+                                    alpha=1.0, early_exit_score=1.1, total_candidates=1)
+    assert result == {"updates": [], "loaded": False, "failed": True}
+    assert reranker._model is None
 
 
 def test_explicit_directml_never_silently_uses_cpu(onnx_settings, monkeypatch):
