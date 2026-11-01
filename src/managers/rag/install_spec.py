@@ -502,7 +502,8 @@ def build_install_plan(
             already_installed_status=_("Not required", "Not required"),
         )
 
-    if status.get("ok"):
+    clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+    if status.get("ok") and not clean:
         return InstallPlan(
             actions=[],
             already_installed=True,
@@ -640,7 +641,8 @@ def build_model_install_plan(
     if not status.get("required"):
         return InstallPlan(actions=[], already_installed=True,
                            already_installed_status=_("Not required", "Not required"))
-    if status.get("ok"):
+    clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+    if status.get("ok") and not clean:
         return InstallPlan(actions=[], already_installed=True,
                            already_installed_status=_("Already installed", "Already installed"))
 

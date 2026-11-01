@@ -160,7 +160,8 @@ class OmniVoiceInstallSpec:
     def build_install_plan(cls, model_id: str, ctx: dict) -> InstallPlan:
         mid = str(model_id or "").strip()
         backend_kind = cls.required_backend(mid, ctx)
-        if cls.is_installed(mid, ctx):
+        clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+        if not clean and cls.is_installed(mid, ctx):
             return InstallPlan(
                 actions=[],
                 already_installed=True,

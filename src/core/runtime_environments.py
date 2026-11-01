@@ -581,6 +581,8 @@ class EnvironmentTransaction:
             "python": _python_tag(),
             "platform": _platform_tag(),
         }
+        if (meta or {}).get("clean"):
+            revision_payload["rebuild_id"] = self.transaction_id
         revision_id = _hash_payload(revision_payload, length=20)
         final_root = self.manager.overlay_root / _safe_environment_id(self.logical_id) / revision_id
         final_site = final_root / "site-packages"

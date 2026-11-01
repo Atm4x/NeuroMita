@@ -1341,18 +1341,14 @@ class InstallController(InstallService):
                     cb.progress(100)
                     ok = True
                 elif managed and op == "install":
+                    if clean_requested and _category != "backend" and (
+                        result.already_installed or not result.actions
+                    ):
+                        raise RuntimeError(
+                            "Clean reinstall requires a complete installation plan; "
+                            "the existing environment was preserved"
+                        )
                     requested_specs = self._collect_pip_specs(result)
-                    if clean_requested and active_environment is not None:
-                        # Rebuild from an empty overlay. Reinstalling into the
-                        # old directory can leave stale hydra/fairseq files.
-                        cb.log("Clean reinstall: removing the existing environment")
-                        if not environment_manager.remove_installed(
-                            active_environment.logical_id, delete=True
-                        ):
-                            raise RuntimeError(
-                                f"Failed to remove environment '{active_environment.logical_id}'"
-                            )
-                        active_environment = None
                     candidate_transaction = environment_manager.begin(
                         meta={**meta, **({"environment_id": result.environment_id} if result.environment_id else {})},
                         requested_specs=requested_specs,
