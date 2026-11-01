@@ -199,7 +199,13 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
             self._current_gpu = str(run_ctx.get("gpu_vendor") or "CPU")
         run_ctx.setdefault("gpu_vendor", self._current_gpu)
         st = check_requirements(self.requirements(), ctx=run_ctx)
-        return bool(st.get("ok"))
+        if not st.get("ok"):
+            return False
+        manifest = self.install_manifest()
+        return bool(manifest) and all(
+            os.path.isfile(item["dest"]) and os.path.getsize(item["dest"]) > 0
+            for item in manifest
+        )
     
     def install_manifest(self) -> list[dict]:
         model_name = self._normalized_ckpt_name()

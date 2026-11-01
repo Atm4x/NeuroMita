@@ -1273,7 +1273,7 @@ class HistoryManager(CharacterScopedService):
                 except Exception:
                     pass
                 logger.error(f"DB Error saving history atomically: {format_exception(e)}", exc_info=True)
-                return
+                raise HistoryBatchWriteError("Failed to save history snapshot") from e
             finally:
                 try:
                     conn.close()

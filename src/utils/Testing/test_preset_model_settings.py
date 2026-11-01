@@ -285,7 +285,8 @@ class PresetModelSettingsTests(unittest.TestCase):
                 custom_id = controller.save_custom({"name": "Custom Router", "protocol_id": "openrouter_default"})
                 self.assertEqual(controller.get_full(custom_id)["model_settings"]["schema_id"], "openrouter")
                 document = self.service.create("google-level")
-                identifier = controller.save_custom({"name": "Preset", "base": 3, "model_settings": document})
+                identifier = controller.save_custom({"name": "Preset", "base": 3, "model_settings": document,
+                                                     "key": "private-key", "reserve_keys": ["private-reserve"]})
                 exported = controller.get_full(identifier)
                 self.assertEqual(exported["model_settings"], document)
                 saved = json.loads(controller.presets_path.read_text(encoding="utf-8"))
@@ -300,6 +301,10 @@ class PresetModelSettingsTests(unittest.TestCase):
                 self.assertEqual(controller.get_full(identifier)["model_settings"], document)
                 path = self.directory / "export.json"
                 self.assertTrue(controller.export_preset(identifier, str(path)))
+                shared = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("key", shared)
+                self.assertNotIn("reserve_keys", shared)
+                self.assertEqual(controller.get_full(identifier)["key"], "private-key")
                 imported = controller.import_preset(str(path))
                 new_document = controller.get_full(imported)["model_settings"]
                 self.assertEqual(new_document["values"], document["values"])

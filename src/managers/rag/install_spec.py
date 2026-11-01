@@ -12,7 +12,7 @@ from core.events import Events, get_event_bus
 from core.install_requirements import InstallRequirement, check_requirements
 from core.install_types import InstallAction, InstallPlan
 from core.installables import ComponentCategory, ComponentMetadata, coerce_backend, make_component_id
-from core.installables.helpers import build_runtime_ctx, noop_plan, status_from_installed
+from core.installables.helpers import build_runtime_ctx, status_from_installed
 from handlers.embedding_presets import resolve_full_config
 from managers.rag.pipeline.config import resolve_ce_model
 from managers.rag.local_backend import local_backend, is_lm_reranker as _is_lm_reranker_model
@@ -764,7 +764,7 @@ class RagModelInstallableComponent:
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
-        return noop_plan("RAG uninstall is not implemented yet.")
+        raise NotImplementedError("RAG model removal is not supported; no files were deleted.")
 
     def build_initialize_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan | None:
         return None
@@ -817,7 +817,7 @@ class RagInstallableComponent:
         )
 
     def build_uninstall_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan:
-        return noop_plan("RAG uninstall is not implemented yet.")
+        raise NotImplementedError("RAG model removal is not supported; no files were deleted.")
 
     def build_initialize_plan(self, ctx: dict[str, Any] | None = None) -> InstallPlan | None:
         return None
