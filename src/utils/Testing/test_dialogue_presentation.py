@@ -113,18 +113,18 @@ class DialoguePresentationTests(unittest.TestCase):
             "secret_exposed": None,
             "timer_add": [],
             "quiet_text": "",
+            "response": "Hi",
             "response_protocol_version": 3,
         })
 
         self.assertEqual(visible["attitude_change"], 0)
         self.assertEqual(visible["boredom_change"], 0.0)
         self.assertIs(visible["stress_change"], False)
-        self.assertEqual(visible["response_protocol_version"], 3)
         self.assertEqual(visible["segments"][0]["emotions"], [])
         for hidden in (
             "memory_add", "memory_merge", "reminder_add", "custom_fields",
             "entities", "relations", "tool_call", "secret_exposed",
-            "timer_add", "quiet_text",
+            "timer_add", "quiet_text", "response", "response_protocol_version",
         ):
             self.assertNotIn(hidden, visible)
 
@@ -157,6 +157,7 @@ class DialoguePresentationTests(unittest.TestCase):
                 "custom_fields": None,
                 "entities": [],
                 "tool_call": None,
+                "response": "Hi",
                 "response_protocol_version": 3,
             },
             mode="json",
@@ -166,8 +167,12 @@ class DialoguePresentationTests(unittest.TestCase):
         self.assertIn('"attitude_change": 0', json_label)
         self.assertIn('"stress_change": false', json_label)
         self.assertIn('"emotions": []', json_label)
-        for hidden in ("memory_add", "custom_fields", "entities", "tool_call"):
+        for hidden in (
+            "memory_add", "custom_fields", "entities", "tool_call",
+            "response_protocol_version",
+        ):
             self.assertNotIn(hidden, json_label)
+        self.assertNotIn('"response":', json_label)
         self.assertTrue(any(
             text.startswith("Нормализованный ответ")
             or text.startswith("Normalized response")

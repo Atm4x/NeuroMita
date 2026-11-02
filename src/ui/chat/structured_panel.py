@@ -308,16 +308,23 @@ class StructuredOutputPanel(QFrame):
         if entities or relations:
             layout.addWidget(GraphBlock(entities, relations, self._font_sm, layout.parentWidget()))
 
+    _NORMALIZED_HIDDEN_FIELDS = frozenset({"response", "response_protocol_version"})
+
     @staticmethod
     def _visible_json_payload(data: dict) -> dict:
         """Top-level fields for the normalized JSON view.
 
         Presentation-only filter: keeps 0/False, drops empty defaults
-        (None / "" / [] / {}). Nested values are never inspected.
+        (None / "" / [] / {}) and derived fields. Nested values are never
+        inspected.
+
+        ``response`` repeats the spoken text already present in segments and
+        ``response_protocol_version`` is internal wire metadata, so the view
+        stays close to the JSON the model actually produced.
         """
         visible: dict = {}
         for key, value in data.items():
-            if key == "_raw_json":
+            if key == "_raw_json" or key in StructuredOutputPanel._NORMALIZED_HIDDEN_FIELDS:
                 continue
             if value is None or value == "" or value == [] or value == {}:
                 continue
@@ -331,8 +338,8 @@ class StructuredOutputPanel(QFrame):
             raw = raw_json
         else:
             caption_text = _(
-                "Нормализованный ответ (исходный JSON модели недоступен; пустые поля скрыты)",
-                "Normalized response (raw model JSON unavailable; empty fields hidden)",
+                "Нормализованный ответ (исходный JSON модели недоступен; пустые и служебные поля скрыты)",
+                "Normalized response (raw model JSON unavailable; empty and derived fields hidden)",
             )
             raw = json.dumps(self._visible_json_payload(data), ensure_ascii=False, indent=2)
         try:
