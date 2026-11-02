@@ -309,6 +309,8 @@ class AppShellController:
                         "<\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>",
                         "<Attached Images>",
                     )
+                    if len(all_image_data) == 1:
+                        label = _("<Прикрепленное изображение>", "<Attached Image>")
                 elif (
                     current_image_data or explicit_image_data
                 ) and not staged_image_data:

@@ -31,6 +31,7 @@
   "<br><br><b>Пакеты backend:</b><br>{packages}": "<br><br><b>Backend packages:</b><br>{packages}",
   "<Изображение экрана>": "<Screen Image>",
   "<Изображения>": "<Images>",
+  "<Прикрепленное изображение>": "<Attached Image>",
   "<Прикрепленные изображения>": "<Attached Images>",
   ">1 уменьшает зацикливание на повторах.": ">1 reduces looping on repeats.",
   "ИИ-движок запускается…": "AI Engine is starting…",

@@ -47,7 +47,7 @@ def _gemini_segment_props(schema: dict) -> dict:
 class IntentsPassthroughTests(unittest.TestCase):
     def test_inventory_string_payload_reaches_unity_as_object(self) -> None:
         for intent_type in ("inventory.take", "inventory.collect", "inventory.drop",
-                            "inventory.return", "inventory.equip_right", "inventory.equip_left"):
+                            "inventory.return", "inventory.equip_right", "inventory.equip_left", "inventory.equip_head"):
             for value in ("Cat", '"Cat"', '{"object":"Cat"}'):
                 with self.subTest(intent_type=intent_type, value=value):
                     response = parse_structured_response(json.dumps({"segments": [{

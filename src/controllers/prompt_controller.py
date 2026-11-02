@@ -1282,6 +1282,12 @@ class PromptController(PromptBuilderService):
         user_message_for_history: Optional[Dict[str, Any]] = None
         user_content_chunks: List[Dict[str, Any]] = []
 
+        if image_data and not user_input and not system_input and sender == "Player" and source is PlayerMessageSource.APPLICATION:
+            user_content_chunks.append({
+                "type": "text",
+                "text": "Please look at the attached image(s) and react to what you can see.",
+            })
+
         if user_input:
             if sender and sender != "Player":
                 prefix = f"[{sender} is talking to you ({char_id})]: "

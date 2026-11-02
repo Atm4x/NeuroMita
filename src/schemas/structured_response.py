@@ -342,7 +342,7 @@ class ResponseSegment(BaseModel):
                     payload = decoded
                 elif (itype.strip() in {
                     "inventory.take", "inventory.collect", "inventory.drop",
-                    "inventory.return", "inventory.equip_right", "inventory.equip_left",
+                    "inventory.return", "inventory.equip_right", "inventory.equip_left", "inventory.equip_head",
                 } and isinstance(decoded, str) and decoded.strip()):
                     payload = {"object": decoded.strip()}
                 else:
