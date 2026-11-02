@@ -97,6 +97,85 @@ class DialoguePresentationTests(unittest.TestCase):
         self.assertEqual(format_conversation_title(snapshot), "Conversation with Mitas (4)")
         self.assertEqual(format_runtime_source(snapshot), "Game")
 
+    def test_structured_panel_json_view_keeps_zero_and_false(self) -> None:
+        visible = StructuredOutputPanel._visible_json_payload({
+            "segments": [{"text": "Hi", "emotions": []}],
+            "attitude_change": 0,
+            "boredom_change": 0.0,
+            "stress_change": False,
+            "memory_add": [],
+            "memory_merge": [],
+            "reminder_add": None,
+            "custom_fields": {},
+            "entities": [],
+            "relations": [],
+            "tool_call": None,
+            "secret_exposed": None,
+            "timer_add": [],
+            "quiet_text": "",
+            "response_protocol_version": 3,
+        })
+
+        self.assertEqual(visible["attitude_change"], 0)
+        self.assertEqual(visible["boredom_change"], 0.0)
+        self.assertIs(visible["stress_change"], False)
+        self.assertEqual(visible["response_protocol_version"], 3)
+        self.assertEqual(visible["segments"][0]["emotions"], [])
+        for hidden in (
+            "memory_add", "memory_merge", "reminder_add", "custom_fields",
+            "entities", "relations", "tool_call", "secret_exposed",
+            "timer_add", "quiet_text",
+        ):
+            self.assertNotIn(hidden, visible)
+
+    def test_structured_panel_json_mode_shows_raw_model_json(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        raw = '{"segments": [{"text": "Hi"}], "memory_add": [], "tool_call": null}'
+        panel = StructuredOutputPanel(
+            {"_raw_json": raw, "segments": [{"text": "Hi"}], "memory_add": [], "tool_call": None},
+            mode="json",
+        )
+        labels = [label.text() for label in panel.findChildren(QLabel)]
+        json_label = next(text for text in labels if '"segments"' in text)
+        self.assertIn('"memory_add": []', json_label)
+        self.assertIn('"tool_call": null', json_label)
+        self.assertTrue(any(
+            text == "Исходный JSON модели" or text == "Raw model JSON"
+            for text in labels
+        ))
+        panel.close()
+        app.processEvents()
+
+    def test_structured_panel_json_mode_hides_normalized_empty_defaults(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        panel = StructuredOutputPanel(
+            {
+                "segments": [{"text": "Hi", "emotions": []}],
+                "attitude_change": 0,
+                "stress_change": False,
+                "memory_add": [],
+                "custom_fields": None,
+                "entities": [],
+                "tool_call": None,
+                "response_protocol_version": 3,
+            },
+            mode="json",
+        )
+        labels = [label.text() for label in panel.findChildren(QLabel)]
+        json_label = next(text for text in labels if '"segments"' in text)
+        self.assertIn('"attitude_change": 0', json_label)
+        self.assertIn('"stress_change": false', json_label)
+        self.assertIn('"emotions": []', json_label)
+        for hidden in ("memory_add", "custom_fields", "entities", "tool_call"):
+            self.assertNotIn(hidden, json_label)
+        self.assertTrue(any(
+            text.startswith("Нормализованный ответ")
+            or text.startswith("Normalized response")
+            for text in labels
+        ))
+        panel.close()
+        app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()
