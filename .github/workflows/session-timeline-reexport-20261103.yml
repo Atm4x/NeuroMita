@@ -1,0 +1,36 @@
+name: Session timeline Python source Git bundle
+on:
+  push:
+    branches:
+      - bridge/session-timeline-reexport-20261103
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify and bundle target
+        shell: bash
+        env:
+          TARGET_SHA: 5f3d061f523d9abefa6a264bb2953048a935fa65
+          TARGET_REF: session-timeline
+        run: |
+          set -euo pipefail
+          git fetch origin "+refs/heads/$TARGET_REF:refs/remotes/origin/$TARGET_REF"
+          test "$(git rev-parse "refs/remotes/origin/$TARGET_REF")" = "$TARGET_SHA"
+          git branch export/source "$TARGET_SHA"
+          git bundle create sandbox-python.bundle refs/heads/export/source
+          git bundle verify sandbox-python.bundle
+          git bundle list-heads sandbox-python.bundle
+          sha256sum sandbox-python.bundle > sandbox-python.bundle.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-python-source-20261103
+          path: |
+            sandbox-python.bundle
+            sandbox-python.bundle.sha256
+          retention-days: 7
