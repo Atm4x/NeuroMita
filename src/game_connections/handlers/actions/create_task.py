@@ -180,6 +180,7 @@ async def _dispatch_task(
         "user_input": user_input,
         "system_input": system_input,
         "client_id": ctx.client_id,
+        "client_role": ctx.client_role,
         "event_type": event_type,
         "req_id": req_id,
         "sender": sender,
@@ -293,6 +294,11 @@ class CreateTaskAction:
         data = request.get("data", {}) or {}
         context = request.get("context", {}) or {}
         req_id = request.get("req_id", None)
+        desktop_turn = ctx.client_role == "desktop"
+        if desktop_turn and (event_type != "answer" or character_id != "Kind"):
+            await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                reason="Desktop supports only Kind dialogue", req_id=req_id)
+            return
         dialogue_payload = context.get("dialogue") if isinstance(context.get("dialogue"), dict) else {}
 
         if character_id == "TwoD":
@@ -402,29 +408,30 @@ class CreateTaskAction:
             "tv_observation": context.get("tv_observation", {}),
             "novel": context.get("novel", {}) if character_id == "TwoD" else {},
         }
-        # Runtime events are consumable by this exact turn and must never leak
-        # into the persistent fallback state used by non-Unity requests.
-        persistent_game_state = dict(game_state_payload)
-        persistent_game_state.pop("runtime_events", None)
-        persistent_game_state.pop("tv_observation", None)
-        persistent_game_state["character_id"] = str(character_id or "")
-        if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
-            target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
-            if target_changed:
-                event_bus.emit(
-                    Events.Server.GAME_DIALOGUE_TARGET_CHANGED,
-                    {"character_id": str(character_id or "")},
-                )
-        event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
+        if not desktop_turn:
+            # Runtime events are consumable by this exact turn and must never leak
+            # into the persistent fallback state used by non-Unity requests.
+            persistent_game_state = dict(game_state_payload)
+            persistent_game_state.pop("runtime_events", None)
+            persistent_game_state.pop("tv_observation", None)
+            persistent_game_state["character_id"] = str(character_id or "")
+            if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
+                target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
+                if target_changed:
+                    event_bus.emit(
+                        Events.Server.GAME_DIALOGUE_TARGET_CHANGED,
+                        {"character_id": str(character_id or "")},
+                    )
+            event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
 
-        timeline_ingress = services().get_optional(UnityTimelineIngress)
-        if timeline_ingress is not None:
-            timeline_event_id = await asyncio.to_thread(
-                timeline_ingress.ingest, request, str(character_id), list(participants or []),
-            )
-            req_id = request.get("req_id")
-            if timeline_event_id:
-                game_state_payload["_timeline_event_id"] = timeline_event_id
+            timeline_ingress = services().get_optional(UnityTimelineIngress)
+            if timeline_ingress is not None:
+                timeline_event_id = await asyncio.to_thread(
+                    timeline_ingress.ingest, request, str(character_id), list(participants or []),
+                )
+                req_id = request.get("req_id")
+                if timeline_event_id:
+                    game_state_payload["_timeline_event_id"] = timeline_event_id
 
         if server._should_block_event(event_type):
             await server._send_aborted_update(ctx.client_id, event_type, character_id, req_id=req_id)
@@ -510,7 +517,7 @@ class CreateTaskAction:
                 images=collect_context_images(context, client_id=ctx.client_id),
                 image_source=effective_image_source,
                 player_message_source=(
-                    PlayerMessageSource.GAME.value
+                    (PlayerMessageSource.APPLICATION if desktop_turn else PlayerMessageSource.GAME).value
                     if user_input and resolved_speaker.kind is DialogueActorKind.PLAYER
                     else ""
                 ),

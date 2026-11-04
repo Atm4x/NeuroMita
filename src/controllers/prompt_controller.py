@@ -13,6 +13,7 @@ from main_logger import logger
 from services.contracts import (
     AppVarsService,
     CharacterEnvironmentContextService,
+    DesktopWatchService,
     HistoryService,
     PlayerMessageSource,
     PromptBuildRequest,
@@ -929,6 +930,22 @@ class PromptController(PromptBuilderService):
                 "[/GAME_MASTER_TASK]"
             ),
         }
+    @staticmethod
+    def _desktop_context_for_character(character_id: str) -> str:
+        if character_id != "Kind":
+            return ""
+        registry = services()
+        settings = registry.get_optional(SettingsService)
+        if settings is None or settings.get("DESKTOP_MODE_ACTIVE", False) is not True:
+            return ""
+        watch = registry.get_optional(DesktopWatchService)
+        if watch is None or not watch.desktop_state():
+            return ""
+        from core.desktop_context import format_desktop_context
+        state = dict(watch.desktop_state())
+        state["watching_screen"] = watch.is_watching() is True
+        return format_desktop_context(state)
+
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
         cartridge = getattr(character, "cartridge_definition", None)
@@ -954,7 +971,8 @@ class PromptController(PromptBuilderService):
         image_cfg = request.image_quality or {}
         separate_prompts = bool(request.separate_prompts)
         extra_system_infos = request.extra_system_infos or []
-        game_state = request.game_state or {}
+        desktop_context = self._desktop_context_for_character(char_id)
+        game_state = {} if desktop_context else (request.game_state or {})
         character_profile = runtime_profile_for(character)
         capabilities = request.capabilities or {}
         profile = capabilities.get("structured_response_profile")
@@ -987,7 +1005,7 @@ class PromptController(PromptBuilderService):
 
         game_state_prompt_content: Optional[str] = None
         try:
-            if character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
+            if not desktop_context and character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
                 game_state_prompt_content = character.game_manager.get_active_game_state_prompt()
         except Exception as e:
             logger.warning(f"[PromptController][{char_id}] Ошибка при формировании промпта игры: {format_exception(e)}", exc_info=True)
@@ -1057,7 +1075,7 @@ class PromptController(PromptBuilderService):
         # ниже): снимок game_state персистентен и липко хранит последние
         # значения даже после отключения мода, иначе десктоп-чат без игры
         # показывал бы устаревший мир в противоречии с [System State].
-        if request_runtime.connected is False:
+        if desktop_context or request_runtime.connected is False:
             unity_static_messages: List[Dict[str, Any]] = []
             unity_dynamic_messages: List[Dict[str, Any]] = []
         elif character_profile.scene_context_key:
@@ -1166,7 +1184,7 @@ class PromptController(PromptBuilderService):
             }
         if game_state_prompt_content:
             messages.append({"role": "system", "content": game_state_prompt_content})
-        shared_minigame_context = None if character_profile.scene_context_key else self._build_shared_minigame_context(char_id)
+        shared_minigame_context = None if desktop_context or character_profile.scene_context_key else self._build_shared_minigame_context(char_id)
         if shared_minigame_context is not None:
             messages.append(shared_minigame_context)
 
@@ -1231,7 +1249,9 @@ class PromptController(PromptBuilderService):
         else:
             messages.append(self._build_system_state_message(source, runtime=request_runtime))
             character_environment_message = self._build_character_environment_message(source, runtime=request_runtime)
-        if character_environment_message is not None:
+        if desktop_context:
+            messages.append({"role": "system", "content": desktop_context})
+        elif character_environment_message is not None:
             messages.append(character_environment_message)
         if dialogue_context_message is not None:
             messages.append(dialogue_context_message)
