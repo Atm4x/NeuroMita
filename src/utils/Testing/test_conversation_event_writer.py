@@ -118,6 +118,34 @@ def test_write_turn_separates_source_and_responder_actor_metadata() -> None:
     assert assistant_event["source_actor_id"] == "actor-crazy"
 
 
+def test_write_turn_persists_request_provenance_on_the_assistant_turn() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-3",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-3",
+        sample_id="sample-3",
+        context_snapshot_id="ctx_0123456789abcdef0123456789abcdef",
+    )
+
+    user_event, assistant_event = character.batches[0]
+    assert "context_snapshot_id" not in user_event
+    assert assistant_event["sample_id"] == "sample-3"
+    assert assistant_event["context_snapshot_id"] == "ctx_0123456789abcdef0123456789abcdef"
+
+
 def test_write_turn_uses_dialogue_speaker_when_transport_sender_is_player() -> None:
     kind = _Character("Kind")
     crazy = _Character("Crazy")

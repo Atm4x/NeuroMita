@@ -1910,6 +1910,11 @@ class ModelController(GenerationService, ModelStateService):
                 trace.set_attribute("model", llm_response.model or "")
                 trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
+            # The snapshot id names the exact request behind this reply; persist
+            # it with the turn so history reloads can still open that request.
+            context_snapshot_id = str(
+                (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
+            )
 
             if original_image_data and bool(self.settings.get("IMAGE_INLINE_DESCRIPTION", False)):
                 _detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
@@ -1957,15 +1962,10 @@ class ModelController(GenerationService, ModelStateService):
                     image_descriptions=image_descriptions,
                     structured_model_cls=structured_model_cls,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
                     dialogue=request.dialogue,
                 )
                 if structured_result is not None:
-                    structured_result = dataclasses.replace(
-                        structured_result,
-                        context_snapshot_id=str(
-                            (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
-                        ),
-                    )
                     self._consume_temporary_system_infos(char_id, extra_system_infos)
                 return structured_result
 
@@ -2030,6 +2030,7 @@ class ModelController(GenerationService, ModelStateService):
                         thinking=think_text or None,
                         llm_usage=usage_snapshot,
                         sample_id=sample_id,
+                        context_snapshot_id=context_snapshot_id,
                         dialogue=request.dialogue,
                     )
                     assistant_message_id = history_write.assistant_message_id
@@ -2064,9 +2065,7 @@ class ModelController(GenerationService, ModelStateService):
                 think=think_text or None,
                 message_id=assistant_message_id,
                 sample_id=sample_id or "",
-                context_snapshot_id=str(
-                    (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
-                ),
+                context_snapshot_id=context_snapshot_id,
             )
 
         except OperationCancelledError:
@@ -2244,6 +2243,7 @@ class ModelController(GenerationService, ModelStateService):
         image_descriptions: dict[str, str] | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         dialogue: Any = None,
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
@@ -2299,6 +2299,7 @@ class ModelController(GenerationService, ModelStateService):
                             thinking=think_text or None,
                             llm_usage=usage_snapshot,
                             sample_id=sample_id,
+                            context_snapshot_id=context_snapshot_id,
                             assistant_is_deleted=True,
                             dialogue=dialogue,
                         )
@@ -2333,6 +2334,7 @@ class ModelController(GenerationService, ModelStateService):
                 character_id=char_id,
                 voice_profile=None,
                 sample_id=sample_id or "",
+                context_snapshot_id=context_snapshot_id or "",
                 error=safe_message,
                 error_details=error_details,
                 structured_parse_level="rejected",
@@ -2353,6 +2355,7 @@ class ModelController(GenerationService, ModelStateService):
         except ValueError:
             return ChatGenerationResult(
                 text='', character_id=char_id, error='The model requested a tool forbidden by this request.',
+                sample_id=sample_id or "", context_snapshot_id=context_snapshot_id or "",
                 error_details={'code': 'native_tool_call_invalid', 'stage': 'tools'},
                 structured_parse_level='rejected', control_plane_trusted=False,
             )
@@ -2432,6 +2435,7 @@ class ModelController(GenerationService, ModelStateService):
                 tool_depth=tool_depth,
                 structured_model_cls=structured_model_cls,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
                 image_descriptions=image_descriptions,
                 voice_profile=voice_profile,
                 dialogue=dialogue,
@@ -2529,6 +2533,7 @@ class ModelController(GenerationService, ModelStateService):
                     thinking=think_text or None,
                     llm_usage=usage_snapshot,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
                     dialogue=dialogue,
                 )
                 assistant_message_id = history_write.assistant_message_id
@@ -2580,6 +2585,7 @@ class ModelController(GenerationService, ModelStateService):
             structured=result_dict,
             message_id=assistant_message_id,
             sample_id=sample_id or "",
+            context_snapshot_id=context_snapshot_id or "",
             structured_parse_level=parse_outcome.parse_level,
             control_plane_trusted=parse_outcome.control_plane_trusted,
         )
@@ -2618,6 +2624,7 @@ class ModelController(GenerationService, ModelStateService):
         trace_id: str | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         image_descriptions: dict[str, str] | None = None,
         voice_profile=None,
         dialogue: Any = None,
@@ -2688,6 +2695,7 @@ class ModelController(GenerationService, ModelStateService):
                 thinking=think_text or None,
                 llm_usage=usage_snapshot,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
                 dialogue=dialogue,
             )
             first_assistant_message_id = history_write.assistant_message_id
@@ -2708,6 +2716,8 @@ class ModelController(GenerationService, ModelStateService):
             "speaker_name": char_name or "",
             "structured_data": result_dict,
             "message_id": first_assistant_message_id,
+            "sample_id": sample_id or "",
+            "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
 
         # Emit tool executing indicator for UI
@@ -2835,6 +2845,8 @@ class ModelController(GenerationService, ModelStateService):
                 think=think_text or None,
                 structured=result_dict,
                 message_id=first_assistant_message_id,
+                sample_id=sample_id or "",
+                context_snapshot_id=context_snapshot_id or "",
                 structured_parse_level="tool_intermediate",
                 control_plane_trusted=False,
             )
@@ -2890,6 +2902,9 @@ class ModelController(GenerationService, ModelStateService):
             image_descriptions=image_descriptions,
             structured_model_cls=structured_model_cls,
             sample_id=sample_id_2,
+            context_snapshot_id=str(
+                (llm_response_2.raw or {}).get("context_snapshot_id") or ""
+            ),
             dialogue=dialogue,
             native_tool_call=(llm_response_2.raw or {}).get("native_tool_call"),
             request_cancellation=request_cancellation,

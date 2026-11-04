@@ -25,6 +25,10 @@ def semantic_message(message: dict) -> dict:
         "conversation_id", "conversation_epoch", "turn_index", "speaker_actor_id",
         "source_actor_id", "responder_actor_id", "participant_actor_ids",
         "context_world",
+        # Provenance of the exact generation behind this message. Provider
+        # requests are stripped to role/content later, so keeping these ids in
+        # the timeline does not leak diagnostics into prompts.
+        "sample_id", "context_snapshot_id",
     )
     result = {key: message[key] for key in allowed if key in message}
     structured = result.get("structured_data")

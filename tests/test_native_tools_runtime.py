@@ -119,7 +119,10 @@ def test_native_followup_executes_once_and_preserves_call_and_result(cancel_stag
         return '42'
     def generate(messages, **kwargs):
         followups.append((messages, kwargs))
-        return LLMResponse(text='{"segments":[{"text":"done"}]}')
+        return LLMResponse(
+            text='{"segments":[{"text":"done"}]}',
+            raw={'context_snapshot_id': 'ctx_followup', 'finetune_sample_id': 'sample_followup'},
+        )
     harness = SimpleNamespace(settings=SimpleNamespace(get=lambda key, default=None: default),
         event_bus=SimpleNamespace(emit=lambda *_args, **_kwargs: None),
         model=SimpleNamespace(tool_manager=SimpleNamespace(set_char_context=lambda _: None, run=run), generate=generate),
@@ -134,6 +137,7 @@ def test_native_followup_executes_once_and_preserves_call_and_result(cancel_stag
         sender='Player', participants=[], user_input='calculate', image_data=[], image_source='', req_id='r',
         task_uid='t', event_type='chat', combined_messages=[{'role': 'user', 'content': 'calculate'}],
         preset_id=None, enabled_tools=['calculator'], tool_depth=0,
+        context_snapshot_id='ctx_initial', sample_id='sample_initial',
         request_cancellation=cancellation,
         native_tool_call={'name': 'calculator', 'arguments': {'value': 41}, 'id': 'call_real',
                           'assistant_text': None, 'responses_output': []})
@@ -149,7 +153,80 @@ def test_native_followup_executes_once_and_preserves_call_and_result(cancel_stag
     assert messages[-2]['tool_calls'][0]['id'] == 'call_real'
     assert messages[-1] == {'role': 'tool', 'tool_call_id': 'call_real', 'content': '42'}
     assert result['tool_depth'] == 1
+    assert result['context_snapshot_id'] == 'ctx_followup'
+    assert result['sample_id'] == 'sample_followup'
     assert followups[0][1]['request_options_override']['cancellation'] is cancellation
+
+
+@pytest.mark.parametrize('tool_count', [0, 1, 2])
+def test_structured_tool_chain_returns_and_persists_each_requests_snapshot(tool_count):
+    from types import MethodType
+    from controllers.model_controller import ModelController
+    from core.request_policy import RequestPolicy
+    from schemas.structured_response import StructuredResponse, ResponseSegment, ToolCall
+
+    def response_text(index):
+        return StructuredResponse(
+            segments=[ResponseSegment(text=f'answer {index}')],
+            tool_call=ToolCall(name='calculator', args={}) if index < tool_count else None,
+        ).model_dump_json()
+
+    writes, ui_updates = [], []
+    generated = iter(range(1, tool_count + 1))
+
+    def generate(*_args, **_kwargs):
+        index = next(generated)
+        return LLMResponse(text=response_text(index), raw={
+            'context_snapshot_id': f'ctx_{index}', 'finetune_sample_id': f'sample_{index}',
+        })
+
+    def write_turn(**kwargs):
+        writes.append(kwargs)
+        return SimpleNamespace(assistant_message_id=f'out:{len(writes)}')
+
+    def emit(topic, *args, **_kwargs):
+        from core.events import Events
+        if topic == Events.GUI.UPDATE_CHAT_UI and args[0].get('role') == 'assistant':
+            ui_updates.append(args[0])
+
+    harness = SimpleNamespace(
+        settings=SimpleNamespace(get=lambda key, default=None: default),
+        event_bus=SimpleNamespace(emit=emit),
+        model=SimpleNamespace(
+            tool_manager=SimpleNamespace(set_char_context=lambda _: None, run=lambda *_a, **_k: '42'),
+            generate=generate,
+        ),
+        event_writer=SimpleNamespace(write_turn=write_turn),
+        _build_usage_snapshot=lambda *_a, **_k: None,
+        _store_last_usage=lambda *_a, **_k: None,
+        _publish_history_commit=lambda *_a, **_k: None,
+        _sanitize_structured_segment_fields=lambda *_a: None,
+        _split_response_thinking=lambda response: (response.text, ''),
+    )
+    harness._process_structured_output = MethodType(ModelController._process_structured_output, harness)
+    harness._handle_tool_call = MethodType(ModelController._handle_tool_call, harness)
+    result = harness._process_structured_output(
+        visible_raw=response_text(0), think_text='', usage=None, response_model='m',
+        response_provider='common', pricing_info=None,
+        char=SimpleNamespace(process_structured_response=lambda *_a, **_k: None),
+        char_id='Crazy', char_name='Crazy', origin_message_id=None, capabilities={},
+        policy=RequestPolicy(write_to_history=True), sender='Player', participants=[],
+        user_input='calculate', image_data=[], image_source='', req_id='r', task_uid='t',
+        event_type='chat', tools_on=True, enabled_tools=['calculator'],
+        sample_id='sample_0', context_snapshot_id='ctx_0',
+    )
+    assert result.text == f'answer {tool_count}'
+    assert result.context_snapshot_id == f'ctx_{tool_count}'
+    assert result.sample_id == f'sample_{tool_count}'
+    assert [turn['context_snapshot_id'] for turn in writes] == [
+        f'ctx_{index}' for index in range(tool_count + 1)
+    ]
+    assert [turn['sample_id'] for turn in writes] == [
+        f'sample_{index}' for index in range(tool_count + 1)
+    ]
+    assert [update['context_snapshot_id'] for update in ui_updates] == [
+        f'ctx_{index}' for index in range(tool_count)
+    ]
 
 
 def test_raw_responses_history_keeps_encrypted_reasoning_and_call():
@@ -439,7 +516,10 @@ def test_native_exchange_persists_reloads_and_projects_for_subsequent_turn(monke
         event_bus=SimpleNamespace(emit=lambda *_args, **_kwargs: None),
         model=SimpleNamespace(tool_manager=SimpleNamespace(set_char_context=lambda _: None,
             run=lambda *args, **kwargs: calls.append(args) or '42'),
-            generate=lambda *_args, **_kwargs: None if followup_fails else LLMResponse(text='{"segments":[{"text":"done"}]}')),
+            generate=lambda *_args, **_kwargs: None if followup_fails else LLMResponse(
+                text='{"segments":[{"text":"done"}]}',
+                raw={'context_snapshot_id': 'ctx_followup', 'finetune_sample_id': 'sample_followup'},
+            )),
         _build_usage_snapshot=lambda *_args, **_kwargs: None,
         _split_response_thinking=lambda response: (response.text, ''),
         _process_structured_output=lambda **kwargs: kwargs)
@@ -451,7 +531,7 @@ def test_native_exchange_persists_reloads_and_projects_for_subsequent_turn(monke
             'function': {'name': 'calculator', 'arguments': '{"value":41}'},
             'extra_content': {'google': {'thought_signature': 'opaque-signature'}}}
     try:
-        ModelController._handle_tool_call(harness,
+        result = ModelController._handle_tool_call(harness,
             structured=StructuredResponse(segments=[], tool_call=ToolCall(name='calculator', args={'value': 41})),
             visible_raw='{"segments":[]}', think_text='', usage=None, response_model='m', response_provider='common',
             pricing_info=None, char=character, char_id='Crazy', char_name='Crazy', origin_message_id=None,
@@ -459,9 +539,18 @@ def test_native_exchange_persists_reloads_and_projects_for_subsequent_turn(monke
             policy=RequestPolicy(write_to_history=True), sender='Player', participants=[], user_input='calculate',
             image_data=[], image_source='', req_id='r', task_uid='t', event_type='chat',
             combined_messages=[{'role': 'user', 'content': 'calculate'}], preset_id=None,
-            enabled_tools=['calculator'], tool_depth=0, native_tool_call=call)
+            enabled_tools=['calculator'], tool_depth=0, native_tool_call=call,
+            context_snapshot_id='ctx_initial', sample_id='sample_initial')
+        if followup_fails:
+            assert result.context_snapshot_id == 'ctx_initial'
+            assert result.sample_id == 'sample_initial'
+        else:
+            assert result['context_snapshot_id'] == 'ctx_followup'
+            assert result['sample_id'] == 'sample_followup'
         reloaded = HistoryManager(storage_name='Crazy', character_id='Crazy').load_history()['messages']
         assistant = next(message for message in reloaded if message['role'] == 'assistant')
+        assert assistant['context_snapshot_id'] == 'ctx_initial'
+        assert assistant['sample_id'] == 'sample_initial'
         exchange = assistant['structured_data']['native_tool_history']
         assert exchange[0]['tool_calls'][0]['id'] == 'call_real'
         if dialect == 'responses':

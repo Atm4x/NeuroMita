@@ -338,6 +338,7 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         is_deleted: bool = False,
         turn_id: str,
     ) -> dict:
@@ -361,6 +362,8 @@ class ConversationEventWriter:
             msg.update(llm_usage)
         if sample_id:
             msg["sample_id"] = sample_id
+        if context_snapshot_id:
+            msg["context_snapshot_id"] = context_snapshot_id
         if is_deleted:
             # Internal HistoryManager flag. It intentionally does not use a
             # public protocol field and is persisted as is_deleted=1.
@@ -430,6 +433,7 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         assistant_is_deleted: bool = False,
         dialogue: Any = None,
     ) -> ConversationWriteResult:
@@ -483,6 +487,7 @@ class ConversationEventWriter:
             thinking=thinking,
             llm_usage=llm_usage,
             sample_id=sample_id,
+            context_snapshot_id=context_snapshot_id,
             is_deleted=assistant_is_deleted,
             turn_id=turn_id,
         )
