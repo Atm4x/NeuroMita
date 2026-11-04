@@ -236,7 +236,7 @@ def load_editor(harness, controller, base=9, overrides=None):
 
 def test_local_editor_can_apply_cancel_save_and_reopen_pipeline(editor):
     harness, controller = editor
-    pid = load_editor(harness, controller)
+    pid = load_editor(harness, controller, overrides={"transforms": []})
     assert not harness.view.protocol_section.isHidden()
     assert not harness.view.protocol_row.combo.isEnabled()
     harness._on_configure_pipeline_clicked()

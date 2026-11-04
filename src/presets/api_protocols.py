@@ -115,18 +115,17 @@ API_PROTOCOLS_DATA = [
         "provider": "common",
         "auth": {"mode": "bearer"},
         "headers": {},
-        # Отдельный протокол, а не generic: LM Studio понимает reasoning_effort
-        # ("none" глушит мысли локальных reasoning-моделей вроде Gemma 4 и Qwen3),
-        # тогда как произвольный OpenAI-совместимый сервер на неизвестный параметр
-        # ответит 4xx. json_schema LM Studio держит грамматикой — проверено.
+        # LM Studio/Qwen accepts schema and native tools separately; combining
+        # them can produce an empty grammar. Keep tool calls in the JSON schema.
         "capabilities": {
             "tools_native": True,
             "streaming": True,
             "streaming_with_tools": False,
             "structured_output": True,
             "reasoning_control": "reasoning_effort",
+            "native_tools_with_structured_output": False,
         },
-        "transforms": [],
+        "transforms": [{"id": "normalize_system_messages"}],
     },
     {
         "id": "aiio_default",

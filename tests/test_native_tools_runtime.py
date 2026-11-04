@@ -329,6 +329,35 @@ def test_schema_fallback_restores_profile_for_retry_and_does_not_mutate_input():
     assert req.messages == [{'role': 'user', 'content': 'calculate'}]
 
 
+@pytest.mark.parametrize('native_structured,effective', [(True, 'schema'), (False, 'native')])
+def test_lmstudio_keeps_tools_in_schema_only_when_native_schema_is_sent(native_structured, effective):
+    from presets.api_protocols import API_PROTOCOLS_DATA
+    from services.native_tool_calls import configure_native_tools
+    from handlers.llm_providers.protocols.chat_completions.request import encode_request
+
+    protocol = next(p for p in API_PROTOCOLS_DATA if p['id'] == 'lmstudio_default')
+    req = request()
+    req.protocol_id = protocol['id']
+    req.dialect_id = protocol['dialect']
+    req.capabilities.update(protocol['capabilities'], native_structured_output=native_structured)
+    req.native_parameters = {'temperature': 0.6, 'top_p': 0.95, 'max_tokens': 512, 'reasoning_effort': 'none'}
+    manager = SimpleNamespace(_filtered_schema=lambda _: [{'name': 'calculator', 'parameters': {'type': 'object'}}])
+    decision = configure_native_tools(req, {}, manager)
+    assert decision['effective'] == effective
+    payload = encode_request(req, wire_stream=False)
+    assert payload['reasoning_effort'] == 'none'
+    assert payload['temperature'] == 0.6
+    assert payload['top_p'] == 0.95
+    assert payload['max_tokens'] == 512
+    if native_structured:
+        assert decision['reason'] == 'native_tools_with_structured_output_unsupported'
+        assert 'tools' not in payload
+        assert 'tool_call' in payload['response_format']['json_schema']['schema']['properties']
+    else:
+        assert 'response_format' not in payload
+        assert payload['tools'][0]['function']['name'] == 'calculator'
+
+
 @pytest.mark.parametrize('mode,dialect,effective', [
     ('schema', 'openai_responses', 'schema'),
     ('native', 'gemini_generate_content', 'schema'),

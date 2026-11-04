@@ -20,6 +20,12 @@ def resolve_tool_mode(settings, capabilities, dialect_id):
     active = isinstance(profile, StructuredResponseCapabilities) and profile.can_call_tools
     if not active or requested == 'off':
         return {'requested': requested, 'effective': 'off', 'reason': 'tools_unavailable'}
+    if (requested == 'native'
+            and capabilities.get('structured_output', False)
+            and capabilities.get('native_structured_output', True)
+            and not capabilities.get('native_tools_with_structured_output', True)):
+        return {'requested': requested, 'effective': 'schema',
+                'reason': 'native_tools_with_structured_output_unsupported'}
     if requested == 'native' and dialect_id in NATIVE_DIALECTS and capabilities.get('tools_native', False):
         return {'requested': requested, 'effective': 'native', 'reason': None}
     return {'requested': requested, 'effective': 'schema',
