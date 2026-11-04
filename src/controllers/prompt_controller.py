@@ -956,6 +956,9 @@ class PromptController(PromptBuilderService):
         if not char_id:
             raise ValueError("build_prompt: character без char_id")
 
+        from services.mita_stages import get_mita_stage_service
+        get_mita_stage_service().prepare_prompt_context(character)
+
         event_type = request.event_type
         user_input = request.user_input or ""
         system_input = request.system_input or ""

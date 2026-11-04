@@ -2381,6 +2381,8 @@ class ModelController(GenerationService, ModelStateService):
                 if not isinstance(normalized, StructuredResponse):
                     raise TypeError("Character postprocessing must return StructuredResponse or None")
                 structured = normalized
+            from services.mita_stages import get_mita_stage_service
+            get_mita_stage_service().observe_response(char, structured)
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])

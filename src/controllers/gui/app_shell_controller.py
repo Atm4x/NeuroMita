@@ -3,6 +3,7 @@ from core.error_utils import format_exception
 
 import base64
 import os
+import re
 import uuid
 from typing import Any, Callable
 
@@ -222,6 +223,10 @@ class AppShellController:
         settings = use(SettingsService)
         staged_images = self._view.staged_images_snapshot()
         character_id = self.current_character_id()
+        if from_entry and self._handle_stage_command(user_input, character_id):
+            if getattr(self._view, "user_entry", None) is not None:
+                self._view.user_entry.clear()
+            return True
         auto_screen = bool(settings.get("AUTO_ATTACH_IMAGES", False))
         auto_camera = bool(settings.get("ENABLE_CAMERA_CAPTURE", False))
 
@@ -251,6 +256,30 @@ class AppShellController:
             camera_limit=int(settings.get("CAMERA_CAPTURE_HISTORY_LIMIT", 1) or 1),
             on_ready=finish,
         )
+        return True
+
+    _STAGE_COMMAND_RE = re.compile(r"^/stage(?:\s+(.*))?$", re.IGNORECASE)
+
+    def _emit_stage_event(self, text: str, character_id: str) -> None:
+        self._event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+            "role": "event",
+            "response": str(text or ""),
+            "character_id": str(character_id or ""),
+            "message_id": f"stage-{uuid.uuid4().hex}",
+            "is_initial": False,
+        })
+
+    def _handle_stage_command(self, user_input: str, character_id: str) -> bool:
+        match = self._STAGE_COMMAND_RE.match(str(user_input or "").strip())
+        if match is None:
+            return False
+
+        from services.mita_stages import get_mita_stage_service
+
+        service = get_mita_stage_service()
+        character = use(CharacterRegistry).current()
+        output = service.handle_command(character, str(match.group(1) or ""))
+        self._emit_stage_event(output, character_id)
         return True
 
     def _finish_send_message(
