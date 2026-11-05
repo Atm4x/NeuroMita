@@ -91,6 +91,90 @@ class HistoryImageDescriptionTests(unittest.TestCase):
 
         self.assertNotIn("image_url", _part_types(result[0]["content"]))
 
+    def test_multi_image_message_is_left_untouched(self):
+        controller = self._make_controller()
+        messages = [
+            {
+                "role": "user",
+                "content": [_image_part(), _image_part("data:image/jpeg;base64,BBBB")],
+                "image_descriptions": {"normal": "One combined description."},
+            },
+            {"role": "user", "content": [_image_part("data:image/jpeg;base64,CCCC")]},
+        ]
+
+        result = controller._replace_older_images_with_descriptions(messages)
+
+        self.assertEqual(_part_types(result[0]["content"]).count("image_url"), 2)
+
+    def test_best_description_variant_is_used(self):
+        controller = self._make_controller({"HISTORY_IMAGE_DESCRIPTION_KEEP_RECENT": 0})
+        messages = [
+            {
+                "role": "user",
+                "content": [_image_part()],
+                "image_descriptions": {
+                    "brief": "Brief variant.",
+                    "normal": "Normal variant.",
+                    "manual": "Manual variant.",
+                },
+            },
+        ]
+
+        result = controller._replace_older_images_with_descriptions(messages)
+
+        self.assertIn("Manual variant.", result[0]["content"][0]["text"])
+        self.assertNotIn("Normal variant.", result[0]["content"][0]["text"])
+
+    def test_player_image_wins_over_newer_assistant_image(self):
+        controller = self._make_controller()
+        messages = [
+            {
+                "role": "user",
+                "content": [_image_part()],
+                "image_descriptions": {"normal": "Player screenshot."},
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Look."}, _image_part("data:image/jpeg;base64,BBBB")],
+                "image_descriptions": {"normal": "Mita camera frame."},
+            },
+        ]
+
+        result = controller._replace_older_images_with_descriptions(messages)
+
+        self.assertIn("image_url", _part_types(result[0]["content"]))
+        self.assertNotIn("image_url", _part_types(result[1]["content"]))
+        self.assertIn("Mita camera frame.", result[1]["content"][1]["text"])
+
+    def test_quality_reduction_still_applies_to_retained_image_with_description(self):
+        controller = self._make_controller()
+        messages = [
+            {
+                "role": "user",
+                "content": [_image_part()],
+                "image_descriptions": {"normal": "Retained frame."},
+            },
+        ]
+        processed_quality: list[int] = []
+        controller._process_image_quality = lambda data, quality: (
+            processed_quality.append(quality),
+            data,
+        )[1]
+
+        result = controller._apply_history_image_quality_reduction(
+            messages,
+            {
+                "start_index": 0,
+                "use_percentage": False,
+                "min_quality": 30,
+                "decrease_rate": 5,
+                "screen_capture_quality": 75,
+            },
+        )
+
+        self.assertEqual(processed_quality, [75])
+        self.assertIn("image_url", _part_types(result[0]["content"]))
+
 
 if __name__ == "__main__":
     unittest.main()
