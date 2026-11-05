@@ -121,6 +121,22 @@ class LoadedSkillsPromptTests(unittest.TestCase):
             self.assertNotIn("Pick a calm track.", block)
             self.assertEqual(catalog.render_loaded_block(["missing"]), "")
 
+    def test_eager_block_contains_every_catalog_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _prompt_set(
+                root,
+                [
+                    {"id": "music", "title": "Music", "file": "music.md"},
+                    {"id": "wardrobe", "title": "Wardrobe", "file": "wardrobe.md"},
+                ],
+                {"music.md": "Pick a calm track.", "wardrobe.md": "Offer two outfits."},
+            )
+            catalog = SkillCatalog.load(root)
+            block = catalog.render_loaded_block(sorted(catalog.entries), max_chars=4000)
+            self.assertIn("Pick a calm track.", block)
+            self.assertIn("Offer two outfits.", block)
+
 
 if __name__ == "__main__":
     unittest.main()

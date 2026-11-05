@@ -105,6 +105,19 @@ def setup_model_interaction_controls(
              'them instead of keeping every skill in the prompt every turn. '
              'Skills come from the Skills folder of the character prompt set.')},
 
+        {'label': _('Режим скиллов', 'Skill loading mode'),
+         'key': 'SKILL_LOADING_MODE', 'type': 'combobox',
+         'options': ['on_demand', 'eager'], 'default': 'on_demand',
+         'tooltip': _(
+             'on_demand — в промпте только короткий каталог, текст скилла подгружается '
+             'инструментом load_skill, когда он нужен. '
+             'eager — тексты всех скиллов лежат в стабильной части промпта всегда: '
+             'один запрос на ход, но больше токенов.',
+             'on_demand — only a short catalog is in the prompt and the skill body is '
+             'loaded by load_skill when needed. '
+             'eager — all skill bodies always sit in the stable prompt prefix: one request '
+             'per turn, more tokens.')},
+
         {'label': _('Макс. глубина цепочки тулов', 'Max tool chain depth'),
          'key': 'TOOL_MAX_DEPTH', 'type': 'entry',
          'default': 2, 'depends_on': 'TOOLS_ON',

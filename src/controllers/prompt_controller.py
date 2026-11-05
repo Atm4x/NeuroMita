@@ -1115,17 +1115,26 @@ class PromptController(PromptBuilderService):
         skill_catalog = None
         skill_catalog_block = ""
         loaded_skills_context = ""
+        eager_skills_context = ""
         if capabilities.get("skills", False):
             try:
                 from services.skill_catalog import SkillCatalog
                 skill_catalog = SkillCatalog.load(getattr(character, "base_data_path", "") or "")
-                skill_catalog_block = skill_catalog.render_catalog_block(
-                    capabilities=capabilities.get("skill_capabilities") or (),
-                    max_chars=int(capabilities.get("skill_catalog_max_chars") or 1200),
-                )
-                loaded_skills_context = skill_catalog.render_loaded_block(
-                    character.skills.loaded(),
-                )
+                if capabilities.get("skill_mode") == "eager":
+                    # Eager mode keeps every skill in the stable prefix and never
+                    # asks the model to load anything.
+                    eager_skills_context = skill_catalog.render_loaded_block(
+                        sorted(skill_catalog.entries),
+                        max_chars=int(capabilities.get("skill_eager_max_chars") or 12000),
+                    )
+                else:
+                    skill_catalog_block = skill_catalog.render_catalog_block(
+                        capabilities=capabilities.get("skill_capabilities") or (),
+                        max_chars=int(capabilities.get("skill_catalog_max_chars") or 1200),
+                    )
+                    loaded_skills_context = skill_catalog.render_loaded_block(
+                        character.skills.loaded(),
+                    )
             except Exception as exc:
                 logger.warning(
                     "[PromptController][%s] Failed to read the skill catalog: %s",
@@ -1250,6 +1259,9 @@ class PromptController(PromptBuilderService):
 
         if core_memory_context:
             messages.append({"role": "system", "content": core_memory_context})
+
+        if eager_skills_context:
+            messages.append({"role": "system", "content": eager_skills_context})
 
         if skill_catalog_block:
             messages.append({"role": "system", "content": skill_catalog_block})

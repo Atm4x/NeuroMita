@@ -53,6 +53,16 @@ The catalog block is derived from the character prompt set, so it only changes
 when the set does. Loaded bodies change per turn and are placed after the
 history, in the volatile part of the prompt.
 
+## Modes
+
+SKILL_LOADING_MODE picks one of two policies over the same catalog and renderer:
+
+on_demand (default) keeps only the compact [SKILLS] list in the prompt; bodies
+arrive through load_skill and stay loaded for a bounded number of turns.
+
+eager places every skill body in the stable prompt prefix and never calls the
+tool: one request per turn, but the context always carries all authored text.
+
 ## Enabling
 
 TOOLS_ON and TOOL_ENABLED_load_skill must both be on (Settings - Tools -

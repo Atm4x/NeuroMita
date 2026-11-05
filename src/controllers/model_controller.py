@@ -1599,8 +1599,15 @@ class ModelController(GenerationService, ModelStateService):
 
         # On-demand skills only make sense while load_skill is actually offered
         # to the model; the catalog block is derived from that capability.
+        skill_mode = str(
+            self.settings.get("SKILL_LOADING_MODE", "on_demand") or "on_demand"
+        ).strip().lower()
+        effective_capabilities["skill_mode"] = (
+            "eager" if skill_mode == "eager" else "on_demand"
+        )
         effective_capabilities["skills"] = bool(
             "load_skill" in (_enabled_tools or [])
+            or effective_capabilities["skill_mode"] == "eager"
         )
 
         with character_lock(char_id):
