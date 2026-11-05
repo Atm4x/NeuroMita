@@ -669,6 +669,7 @@ class PromptController(PromptBuilderService):
         "Unity Intent Contract",
         "Unity Runtime Events",
         "Active Cognitive Effects",
+        "Recent Effect Aftermath",
         "Cognitive Effect",
         "SYSTEM",
         "SYSTEM INFO",
@@ -734,6 +735,28 @@ class PromptController(PromptBuilderService):
         sections = []
         for item in valid:
             text = str(item["prompt_text"]).strip()
+            if text.startswith(opener) and text.endswith(closing):
+                text = text[len(opener):-len(closing)]
+            safe = cls._neutralize_world_state_tags(text).strip()
+            if safe:
+                sections.append(safe)
+        if not sections:
+            return None
+        return {"role": "system", "content": opener + "\n" + "\n\n".join(sections) + "\n" + closing}
+
+    @classmethod
+    def _build_cognitive_effect_aftermath_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Keep a just-finished effect available for reflection for a short time."""
+        aftermath = game_state.get("cognitive_effect_aftermath")
+        if not isinstance(aftermath, list):
+            return None
+        opener = "[Recent Effect Aftermath]"
+        closing = "[/Recent Effect Aftermath]"
+        sections = []
+        for item in aftermath:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("prompt_text") or "").strip()
             if text.startswith(opener) and text.endswith(closing):
                 text = text[len(opener):-len(closing)]
             safe = cls._neutralize_world_state_tags(text).strip()
@@ -1144,6 +1167,7 @@ class PromptController(PromptBuilderService):
                 self._build_unity_runtime_capabilities_message(game_state),
                 self._build_unity_world_state_message(game_state),
                 self._build_active_cognitive_effects_message(game_state),
+                self._build_cognitive_effect_aftermath_message(game_state),
                 self._build_shared_world_info_message(game_state),
                 self._build_character_world_context_message(game_state),
                 self._build_unity_runtime_events_message(game_state),

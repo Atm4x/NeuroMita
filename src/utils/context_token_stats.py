@@ -12,6 +12,7 @@ _SECTION_MARKERS = (
     ("[Current Group Conversation]", "group conversation"),
     ("[GAME_MASTER_DIRECTIVE]", "game master directive"),
     ("[Active Cognitive Effects]", "Active Cognitive Effects"),
+    ("[Recent Effect Aftermath]", "Recent Effect Aftermath"),
     ("[Cognitive Effect]", "Cognitive Effect"),
     ("[NeuroMita World State]", "NeuroMita World State"),
     ("[MiSide World State]", "NeuroMita World State"),
