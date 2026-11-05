@@ -54,6 +54,7 @@ from services.structured_response_capabilities import (
 )
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
+from domain.working_state import working_state_transition
 from services.conversation_timeline import ConversationTimeline
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
@@ -2447,11 +2448,12 @@ class ModelController(GenerationService, ModelStateService):
         # a stale plan for the next player message.
         if capabilities.get("working_state", False):
             try:
-                if structured.working_state is None:
+                commit_working_state, working_state_value = working_state_transition(structured)
+                if commit_working_state and working_state_value is None:
                     char.working_state.clear()
-                else:
+                elif commit_working_state:
                     char.working_state.update(
-                        structured.working_state,
+                        working_state_value,
                         epoch=capabilities.get("history_epoch_at_request"),
                         max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 1000) or 1000),
                     )

@@ -101,6 +101,26 @@ def normalize_working_state_update(
     return state
 
 
+def working_state_transition(structured: Any) -> tuple[bool, Any]:
+    """Decide what one parsed response says about the working state.
+
+    Returns (commit, value). Optional response fields are routinely omitted,
+    and an omitted working_state must leave the previous handoff untouched.
+    Only an explicit null asks to forget it.
+    """
+    if structured is None:
+        return False, None
+    fields_set = getattr(structured, "model_fields_set", None)
+    if fields_set is None:
+        fields_set = getattr(structured, "__fields_set__", None)
+    if fields_set is None:
+        value = getattr(structured, "working_state", None)
+        return value is not None, value
+    if "working_state" not in fields_set:
+        return False, None
+    return True, getattr(structured, "working_state", None)
+
+
 def content_length(state: Mapping[str, Any]) -> int:
     total = len(str(state.get("focus") or ""))
     for name, _limit in _LIST_FIELDS:

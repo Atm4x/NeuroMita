@@ -16,8 +16,10 @@ from domain.working_state import (
     MAX_OPEN_LOOPS,
     content_length,
     normalize_working_state_update,
+    working_state_transition,
 )
 from managers.working_state_manager import WorkingStateManager
+from schemas.structured_response import StructuredResponse
 
 
 class WorkingStateNormalizationTests(unittest.TestCase):
@@ -108,6 +110,38 @@ class WorkingStateManagerTests(unittest.TestCase):
 
         manager.restore_snapshot(snapshot)
         self.assertIn("Snapshot", manager.format_for_prompt())
+
+
+class WorkingStateTransitionTests(unittest.TestCase):
+    """An omitted optional field must not erase the previous handoff."""
+
+    def test_omitted_field_keeps_previous_note(self):
+        response = StructuredResponse()
+        self.assertEqual(working_state_transition(response), (False, None))
+
+    def test_explicit_null_clears_note(self):
+        response = StructuredResponse.model_validate({"working_state": None})
+        commit, value = working_state_transition(response)
+        self.assertTrue(commit)
+        self.assertIsNone(value)
+
+    def test_provided_object_is_committed(self):
+        response = StructuredResponse.model_validate(
+            {"working_state": {"focus": "Next scene"}}
+        )
+        commit, value = working_state_transition(response)
+        self.assertTrue(commit)
+        self.assertEqual(value.focus, "Next scene")
+
+    def test_plain_object_without_field_tracking_uses_value_presence(self):
+        from types import SimpleNamespace
+        self.assertEqual(
+            working_state_transition(SimpleNamespace(working_state=None)),
+            (False, None),
+        )
+        self.assertTrue(working_state_transition(
+            SimpleNamespace(working_state={"focus": "x"})
+        )[0])
 
 
 if __name__ == "__main__":
