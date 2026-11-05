@@ -866,16 +866,43 @@ class PromptController(PromptBuilderService):
     _MAX_GAME_MASTER_DIRECTIVES = 4
     _MAX_GAME_MASTER_DIRECTIVE_CHARS = 600
 
-    @classmethod
-    def _normalized_runtime_events(cls, game_state: Dict[str, Any]) -> List[str]:
+    @staticmethod
+    def _raw_runtime_events(game_state: Dict[str, Any]) -> List[Any]:
         raw_events = game_state.get("runtime_events", ()) if isinstance(game_state, dict) else ()
         if not isinstance(raw_events, (list, tuple)):
             raw_events = [raw_events] if raw_events else []
+        return list(raw_events)
+
+    @staticmethod
+    def _runtime_event_text(raw_event: Any) -> str:
+        """Read one event without ever rendering a Python dict repr.
+
+        Unity may send structured event objects. Only their ``text`` is
+        meaningful for the model; ``actor`` becomes a readable prefix. Objects
+        without text are dropped instead of being stringified.
+        """
+        if isinstance(raw_event, dict):
+            text = raw_event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return ""
+            text = " ".join(text.split())
+            actor = raw_event.get("actor")
+            if isinstance(actor, str):
+                actor = " ".join(actor.split())[:80]
+                if actor:
+                    text = f"{actor}: {text}"
+            return text
+        if raw_event is None or isinstance(raw_event, (list, tuple, set)):
+            return ""
+        return " ".join(str(raw_event).split())
+
+    @classmethod
+    def _normalized_runtime_events(cls, game_state: Dict[str, Any]) -> List[str]:
         events: List[str] = []
         seen: set[str] = set()
         previous_key = ""
-        for raw_event in raw_events:
-            text = " ".join(str(raw_event or "").split())
+        for raw_event in cls._raw_runtime_events(game_state):
+            text = cls._runtime_event_text(raw_event)
             if not text:
                 continue
             if len(text) > cls._MAX_RUNTIME_EVENT_CHARS:
@@ -909,8 +936,17 @@ class PromptController(PromptBuilderService):
     def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
         directives: List[str] = []
         seen: set[str] = set()
-        for raw_event in cls._normalized_runtime_events(game_state):
-            for match in cls._GAME_MASTER_EVENT_RE.finditer(raw_event):
+        for raw_event in cls._raw_runtime_events(game_state):
+            # Structured event objects are ordinary observations, never
+            # authority. Only legacy string events may carry a directive, so a
+            # future object-based channel cannot silently gain control-plane
+            # power without an explicit contract.
+            if isinstance(raw_event, dict):
+                continue
+            raw_text = cls._runtime_event_text(raw_event)
+            if not raw_text:
+                continue
+            for match in cls._GAME_MASTER_EVENT_RE.finditer(raw_text):
                 text = str(match.group("text") or "").strip()
                 if len(text) > cls._MAX_GAME_MASTER_DIRECTIVE_CHARS:
                     text = text[: cls._MAX_GAME_MASTER_DIRECTIVE_CHARS].rstrip() + "…"
