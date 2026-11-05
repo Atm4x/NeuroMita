@@ -359,33 +359,33 @@ class StructuredResponse(BaseModel):
     boredom_change: float = Field(default=0.0, description="Change in boredom (-6 to 6)")
     stress_change: float = Field(default=0.0, description="Change in stress (-6 to 6)")
 
-    memory_add: Optional[List[str]] = Field(default=None, description="Memories to add. Format: 'priority|content' (priority: low/normal/high/critical). Example: ['high|Player prefers tea', 'normal|Cat name is Barsik']")
-    memory_update: Optional[List[str]] = Field(default=None, description="Memories to update. Format: 'number|priority|content' (priority: low/normal/high/critical). Example: ['4|high|Updated content here']")
-    memory_delete: Optional[List[str]] = Field(default=None, description="Memories to delete. Format: 'number', range 'start-end', or comma-separated 'n1,n2'. Example: ['2', '5-8']")
-    memory_merge: Optional[List[str]] = Field(default=None, description="Merge memories into the first ID. Format: 'id1,id2,...' or 'id1,id2,...:merged content'. All IDs after the first are deleted; first is updated with merged content. Example: ['3,7', '5,9,12:Combined fact text']")
+    memory_add: Optional[List[str]] = Field(default=None, description="Memories to add. Format: 'priority|content' (priority: low/normal/high/critical). Example: [\"high|Player prefers tea\", \"normal|Cat name is Barsik\"]")
+    memory_update: Optional[List[str]] = Field(default=None, description="Memories to update. Format: 'number|priority|content' (priority: low/normal/high/critical). Example: [\"4|high|Updated content here\"]")
+    memory_delete: Optional[List[str]] = Field(default=None, description="Memories to delete. Format: 'number', range 'start-end', or comma-separated 'n1,n2'. Example: [\"2\", \"5-8\"]")
+    memory_merge: Optional[List[str]] = Field(default=None, description="Merge memories into the first ID. Format: 'id1,id2,...' or 'id1,id2,...:merged content'. All IDs after the first are deleted; first is updated with merged content. Example: [\"3,7\", \"5,9,12:Combined fact text\"]")
 
     reminder_add: Optional[List[str]] = Field(
         default=None,
         description="Reminders to set. A JSON array of strings; each item is "
                     "'YYYY-MM-DDTHH:MM:SS|reminder text'. "
-                    "Example: ['2026-04-03T15:00:00|Remind player about the meeting']."
+                    "Example: [\"2026-04-03T15:00:00|Remind player about the meeting\"]."
     )
     reminder_delete: Optional[List[str]] = Field(
         default=None,
         description="Reminder IDs to delete. A JSON array of strings; each item "
-                    "is a number. Example: ['3', '7']."
+                    "is a number. Example: [\"3\", \"7\"]."
     )
 
     entities: Optional[List[str]] = Field(
         default=None,
         description="Notable named entities. Format: 'name:type'. Types: person|place|thing|concept. "
-                    "Example: ['player:person', 'cats:thing']. Fill only when instructed. Omit if not needed."
+                    "Example: [\"player:person\", \"cats:thing\"]. Fill only when instructed. Omit if not needed."
     )
 
     relations: Optional[List[str]] = Field(
         default=None,
         description="Relation triples. Format: 'subject|predicate|object'. "
-                    "Example: ['player|likes|cats', 'mita|is afraid of|darkness']. Fill only when instructed. Omit if not needed."
+                    "Example: [\"player|likes|cats\", \"mita|is afraid of|darkness\"]. Fill only when instructed. Omit if not needed."
     )
 
     tool_call: Optional[ToolCall] = Field(
