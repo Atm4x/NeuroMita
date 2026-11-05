@@ -138,5 +138,79 @@ class LoadedSkillsPromptTests(unittest.TestCase):
             self.assertIn("Offer two outfits.", block)
 
 
+class PromptIntegrationTests(unittest.TestCase):
+    class _Character:
+        char_id = "SkillPrompt"
+        id = "SkillPrompt"
+
+        def __init__(self, path, loaded):
+            self.base_data_path = str(path)
+            self.skills = self
+            self._loaded = list(loaded)
+
+        def loaded(self):
+            return list(self._loaded)
+
+        def get_variable(self, _name, default=None):
+            return default
+
+    def _texts(self, policy=None):
+        from controllers.prompt_controller import PromptController
+        from core.request_policy import RequestPolicy
+        from services.contracts import PromptBuildRequest
+
+        controller = PromptController()
+        controller._build_system_messages = lambda *_a, **_k: ([], [], [])
+        controller._get_setting = lambda _key, default=None, *_a, **_k: default
+        controller._build_system_state_message = lambda *_a, **_k: {
+            "role": "system", "content": "[System State] skill prompt test"
+        }
+        result = controller.build(PromptBuildRequest(
+            character=self.character,
+            event_type="chat",
+            policy=policy or RequestPolicy(use_history_in_prompt=False),
+            user_input="hi",
+            capabilities={
+                "structured_output": True,
+                "skills": True,
+                "skill_mode": self.mode,
+            },
+        ))
+        return [str(m.get("content") or "") for m in result.messages]
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        _prompt_set(
+            root,
+            [{"id": "music", "title": "Music", "file": "music.md"}],
+            {"music.md": "Pick a calm track."},
+        )
+        self.root = root
+        self.mode = "on_demand"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_catalog_block_precedes_history_and_loaded_block_is_separate(self):
+        self.character = self._Character(self.root, ["music"])
+        texts = self._texts()
+        joined = "\n".join(texts)
+        self.assertIn("[SKILLS]", joined)
+        self.assertIn("- music: Music", joined)
+        self.assertIn("[LOADED SKILLS]", joined)
+        self.assertIn("Pick a calm track.", joined)
+        self.assertLess(joined.index("[SKILLS]"), joined.index("[LOADED SKILLS]"))
+
+    def test_eager_mode_embeds_bodies_without_catalog(self):
+        self.mode = "eager"
+        self.character = self._Character(self.root, [])
+        texts = self._texts()
+        joined = "\n".join(texts)
+        self.assertIn("[LOADED SKILLS]", joined)
+        self.assertIn("Pick a calm track.", joined)
+        self.assertNotIn("[SKILLS]", joined.replace("[LOADED SKILLS]", ""))
+
+
 if __name__ == "__main__":
     unittest.main()
