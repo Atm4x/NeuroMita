@@ -1203,7 +1203,9 @@ class PromptController(PromptBuilderService):
                     "open loops, and immediate next steps. Do not copy dialogue, long-term memories, "
                     "or chain-of-thought. When present, working_state must be an object with focus, "
                     "situation, assumptions, open_loops and next_steps. Current observations, game state "
-                    "and newer dialogue override it.\n"
+                    "and newer dialogue override it. When [Active Cognitive Effects] is present, treat it "
+                    "as current game state: if it conflicts with [WORKING STATE], the active effect wins "
+                    "for this turn and the working-state handoff must be revised to match it.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })
