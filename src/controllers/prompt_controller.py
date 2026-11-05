@@ -985,6 +985,41 @@ class PromptController(PromptBuilderService):
                 "[/GAME_MASTER_TASK]"
             ),
         }
+
+    _FIRST_ENCOUNTER_TEXT = (
+        "[First Encounter]\n"
+        "You have no established shared history with this player in this story.\n"
+        "Do not invent previous meetings, promises, or experiences.\n"
+        "Learn their name naturally if it is unknown; react only to what you can actually observe.\n"
+        "Your personality and canonical backstory stay unchanged.\n"
+        "[/First Encounter]"
+    )
+
+    @classmethod
+    def _build_relationship_context_message(
+        cls,
+        character,
+        *,
+        has_history: bool,
+        has_summary: bool,
+    ) -> Optional[Dict[str, str]]:
+        phase = str(
+            character.get_variable("relationship_context_phase", "unmet") or "unmet"
+        ).strip().lower()
+        if phase != "unmet":
+            return None
+        if has_history or has_summary:
+            # Старая база без маркера: история уже есть, значит знакомство
+            # состоялось. Блок «мы не знакомы» противоречил бы ей, поэтому не
+            # отправляем его и не стираем память игрока.
+            logger.warning(
+                f"[PromptController][{getattr(character, 'char_id', '?')}] "
+                "relationship_context_phase=unmet contradicts existing history; "
+                "first-encounter block suppressed."
+            )
+            return None
+        return {"role": "system", "content": cls._FIRST_ENCOUNTER_TEXT}
+
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
         cartridge = getattr(character, "cartridge_definition", None)
@@ -1187,6 +1222,15 @@ class PromptController(PromptBuilderService):
             messages.append({"role": "assistant", "content": action_context})
 
         messages.extend(history_limited)
+
+        if not is_game_master:
+            relationship_context_message = self._build_relationship_context_message(
+                character,
+                has_history=bool(history_limited),
+                has_summary=bool(history_summary),
+            )
+            if relationship_context_message is not None:
+                messages.append(relationship_context_message)
 
         # These blocks are model-produced data, never system instructions. Put
         # them after the stable summary/history prefix so their frequent updates

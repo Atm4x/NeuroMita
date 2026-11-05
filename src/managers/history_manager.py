@@ -1454,6 +1454,29 @@ class HistoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+    def clear_variables(self) -> int:
+        """Удаляет все сохранённые переменные персонажа.
+
+        Нужен для полного сброса неразрешённых (не загруженных в память)
+        персонажей: одного clear_history() недостаточно, иначе их переменные
+        переживают сброс и воскресают при следующей загрузке.
+        """
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM variables WHERE character_id = ?",
+                (self.storage_key,),
+            )
+            deleted = cursor.rowcount or 0
+            conn.commit()
+            return deleted
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     def save_missed_history(self, missed_messages: list):
         for msg in missed_messages or []:
             if not isinstance(msg, dict):

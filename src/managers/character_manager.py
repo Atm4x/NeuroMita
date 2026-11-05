@@ -297,7 +297,12 @@ class CharacterManager:
             if character_id in loaded_ids:
                 continue
             try:
-                self.resources.history_for(character_id).clear_history()
+                history = self.resources.history_for(character_id)
+                history.clear_history()
+                # clear_history() не трогает сохранённые переменные. Без этого
+                # непрогруженные персонажи переживали "Сбросить историю ВСЕХ":
+                # маркер знакомства, стадии и прочее воскресали при загрузке.
+                history.clear_variables()
                 self.resources.memory_for(character_id).clear_memories()
                 self.resources.working_state_for(character_id).clear()
             except Exception as exc:
