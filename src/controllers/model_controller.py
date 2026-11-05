@@ -62,7 +62,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "load_skill"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -70,6 +70,7 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "load_skill": False,
 }
 
 
@@ -202,8 +203,10 @@ class ModelController(GenerationService, ModelStateService):
 
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
+        from managers.tools.builtin.load_skill import LoadSkillTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
         self.model.tool_manager.register(ReminderTool())
+        self.model.tool_manager.register(LoadSkillTool(settings=self.settings))
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()
@@ -1593,6 +1596,13 @@ class ModelController(GenerationService, ModelStateService):
             except Exception as e:
                 logger.warning(f"[ModelController] Failed to build tools prompt: {format_exception(e)}")
                 _tools_on = False
+
+        # On-demand skills only make sense while load_skill is actually offered
+        # to the model; the catalog block is derived from that capability.
+        effective_capabilities["skills"] = bool(
+            self.settings.get("SKILLS_ON", False)
+            and "load_skill" in (_enabled_tools or [])
+        )
 
         with character_lock(char_id):
             _custom_params = copy.deepcopy(getattr(char, "custom_params", []) or [])

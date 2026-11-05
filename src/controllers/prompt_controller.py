@@ -1112,6 +1112,27 @@ class PromptController(PromptBuilderService):
                     format_exception(exc),
                 )
 
+        skill_catalog = None
+        skill_catalog_block = ""
+        loaded_skills_context = ""
+        if capabilities.get("skills", False):
+            try:
+                from services.skill_catalog import SkillCatalog
+                skill_catalog = SkillCatalog.load(getattr(character, "base_data_path", "") or "")
+                skill_catalog_block = skill_catalog.render_catalog_block(
+                    capabilities=capabilities.get("skill_capabilities") or (),
+                    max_chars=int(capabilities.get("skill_catalog_max_chars") or 1200),
+                )
+                loaded_skills_context = skill_catalog.render_loaded_block(
+                    character.skills.loaded(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[PromptController][%s] Failed to read the skill catalog: %s",
+                    char_id,
+                    format_exception(exc),
+                )
+
         game_state_prompt_content: Optional[str] = None
         try:
             if character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
@@ -1230,6 +1251,9 @@ class PromptController(PromptBuilderService):
         if core_memory_context:
             messages.append({"role": "system", "content": core_memory_context})
 
+        if skill_catalog_block:
+            messages.append({"role": "system", "content": skill_catalog_block})
+
         if history_summary:
             messages.append({
                 "role": "system",
@@ -1277,6 +1301,9 @@ class PromptController(PromptBuilderService):
         # do not invalidate provider prompt caching for the dialogue itself.
         if working_state_context:
             messages.append({"role": "assistant", "content": working_state_context})
+
+        if loaded_skills_context:
+            messages.append({"role": "system", "content": loaded_skills_context})
 
         dialogue_context_message = None
         dialogue = request.dialogue

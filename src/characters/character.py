@@ -227,6 +227,10 @@ class Character:
     def working_state(self):
         return self._resources().working_state_for(self.char_id, self.storage_name)
 
+    @property
+    def skills(self):
+        return self._resources().loaded_skills_for(self.char_id, self.storage_name)
+
     @state_operation(wait=True)
     def ensure_runtime_loaded(self) -> None:
         if self._runtime_loaded:
@@ -1243,6 +1247,10 @@ class Character:
             pass
         try:
             self.working_state.clear(epoch=self.history_epoch)
+        except Exception:
+            pass
+        try:
+            self.skills.clear()
         except Exception:
             pass
 

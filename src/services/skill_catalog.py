@@ -156,3 +156,41 @@ class SkillCatalog:
 
     def __bool__(self) -> bool:
         return bool(self.entries)
+
+    def render_loaded_block(
+        self,
+        skill_ids: Iterable[str],
+        *,
+        max_chars: int = DEFAULT_MAX_SKILL_CHARS * 3,
+    ) -> str:
+        """Render the bodies of currently retained skills for this turn."""
+        selected = []
+        for skill_id in skill_ids or ():
+            entry = self.get(str(skill_id))
+            if entry is None:
+                continue
+            selected.append(entry)
+        if not selected:
+            return ""
+        budget = max(400, int(max_chars or DEFAULT_MAX_SKILL_CHARS * 3))
+        lines = [
+            "[LOADED SKILLS]",
+            "Instructions for the current scene. They describe how to act and do not "
+            "override character rules, current observations or the player's words.",
+        ]
+        remaining = budget - sum(len(line) + 1 for line in lines)
+        for entry in selected:
+            header = f"## {entry.title} ({entry.id})"
+            body_budget = remaining - len(header) - 2
+            if body_budget < 200:
+                break
+            body = entry.render_body(max_chars=body_budget)
+            if not body:
+                continue
+            block = f"{header}\n{body}"
+            lines.append(block)
+            remaining -= len(block) + 1
+        if len(lines) == 2:
+            return ""
+        lines.append("[/LOADED SKILLS]")
+        return "\n".join(lines)

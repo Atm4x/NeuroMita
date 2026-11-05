@@ -10,6 +10,7 @@ from managers.history_manager import HistoryManager
 from managers.memory_manager import MemoryManager
 from managers.reminder_manager import ReminderManager
 from managers.working_state_manager import WorkingStateManager
+from managers.skill_session_manager import SkillSessionManager
 
 
 @dataclass
@@ -29,11 +30,13 @@ class CharacterResourceManager:
         self._memory_views: dict[str, object] = {}
         self._reminder_views: dict[str, object] = {}
         self._working_state_views: dict[str, object] = {}
+        self._skill_views: dict[str, object] = {}
 
         self.history_manager = HistoryManager()
         self.memory_manager = MemoryManager()
         self.reminder_manager = ReminderManager()
         self.working_state_manager = WorkingStateManager()
+        self.skill_session_manager = SkillSessionManager()
 
     @staticmethod
     def _key(character_id: str) -> str:
@@ -82,6 +85,11 @@ class CharacterResourceManager:
                 descriptor.prompt_set_path,
             )
             self.working_state_manager.register_scope(
+                key,
+                descriptor.storage_name,
+                descriptor.prompt_set_path,
+            )
+            self.skill_session_manager.register_scope(
                 key,
                 descriptor.storage_name,
                 descriptor.prompt_set_path,
@@ -176,6 +184,23 @@ class CharacterResourceManager:
                 )
                 self._working_state_views[descriptor.character_id] = view
             return view
+
+    def loaded_skills_for(self, character_id: str, storage_name: str = ""):
+        with self._lock:
+            descriptor = self._descriptor(character_id, storage_name)
+            view = self._skill_views.get(descriptor.character_id)
+            if view is None:
+                view = self.skill_session_manager.bind(
+                    descriptor.character_id,
+                    descriptor.storage_name,
+                    descriptor.prompt_set_path,
+                )
+                self._skill_views[descriptor.character_id] = view
+            return view
+
+    def prompt_set_path_for(self, character_id: str, storage_name: str = "") -> str:
+        with self._lock:
+            return self._descriptor(character_id, storage_name).prompt_set_path
 
     def shutdown(self) -> None:
         for name, callback in (
