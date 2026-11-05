@@ -430,16 +430,29 @@ class PromptSystemStateTests(unittest.TestCase):
         self.assertIn("- Player stood up.", message["content"])
         self.assertIn("- TV was switched off.", message["content"])
 
-    def test_runtime_events_are_deduplicated_after_whitespace_normalization(self):
+    def test_resend_separated_from_its_original_is_dropped(self):
         message = PromptController._build_unity_runtime_events_message({
             "runtime_events": [
                 "Basement door opened.",
-                "  basement   door opened.  ",
                 "TV was switched off.",
+                "  basement   door opened.  ",
             ],
         })
         self.assertEqual(message["content"].count("- Basement door opened."), 1)
         self.assertEqual(message["content"].count("- TV was switched off."), 1)
+
+    def test_consecutive_identical_events_are_kept(self):
+        message = PromptController._build_unity_runtime_events_message({
+            "runtime_events": ["Knock on the door.", "Knock on the door.", "Knock on the door."],
+        })
+        self.assertEqual(message["content"].count("- Knock on the door."), 3)
+
+    def test_oversized_event_is_truncated(self):
+        message = PromptController._build_unity_runtime_events_message({
+            "runtime_events": ["E" * (PromptController._MAX_RUNTIME_EVENT_CHARS + 50)],
+        })
+        body_line = next(line for line in message["content"].splitlines() if line.startswith("- "))
+        self.assertEqual(len(body_line), PromptController._MAX_RUNTIME_EVENT_CHARS + 3)
 
     def test_runtime_events_keep_only_the_most_recent_tail(self):
         limit = PromptController._MAX_RUNTIME_EVENTS

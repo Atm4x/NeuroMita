@@ -856,10 +856,15 @@ class PromptController(PromptBuilderService):
     )
 
     # Unity may resend the same event (a door, a wardrobe, the TV) across
-    # several turns. Repetition teaches the model to treat a one-off event as
-    # an ongoing action, so the prompt carries one normalized copy and only a
-    # bounded tail of the most recent entries.
+    # turns. Repetition teaches the model to treat a one-off event as an
+    # ongoing action, so a resend that is separated from its original is
+    # dropped. Consecutive identical lines stay: three knocks are three
+    # occurrences, not stale state.
     _MAX_RUNTIME_EVENTS = 24
+    _MAX_RUNTIME_EVENT_CHARS = 400
+    _MAX_RUNTIME_EVENT_TOTAL_CHARS = 6000
+    _MAX_GAME_MASTER_DIRECTIVES = 4
+    _MAX_GAME_MASTER_DIRECTIVE_CHARS = 600
 
     @classmethod
     def _normalized_runtime_events(cls, game_state: Dict[str, Any]) -> List[str]:
@@ -868,16 +873,37 @@ class PromptController(PromptBuilderService):
             raw_events = [raw_events] if raw_events else []
         events: List[str] = []
         seen: set[str] = set()
+        previous_key = ""
         for raw_event in raw_events:
             text = " ".join(str(raw_event or "").split())
             if not text:
                 continue
+            if len(text) > cls._MAX_RUNTIME_EVENT_CHARS:
+                text = text[: cls._MAX_RUNTIME_EVENT_CHARS].rstrip() + "…"
             key = text.casefold()
+            if key == previous_key:
+                events.append(text)
+                continue
+            previous_key = key
             if key in seen:
                 continue
             seen.add(key)
             events.append(text)
         return events
+
+    @classmethod
+    def _trim_runtime_events_to_budget(cls, events: List[str]) -> List[str]:
+        """Keep the newest events that fit the character budget."""
+        kept: List[str] = []
+        total = 0
+        for item in reversed(events):
+            cost = len(item) + 2  # list marker and newline
+            if kept and total + cost > cls._MAX_RUNTIME_EVENT_TOTAL_CHARS:
+                break
+            kept.append(item)
+            total += cost
+        kept.reverse()
+        return kept
 
     @classmethod
     def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
@@ -886,10 +912,14 @@ class PromptController(PromptBuilderService):
         for raw_event in cls._normalized_runtime_events(game_state):
             for match in cls._GAME_MASTER_EVENT_RE.finditer(raw_event):
                 text = str(match.group("text") or "").strip()
+                if len(text) > cls._MAX_GAME_MASTER_DIRECTIVE_CHARS:
+                    text = text[: cls._MAX_GAME_MASTER_DIRECTIVE_CHARS].rstrip() + "…"
                 key = text.casefold()
                 if text and key not in seen:
                     seen.add(key)
                     directives.append(text)
+                    if len(directives) >= cls._MAX_GAME_MASTER_DIRECTIVES:
+                        return directives
         return directives
 
     @classmethod
@@ -903,6 +933,7 @@ class PromptController(PromptBuilderService):
             return None
         if len(events) > cls._MAX_RUNTIME_EVENTS:
             events = events[-cls._MAX_RUNTIME_EVENTS:]
+        events = cls._trim_runtime_events_to_budget(events)
         safe_events = [cls._neutralize_world_state_tags(item) for item in events]
         body = "\n".join(f"- {item}" for item in safe_events)
         return {
