@@ -1,6 +1,7 @@
 """Examples in the structured-response schema match the declared field types."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import unittest
@@ -39,6 +40,13 @@ class StructuredResponseSchemaExampleTests(unittest.TestCase):
                 )
                 self.assertTrue(example.endswith("]"),
                                 f"{name}: unexpected example {example!r}")
+                parsed = json.loads(example)
+                self.assertIsInstance(parsed, list, f"{name}: example must parse as a list")
+                self.assertTrue(parsed, f"{name}: example list must not be empty")
+                self.assertTrue(
+                    all(isinstance(item, str) for item in parsed),
+                    f"{name}: every example item must be a string",
+                )
 
 
 if __name__ == "__main__":
