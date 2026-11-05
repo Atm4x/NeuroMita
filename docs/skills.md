@@ -61,6 +61,13 @@ of file, and it wins over the local folder. The folder stays as a fallback
 for characters the game does not describe. The catalog is cached per
 character so load_skill and the prompt agree on what exists.
 
+In the Unity build the manifest lives in
+Assets/StreamingAssets/Data/Skills/: catalog.json lists id, title, description,
+file and optional capabilities or characters, and the .md files next to it hold
+the bodies. Unity validates that catalog and sends it with every context
+snapshot, so the game stays the source of truth for what a scene supports and
+this repository keeps no copy of those files.
+
 SKILL_LOADING_MODE picks one of two policies over the same catalog and renderer:
 
 on_demand (default) keeps only the compact [SKILLS] list in the prompt; bodies
