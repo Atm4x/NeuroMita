@@ -430,6 +430,41 @@ class PromptSystemStateTests(unittest.TestCase):
         self.assertIn("- Player stood up.", message["content"])
         self.assertIn("- TV was switched off.", message["content"])
 
+    def test_runtime_events_are_deduplicated_after_whitespace_normalization(self):
+        message = PromptController._build_unity_runtime_events_message({
+            "runtime_events": [
+                "Basement door opened.",
+                "  basement   door opened.  ",
+                "TV was switched off.",
+            ],
+        })
+        self.assertEqual(message["content"].count("- Basement door opened."), 1)
+        self.assertEqual(message["content"].count("- TV was switched off."), 1)
+
+    def test_runtime_events_keep_only_the_most_recent_tail(self):
+        limit = PromptController._MAX_RUNTIME_EVENTS
+        events = [f"Event {index}" for index in range(limit + 6)]
+        message = PromptController._build_unity_runtime_events_message({
+            "runtime_events": events,
+        })
+        body_lines = [line for line in message["content"].splitlines() if line.startswith("- ")]
+        self.assertEqual(len(body_lines), limit)
+        self.assertNotIn("- Event 0", body_lines)
+        self.assertIn(f"- Event {limit + 5}", body_lines)
+
+    def test_game_master_directives_are_deduplicated_case_insensitively(self):
+        directives = PromptController._extract_game_master_directives({
+            "runtime_events": [
+                "[GAME_MASTER]: GameMaster said: Tell her to leave.",
+                "[game_master]: gamemaster said: tell her to leave.",
+                "[GAME_MASTER][MANDATORY]: GameMaster said: Wait for the player.",
+            ],
+        })
+        self.assertEqual(
+            directives,
+            ["Tell her to leave.", "Wait for the player."],
+        )
+
     def test_runtime_events_are_not_persisted_in_global_game_state(self):
         state = GameState()
         state.update_from_event_data({
