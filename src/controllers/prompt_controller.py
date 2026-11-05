@@ -756,30 +756,54 @@ class PromptController(PromptBuilderService):
         re.IGNORECASE,
     )
 
+    # Unity may resend the same event (a door, a wardrobe, the TV) across
+    # several turns. Repetition teaches the model to treat a one-off event as
+    # an ongoing action, so the prompt carries one normalized copy and only a
+    # bounded tail of the most recent entries.
+    _MAX_RUNTIME_EVENTS = 24
+
     @classmethod
-    def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
+    def _normalized_runtime_events(cls, game_state: Dict[str, Any]) -> List[str]:
         raw_events = game_state.get("runtime_events", ()) if isinstance(game_state, dict) else ()
         if not isinstance(raw_events, (list, tuple)):
             raw_events = [raw_events] if raw_events else []
-        directives: List[str] = []
+        events: List[str] = []
+        seen: set[str] = set()
         for raw_event in raw_events:
-            for match in cls._GAME_MASTER_EVENT_RE.finditer(str(raw_event or "")):
+            text = " ".join(str(raw_event or "").split())
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(text)
+        return events
+
+    @classmethod
+    def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
+        directives: List[str] = []
+        seen: set[str] = set()
+        for raw_event in cls._normalized_runtime_events(game_state):
+            for match in cls._GAME_MASTER_EVENT_RE.finditer(raw_event):
                 text = str(match.group("text") or "").strip()
-                if text and text not in directives:
+                key = text.casefold()
+                if text and key not in seen:
+                    seen.add(key)
                     directives.append(text)
         return directives
+
     @classmethod
     def _build_unity_runtime_events_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
-        raw_events = game_state.get("runtime_events", ())
-        if not isinstance(raw_events, (list, tuple)):
-            raw_events = [raw_events] if raw_events else []
-        events = [str(item).strip() for item in raw_events if str(item).strip()]
-        if not events:
-            return None
+        events = cls._normalized_runtime_events(game_state)
         # GameMaster directives are promoted to a dedicated final system message
         # by build(). Do not leave a competing copy buried in runtime events.
         events = [cls._GAME_MASTER_EVENT_RE.sub("", item).strip() for item in events]
         events = [item for item in events if item]
+        if not events:
+            return None
+        if len(events) > cls._MAX_RUNTIME_EVENTS:
+            events = events[-cls._MAX_RUNTIME_EVENTS:]
         safe_events = [cls._neutralize_world_state_tags(item) for item in events]
         body = "\n".join(f"- {item}" for item in safe_events)
         return {
@@ -788,6 +812,7 @@ class PromptController(PromptBuilderService):
                 "[Unity Runtime Events]\n"
                 "These events occurred after the previous dispatched turn and belong to this turn's context.\n"
                 "If an event describes an older state that conflicts with NeuroMita World State, the current world state wins.\n"
+                "Each line describes one occurrence. Repeated wording means the runtime reported the same situation again, not a new action.\n"
                 f"{body}\n"
                 "[/Unity Runtime Events]"
             ),
