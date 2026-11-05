@@ -26,6 +26,14 @@ class LoadSkillTool(Tool):
         self._prompt_set_path = str(path or "")
 
     def _catalog(self) -> SkillCatalog:
+        if self._char_id:
+            try:
+                from managers.character_resource_manager import get_character_resource_manager
+                cached = get_character_resource_manager().skill_catalogs_for(self._char_id).get()
+            except Exception:
+                cached = None
+            if cached is not None:
+                return cached
         root = self._prompt_set_path
         if not root and self._char_id:
             from managers.character_resource_manager import get_character_resource_manager

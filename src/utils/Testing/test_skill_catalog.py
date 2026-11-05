@@ -133,5 +133,38 @@ class SkillCatalogTests(unittest.TestCase):
             self.assertEqual(len(entry.render_body(max_chars=40)), 40)
 
 
+class RuntimePayloadCatalogTests(unittest.TestCase):
+    PAYLOAD = {
+        "skills": [
+            {"id": "music", "title": "Music", "body": "Pick a calm track."},
+            {"id": "wardrobe", "title": "Wardrobe", "body": "Offer two outfits.", "capabilities": ["wardrobe"]},
+        ]
+    }
+
+    def test_payload_builds_entries_without_files(self):
+        catalog = SkillCatalog.from_payload(self.PAYLOAD)
+        self.assertEqual(sorted(catalog.entries), ["music", "wardrobe"])
+        self.assertEqual(catalog.get("music").content, "Pick a calm track.")
+        self.assertEqual(len(catalog.get("music").content_hash), 64)
+
+    def test_payload_accepts_a_json_string(self):
+        import json
+        catalog = SkillCatalog.from_payload(json.dumps(self.PAYLOAD))
+        self.assertTrue(catalog)
+
+    def test_payload_rejects_missing_body_and_bad_ids(self):
+        catalog = SkillCatalog.from_payload({"skills": [
+            {"id": "empty", "title": "Empty"},
+            {"id": "Bad Id", "body": "x"},
+            {"id": "ok", "body": "y"},
+        ]})
+        self.assertEqual(list(catalog.entries), ["ok"])
+        self.assertEqual(len(catalog.issues), 2)
+
+    def test_empty_payload_is_falsy_but_not_an_error(self):
+        catalog = SkillCatalog.from_payload([])
+        self.assertFalse(catalog)
+
+
 if __name__ == "__main__":
     unittest.main()

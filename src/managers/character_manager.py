@@ -196,6 +196,7 @@ class CharacterManager:
                 self.resources.working_state_for(identity).restore_snapshot({})
                 self.resources.loaded_skills_for(identity).clear()
                 self.resources.action_receipts_for(identity).clear()
+                self.resources.skill_catalogs_for(identity).clear()
                 self.resources.reminders_for(identity).restore_snapshot({"reminders": [], "next_number": 1, "timer_remaining": {}})
                 self.resources.history_manager.bind(identity).replace_timeline_cache([])
                 self.resources.memory_for(identity).invalidate_snapshot_cache()
@@ -309,6 +310,7 @@ class CharacterManager:
                 self.resources.working_state_for(character_id).clear()
                 self.resources.loaded_skills_for(character_id).clear()
                 self.resources.action_receipts_for(character_id).clear()
+                self.resources.skill_catalogs_for(character_id).clear()
             except Exception as exc:
                 logger.error(
                     f"[CharacterManager] Failed to clear resources for {character_id}: {format_exception(exc)}",

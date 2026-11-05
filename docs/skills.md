@@ -55,6 +55,12 @@ history, in the volatile part of the prompt.
 
 ## Modes
 
+The connected game runtime can send the catalog itself. Its payload
+calls it skills_catalog; the same manifest shape is used with body instead
+of file, and it wins over the local folder. The folder stays as a fallback
+for characters the game does not describe. The catalog is cached per
+character so load_skill and the prompt agree on what exists.
+
 SKILL_LOADING_MODE picks one of two policies over the same catalog and renderer:
 
 on_demand (default) keeps only the compact [SKILLS] list in the prompt; bodies

@@ -12,6 +12,7 @@ from managers.reminder_manager import ReminderManager
 from managers.working_state_manager import WorkingStateManager
 from managers.skill_session_manager import SkillSessionManager
 from managers.action_receipt_ledger import ActionReceiptLedger
+from managers.skill_catalog_registry import SkillCatalogRegistry
 
 
 @dataclass
@@ -33,6 +34,7 @@ class CharacterResourceManager:
         self._working_state_views: dict[str, object] = {}
         self._skill_views: dict[str, object] = {}
         self._action_receipt_views: dict[str, object] = {}
+        self._skill_catalog_views: dict[str, object] = {}
 
         self.history_manager = HistoryManager()
         self.memory_manager = MemoryManager()
@@ -40,6 +42,7 @@ class CharacterResourceManager:
         self.working_state_manager = WorkingStateManager()
         self.skill_session_manager = SkillSessionManager()
         self.action_receipt_ledger = ActionReceiptLedger()
+        self.skill_catalog_registry = SkillCatalogRegistry()
 
     @staticmethod
     def _key(character_id: str) -> str:
@@ -98,6 +101,11 @@ class CharacterResourceManager:
                 descriptor.prompt_set_path,
             )
             self.action_receipt_ledger.register_scope(
+                key,
+                descriptor.storage_name,
+                descriptor.prompt_set_path,
+            )
+            self.skill_catalog_registry.register_scope(
                 key,
                 descriptor.storage_name,
                 descriptor.prompt_set_path,
@@ -221,6 +229,19 @@ class CharacterResourceManager:
                     descriptor.prompt_set_path,
                 )
                 self._action_receipt_views[descriptor.character_id] = view
+            return view
+
+    def skill_catalogs_for(self, character_id: str, storage_name: str = ""):
+        with self._lock:
+            descriptor = self._descriptor(character_id, storage_name)
+            view = self._skill_catalog_views.get(descriptor.character_id)
+            if view is None:
+                view = self.skill_catalog_registry.bind(
+                    descriptor.character_id,
+                    descriptor.storage_name,
+                    descriptor.prompt_set_path,
+                )
+                self._skill_catalog_views[descriptor.character_id] = view
             return view
 
     def shutdown(self) -> None:

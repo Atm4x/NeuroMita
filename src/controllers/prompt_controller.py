@@ -850,6 +850,44 @@ class PromptController(PromptBuilderService):
             return False
         return support_intents
 
+    @staticmethod
+    def _resolve_skill_catalog(character: Any, game_state: Any):
+        """Prefer the catalog sent by the game runtime over the local files."""
+        from services.skill_catalog import SkillCatalog
+
+        registry = getattr(character, "skill_catalogs", None)
+        payload = None
+        if isinstance(game_state, dict):
+            if "skills_catalog" in game_state:
+                payload = game_state.get("skills_catalog")
+            elif "skills" in game_state:
+                payload = game_state.get("skills")
+
+        if payload is not None:
+            catalog = SkillCatalog.from_payload(payload)
+            if registry is not None:
+                try:
+                    registry.set(catalog)
+                except Exception:
+                    pass
+            return catalog
+
+        if registry is not None:
+            try:
+                cached = registry.get()
+            except Exception:
+                cached = None
+            if cached is not None:
+                return cached
+
+        catalog = SkillCatalog.load(getattr(character, "base_data_path", "") or "")
+        if registry is not None and catalog:
+            try:
+                registry.set(catalog)
+            except Exception:
+                pass
+        return catalog
+
     _GAME_MASTER_EVENT_RE = re.compile(
         r"\[GAME_MASTER\](?:\[MANDATORY\])?\s*:\s*GameMaster said:\s*(?P<text>[^\r\n]+)",
         re.IGNORECASE,
@@ -1118,8 +1156,7 @@ class PromptController(PromptBuilderService):
         eager_skills_context = ""
         if capabilities.get("skills", False):
             try:
-                from services.skill_catalog import SkillCatalog
-                skill_catalog = SkillCatalog.load(getattr(character, "base_data_path", "") or "")
+                skill_catalog = self._resolve_skill_catalog(character, request.game_state)
                 if capabilities.get("skill_mode") == "eager":
                     # Eager mode keeps every skill in the stable prefix and never
                     # asks the model to load anything.

@@ -118,6 +118,60 @@ class SkillCatalog:
     def get(self, skill_id: str) -> SkillEntry | None:
         return self.entries.get(str(skill_id or "").strip())
 
+    @classmethod
+    def from_payload(cls, payload: object) -> "SkillCatalog":
+        """Build a catalog from the connected game runtime payload.
+
+        The runtime owns the skill text there, so there are no files to read:
+        the same manifest shape is used, with ``body`` instead of ``file``.
+        """
+        catalog = cls(root=Path(""))
+        data = payload
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError as exc:
+                catalog.issues.append(f"unreadable runtime catalog: {exc}")
+                return catalog
+        if isinstance(data, dict):
+            data = data.get("skills")
+        if not isinstance(data, list):
+            catalog.issues.append("runtime catalog has no skills list")
+            return catalog
+        for index, raw in enumerate(data):
+            try:
+                entry = catalog._payload_entry(raw, index)
+            except SkillCatalogError as exc:
+                catalog.issues.append(str(exc))
+                continue
+            if entry.id in catalog.entries:
+                catalog.issues.append(f"duplicate skill id: {entry.id}")
+                continue
+            catalog.entries[entry.id] = entry
+        return catalog
+
+    def _payload_entry(self, raw: object, index: int) -> SkillEntry:
+        if not isinstance(raw, dict):
+            raise SkillCatalogError(f"skill #{index} is not an object")
+        skill_id = str(raw.get("id") or "").strip()
+        if not _ID_RE.match(skill_id) or len(skill_id) > MAX_SKILL_ID_CHARS:
+            raise SkillCatalogError(f"skill #{index} has an invalid id: {skill_id!r}")
+        content = str(raw.get("body") or raw.get("content") or "").strip()
+        if not content:
+            raise SkillCatalogError(f"skill {skill_id} has no body")
+        capabilities = raw.get("capabilities") or []
+        if not isinstance(capabilities, list):
+            capabilities = []
+        return SkillEntry(
+            id=skill_id,
+            title=str(raw.get("title") or skill_id).strip(),
+            description=" ".join(str(raw.get("description") or "").split()),
+            content=content,
+            content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            token_estimate=(len(content) + 3) // 4,
+            capabilities=tuple(str(item) for item in capabilities if str(item).strip()),
+        )
+
     def available(self, capabilities: Iterable[str] = ()) -> list[SkillEntry]:
         required = {str(item).strip() for item in capabilities if str(item).strip()}
         if not required:

@@ -103,6 +103,30 @@ class LoadSkillToolTests(unittest.TestCase):
 
 
 class LoadedSkillsPromptTests(unittest.TestCase):
+    def test_runtime_catalog_wins_over_the_local_folder(self):
+        from controllers.prompt_controller import PromptController
+        from managers.skill_catalog_registry import SkillCatalogRegistry
+        from services.skill_catalog import SkillCatalog
+
+        class _Character:
+            char_id = "RuntimeSkills"
+            id = "RuntimeSkills"
+            base_data_path = "Z:\\no\\such\\folder"
+            skills = None
+
+        registry = SkillCatalogRegistry().bind("RuntimeSkills", "RuntimeSkills")
+        character = _Character()
+        character.skill_catalogs = registry
+        catalog = PromptController._resolve_skill_catalog(
+            character,
+            {"skills_catalog": [{"id": "tv", "title": "TV", "body": "Turn it off."}]},
+        )
+        self.assertEqual(list(catalog.entries), ["tv"])
+        self.assertIs(registry.get(), catalog)
+
+        cached = PromptController._resolve_skill_catalog(character, {})
+        self.assertIs(cached, catalog)
+
     def test_loaded_block_contains_only_retained_skills(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -170,6 +194,7 @@ class PromptIntegrationTests(unittest.TestCase):
             event_type="chat",
             policy=policy or RequestPolicy(use_history_in_prompt=False),
             user_input="hi",
+            game_state=self.game_state,
             capabilities={
                 "structured_output": True,
                 "skills": True,
@@ -188,6 +213,7 @@ class PromptIntegrationTests(unittest.TestCase):
         )
         self.root = root
         self.mode = "on_demand"
+        self.game_state = {}
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -210,6 +236,15 @@ class PromptIntegrationTests(unittest.TestCase):
         self.assertIn("[LOADED SKILLS]", joined)
         self.assertIn("Pick a calm track.", joined)
         self.assertNotIn("[SKILLS]", joined.replace("[LOADED SKILLS]", ""))
+
+    def test_runtime_payload_supplies_the_catalog_block(self):
+        self.character = self._Character(Path("Z:\\missing"), [])
+        self.game_state = {
+            "skills_catalog": [{"id": "tv", "title": "TV", "body": "Turn it off."}],
+        }
+        joined = "\n".join(self._texts())
+        self.assertIn("[SKILLS]", joined)
+        self.assertIn("- tv: TV", joined)
 
 
 if __name__ == "__main__":
