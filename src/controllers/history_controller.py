@@ -12,7 +12,7 @@ from io import BytesIO
 from core.character_locks import character_lock
 from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
-from core.message_content import MessageContentCodec
+from core.message_content import IMAGE_PART, MessageContentCodec
 from core.response_status import response_status_kind
 from core.services import services, use
 from main_logger import logger
@@ -53,6 +53,11 @@ class HistoryController(HistoryService):
     #   memory  — сводка уходит отдельной памятью в MemorySystem (легаси).
     _DEFAULT_OUTPUT_TARGET = "layered"
     _EXTERNAL_SUMMARY_TARGETS = ("history", "layered")
+
+    # Сколько последних сообщений с картинками оставлять картинками. Для более
+    # старых окно использует сохранённое текстовое описание: оно дешевле по
+    # токенам и не теряет смысл кадра.
+    _IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT = 1
 
     def __init__(self):
         self.event_bus = get_event_bus()
@@ -192,6 +197,8 @@ class HistoryController(HistoryService):
                 summarized=llm_messages_history[:summary_cut],
                 window_overflow=window_overflow,
             )
+
+        history_limited = self._replace_older_images_with_descriptions(history_limited)
 
         if image_quality.get('enabled', False):
             history_limited = self._apply_history_image_quality_reduction(history_limited, image_quality)
@@ -1486,6 +1493,102 @@ class HistoryController(HistoryService):
             f"Using local compression fallback after provider failure: {failure_details or 'n/a'}"
         )
         return fallback_summary
+
+    @classmethod
+    def _message_has_inline_image(cls, message: Dict[str, Any]) -> bool:
+        if not isinstance(message, dict):
+            return False
+        return any(
+            MessageContentCodec.part_type(part) == IMAGE_PART
+            for part in MessageContentCodec.parts(message.get("content"))
+        )
+
+    @classmethod
+    def _message_image_description(cls, message: Dict[str, Any]) -> str:
+        """Текст, который был сохранён вместе с картинкой при её получении."""
+        if not isinstance(message, dict):
+            return ""
+        texts: List[str] = []
+
+        def _remember(value: Any) -> None:
+            text = " ".join(str(value or "").split())
+            if text and text not in texts:
+                texts.append(text)
+
+        single = message.get("image_description")
+        if isinstance(single, str):
+            _remember(single)
+        description_map = message.get("image_descriptions")
+        if isinstance(description_map, dict):
+            for value in description_map.values():
+                _remember(value)
+        return " | ".join(texts)
+
+    def _replace_older_images_with_descriptions(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Заменяет base64 картинок в старых сообщениях их описаниями.
+
+        Окно истории отправляется модели целиком на каждом ходу, поэтому
+        встроенные изображения стоят токенов постоянно. У сообщения уже есть
+        текстовое описание изображения (image_descriptions или
+        image_description); для промпта оно несёт тот же смысл, что и сам
+        кадр. Самые свежие сообщения с картинками остаются нетронутыми,
+        остальные получают текст.
+        """
+        if not messages:
+            return messages
+
+        keep_recent = int(
+            self._get_setting(
+                "HISTORY_IMAGE_DESCRIPTION_KEEP_RECENT",
+                self._IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT,
+            )
+            or 0
+        )
+        keep_recent = max(0, keep_recent)
+
+        image_positions = [
+            index for index, message in enumerate(messages)
+            if self._message_has_inline_image(message)
+        ]
+        if not image_positions:
+            return messages
+        keep_positions = set(image_positions[-keep_recent:]) if keep_recent else set()
+
+        updated_messages: List[Dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if index in keep_positions or not self._message_has_inline_image(message):
+                updated_messages.append(message)
+                continue
+
+            description = self._message_image_description(message)
+            if not description:
+                updated_messages.append(message)
+                continue
+
+            new_parts: List[Dict[str, Any]] = []
+            replaced = False
+            for part in MessageContentCodec.parts(message.get("content")):
+                if MessageContentCodec.part_type(part) == IMAGE_PART:
+                    if not replaced:
+                        new_parts.append({
+                            "type": "text",
+                            "text": f"[Earlier image — description: {description}]",
+                        })
+                        replaced = True
+                    continue
+                new_parts.append(part)
+
+            if not replaced:
+                updated_messages.append(message)
+                continue
+            updated = dict(message)
+            updated["content"] = new_parts
+            updated_messages.append(updated)
+
+        return updated_messages
 
     def _process_image_quality(self, image_bytes: bytes, target_quality: int) -> Optional[bytes]:
         if not image_bytes:
