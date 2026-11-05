@@ -1508,21 +1508,37 @@ class HistoryController(HistoryService):
         """Текст, который был сохранён вместе с картинкой при её получении."""
         if not isinstance(message, dict):
             return ""
-        texts: List[str] = []
 
-        def _remember(value: Any) -> None:
-            text = " ".join(str(value or "").split())
-            if text and text not in texts:
-                texts.append(text)
+        def _clean(value: Any) -> str:
+            return " ".join(str(value or "").split())
 
-        single = message.get("image_description")
-        if isinstance(single, str):
-            _remember(single)
         description_map = message.get("image_descriptions")
-        if isinstance(description_map, dict):
+        if isinstance(description_map, dict) and description_map:
+            # Ключи — варианты одного и того же описания, а не описания разных
+            # кадров. Берём лучший доступный вариант, а не склеиваем их все.
+            for key in ("manual", "detailed", "normal", "brief"):
+                value = _clean(description_map.get(key))
+                if value:
+                    return value
             for value in description_map.values():
-                _remember(value)
-        return " | ".join(texts)
+                text = _clean(value)
+                if text:
+                    return text
+        return _clean(message.get("image_description"))
+
+    @classmethod
+    def _count_inline_images(cls, message: Dict[str, Any]) -> int:
+        return sum(
+            1
+            for part in MessageContentCodec.parts(message.get("content"))
+            if MessageContentCodec.part_type(part) == IMAGE_PART
+        )
+
+    @classmethod
+    def _is_player_image_message(cls, message: Dict[str, Any]) -> bool:
+        if str(message.get("role") or "") != "user":
+            return False
+        return str(message.get("image_source") or "").lower() != "mita_camera"
 
     def _replace_older_images_with_descriptions(
         self,
@@ -1555,11 +1571,26 @@ class HistoryController(HistoryService):
         ]
         if not image_positions:
             return messages
-        keep_positions = set(image_positions[-keep_recent:]) if keep_recent else set()
+
+        # Игрок мог прислать скриншот, который обсуждается прямо сейчас, а Мита
+        # следом отправить свой кадр. Свежесть сама по себе выбрала бы кадр Миты,
+        # поэтому при наличии кадров игрока сохраняем именно их.
+        player_positions = [
+            index for index in image_positions
+            if self._is_player_image_message(messages[index])
+        ]
+        keep_source = player_positions or image_positions
+        keep_positions = set(keep_source[-keep_recent:]) if keep_recent else set()
 
         updated_messages: List[Dict[str, Any]] = []
         for index, message in enumerate(messages):
             if index in keep_positions or not self._message_has_inline_image(message):
+                updated_messages.append(message)
+                continue
+
+            # Одно описание не привязано к конкретному кадру из нескольких:
+            # замена в таком сообщении перепутала бы изображения и текст.
+            if self._count_inline_images(message) != 1:
                 updated_messages.append(message)
                 continue
 
@@ -1658,7 +1689,7 @@ class HistoryController(HistoryService):
             # The description replaces the image in history; no base64 to degrade.
             # Supports both new dict format and legacy string.
             _has_desc = bool(msg.get("image_descriptions") or msg.get("image_description"))
-            if _has_desc:
+            if _has_desc and not self._message_has_inline_image(msg):
                 updated_messages.append(msg)
                 continue
 
