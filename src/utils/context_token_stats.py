@@ -11,6 +11,7 @@ _SECTION_MARKERS = (
     ("[Available Tools]", "tools"),
     ("[Current Group Conversation]", "group conversation"),
     ("[GAME_MASTER_DIRECTIVE]", "game master directive"),
+    ("[Active Cognitive Effects]", "Active Cognitive Effects"),
     ("[NeuroMita World State]", "NeuroMita World State"),
     ("[MiSide World State]", "NeuroMita World State"),
     ("[Character World Context]", "Character World Context"),

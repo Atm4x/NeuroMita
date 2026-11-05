@@ -139,6 +139,7 @@ _SECTION_STYLE = {
     "state":       ("fa6s.clock", "#22D3EE"),
     "sysstate":    ("fa6s.plug", "#38BDF8"),
     "behavior":    ("fa6s.chart-column", "#F472B6"),
+    "cognitive":   ("fa6s.eye", "#F472B6"),
     "participant": ("fa6s.user-group", "#FBBF24"),
     "unity":       ("fa6s.gamepad", "#8B5CF6"),
     "world":       ("fa6s.house", "#4ADE80"),
@@ -182,6 +183,7 @@ _SECTION_TO_GROUP = {
     "Unity runtime": "context",
     "group conversation": "context",
     "game master directive": "context",
+    "Active Cognitive Effects": "context",
     "System State": "context",
     "reminders": "context",
     "core memories": "context",
@@ -1370,6 +1372,8 @@ class ContextViewerDialog(QDialog):
             cat = "summary"
         elif "entity" in key or "graph" in key or "knowledge" in key:
             cat = "entity"
+        elif "active cognitive" in key or "cognitive effect" in key:
+            cat = "cognitive"
         elif "behavior" in key or "behaviour" in key:
             cat = "behavior"
         elif "action" in key:
