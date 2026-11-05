@@ -1967,6 +1967,7 @@ class ModelController(GenerationService, ModelStateService):
                     sample_id=sample_id,
                     context_snapshot_id=context_snapshot_id,
                     dialogue=request.dialogue,
+                    cognitive_effect_changes=cognitive_effect_changes,
                 )
                 if structured_result is not None:
                     self._consume_temporary_system_infos(char_id, extra_system_infos)
@@ -2252,6 +2253,7 @@ class ModelController(GenerationService, ModelStateService):
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
         tv_observation: dict | None = None,
+        cognitive_effect_changes: list | None = None,
     ) -> Optional[ChatGenerationResult]:
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
@@ -2447,6 +2449,7 @@ class ModelController(GenerationService, ModelStateService):
                 dialogue=dialogue,
                 native_tool_call=native_tool_call,
                 request_cancellation=request_cancellation,
+                cognitive_effect_changes=cognitive_effect_changes,
             )
 
         # A tool-call response is only an intermediate turn. Commit its working
@@ -2638,6 +2641,7 @@ class ModelController(GenerationService, ModelStateService):
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
         tv_observation: dict | None = None,
+        cognitive_effect_changes: list | None = None,
     ) -> Optional[ChatGenerationResult]:
         """
         Handle a tool_call from a structured response:
@@ -2916,6 +2920,7 @@ class ModelController(GenerationService, ModelStateService):
             dialogue=dialogue,
             native_tool_call=(llm_response_2.raw or {}).get("native_tool_call"),
             request_cancellation=request_cancellation,
+            cognitive_effect_changes=cognitive_effect_changes,
         )
 
     # ---------------------------------------------------------------------
