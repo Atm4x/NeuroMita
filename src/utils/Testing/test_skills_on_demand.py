@@ -145,6 +145,36 @@ class LoadedSkillsPromptTests(unittest.TestCase):
             self.assertNotIn("Pick a calm track.", block)
             self.assertEqual(catalog.render_loaded_block(["missing"]), "")
 
+    def test_scope_change_forgets_retained_skill_text(self):
+        from controllers.prompt_controller import PromptController
+        from managers.skill_catalog_registry import SkillCatalogRegistry
+
+        class _Character:
+            char_id = "ScopeSkills"
+            id = "ScopeSkills"
+            base_data_path = "Z:\\no\\such\\folder"
+
+            def __init__(self):
+                self.skills = []
+                self.skill_catalogs = SkillCatalogRegistry().bind("ScopeSkills", "ScopeSkills")
+
+        character = _Character()
+        payload = {"skills_catalog": [{"id": "tv", "title": "TV", "body": "Turn it off."}]}
+
+        PromptController._resolve_skill_catalog(
+            character, dict(payload, skills_scope="world|CrazyHouse|rev1")
+        )
+        character.skills.append("tv")
+        PromptController._resolve_skill_catalog(
+            character, dict(payload, skills_scope="world|CrazyHouse|rev1")
+        )
+        self.assertEqual(character.skills, ["tv"])
+
+        PromptController._resolve_skill_catalog(
+            character, dict(payload, skills_scope="world|KindHouse|rev1")
+        )
+        self.assertEqual(character.skills, [])
+
     def test_eager_block_contains_every_catalog_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

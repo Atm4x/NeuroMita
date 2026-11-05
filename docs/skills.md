@@ -68,6 +68,19 @@ the bodies. Unity validates that catalog and sends it with every context
 snapshot, so the game stays the source of truth for what a scene supports and
 this repository keeps no copy of those files.
 
+The snapshot also carries skills_catalog_revision, a hash of the manifest and
+every body, and skills_scope, which names the world, the active scene and that
+revision. Bodies travel with each snapshot rather than on first use: the game
+has no per-connection acknowledgement, so a memo of what a client already has
+could leave it without any text at all. The payload is small JSON, and the
+revision lets the two sides tell a real change from a repetition.
+
+When skills_scope changes, the catalog is replaced and the retained skill text
+is dropped, because open skill bodies describe the scene they were loaded in.
+Loading a wardrobe skill inside one location and keeping its instructions
+after a scene change would describe furniture and clothing that no longer
+exist.
+
 SKILL_LOADING_MODE picks one of two policies over the same catalog and renderer:
 
 on_demand (default) keeps only the compact [SKILLS] list in the prompt; bodies

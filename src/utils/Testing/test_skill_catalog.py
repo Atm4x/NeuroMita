@@ -166,5 +166,23 @@ class RuntimePayloadCatalogTests(unittest.TestCase):
         self.assertFalse(catalog)
 
 
+class RegistryScopeTests(unittest.TestCase):
+    def test_scope_change_is_reported_once(self):
+        from managers.skill_catalog_registry import SkillCatalogRegistry
+
+        registry = SkillCatalogRegistry().bind("Scope", "Scope")
+        catalog = SkillCatalog.from_payload({"skills": [{"id": "tv", "body": "Off."}]})
+
+        self.assertTrue(registry.set(catalog, scope="world|CrazyHouse|r1"))
+        self.assertFalse(registry.set(catalog, scope="world|CrazyHouse|r1"))
+        self.assertEqual(registry.scope(), "world|CrazyHouse|r1")
+        self.assertTrue(registry.set(catalog, scope="world|KindHouse|r1"))
+        self.assertIs(registry.get(), catalog)
+
+        registry.clear()
+        self.assertIsNone(registry.get())
+        self.assertEqual(registry.scope(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

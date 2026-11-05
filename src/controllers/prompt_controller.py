@@ -865,9 +865,13 @@ class PromptController(PromptBuilderService):
 
         if payload is not None:
             catalog = SkillCatalog.from_payload(payload)
+            scope = ""
+            if isinstance(game_state, dict):
+                scope = str(game_state.get("skills_scope") or "").strip()
             if registry is not None:
                 try:
-                    registry.set(catalog)
+                    if registry.set(catalog, scope=scope):
+                        PromptController._forget_loaded_skills(character)
                 except Exception:
                     pass
             return catalog
@@ -887,6 +891,17 @@ class PromptController(PromptBuilderService):
             except Exception:
                 pass
         return catalog
+
+    @staticmethod
+    def _forget_loaded_skills(character: Any) -> None:
+        """Retained skill text describes one scene; a new scope invalidates it."""
+        skills = getattr(character, "skills", None)
+        if skills is None:
+            return
+        try:
+            skills.clear()
+        except Exception:
+            return
 
     _GAME_MASTER_EVENT_RE = re.compile(
         r"\[GAME_MASTER\](?:\[MANDATORY\])?\s*:\s*GameMaster said:\s*(?P<text>[^\r\n]+)",
