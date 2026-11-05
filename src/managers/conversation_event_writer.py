@@ -12,7 +12,7 @@ from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
 from services.conversation_timeline import ConversationTimeline
-from utils.cognitive_effect_notes import build_cognitive_effect_notice
+from utils.cognitive_effect_notes import build_cognitive_effect_notice, cognitive_effect_change_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,7 +465,7 @@ class ConversationEventWriter:
             responder_character_id=responder_character_id,
         )
         notices = self._build_cognitive_effect_notices(
-            history_recipients,
+            responder_character_id,
             [] if assistant_is_deleted else cognitive_effect_changes,
         )
 
@@ -565,21 +565,35 @@ class ConversationEventWriter:
 
     def _build_cognitive_effect_notices(
         self,
-        recipients: list[str],
+        observer_character_id: str,
         changes: list[dict] | None,
     ) -> dict[str, dict]:
-        if not changes:
+        observer_character_id = str(observer_character_id or "").strip()
+        if not changes or not observer_character_id:
             return {}
-        notices: dict[str, dict] = {}
-        for recipient_id in recipients:
-            character = self._get_character_ref(recipient_id)
-            if character is None:
-                continue
-            notice = build_cognitive_effect_notice(recipient_id, changes)
-            if notice is None:
-                continue
-            history = getattr(character, "history_manager", None)
-            if history is not None and history.contains_message_id(notice["message_id"]):
-                continue
-            notices[recipient_id] = notice
-        return notices
+        character = self._get_character_ref(observer_character_id)
+        if character is None:
+            return {}
+        seen_change_ids: set[str] = set()
+        history = getattr(character, "history_manager", None)
+        get_recent = getattr(history, "get_recent_messages", None)
+        if callable(get_recent):
+            try:
+                for message in get_recent(limit=64):
+                    seen_change_ids.update(cognitive_effect_change_ids(message))
+            except Exception as exc:
+                logger.warning(
+                    f"[ConversationEventWriter] cognitive notice dedupe failed for "
+                    f"{observer_character_id}: {format_exception(exc)}",
+                    exc_info=True,
+                )
+        notice = build_cognitive_effect_notice(
+            observer_character_id,
+            changes,
+            seen_change_ids=seen_change_ids,
+        )
+        if notice is None:
+            return {}
+        if history is not None and history.contains_message_id(notice["message_id"]):
+            return {}
+        return {observer_character_id: notice}

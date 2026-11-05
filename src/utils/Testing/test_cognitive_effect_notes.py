@@ -48,6 +48,43 @@ def test_other_participant_gets_third_person_notice() -> None:
     assert "твои реакции" not in notice["content"]
 
 
+def test_mutual_other_is_spoken_from_their_own_perspective() -> None:
+    notice = build_cognitive_effect_notice("Crazy", [
+        _change(
+            direction="mutual",
+            observer_character_id="Crazy",
+            observer_is_subject=False,
+            observer_is_affected=True,
+            counterpart_character_id="Kind",
+        )
+    ])
+
+    assert notice is not None
+    assert "ваша связь с Kind" in notice["content"]
+    assert "В Kind что-то изменилось" not in notice["content"]
+
+
+def test_default_notice_hides_effect_name_before_investigation() -> None:
+    unaware = build_cognitive_effect_notice("Kind", [_change(awareness="unaware")])
+    noticing = build_cognitive_effect_notice("Kind", [_change(awareness="noticing")])
+    investigating = build_cognitive_effect_notice("Kind", [_change(awareness="investigating")])
+
+    assert unaware is not None and noticing is not None and investigating is not None
+    assert "Literalism" not in unaware["content"]
+    assert "Literalism" not in noticing["content"]
+    assert "Literalism" in investigating["content"]
+
+
+def test_seen_change_ids_are_excluded_as_individual_events() -> None:
+    notice = build_cognitive_effect_notice("Kind", [
+        _change(change_id="change-seen"),
+        _change(change_id="change-new", sequence=5),
+    ], seen_change_ids={"change-seen"})
+
+    assert notice is not None
+    assert notice["cognitive_effect_change_ids"] == ["change-new"]
+
+
 def test_refresh_is_collapsed_when_intensity_changed_is_present() -> None:
     notice = build_cognitive_effect_notice("Kind", [
         _change(kind="effect_refreshed", sequence=5),
@@ -74,5 +111,5 @@ def test_other_participant_awareness_notice_uses_third_person() -> None:
     ])
 
     assert notice is not None
-    assert "Kind иначе воспринимает" in notice["content"]
-    assert "Ты иначе воспринимаешь" not in notice["content"]
+    assert "Kind понимает" in notice["content"]
+    assert "Ты понимаешь" not in notice["content"]

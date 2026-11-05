@@ -34,6 +34,7 @@ from managers.mini_game_session_registry import mini_game_sessions
 from services.conversation_timeline import ConversationTimeline
 from utils.cognitive_effect_notes import (
     build_cognitive_effect_notice,
+    cognitive_effect_change_ids,
     normalize_cognitive_effect_changes,
 )
 
@@ -1070,7 +1071,7 @@ class PromptController(PromptBuilderService):
         cognitive_effect_changes = normalize_cognitive_effect_changes(
             game_state.get("cognitive_effect_changes")
         )
-        cognitive_effect_note = build_cognitive_effect_notice(char_id, cognitive_effect_changes)
+        cognitive_effect_note = None
 
         history_limited: List[Dict[str, Any]] = []
         history_summary: str = ""
@@ -1209,6 +1210,16 @@ class PromptController(PromptBuilderService):
             messages.append({"role": "assistant", "content": action_context})
 
         messages.extend(history_limited)
+        seen_cognitive_change_ids = {
+            change_id
+            for message in history_limited
+            for change_id in cognitive_effect_change_ids(message)
+        }
+        cognitive_effect_note = build_cognitive_effect_notice(
+            char_id,
+            cognitive_effect_changes,
+            seen_change_ids=seen_cognitive_change_ids,
+        )
         if cognitive_effect_note is not None:
             existing_ids = {
                 str(message.get("message_id") or "")
