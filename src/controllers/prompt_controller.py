@@ -1206,11 +1206,14 @@ class PromptController(PromptBuilderService):
                 "content": (
                     "[WORKING STATE PROTOCOL]\n"
                     "Use the working_state response field as a compact handoff to your next turn. "
-                    "Keep only the current focus, established understanding, tentative assumptions, "
-                    "open loops, and immediate next steps. Do not copy dialogue, long-term memories, "
-                    "or chain-of-thought. When present, working_state must be an object with focus, "
-                    "situation, assumptions, open_loops and next_steps. Current observations, game state "
-                    "and newer dialogue override it.\n"
+                    "Keep only the current focus (one short sentence), current understanding, "
+                    "tentative assumptions, at most 3 open loops and at most 2 immediate next steps. "
+                    "Use short phrases; the whole note must stay under 1000 characters. "
+                    "Do not copy dialogue, long-term memories, or chain-of-thought. "
+                    "When present, working_state is an object with focus, situation, assumptions, "
+                    "open_loops and next_steps. Omit the field when there is nothing left to hand over. "
+                    "It is never a memory and never overrides current observations, game state "
+                    "or newer dialogue.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })

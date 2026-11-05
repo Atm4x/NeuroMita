@@ -10,6 +10,11 @@ import threading
 from copy import deepcopy
 from typing import Any
 
+from domain.working_state import (
+    DEFAULT_MAX_CHARS,
+    normalize_working_state_update,
+    render_normalized_prompt_block,
+)
 from managers.character_scoped_service import CharacterScopedService
 
 
@@ -28,58 +33,42 @@ class WorkingStateManager(CharacterScopedService):
         super().__init__()
         self._lock = threading.RLock()
         self._states: dict[str, dict[str, Any]] = {}
+        self._epochs: dict[str, int] = {}
 
-    @staticmethod
-    def _clean_text(value: Any, *, limit: int) -> str:
-        text = " ".join(str(value or "").split()).strip()
-        return text[:limit].rstrip() if limit > 0 else ""
+    def update(
+        self,
+        value: Any,
+        *,
+        epoch: int | None = None,
+        max_chars: int = DEFAULT_MAX_CHARS,
+    ) -> bool:
+        """Replace the state with a bounded model-produced snapshot.
 
-    def update(self, value: Any, *, max_chars: int = 2000) -> bool:
-        """Replace the state with a bounded, normalized model-produced snapshot."""
-        if hasattr(value, "model_dump"):
-            value = value.model_dump(exclude_none=True)
-        if not isinstance(value, dict):
-            return False
+        An empty or malformed update is ignored: the last valid note stays in
+        place instead of being destroyed by a bad turn. A snapshot produced
+        before the last history reset is stale and is dropped as well.
+        """
+        key = self.storage_key
+        with self._lock:
+            if epoch is not None:
+                known = self._epochs.get(key)
+                if known is None:
+                    self._epochs[key] = int(epoch)
+                elif int(epoch) != known:
+                    return False
 
-        max_chars = max(200, int(max_chars or 2000))
-        remaining = max_chars
-        cleaned: dict[str, Any] = {}
-        for field, _label in self._FIELDS:
-            raw = value.get(field)
-            if field == "focus":
-                text = self._clean_text(raw, limit=min(600, remaining))
-                if text:
-                    cleaned[field] = text
-                    remaining -= len(text)
-                continue
+            cleaned = normalize_working_state_update(value, max_chars=max_chars)
+            if cleaned is None:
+                return False
+            self._states[key] = cleaned
+            return True
 
-            if not isinstance(raw, list):
-                continue
-            entries: list[str] = []
-            for item in raw[:6]:
-                text = self._clean_text(item, limit=min(400, remaining))
-                if not text:
-                    continue
-                entries.append(text)
-                remaining -= len(text)
-                if remaining <= 0:
-                    break
-            if entries:
-                cleaned[field] = entries
-            if remaining <= 0:
-                break
-
+    def clear(self, *, epoch: int | None = None) -> None:
         with self._lock:
             key = self.storage_key
-            if cleaned:
-                self._states[key] = cleaned
-            else:
-                self._states.pop(key, None)
-        return bool(cleaned)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._states.pop(self.storage_key, None)
+            self._states.pop(key, None)
+            if epoch is not None:
+                self._epochs[key] = int(epoch)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -108,14 +97,4 @@ class WorkingStateManager(CharacterScopedService):
             state = dict(self._states.get(self.storage_key, {}))
         if not state:
             return ""
-
-        lines = ["[WORKING STATE]", "Temporary interpretation from the previous turn."]
-        for field, label in self._FIELDS:
-            value = state.get(field)
-            if isinstance(value, str) and value:
-                lines.append(f"{label}: {value}")
-            elif isinstance(value, list) and value:
-                lines.append(f"{label}:")
-                lines.extend(f"- {item}" for item in value)
-        lines.append("[/WORKING STATE]")
-        return "\n".join(lines)
+        return render_normalized_prompt_block(state) or ""

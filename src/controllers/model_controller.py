@@ -1743,6 +1743,9 @@ class ModelController(GenerationService, ModelStateService):
             effective_capabilities["tools_prompt"] = "Use the advertised native functions to call tools."
         effective_capabilities["working_state"] = "working_state" not in profile.excluded_fields
         effective_capabilities["structured_prompt_features"] = profile.prompt_features()
+        effective_capabilities["history_epoch_at_request"] = int(
+            getattr(char, "history_epoch", 0) or 0
+        )
         effective_capabilities.update({
             "structured_exclude_fields": profile.excluded_fields,
             "structured_segment_exclude_fields": profile.excluded_segment_fields,
@@ -2449,7 +2452,8 @@ class ModelController(GenerationService, ModelStateService):
                 else:
                     char.working_state.update(
                         structured.working_state,
-                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
+                        epoch=capabilities.get("history_epoch_at_request"),
+                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 1000) or 1000),
                     )
             except Exception as exc:
                 logger.warning(

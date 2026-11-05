@@ -1242,7 +1242,7 @@ class Character:
         except Exception:
             pass
         try:
-            self.working_state.clear()
+            self.working_state.clear(epoch=self.history_epoch)
         except Exception:
             pass
 
