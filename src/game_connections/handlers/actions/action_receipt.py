@@ -31,11 +31,16 @@ def parse_receipts(turn_uid: str, items: Iterable[Any]) -> list[dict]:
             continue
         if not 0 <= segment <= 255 or not 0 <= index <= 255:
             continue
+        try:
+            sequence = max(0, int(item.get("seq") or 0))
+        except (TypeError, ValueError):
+            sequence = 0
         parsed.append({
             "ref": action_ref(turn, segment, field, index),
             "status": item.get("status"),
             "detail": str(item.get("detail") or "")[:200],
             "turn_uid": turn,
+            "seq": sequence,
         })
     return parsed
 

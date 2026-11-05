@@ -15,8 +15,8 @@ _STATUS_ALIASES = {
     "done": "applied",
     "error": "failed",
     "failure": "failed",
-    "cancelled": "failed",
-    "canceled": "failed",
+    "cancel": "cancelled",
+    "canceled": "cancelled",
 }
 
 STATUSES = (
@@ -24,6 +24,7 @@ STATUSES = (
     "started",
     "applied",
     "completed",
+    "cancelled",
     "failed",
     "rejected",
     "unknown",
@@ -34,6 +35,7 @@ _SHORT_LABELS = {
     "started": "in progress",
     "applied": "applied",
     "completed": "completed",
+    "cancelled": "interrupted",
     "failed": "failed",
     "rejected": "rejected",
     "unknown": "unconfirmed",
@@ -50,6 +52,13 @@ def normalize_status(value: Any) -> str:
 
 def short_label(status: Any) -> str:
     return _SHORT_LABELS.get(normalize_status(status), "unconfirmed")
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 class ActionReceiptLedger(CharacterScopedService):
@@ -71,20 +80,29 @@ class ActionReceiptLedger(CharacterScopedService):
         *,
         detail: str = "",
         turn_uid: str = "",
+        seq: int = 0,
         max_receipts: int = MAX_RECEIPTS,
     ) -> bool:
         key = str(ref or "").strip()
         if not key:
             return False
         limit = max(20, int(max_receipts or MAX_RECEIPTS))
+        sequence = _as_int(seq)
         entry = {
             "ref": key,
             "status": normalize_status(status),
             "detail": " ".join(str(detail or "").split())[:MAX_DETAIL_CHARS],
             "turn_uid": str(turn_uid or ""),
+            "seq": sequence,
         }
         with self._lock:
             receipts = self._receipts.setdefault(self.storage_key, OrderedDict())
+            previous = receipts.get(key)
+            if previous is not None and _as_int(previous.get("seq")) > sequence:
+                # An older report must never roll an action back. Unity may
+                # flush a queued receipt after the command already reported its
+                # real outcome, and the two arrive out of order.
+                return False
             receipts.pop(key, None)
             receipts[key] = entry
             while len(receipts) > limit:
@@ -104,6 +122,7 @@ class ActionReceiptLedger(CharacterScopedService):
                 raw.get("status"),
                 detail=str(raw.get("detail") or ""),
                 turn_uid=str(raw.get("turn_uid") or turn_uid),
+                seq=raw.get("seq"),
             ):
                 stored += 1
         return stored

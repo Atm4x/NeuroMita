@@ -18,7 +18,7 @@ from managers.action_memory import (
     requested_action_records_from_messages,
     requested_actions_from_structured,
 )
-from managers.action_receipt_ledger import ActionReceiptLedger
+from managers.action_receipt_ledger import ActionReceiptLedger, short_label
 
 
 STRUCTURED = {
@@ -72,6 +72,24 @@ class ReceiptLedgerTests(unittest.TestCase):
         ledger.clear()
         self.assertEqual(ledger.status_for("a"), "")
 
+    def test_cancelled_is_its_own_outcome(self):
+        ledger = self._ledger()
+        ledger.record("stop", "cancelled")
+        ledger.record("alias", "canceled")
+        self.assertEqual(ledger.status_for("stop"), "cancelled")
+        self.assertEqual(ledger.status_for("alias"), "cancelled")
+        self.assertEqual(short_label("cancelled"), "interrupted")
+        self.assertEqual(short_label("failed"), "failed")
+
+    def test_an_older_report_never_rolls_back_a_newer_one(self):
+        ledger = self._ledger()
+        ledger.record("a", "completed", seq=3)
+        self.assertFalse(ledger.record("a", "started", seq=2))
+        self.assertEqual(ledger.status_for("a"), "completed")
+        ledger.record("a", "failed", seq=4)
+        self.assertEqual(ledger.status_for("a"), "failed")
+        self.assertEqual(ledger.receipt_for("a")["seq"], 4)
+
 
 class ReceiptPayloadTests(unittest.TestCase):
     def test_valid_receipts_get_refs(self):
@@ -92,6 +110,14 @@ class ReceiptPayloadTests(unittest.TestCase):
             {"segment": 0, "field": "", "index": 0},
             {"segment": "x", "field": "clothes", "index": 0},
         ]), [])
+
+    def test_sequence_survives_parsing_and_is_clamped(self):
+        parsed = parse_receipts("turn-1", [
+            {"segment": 0, "field": "music", "index": 0, "status": "started", "seq": 2},
+            {"segment": 0, "field": "music", "index": 1, "status": "started", "seq": -5},
+            {"segment": 0, "field": "music", "index": 2, "status": "started", "seq": "x"},
+        ])
+        self.assertEqual([item["seq"] for item in parsed], [2, 0, 0])
 
 
 class ActionProjectionTests(unittest.TestCase):
