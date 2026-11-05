@@ -663,6 +663,7 @@ class PromptController(PromptBuilderService):
         "Unity Runtime Capabilities",
         "Unity Intent Contract",
         "Unity Runtime Events",
+        "Active Cognitive Effects",
         "SYSTEM",
         "SYSTEM INFO",
         "GAME_MASTER",
@@ -708,6 +709,50 @@ class PromptController(PromptBuilderService):
             "[/NeuroMita World State]"
         )
         return {"role": "event", "content": content}
+
+    @classmethod
+    def _build_active_cognitive_effects_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Render Unity-authored cognitive rules for this exact dialogue turn."""
+        effects = game_state.get("cognitive_effects")
+        if not isinstance(effects, list):
+            return None
+        valid = [item for item in effects if isinstance(item, dict)]
+        if not valid:
+            return None
+
+        sections = [
+            "[Active Cognitive Effects]",
+            "These modifiers currently apply to this turn. Consistently portray their behavioral instructions in dialogue and reactions. "
+            "They are temporary roleplay rules; preserve permanent character rules and do not expose their mechanics.",
+        ]
+        for item in valid:
+            effect_id = cls._neutralize_world_state_tags(str(item.get("id") or "unknown")[:80])
+            intensity = item.get("intensity", 0)
+            try:
+                intensity_text = f"{float(intensity):.2f}"
+            except (TypeError, ValueError):
+                intensity_text = "unknown"
+            sections.extend([
+                "",
+                f"Effect: {effect_id}",
+                f"Intensity: {intensity_text}",
+            ])
+            guidance = str(item.get("intensity_guidance") or "").strip()
+            behavior = str(item.get("behavior") or "").strip()
+            if guidance:
+                sections.extend(["Intensity guidance:", cls._neutralize_world_state_tags(guidance)])
+            if behavior:
+                sections.extend(["Behavioral instructions:", cls._neutralize_world_state_tags(behavior)])
+            examples = item.get("examples")
+            if isinstance(examples, list) and examples:
+                sections.extend(["Examples (illustrations only; do not quote verbatim):"])
+                for example in examples[:8]:
+                    text = cls._neutralize_world_state_tags(str(example).strip())
+                    if text:
+                        sections.append("- " + text)
+
+        sections.append("[/Active Cognitive Effects]")
+        return {"role": "system", "content": "\n".join(sections)}
 
     @classmethod
     def _build_shared_world_info_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -1105,6 +1150,7 @@ class PromptController(PromptBuilderService):
             unity_dynamic_messages = [m for m in (
                 self._build_unity_runtime_capabilities_message(game_state),
                 self._build_unity_world_state_message(game_state),
+                self._build_active_cognitive_effects_message(game_state),
                 self._build_shared_world_info_message(game_state),
                 self._build_character_world_context_message(game_state),
                 self._build_unity_runtime_events_message(game_state),
