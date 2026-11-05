@@ -105,6 +105,16 @@ def test_intensity_change_shows_previous_and_current_strength() -> None:
     assert "0.40 → 0.80" in notice["content"]
 
 
+def test_dynamic_phase_is_rendered_without_naming_effect_before_investigation() -> None:
+    notice = build_cognitive_effect_notice("Kind", [
+        _change(kind="effect_phase_changed", awareness="unaware", phase="falling"),
+    ])
+
+    assert notice is not None
+    assert "Необычное изменение начинает ослабевать" in notice["content"]
+    assert "Literalism" not in notice["content"]
+
+
 def test_identical_rendered_changes_are_grouped_with_count() -> None:
     notice = build_cognitive_effect_notice("Kind", [
         _change(change_id="ended-1", instance_id="instance-1", id="anger",

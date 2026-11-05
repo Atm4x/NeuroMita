@@ -230,6 +230,15 @@ def _render_change(
         if awareness == "unaware":
             return "Ощущение необычности становится слабее."
 
+    if kind in {"effect_phase_changed", "effect_decay_started"}:
+        phase = str(item.get("phase") or "").strip().lower()
+        described = f"«{effect_name}»" if identifies_effect else "Необычное изменение"
+        if kind == "effect_decay_started" or phase == "falling":
+            return f"{described} начинает ослабевать."
+        if phase == "rising":
+            return f"{described} становится сильнее."
+        return f"{described} достигает наибольшей силы."
+
     if kind == "effect_started":
         return f"«{effect_name}» начинает влиять на {reaction_owner}."
     if kind == "effect_ended":

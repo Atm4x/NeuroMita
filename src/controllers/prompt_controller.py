@@ -718,11 +718,14 @@ class PromptController(PromptBuilderService):
 
     @classmethod
     def _build_active_cognitive_effects_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
-        """Render Unity-authored cognitive rules for this exact dialogue turn."""
+        """Wrap the prepared Unity cognitive rules for this exact dialogue turn."""
         effects = game_state.get("cognitive_effects")
         if not isinstance(effects, list):
             return None
-        valid = [item for item in effects if isinstance(item, dict)]
+        valid = [
+            item for item in effects
+            if isinstance(item, dict) and str(item.get("prompt_text") or "").strip()
+        ]
         if not valid:
             return None
 
@@ -732,32 +735,8 @@ class PromptController(PromptBuilderService):
             "They are temporary roleplay rules; preserve permanent character rules and do not expose their mechanics.",
         ]
         for item in valid:
-            effect_id = cls._neutralize_world_state_tags(str(item.get("id") or "unknown")[:80])
-            intensity = item.get("intensity", 0)
-            try:
-                intensity_text = f"{float(intensity):.2f}"
-            except (TypeError, ValueError):
-                intensity_text = "unknown"
-            sections.extend([
-                "",
-                f"Effect: {effect_id}",
-                f"Intensity: {intensity_text}",
-            ])
-            guidance = str(item.get("intensity_guidance") or "").strip()
-            behavior = str(item.get("behavior") or "").strip()
-            if guidance:
-                sections.extend(["Intensity guidance:", cls._neutralize_world_state_tags(guidance)])
-            if behavior:
-                sections.extend(["Behavioral instructions:", cls._neutralize_world_state_tags(behavior)])
-            if item.get("indefinite"):
-                sections.append("Duration: until removed")
-            examples = item.get("examples")
-            if isinstance(examples, list) and examples:
-                sections.extend(["Examples (illustrations only; do not quote verbatim):"])
-                for example in examples[:8]:
-                    text = cls._neutralize_world_state_tags(str(example).strip())
-                    if text:
-                        sections.append("- " + text)
+            prompt_text = cls._neutralize_world_state_tags(str(item["prompt_text"]).strip())
+            sections.extend(["", prompt_text])
 
         sections.append("[/Active Cognitive Effects]")
         return {"role": "system", "content": "\n".join(sections)}
