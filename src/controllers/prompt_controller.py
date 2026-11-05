@@ -729,17 +729,19 @@ class PromptController(PromptBuilderService):
         if not valid:
             return None
 
-        sections = [
-            "[Active Cognitive Effects]",
-            "These modifiers currently apply to this turn. Consistently portray their behavioral instructions in dialogue and reactions. "
-            "They are temporary roleplay rules; preserve permanent character rules and do not expose their mechanics.",
-        ]
+        opener = "[Active Cognitive Effects]"
+        closing = "[/Active Cognitive Effects]"
+        sections = []
         for item in valid:
-            prompt_text = cls._neutralize_world_state_tags(str(item["prompt_text"]).strip())
-            sections.extend(["", prompt_text])
-
-        sections.append("[/Active Cognitive Effects]")
-        return {"role": "system", "content": "\n".join(sections)}
+            text = str(item["prompt_text"]).strip()
+            if text.startswith(opener) and text.endswith(closing):
+                text = text[len(opener):-len(closing)]
+            safe = cls._neutralize_world_state_tags(text).strip()
+            if safe:
+                sections.append(safe)
+        if not sections:
+            return None
+        return {"role": "system", "content": opener + "\n" + "\n\n".join(sections) + "\n" + closing}
 
     @classmethod
     def _build_shared_world_info_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:

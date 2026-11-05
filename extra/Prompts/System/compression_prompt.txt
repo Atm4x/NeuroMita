@@ -4,6 +4,8 @@ Your messages in the history will be attributed to "{current_character_name}". M
 
 Each message in the history will be formatted as follows: "[HH:MM] [Sender]: Message Content" or "[Sender]: Message Content" if the timestamp is not available. Focus on extracting the most critical information that would be essential for understanding the ongoing narrative and character development. Do not invent any information not present in the original history.
 
+Treat "[Active Cognitive Effects]" blocks and "[Cognitive Effect]" notices as temporary subjective states of {your character}, not as objective facts about the world or other people. Describe a change that has ended as something experienced in the past ("for a while you felt...", "the sense of a second presence faded..."), never as a current trait, permanent belief, or established fact. Do not keep a second consciousness, an altered identity, or an imposed belief speaking or present after its notice says it ended. Omit effect names, strength values, phases, and timers unless the character herself knew and cared about them.
+
 Previous summary:
 <PREVIOUS_SUMMARY>
 {previous_summary}
