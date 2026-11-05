@@ -117,7 +117,10 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
             {"role": "assistant", "structured_data": {"segments": [{"animations": ["Dance_02"]}]}},
         ]
         retained = controller._next_retained_action_requests(character, compressed)
-        self.assertEqual(retained, ["animation: Dance_01", "animation: Dance_02"])
+        self.assertEqual(
+            [record["text"] for record in retained],
+            ["animation: Dance_01", "animation: Dance_02"],
+        )
         character.variables[controller._ACTION_MEMORY_RETAINED_VAR] = retained
         context = controller._build_action_memory_context(character)
         self.assertIn("Dance_01", context)

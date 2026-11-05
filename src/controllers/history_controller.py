@@ -19,8 +19,8 @@ from managers.action_memory import (
     append_requested_actions,
     cap_requested_actions,
     render_requested_actions,
-    requested_actions_from_messages,
-    requested_actions_from_structured,
+    requested_action_records,
+    requested_action_records_from_messages,
 )
 from core.response_status import response_status_kind
 from core.services import services, use
@@ -279,7 +279,24 @@ class HistoryController(HistoryService):
             parsed = []
         if not isinstance(parsed, list):
             return []
-        return [str(item).strip() for item in parsed if str(item).strip()]
+        records: list[dict] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                ref = str(item.get("ref") or "").strip()
+            else:
+                text = str(item).strip()
+                ref = ""
+            if text:
+                records.append({"text": text, "ref": ref})
+        return records
+
+    @staticmethod
+    def _receipt_lookup(character):
+        try:
+            return character.action_receipts.status_for
+        except Exception:
+            return None
 
     def _build_action_memory_context(
         self,
@@ -314,7 +331,7 @@ class HistoryController(HistoryService):
                 warned.add(char_id)
         else:
             warned.discard(char_id)
-        return render_requested_actions(records)
+        return render_requested_actions(records, self._receipt_lookup(character))
 
     def _next_retained_action_requests(
         self,
@@ -324,7 +341,7 @@ class HistoryController(HistoryService):
         if not self._action_memory_enabled():
             return None
         records = self._load_retained_action_requests(character)
-        records.extend(requested_actions_from_messages(messages_to_compress))
+        records.extend(requested_action_records_from_messages(messages_to_compress))
         return records[-self._action_memory_keep_last():]
 
     def _compression_enabled(self) -> bool:
@@ -2028,7 +2045,11 @@ class HistoryController(HistoryService):
             if role == "assistant" and self._action_memory_enabled():
                 content = append_requested_actions(
                     content,
-                    requested_actions_from_structured(m.get("structured_data")),
+                    requested_action_records(
+                        m.get("structured_data"),
+                        turn_uid=str(m.get("task_uid") or ""),
+                    ),
+                    self._receipt_lookup(character),
                 )
 
             speaker = str(m.get("speaker") or m.get("sender") or ("Player" if role == "user" else owner_id) or "Player")

@@ -231,6 +231,10 @@ class Character:
     def skills(self):
         return self._resources().loaded_skills_for(self.char_id, self.storage_name)
 
+    @property
+    def action_receipts(self):
+        return self._resources().action_receipts_for(self.char_id, self.storage_name)
+
     @state_operation(wait=True)
     def ensure_runtime_loaded(self) -> None:
         if self._runtime_loaded:
@@ -1251,6 +1255,10 @@ class Character:
             pass
         try:
             self.skills.clear()
+        except Exception:
+            pass
+        try:
+            self.action_receipts.clear()
         except Exception:
             pass
 
