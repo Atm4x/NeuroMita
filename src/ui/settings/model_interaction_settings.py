@@ -95,6 +95,16 @@ def setup_model_interaction_controls(
              'Mita can add, view and delete reminders via tool. '
              'Supports relative dates: "through 2 hours", "tomorrow at 18:00".')},
 
+        {'label': _('Скиллы по требованию', 'On-demand skills'), 'key': 'TOOL_ENABLED_load_skill',
+         'type': 'checkbutton', 'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+         'tooltip': _(
+             'Мита подгружает инструкции скилла (музыка, одежда, ТВ) только когда они нужны, '
+             'вместо того чтобы держать все скиллы в промпте каждый ход. '
+             'Скиллы берутся из папки Skills в наборе промптов персонажа.',
+             'Mita loads skill instructions (music, wardrobe, TV) only when the scene needs '
+             'them instead of keeping every skill in the prompt every turn. '
+             'Skills come from the Skills folder of the character prompt set.')},
+
         {'label': _('Макс. глубина цепочки тулов', 'Max tool chain depth'),
          'key': 'TOOL_MAX_DEPTH', 'type': 'entry',
          'default': 2, 'depends_on': 'TOOLS_ON',

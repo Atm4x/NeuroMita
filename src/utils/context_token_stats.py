@@ -24,6 +24,8 @@ _SECTION_MARKERS = (
     ("[WORKING STATE]", "working state"),
     ("[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]", "retained actions"),
     ("[REQUESTED ACTIONS THIS TURN]", "requested actions"),
+    ("[LOADED SKILLS]", "loaded skills"),
+    ("[SKILLS]", "skills catalog"),
     ("[Runtime Core Directive", "runtime directives"),
     ("[Core Memory", "core memories"),
     ("<memory_islands>", "memories"),
