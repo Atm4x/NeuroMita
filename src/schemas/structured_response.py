@@ -421,11 +421,14 @@ class StructuredResponse(BaseModel):
 
     reminder_add: Optional[List[str]] = Field(
         default=None,
-        description="Reminders to set. Format: 'YYYY-MM-DDTHH:MM:SS|reminder text'. Example: '2026-04-03T15:00:00|Remind player about the meeting'."
+        description="Reminders to set. A JSON array of strings; each item is "
+                    "'YYYY-MM-DDTHH:MM:SS|reminder text'. "
+                    "Example: ['2026-04-03T15:00:00|Remind player about the meeting']."
     )
     reminder_delete: Optional[List[str]] = Field(
         default=None,
-        description="Reminder IDs to delete. Format: 'N' (number). Example: '3'."
+        description="Reminder IDs to delete. A JSON array of strings; each item "
+                    "is a number. Example: ['3', '7']."
     )
     timer_add: Optional[List[str]] = Field(
         default=None,
