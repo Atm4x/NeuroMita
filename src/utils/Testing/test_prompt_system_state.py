@@ -11,6 +11,10 @@ if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from controllers.prompt_controller import PromptController
+from game_connections.handlers.actions.create_task import (
+    _build_game_state_payload,
+    _build_persistent_game_state,
+)
 from handlers.llm_providers.message_preprocessor import _convert_event_content_to_user
 from managers.game_state_manager import GameState
 from core.request_policy import RequestPolicy
@@ -464,6 +468,54 @@ class PromptSystemStateTests(unittest.TestCase):
         self.assertIsNone(PromptController._build_cognitive_effect_aftermath_message({
             "cognitive_effect_aftermath": [],
         }))
+
+    def test_unity_aftermath_reaches_final_prompt_but_not_fallback_state(self):
+        payload = _build_game_state_payload(
+            {
+                "distance": "1,5",
+                "cognitive_effect_aftermath": [{
+                    "prompt_text": (
+                        "[Recent Effect Aftermath]\n"
+                        "You felt unusually strong romantic attraction toward Sleepy.\n"
+                        "[/Recent Effect Aftermath]"
+                    ),
+                }],
+            },
+            character_id="Kind",
+            world_player="Player",
+            world_mita="Kind",
+        )
+        self.assertEqual(payload["distance"], 1.5)
+        self.assertIn("cognitive_effect_aftermath", payload)
+        self.assertNotIn(
+            "cognitive_effect_aftermath",
+            _build_persistent_game_state(payload, "Kind"),
+        )
+
+        class _Character:
+            char_id = "Kind"
+
+            def get_variable(self, _name, default=None):
+                return default
+
+        controller = PromptController()
+        controller._build_system_messages = lambda *_args, **_kwargs: ([], [], [])
+        controller._build_system_state_message = lambda *_args, **_kwargs: {
+            "role": "system",
+            "content": "[system state]",
+        }
+        result = controller.build(PromptBuildRequest(
+            character=_Character(),
+            event_type="chat",
+            policy=RequestPolicy(use_history_in_prompt=False),
+            game_state=payload,
+        ))
+        message = next(
+            item for item in result.messages
+            if "[Recent Effect Aftermath]" in str(item.get("content"))
+        )
+        self.assertEqual(message["role"], "system")
+        self.assertIn("romantic attraction toward Sleepy", message["content"])
 
     def test_cognitive_effect_changes_are_history_events(self):
         class _Character:

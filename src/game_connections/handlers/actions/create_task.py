@@ -139,6 +139,54 @@ def _build_react_prompt(
     return lines, reason_text, duration, []
 
 
+_TRANSIENT_GAME_STATE_KEYS = (
+    "runtime_events",
+    "tv_observation",
+    "cognitive_effects",
+    "cognitive_effect_changes",
+    "cognitive_effect_aftermath",
+)
+
+
+def _build_game_state_payload(
+    context: Dict[str, Any],
+    *,
+    character_id: str,
+    world_player: str,
+    world_mita: str,
+) -> Dict[str, Any]:
+    return {
+        "distance": float(str(context.get("distance", "0")).replace(",", ".")),
+        "roomPlayer": int(context.get("roomPlayer", 0)),
+        "roomMita": int(context.get("roomMita", 0)),
+        "nearObjects": context.get("hierarchy", ""),
+        "world_state": context.get("world_state", ""),
+        "worldPlayer": world_player,
+        "worldMita": world_mita,
+        "runtime_rules": context.get("runtime_rules", ""),
+        "runtime_static_catalog": context.get("runtime_static_catalog", ""),
+        "runtime_capabilities": context.get("runtime_capabilities", ""),
+        "intent_rules": context.get("intent_rules", ""),
+        "cognitive_effects": context.get("cognitive_effects", []),
+        "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
+        "cognitive_effect_aftermath": context.get("cognitive_effect_aftermath", []),
+        "runtime_events": context.get("runtime_events", []),
+        "tv_observation": context.get("tv_observation", {}),
+        "novel": context.get("novel", {}) if character_id == "TwoD" else {},
+    }
+
+
+def _build_persistent_game_state(
+    game_state_payload: Dict[str, Any],
+    character_id: str,
+) -> Dict[str, Any]:
+    persistent_game_state = dict(game_state_payload)
+    for key in _TRANSIENT_GAME_STATE_KEYS:
+        persistent_game_state.pop(key, None)
+    persistent_game_state["character_id"] = str(character_id or "")
+    return persistent_game_state
+
+
 async def _dispatch_task(
     *,
     server,
@@ -392,33 +440,16 @@ class CreateTaskAction:
             or ""
         ).strip()
 
-        game_state_payload = {
-            "distance": float(str(context.get("distance", "0")).replace(",", ".")),
-            "roomPlayer": int(context.get("roomPlayer", 0)),
-            "roomMita": int(context.get("roomMita", 0)),
-            "nearObjects": context.get("hierarchy", ""),
-            "world_state": context.get("world_state", ""),
-            "worldPlayer": world_player,
-            "worldMita": world_mita,
-            "runtime_rules": context.get("runtime_rules", ""),
-            "runtime_static_catalog": context.get("runtime_static_catalog", ""),
-            "runtime_capabilities": context.get("runtime_capabilities", ""),
-            "intent_rules": context.get("intent_rules", ""),
-            "cognitive_effects": context.get("cognitive_effects", []),
-            "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
-            "runtime_events": context.get("runtime_events", []),
-            "tv_observation": context.get("tv_observation", {}),
-            "novel": context.get("novel", {}) if character_id == "TwoD" else {},
-        }
+        game_state_payload = _build_game_state_payload(
+            context,
+            character_id=character_id,
+            world_player=world_player,
+            world_mita=world_mita,
+        )
         if not desktop_turn:
             # Runtime events are consumable by this exact turn and must never leak
             # into the persistent fallback state used by non-Unity requests.
-            persistent_game_state = dict(game_state_payload)
-            persistent_game_state.pop("runtime_events", None)
-            persistent_game_state.pop("tv_observation", None)
-            persistent_game_state.pop("cognitive_effects", None)
-            persistent_game_state.pop("cognitive_effect_changes", None)
-            persistent_game_state["character_id"] = str(character_id or "")
+            persistent_game_state = _build_persistent_game_state(game_state_payload, character_id)
             if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
                 target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
                 if target_changed:
