@@ -6,7 +6,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from main_logger import logger
 from core.message_content import MessageContentCodec
-from handlers.llm_providers.errors import build_provider_error, build_stream_error, coerce_provider_error
+from handlers.llm_providers.errors import (
+    LLMProviderError,
+    build_provider_error,
+    build_stream_error,
+    coerce_provider_error,
+)
 from handlers.llm_providers.param_mapper import filter_jsonable_params
 from schemas.structured_response import StructuredResponse
 
@@ -435,6 +440,29 @@ class GeminiProvider(BaseProvider):
                     if t:
                         text_parts_list.append(t)
 
+            function_calls = [part for part in parts if isinstance(part, dict) and part.get("functionCall")]
+            if not text_parts_list and not function_calls:
+                candidate = (response_data.get("candidates") or [{}])[0]
+                finish_reason = candidate.get("finishReason")
+                block_reason = (response_data.get("promptFeedback") or {}).get("blockReason")
+                logger.warning(
+                    "[GeminiProvider] Empty completion: finishReason=%s blockReason=%s thoughtParts=%d",
+                    finish_reason, block_reason, len(think_texts),
+                )
+                response.close()
+                raise LLMProviderError(
+                    provider=self.name,
+                    friendly_message="Модель вернула пустой ответ. Попробуйте ещё раз или смените модель.",
+                    status_code=200,
+                    provider_message=(
+                        f"Empty completion (finishReason={finish_reason}, blockReason={block_reason})"
+                    ),
+                    raw_payload=response_data if isinstance(response_data, dict) else {},
+                    retryable=True,
+                    code="empty_completion",
+                    url=req.api_url,
+                )
+
             response_text = "".join(text_parts_list) or "..."
 
             result = LLMResponse(
@@ -448,6 +476,12 @@ class GeminiProvider(BaseProvider):
             )
             response.close()
             return result
+        except LLMProviderError:
+            try:
+                response.close()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             provider_error = build_provider_error(
                 self.name,
