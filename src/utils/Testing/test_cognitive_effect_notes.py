@@ -105,6 +105,23 @@ def test_intensity_change_shows_previous_and_current_strength() -> None:
     assert "0.40 → 0.80" in notice["content"]
 
 
+def test_identical_rendered_changes_are_grouped_with_count() -> None:
+    notice = build_cognitive_effect_notice("Kind", [
+        _change(change_id="ended-1", instance_id="instance-1", id="anger",
+                effect_name="Anger", kind="effect_ended", awareness="unaware", sequence=1),
+        _change(change_id="ended-2", instance_id="instance-2", id="fear",
+                effect_name="Fear", kind="effect_ended", awareness="unaware", sequence=2),
+        _change(change_id="ended-3", instance_id="instance-3", id="joy",
+                effect_name="Joy", kind="effect_ended", awareness="unaware", sequence=3),
+    ])
+
+    assert notice is not None
+    bullets = [line for line in notice["content"].splitlines() if line.startswith("- ")]
+    assert bullets == [
+        "- Необычное изменение проходит, и твои реакции постепенно возвращаются к прежним. (×3)"
+    ]
+
+
 def test_other_participant_awareness_notice_uses_third_person() -> None:
     notice = build_cognitive_effect_notice("Crazy", [
         _change(kind="effect_awareness_changed", awareness="investigating"),

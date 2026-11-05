@@ -104,6 +104,8 @@ def build_cognitive_effect_notice(
         reaction_owner = "её реакции"
 
     lines = [heading]
+    rendered_changes: list[tuple[str, int]] = []
+    rendered_indexes: dict[str, int] = {}
     for item in normalized:
         effect_name = str(item.get("effect_name") or item.get("id") or "эффект").strip()
         kind = str(item.get("kind") or "").strip()
@@ -117,7 +119,15 @@ def build_cognitive_effect_notice(
             is_mutual_other=is_mutual_other,
         )
         if text:
-            lines.append("- " + text)
+            if text in rendered_indexes:
+                index = rendered_indexes[text]
+                rendered_changes[index] = (text, rendered_changes[index][1] + 1)
+            else:
+                rendered_indexes[text] = len(rendered_changes)
+                rendered_changes.append((text, 1))
+
+    for text, count in rendered_changes:
+        lines.append("- " + text + (f" (×{count})" if count > 1 else ""))
 
     if len(lines) == 1:
         return None
