@@ -70,6 +70,16 @@ class UnityRuntimeSectionTests(unittest.TestCase):
             "Active Cognitive Effects",
         )
 
+    def test_cognitive_effect_history_event_keeps_its_section(self):
+        changes = {
+            "role": "event",
+            "content": "[Cognitive Effect]\n- Literalism ended.",
+        }
+        self.assertEqual(
+            _classify_message_section(changes, is_last_user=False, seen_dialogue=True),
+            "Cognitive Effect",
+        )
+
     def test_real_dialogue_still_history_and_input(self):
         self.assertEqual(_classify_message_section({"role": "user", "content": "hi"}, is_last_user=False), "history")
         self.assertEqual(_classify_message_section({"role": "user", "content": "hi"}, is_last_user=True), "user input")

@@ -31,9 +31,14 @@ def message_projection(known: KnownEvent, character_id: str) -> dict | None:
         return None
     payload = event.payload.to_dict()
     message = dict(payload.get("message") or {})
+    session_note_role = (
+        "event"
+        if str(message.get("notice_type") or "") == "cognitive_effect"
+        else "system"
+    )
     message.update({
         "message_id": payload.get("message_id") or event.event_id,
-        "role": ("system" if event.kind is EventKind.SESSION_NOTE else
+        "role": (session_note_role if event.kind is EventKind.SESSION_NOTE else
                  "user" if event.kind is EventKind.CHARACTER_OBSERVATION else
                  "assistant" if event.actor_id == character_id else "user"),
         "speaker": event.actor_id, "sender": event.actor_id,

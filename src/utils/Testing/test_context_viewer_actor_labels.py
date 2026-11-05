@@ -62,3 +62,10 @@ def test_active_cognitive_effects_join_the_active_context_group() -> None:
     viewer._est_by_index = {0: {"section": "Active Cognitive Effects"}}
 
     assert viewer._group_key(0) == "context"
+
+
+def test_cognitive_effect_history_event_joins_the_history_group() -> None:
+    viewer = _viewer()
+    viewer._est_by_index = {0: {"section": "Cognitive Effect"}}
+
+    assert viewer._group_key(0) == "history"

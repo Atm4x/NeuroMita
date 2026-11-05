@@ -81,6 +81,45 @@ def test_write_turn_can_mark_only_rejected_assistant_output_as_deleted() -> None
     assert assistant_event["_history_is_deleted"] is True
 
 
+def test_write_turn_persists_cognitive_effect_as_history_event() -> None:
+    character = _Character("Kind")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Kind" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Kind",
+        sender="Player",
+        participants=["Player", "Kind"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-cognitive",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-cognitive",
+        cognitive_effect_changes=[{
+            "change_id": "change-1",
+            "sequence": 1,
+            "instance_id": "instance-1",
+            "id": "literalism",
+            "effect_name": "Literalism",
+            "kind": "effect_ended",
+            "subject_character_id": "Kind",
+            "subject_label": "Kind",
+            "notice_template": "Ты чувствуешь, что внутри всё стало прежним.",
+        }],
+    )
+
+    notice, user_event, assistant_event = character.batches[0]
+    assert notice["role"] == "event"
+    assert notice["notice_type"] == "cognitive_effect"
+    assert "всё стало прежним" in notice["content"]
+    assert user_event["role"] == "user"
+    assert assistant_event["role"] == "assistant"
+
+
 def test_write_turn_separates_source_and_responder_actor_metadata() -> None:
     character = _Character("Mita")
     writer = ConversationEventWriter(

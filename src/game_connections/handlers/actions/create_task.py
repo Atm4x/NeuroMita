@@ -405,6 +405,7 @@ class CreateTaskAction:
             "runtime_capabilities": context.get("runtime_capabilities", ""),
             "intent_rules": context.get("intent_rules", ""),
             "cognitive_effects": context.get("cognitive_effects", []),
+            "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
             "runtime_events": context.get("runtime_events", []),
             "tv_observation": context.get("tv_observation", {}),
             "novel": context.get("novel", {}) if character_id == "TwoD" else {},
@@ -416,6 +417,7 @@ class CreateTaskAction:
             persistent_game_state.pop("runtime_events", None)
             persistent_game_state.pop("tv_observation", None)
             persistent_game_state.pop("cognitive_effects", None)
+            persistent_game_state.pop("cognitive_effect_changes", None)
             persistent_game_state["character_id"] = str(character_id or "")
             if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
                 target_changed = use(GameLinkService).set_unity_target_character_id(character_id)

@@ -12,6 +12,7 @@ from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
 from services.conversation_timeline import ConversationTimeline
+from utils.cognitive_effect_notes import build_cognitive_effect_notice
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +227,7 @@ class ConversationEventWriter:
         user_event: dict | None,
         assistant_event: dict,
         participants: list[str],
+        notices: dict[str, dict] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Persist both sides of the completed turn in one batch per recipient."""
         committed: list[str] = []
@@ -240,6 +242,9 @@ class ConversationEventWriter:
                 continue
 
             local_messages: list[dict] = []
+            notice = (notices or {}).get(pid)
+            if isinstance(notice, dict):
+                local_messages.append(dict(notice))
             for event_msg in (user_event, assistant_event):
                 if not isinstance(event_msg, dict):
                     continue
@@ -248,7 +253,8 @@ class ConversationEventWriter:
                     continue
                 local = dict(event_msg)
                 speaker = str(local.get("speaker") or "")
-                local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
+                if local.get("role") not in {"system", "event"}:
+                    local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
                 local.setdefault("sender", speaker)
                 local_messages.append(local)
 
@@ -435,6 +441,7 @@ class ConversationEventWriter:
         sample_id: str | None = None,
         context_snapshot_id: str | None = None,
         assistant_is_deleted: bool = False,
+        cognitive_effect_changes: list[dict] | None = None,
         dialogue: Any = None,
     ) -> ConversationWriteResult:
         resolved_speaker = self._identity_resolver.resolve(sender, dialogue)
@@ -456,6 +463,10 @@ class ConversationEventWriter:
             pts,
             dialogue=dialogue,
             responder_character_id=responder_character_id,
+        )
+        notices = self._build_cognitive_effect_notices(
+            history_recipients,
+            [] if assistant_is_deleted else cognitive_effect_changes,
         )
 
         turn_id = ConversationMessageIds.turn(task_uid or req_id)
@@ -513,6 +524,13 @@ class ConversationEventWriter:
             assistant_event.update(assistant_metadata)
 
         if self.timeline is not None:
+            for recipient_id, notice in notices.items():
+                self.timeline.record_message(
+                    notice,
+                    (recipient_id,),
+                    actor_id="World",
+                    note=True,
+                )
             _incoming, outgoing = self.timeline.complete_turn(
                 user_event, assistant_event, history_recipients,
                 player=resolved_speaker.kind is DialogueActorKind.PLAYER,
@@ -532,10 +550,36 @@ class ConversationEventWriter:
                 user_event["timeline_event_id"] = incoming.event_id
             if outgoing is not None:
                 assistant_event["timeline_event_id"] = outgoing.event_id
-        committed, failed = self._fanout_turn(user_event, assistant_event, history_recipients)
+        committed, failed = self._fanout_turn(
+            user_event,
+            assistant_event,
+            history_recipients,
+            notices=notices,
+        )
         return ConversationWriteResult(
             user_message_id=str((user_event or {}).get("message_id") or ""),
             assistant_message_id=str(assistant_event.get("message_id") or ""),
             committed_recipient_ids=committed,
             failed_recipient_ids=failed,
         )
+
+    def _build_cognitive_effect_notices(
+        self,
+        recipients: list[str],
+        changes: list[dict] | None,
+    ) -> dict[str, dict]:
+        if not changes:
+            return {}
+        notices: dict[str, dict] = {}
+        for recipient_id in recipients:
+            character = self._get_character_ref(recipient_id)
+            if character is None:
+                continue
+            notice = build_cognitive_effect_notice(recipient_id, changes)
+            if notice is None:
+                continue
+            history = getattr(character, "history_manager", None)
+            if history is not None and history.contains_message_id(notice["message_id"]):
+                continue
+            notices[recipient_id] = notice
+        return notices

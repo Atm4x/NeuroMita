@@ -776,6 +776,7 @@ class PromptBuildResult:
     history_messages: List[Dict[str, Any]]
     user_message: Optional[Dict[str, Any]]
     support_intents: bool = True
+    cognitive_effect_changes: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class PromptBuilderService(ABC):

@@ -1805,6 +1805,9 @@ class ModelController(GenerationService, ModelStateService):
         profile = effective_capabilities["structured_response_profile"].with_prompt_intents(
             bool(prompt_data.support_intents)
         )
+        cognitive_effect_changes = list(
+            getattr(prompt_data, "cognitive_effect_changes", ()) or ()
+        )
         effective_capabilities["structured_response_profile"] = profile
         effective_capabilities["schema_intents"] = profile.prompt_intents
         effective_capabilities["structured_prompt_features"] = profile.prompt_features()
@@ -2031,6 +2034,7 @@ class ModelController(GenerationService, ModelStateService):
                         llm_usage=usage_snapshot,
                         sample_id=sample_id,
                         context_snapshot_id=context_snapshot_id,
+                        cognitive_effect_changes=cognitive_effect_changes,
                         dialogue=request.dialogue,
                     )
                     assistant_message_id = history_write.assistant_message_id
@@ -2536,6 +2540,7 @@ class ModelController(GenerationService, ModelStateService):
                     llm_usage=usage_snapshot,
                     sample_id=sample_id,
                     context_snapshot_id=context_snapshot_id,
+                    cognitive_effect_changes=cognitive_effect_changes,
                     dialogue=dialogue,
                 )
                 assistant_message_id = history_write.assistant_message_id
@@ -2698,6 +2703,7 @@ class ModelController(GenerationService, ModelStateService):
                 llm_usage=usage_snapshot,
                 sample_id=sample_id,
                 context_snapshot_id=context_snapshot_id,
+                cognitive_effect_changes=cognitive_effect_changes,
                 dialogue=dialogue,
             )
             first_assistant_message_id = history_write.assistant_message_id

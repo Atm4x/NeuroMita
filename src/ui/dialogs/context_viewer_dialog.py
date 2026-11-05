@@ -184,6 +184,7 @@ _SECTION_TO_GROUP = {
     "group conversation": "context",
     "game master directive": "context",
     "Active Cognitive Effects": "context",
+    "Cognitive Effect": "history",
     "System State": "context",
     "reminders": "context",
     "core memories": "context",

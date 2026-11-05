@@ -311,6 +311,13 @@ class PromptSystemStateTests(unittest.TestCase):
                     "intensity_guidance": "Dominant for this turn.",
                     "behavior": "Interpret figurative expressions literally.",
                 }],
+                "cognitive_effect_changes": [{
+                    "id": "literalism",
+                    "effect_name": "Literalism",
+                    "kind": "effect_started",
+                    "subject_character_id": "Test",
+                    "subject_label": "Test",
+                }],
                 "world_state": "Player is in the kitchen.",
                 "character_world_context": "The character knows this is her home.",
                 "runtime_events": ["Player stood up."],
@@ -327,6 +334,7 @@ class PromptSystemStateTests(unittest.TestCase):
         i_mem = contents.index("[active memory]")
         i_caps = idx("[Unity Runtime Capabilities]")
         i_effects = idx("[Active Cognitive Effects]")
+        i_effect_changes = idx("[Cognitive Effect]")
         i_world = idx("[NeuroMita World State]")
         i_character_world = idx("[Character World Context]")
         i_events = idx("[Unity Runtime Events]")
@@ -344,6 +352,8 @@ class PromptSystemStateTests(unittest.TestCase):
             self.assertLess(i_dyn, i_cur)
         self.assertLess(i_caps, i_world)
         self.assertLess(i_world, i_effects)
+        self.assertLess(i_effect_changes, i_mem)
+        self.assertEqual(result.messages[i_effect_changes]["role"], "event")
         self.assertLess(i_world, i_character_world)
         self.assertLess(i_character_world, i_events)
         self.assertLess(i_cur, i_sys)
@@ -415,6 +425,39 @@ class PromptSystemStateTests(unittest.TestCase):
             "cognitive_effects": [],
         }))
 
+    def test_cognitive_effect_changes_are_history_events(self):
+        class _Character:
+            char_id = "Kind"
+
+            def get_variable(self, _name, default=None):
+                return default
+
+        controller = PromptController()
+        controller._build_system_messages = lambda *_args, **_kwargs: ([], [], [])
+        controller._build_system_state_message = lambda *_args, **_kwargs: {
+            "role": "system",
+            "content": "[system state]",
+        }
+        result = controller.build(PromptBuildRequest(
+            character=_Character(),
+            event_type="chat",
+            policy=RequestPolicy(use_history_in_prompt=False),
+            game_state={
+                "cognitive_effect_changes": [{
+                    "id": "literalism",
+                    "effect_name": "Literalism",
+                    "kind": "effect_intensity_changed",
+                    "intensity": 0.8,
+                    "subject_character_id": "Kind",
+                    "subject_label": "Kind",
+                }],
+            },
+        ))
+        message = next(m for m in result.messages if "[Cognitive Effect]" in str(m.get("content")))
+        self.assertEqual(message["role"], "event")
+        self.assertIn("0.80", message["content"])
+        self.assertNotIn("Recent Cognitive Effect Changes", str(result.messages))
+
     def test_empty_unity_world_state_is_ignored(self):
         self.assertIsNone(PromptController._build_unity_world_state_message({"world_state": "  "}))
         self.assertIsNone(PromptController._build_unity_world_state_message({"world_state": None}))
@@ -481,7 +524,7 @@ class PromptSystemStateTests(unittest.TestCase):
         self.assertEqual(prompt_state["world_state"], "Player is standing.")
         self.assertNotIn("runtime_events", prompt_state)
 
-    def test_cognitive_effects_are_transient_in_global_game_state(self):
+    def test_cognitive_effects_and_changes_are_transient_in_global_game_state(self):
         state = GameState()
         state.update_from_event_data({
             "cognitive_effects": [{
@@ -491,6 +534,14 @@ class PromptSystemStateTests(unittest.TestCase):
             }],
         })
         self.assertEqual(state.to_prompt_dict()["cognitive_effects"][0]["id"], "literalism")
+        state.update_from_event_data({
+            "cognitive_effect_changes": [{
+                "id": "literalism",
+                "kind": "effect_ended",
+                "message": "Literalism ended.",
+            }],
+        })
+        self.assertNotIn("cognitive_effect_changes", state.to_prompt_dict())
 
         state.update_from_event_data({"world_state": "Next turn without effects."})
         self.assertEqual(state.to_prompt_dict()["cognitive_effects"], [])

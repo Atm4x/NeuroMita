@@ -32,6 +32,10 @@ from services.structured_response_capabilities import StructuredResponseCapabili
 from domain.world_character_relations import get_world_character_context
 from managers.mini_game_session_registry import mini_game_sessions
 from services.conversation_timeline import ConversationTimeline
+from utils.cognitive_effect_notes import (
+    build_cognitive_effect_notice,
+    normalize_cognitive_effect_changes,
+)
 
 _TYPE_MAP = {"float": "number", "double": "number", "int": "integer",
              "bool": "boolean", "str": "string", "string": "string"}
@@ -664,6 +668,7 @@ class PromptController(PromptBuilderService):
         "Unity Intent Contract",
         "Unity Runtime Events",
         "Active Cognitive Effects",
+        "Cognitive Effect",
         "SYSTEM",
         "SYSTEM INFO",
         "GAME_MASTER",
@@ -743,6 +748,8 @@ class PromptController(PromptBuilderService):
                 sections.extend(["Intensity guidance:", cls._neutralize_world_state_tags(guidance)])
             if behavior:
                 sections.extend(["Behavioral instructions:", cls._neutralize_world_state_tags(behavior)])
+            if item.get("indefinite"):
+                sections.append("Duration: until removed")
             examples = item.get("examples")
             if isinstance(examples, list) and examples:
                 sections.extend(["Examples (illustrations only; do not quote verbatim):"])
@@ -1060,6 +1067,10 @@ class PromptController(PromptBuilderService):
 
         messages: List[Dict[str, Any]] = []
         prepared = None
+        cognitive_effect_changes = normalize_cognitive_effect_changes(
+            game_state.get("cognitive_effect_changes")
+        )
+        cognitive_effect_note = build_cognitive_effect_notice(char_id, cognitive_effect_changes)
 
         history_limited: List[Dict[str, Any]] = []
         history_summary: str = ""
@@ -1198,6 +1209,14 @@ class PromptController(PromptBuilderService):
             messages.append({"role": "assistant", "content": action_context})
 
         messages.extend(history_limited)
+        if cognitive_effect_note is not None:
+            existing_ids = {
+                str(message.get("message_id") or "")
+                for message in history_limited
+                if isinstance(message, dict)
+            }
+            if cognitive_effect_note["message_id"] not in existing_ids:
+                messages.append(cognitive_effect_note)
 
         # These blocks are model-produced data, never system instructions. Put
         # them after the stable summary/history prefix so their frequent updates
@@ -1415,6 +1434,7 @@ class PromptController(PromptBuilderService):
             history_messages=history_limited,
             user_message=user_message_for_history,
             support_intents=support_intents,
+            cognitive_effect_changes=cognitive_effect_changes,
         )
 
 
