@@ -149,7 +149,16 @@ def lift_tool_intent(structured: StructuredResponse, enabled_tools) -> str:
         for intent in intents:
             name = str(getattr(intent, "type", "") or "").strip()
             required = BRIDGEABLE_TOOL_INTENTS.get(name)
-            if required is None or name not in names:
+            if required is None:
+                if name in names:
+                    logger.warning(
+                        "[ToolIntentBridge] Tool %r was sent as a Unity intent; "
+                        "only %s can be bridged.",
+                        name, sorted(BRIDGEABLE_TOOL_INTENTS),
+                    )
+                kept.append(intent)
+                continue
+            if name not in names:
                 kept.append(intent)
                 continue
             changed = True

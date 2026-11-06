@@ -192,9 +192,11 @@ class SkillCatalog:
             return ""
         lines = [
             "[SKILLS]",
-            "Skills you can load on demand with load_skill(id). Load one only when the "
-            "current scene needs it; loading returns the full instructions for this and "
-            "the next turns.",
+            "Skills you can load on demand. To read one, call the load_skill tool "
+            "through the top-level tool_call field next to segments, passing the "
+            "skill id as its argument; [Available Tools] shows the exact shape. "
+            "Load one only when the current scene needs it; loading returns the "
+            "full instructions for this and the next turns.",
         ]
         budget = max(200, int(max_chars or DEFAULT_CATALOG_BLOCK_CHARS))
         for entry in entries:
