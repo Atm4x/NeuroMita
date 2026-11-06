@@ -68,6 +68,21 @@ class PromptController(PromptBuilderService):
     def _get_setting(self, key: str, default=None):
         return use(SettingsService).get(key, default)
 
+    def _resolve_environment_mode(self) -> str:
+        """How much of [Character Environment] this prompt carries.
+
+        Reads the setting when a SettingsService is registered. Prompt-build
+        tests build a controller without one; the environment provider is
+        absent there too, so the full default never reaches a request.
+        """
+        settings = services().get_optional(SettingsService)
+        if settings is None:
+            return "full"
+        try:
+            return str(settings.get("CHARACTER_ENVIRONMENT_MODE", "full") or "full")
+        except Exception:
+            return "full"
+
     # Human-readable groupings of unity-only effect fields, used to tell the
     # model which in-world effects are unavailable when the game is not linked.
     _EFFECT_FIELD_LABELS = {
@@ -269,24 +284,30 @@ class PromptController(PromptBuilderService):
     def _build_character_environment_message(
         player_message_source: PlayerMessageSource | str | None = None,
         runtime: RuntimeCapabilities | None = None,
+        mode: object = "full",
     ) -> Dict[str, str] | None:
         provider = services().get_optional(CharacterEnvironmentContextService)
         if provider is None:
             return None
         try:
             from services.character_environment_context import (
+                ENVIRONMENT_MODE_OFF,
                 format_character_environment_context,
+                normalize_environment_mode,
             )
 
+            if normalize_environment_mode(mode) == ENVIRONMENT_MODE_OFF:
+                return None
             capabilities = runtime or runtime_capabilities()
-            return {
-                "role": "system",
-                "content": format_character_environment_context(
-                    provider.snapshot(),
-                    player_message_source=player_message_source,
-                    unity_connected=capabilities.connected,
-                ),
-            }
+            content = format_character_environment_context(
+                provider.snapshot(),
+                player_message_source=player_message_source,
+                unity_connected=capabilities.connected,
+                mode=mode,
+            )
+            if not content.strip():
+                return None
+            return {"role": "system", "content": content}
         except Exception as exc:
             logger.debug("Character environment context is unavailable: %s", format_exception(exc))
             return None
@@ -1680,12 +1701,20 @@ class PromptController(PromptBuilderService):
         })
 
         source = parse_player_message_source(request.player_message_source)
+        environment_mode = self._resolve_environment_mode()
         if source is PlayerMessageSource.NONE:
             messages.append(self._build_system_state_message(runtime=request_runtime))
-            character_environment_message = self._build_character_environment_message(runtime=request_runtime)
+            character_environment_message = self._build_character_environment_message(
+                runtime=request_runtime,
+                mode=environment_mode,
+            )
         else:
             messages.append(self._build_system_state_message(source, runtime=request_runtime))
-            character_environment_message = self._build_character_environment_message(source, runtime=request_runtime)
+            character_environment_message = self._build_character_environment_message(
+                source,
+                runtime=request_runtime,
+                mode=environment_mode,
+            )
         if character_environment_message is not None:
             messages.append(character_environment_message)
         if dialogue_context_message is not None:

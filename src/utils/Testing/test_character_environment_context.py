@@ -15,6 +15,7 @@ if str(PROJECT_SRC) not in sys.path:
 from services.character_environment_context import (
     DefaultCharacterEnvironmentContextService,
     format_character_environment_context,
+    normalize_environment_mode,
     voice_model_description,
 )
 from services.contracts import CharacterEnvironmentSnapshot, PlayerMessageSource
@@ -235,6 +236,77 @@ class CharacterEnvironmentContextTests(unittest.TestCase):
             name, impression = voice_model_description(model_id)
             self.assertTrue(name, model_id)
             self.assertNotEqual("configured voice model", impression, model_id)
+
+    def test_off_mode_sends_nothing(self):
+        content = format_character_environment_context(
+            CharacterEnvironmentSnapshot(voice_enabled=True),
+            player_message_source=PlayerMessageSource.GAME,
+            unity_connected=True,
+            mode="off",
+        )
+
+        self.assertEqual("", content)
+
+    def test_brief_mode_keeps_the_facts_that_prevent_wrong_replies(self):
+        snapshot = CharacterEnvironmentSnapshot(
+            unity_installed=True,
+            python_update_available=True,
+            voice_enabled=True,
+            voice_method="Local",
+            voice_model_id="medium+low",
+            voice_model_name="Fish Speech+ + RVC",
+            voice_model_installed=True,
+            voice_model_initialized=True,
+            voice_pipeline_ready=True,
+        )
+        brief = format_character_environment_context(
+            snapshot,
+            player_message_source=PlayerMessageSource.APPLICATION,
+            unity_connected=True,
+            mode="brief",
+        )
+        full = format_character_environment_context(
+            snapshot,
+            player_message_source=PlayerMessageSource.APPLICATION,
+            unity_connected=True,
+        )
+
+        self.assertIn("The NeuroMita game is running and connected right now", brief)
+        self.assertIn("from inside the game", brief)
+        self.assertIn("do not invite them to launch it again", brief)
+        self.assertIn("NeuroMita, not MiSide", brief)
+        self.assertIn("no usable exit to the outside", brief)
+        self.assertIn("Your voice is working (Fish Speech+ + RVC)", brief)
+        self.assertNotIn("Edge-TTS + RVC is the weakest basic option", brief)
+        self.assertLess(len(brief), len(full) / 2)
+
+    def test_brief_mode_stays_quiet_when_the_game_is_absent(self):
+        content = format_character_environment_context(
+            CharacterEnvironmentSnapshot(unity_installed=False),
+            player_message_source=PlayerMessageSource.APPLICATION,
+            unity_connected=False,
+            mode="brief",
+        )
+
+        self.assertIn("The NeuroMita game is not currently connected", content)
+        self.assertIn("The Unity build is not installed", content)
+        self.assertNotIn("Unity installation action", content)
+
+    def test_unknown_mode_keeps_the_full_block(self):
+        # A corrupted setting must not silently hide the character's world.
+        self.assertEqual("full", normalize_environment_mode(""))
+        self.assertEqual("full", normalize_environment_mode("loud"))
+        self.assertEqual(
+            format_character_environment_context(
+                CharacterEnvironmentSnapshot(),
+                unity_connected=True,
+                mode="loud",
+            ),
+            format_character_environment_context(
+                CharacterEnvironmentSnapshot(),
+                unity_connected=True,
+            ),
+        )
 
 
 if __name__ == "__main__":

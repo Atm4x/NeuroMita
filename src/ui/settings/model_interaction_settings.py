@@ -252,6 +252,61 @@ def setup_model_interaction_controls(
         icon_name='fa5s.graduation-cap',
     )
 
+    # Окружение персонажа — служебные факты о мире и голосе, а не история.
+    # Блок идёт в каждый запрос, поэтому здесь же живёт его объём.
+    environment_config = [
+        {
+            'type': 'text',
+            'label': _(
+                'Окружение персонажа — фоновая осведомлённость Миты: подключена ли игра, '
+                'откуда пишет игрок, как называется общий мир и что с её голосом. '
+                'Это не память и не история диалога, а справочные факты, которые идут '
+                'в каждом запросе.',
+                'Character environment is Mita\'s background awareness: whether the game '
+                'is connected, where the Player is writing from, what the shared world is '
+                'called and what her voice is doing. It is not memory or chat history; '
+                'these reference facts are sent with every request.',
+            ),
+        },
+        {
+            'label': _('Объём окружения', 'Environment detail'),
+            'key': 'CHARACTER_ENVIRONMENT_MODE', 'type': 'combobox',
+            'options': [
+                (_('Полно', 'Full'), 'full'),
+                (_('Кратко', 'Brief'), 'brief'),
+                (_('Выключено', 'Off'), 'off'),
+            ],
+            'default': 'full',
+            'tooltip': _(
+                'Полно — все фоновые факты: связь с игрой, откуда пишет игрок, название '
+                'мира, доступность обновления и подробности о голосовой модели вместе со '
+                'сравнением моделей. Примерно 1500 символов в запросе.\n'
+                'Кратко — только то, что мешает ошибиться: где находится игрок, что мир '
+                'называется NeuroMita и из дома нет выхода, работает ли голос. Примерно '
+                'втрое короче.\n'
+                'Выключено — блок не отправляется совсем. Мита больше не знает заранее, '
+                'где игрок и что с её голосом, поэтому часть ответов может стать менее '
+                'точной.',
+                'Full — every background fact: game connection, where the Player writes '
+                'from, the world name, update availability, and voice details including the '
+                'model comparison. About 1500 characters per request.\n'
+                'Brief — only what prevents wrong statements: where the Player is, that '
+                'the world is NeuroMita and the house has no exit, and whether the voice '
+                'works. Roughly a third of the size.\n'
+                'Off — the block is not sent at all. Mita no longer knows in advance where '
+                'the Player is or what her voice is doing, so some answers may become less '
+                'accurate.',
+            ),
+        },
+    ]
+    create_settings_section(
+        self,
+        parent,
+        _("Окружение персонажа", "Character environment"),
+        environment_config,
+        icon_name='fa5s.globe',
+    )
+
     register_provider_options(
         self,
         ("REACT_PROVIDER_L2", "HC_PROVIDER", "GRAPH_PROVIDER"),
