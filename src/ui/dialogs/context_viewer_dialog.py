@@ -175,6 +175,10 @@ _SECTION_TO_GROUP = {
     "stage": "prompt",
     "tools": "prompt",               # каталог [Available Tools] — статика промпта
     "Unity contract": "prompt",      # статический контракт Unity в статике промпта
+    # [SKILLS] стоит перед историей вместе с остальной статикой промпта; без
+    # этой строки блок уходил в «Активный контекст» и поднимал группу выше
+    # истории, хотя по порядку сообщений она идёт раньше.
+    "skills catalog": "prompt",
     "history": "history",
     "working state protocol": "prompt",
     "working state": "context",

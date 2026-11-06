@@ -50,5 +50,21 @@ class StageSectionTests(unittest.TestCase):
         self.assertEqual(block, "stage")
 
 
+class SkillCatalogSectionTests(unittest.TestCase):
+    """[SKILLS] — статика промпта: она не должна поднимать «Активный контекст»."""
+
+    def test_skills_catalog_stays_with_the_prompt(self):
+        section = classify_message_section(
+            {"role": "system", "content": "[SKILLS]\nSkills you can load on demand: tv"},
+            is_last_user=False,
+            seen_dialogue=False,
+        )
+        self.assertEqual(section, "skills catalog")
+
+        viewer = _viewer([{"role": "system", "content": "[SKILLS]\ntv"}])
+        viewer._est_by_index = {0: {"tokens": 120, "images": 0, "section": section}}
+        self.assertEqual(viewer._group_key(0), "prompt")
+
+
 if __name__ == "__main__":
     unittest.main()
