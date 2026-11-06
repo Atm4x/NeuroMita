@@ -252,7 +252,7 @@ def persisted_native_tool_messages(structured_data):
     if not isinstance(function, dict) or not function.get('name'):
         return []
     historical_content = result['content']
-    if function['name'] == 'load_skill':
+    if function['name'] == 'load_skill' and '[skill:' in historical_content:
         # Tool replies must remain paired with their assistant tool calls, but
         # replaying the full skill body from old turns bypasses skill retention,
         # including scope changes that deliberately invalidate loaded skills.
