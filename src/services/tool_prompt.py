@@ -16,6 +16,15 @@ def _example_tool_args(tool: dict) -> dict:
     for pname in required:
         spec = props.get(pname) if isinstance(props.get(pname), dict) else {}
         ptype = str(spec.get("type") or "")
+        if ptype == "array":
+            items = spec.get("items") if isinstance(spec.get("items"), dict) else {}
+            values = list(items.get("enum") or ())
+            args[pname] = [values[0]] if values else [f"<{pname}>"]
+            continue
+        values = list(spec.get("enum") or ())
+        if values:
+            args[pname] = values[0]
+            continue
         args[pname] = _EXAMPLE_ARG_VALUES.get(ptype, f"<{pname}>")
     return args
 

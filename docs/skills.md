@@ -41,9 +41,10 @@ SkillCatalog.issues; the rest of the catalog keeps working.
 ## Prompt shape
 
 When load_skill is enabled, the prompt carries a compact [SKILLS] block with one
-line per skill. The bodies are not included. The model calls load_skill(id) when
-the current scene needs one; the tool returns the body and the next turn renders
-it in a [LOADED SKILLS] block.
+line per skill. The bodies are not included. The model calls load_skill with one
+or two ids when the current scene needs them; the tool returns the bodies and the
+next turn renders them in a [LOADED SKILLS] block. Two ids in one call cost a
+single tool request, which is why the argument is a list.
 
 Loaded skills are kept per character for the following turns, capped at two
 entries and 2000 estimated tokens. The least recently loaded skill is evicted
