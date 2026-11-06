@@ -163,6 +163,7 @@ _RE_HDR_ESC = re.compile(r"^\[([A-Za-z][A-Za-z0-9 _/\-]{1,48})\]$")
 # (память/состояние/мир игры) и текущий ввод игрока. Ключ → (иконка, цвет, (ru,en)).
 _COARSE_GROUPS = {
     "prompt":  ("fa6s.book-open", "#F0A868", ("Промпт", "Prompt")),
+    "skills":  ("fa6s.puzzle-piece", "#C084FC", ("Скиллы", "Skills")),
     "history": ("fa6s.clock-rotate-left", "#60A5FA", ("История", "History")),
     "context": ("fa6s.brain", "#34D399", ("Активный контекст", "Active context")),
     "input":   ("fa6s.comment", "#F4D35E", ("Ввод игрока", "Player input")),
@@ -179,6 +180,9 @@ _SECTION_TO_GROUP = {
     # этой строки блок уходил в «Активный контекст» и поднимал группу выше
     # истории, хотя по порядку сообщений она идёт раньше.
     "skills catalog": "prompt",
+    # Загруженное инструментом тело скилла — авторская инструкция, а не
+    # остаток системного промпта: отдельная группа со своей иконкой.
+    "loaded skills": "skills",
     "history": "history",
     "working state protocol": "prompt",
     "working state": "context",
