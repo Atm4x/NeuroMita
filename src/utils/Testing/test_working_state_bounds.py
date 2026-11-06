@@ -70,7 +70,7 @@ class WorkingStateManagerTests(unittest.TestCase):
 
     def test_empty_update_keeps_last_valid_state(self):
         manager = self._manager()
-        self.assertTrue(manager.update({"focus": "Keep me"}))
+        self.assertTrue(manager.update({"focus": "Keep me", "open_loops": ["Unfinished"]}))
 
         self.assertFalse(manager.update({}))
         self.assertFalse(manager.update({"unknown": "value"}))
@@ -78,13 +78,19 @@ class WorkingStateManagerTests(unittest.TestCase):
 
     def test_stale_epoch_update_is_dropped(self):
         manager = self._manager()
-        self.assertTrue(manager.update({"focus": "Before reset"}, epoch=1))
+        self.assertTrue(manager.update(
+            {"focus": "Before reset", "open_loops": ["Unfinished"]}, epoch=1
+        ))
 
         manager.clear(epoch=2)
 
-        self.assertFalse(manager.update({"focus": "Late reply"}, epoch=1))
+        self.assertFalse(manager.update(
+            {"focus": "Late reply", "open_loops": ["Unfinished"]}, epoch=1
+        ))
         self.assertEqual(manager.format_for_prompt(), "")
-        self.assertTrue(manager.update({"focus": "Current story"}, epoch=2))
+        self.assertTrue(manager.update(
+            {"focus": "Current story", "open_loops": ["Unfinished"]}, epoch=2
+        ))
         self.assertIn("Current story", manager.format_for_prompt())
 
     def test_render_marks_state_as_interpretation_not_fact(self):
@@ -102,7 +108,8 @@ class WorkingStateManagerTests(unittest.TestCase):
 
     def test_snapshot_round_trip_keeps_fields(self):
         manager = self._manager()
-        manager.update({"focus": "Snapshot", "situation": ["context"]})
+        manager.update({"focus": "Snapshot", "situation": ["context"],
+                        "open_loops": ["Unfinished"]})
         snapshot = manager.snapshot()
 
         manager.clear()
@@ -110,6 +117,34 @@ class WorkingStateManagerTests(unittest.TestCase):
 
         manager.restore_snapshot(snapshot)
         self.assertIn("Snapshot", manager.format_for_prompt())
+
+    def test_a_greeting_paraphrase_does_not_create_a_note(self):
+        manager = self._manager()
+
+        committed = manager.update({
+            "focus": "Greeting the player back",
+            "situation": ["The player just said hello."],
+            "next_steps": ["Ask how her day was"],
+        })
+
+        self.assertFalse(committed)
+        self.assertEqual(manager.format_for_prompt(), "")
+
+    def test_an_unfinished_task_is_still_kept(self):
+        manager = self._manager()
+
+        self.assertTrue(manager.update({
+            "focus": "Player asked for a haircut",
+            "open_loops": ["Choose a style from the wardrobe catalog"],
+        }))
+        self.assertIn("Choose a style", manager.format_for_prompt())
+
+    def test_an_existing_note_can_be_refined_without_a_loop(self):
+        manager = self._manager()
+        manager.update({"focus": "Start", "open_loops": ["Pick a track"]})
+
+        self.assertTrue(manager.update({"focus": "Picked a track, waiting"}))
+        self.assertIn("Picked a track, waiting", manager.format_for_prompt())
 
 
 class WorkingStateTransitionTests(unittest.TestCase):

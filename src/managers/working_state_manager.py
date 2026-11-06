@@ -6,16 +6,20 @@ chat clears it, and restarting the application starts a fresh session.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from copy import deepcopy
 from typing import Any
 
 from domain.working_state import (
     DEFAULT_MAX_CHARS,
+    has_open_obligation,
     normalize_working_state_update,
     render_normalized_prompt_block,
 )
 from managers.character_scoped_service import CharacterScopedService
+
+logger = logging.getLogger(__name__)
 
 
 class WorkingStateManager(CharacterScopedService):
@@ -59,6 +63,14 @@ class WorkingStateManager(CharacterScopedService):
 
             cleaned = normalize_working_state_update(value, max_chars=max_chars)
             if cleaned is None:
+                return False
+            if self._states.get(key) is None and not has_open_obligation(cleaned):
+                # A note that only paraphrases this exchange would be read back
+                # next turn as an agenda nobody agreed on. Keep the previous
+                # note (or none) and leave the decision visible in the log.
+                logger.debug(
+                    "Working state without an open loop was dropped: %s", cleaned
+                )
                 return False
             self._states[key] = cleaned
             return True

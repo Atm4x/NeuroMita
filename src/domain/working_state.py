@@ -121,6 +121,18 @@ def working_state_transition(structured: Any) -> tuple[bool, Any]:
     return True, getattr(structured, "working_state", None)
 
 
+def has_open_obligation(state: Mapping[str, Any] | None) -> bool:
+    """Whether a note names unfinished business rather than restating the scene.
+
+    A greeting, a single answered question and small talk need no handoff. The
+    model still writes those paraphrases when the field is available, so a note
+    is only created when at least one loop is left open.
+    """
+    if not isinstance(state, Mapping):
+        return False
+    return bool(state.get("open_loops"))
+
+
 def content_length(state: Mapping[str, Any]) -> int:
     total = len(str(state.get("focus") or ""))
     for name, _limit in _LIST_FIELDS:

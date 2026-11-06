@@ -1390,9 +1390,14 @@ class PromptController(PromptBuilderService):
                 "role": "system",
                 "content": (
                     "[WORKING STATE PROTOCOL]\n"
-                    "Use the working_state response field as a compact handoff to your next turn. "
+                    "The working_state response field is a compact handoff to your next turn, "
+                    "not a summary of the conversation. Use it only while a concrete task is "
+                    "still unfinished and will continue later: a greeting, small talk, a "
+                    "question you just answered, or simply standing in a room needs no note. "
+                    "When there is nothing unfinished, leave the field out. "
                     "Keep only the current focus (one short sentence), current understanding, "
                     "tentative assumptions, at most 3 open loops and at most 2 immediate next steps. "
+                    "A note without an open loop is discarded, so put the unfinished part there. "
                     "Use short phrases; the whole note must stay under 1000 characters. "
                     "Do not copy dialogue, long-term memories, or chain-of-thought. "
                     "When present, working_state is an object with focus, situation, assumptions, "
