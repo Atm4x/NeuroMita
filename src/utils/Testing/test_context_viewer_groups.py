@@ -50,5 +50,37 @@ class StageSectionTests(unittest.TestCase):
         self.assertEqual(block, "stage")
 
 
+class SkillCatalogSectionTests(unittest.TestCase):
+    """[SKILLS] — статика промпта: она не должна поднимать «Активный контекст»."""
+
+    def test_skills_catalog_stays_with_the_prompt(self):
+        section = classify_message_section(
+            {"role": "system", "content": "[SKILLS]\nSkills you can load on demand: tv"},
+            is_last_user=False,
+            seen_dialogue=False,
+        )
+        self.assertEqual(section, "skills catalog")
+
+        viewer = _viewer([{"role": "system", "content": "[SKILLS]\ntv"}])
+        viewer._est_by_index = {0: {"tokens": 120, "images": 0, "section": section}}
+        viewer._first_history_idx = 1
+        self.assertEqual(viewer._group_key(0), "prompt")
+
+    def test_unknown_section_before_history_is_prompt(self):
+        # Новый блок промпта без записи в таблице не должен поднимать
+        # «Активный контекст» выше истории.
+        viewer = _viewer([
+            {"role": "system", "content": "[Brand New Block]\ntext"},
+            {"role": "assistant", "content": "hi"},
+        ])
+        viewer._est_by_index = {
+            0: {"tokens": 40, "images": 0, "section": "brand new block"},
+            1: {"tokens": 10, "images": 0, "section": "history"},
+        }
+        viewer._first_history_idx = 1
+        self.assertEqual(viewer._group_key(0), "prompt")
+        self.assertEqual(viewer._group_key(1), "history")
+
+
 if __name__ == "__main__":
     unittest.main()
