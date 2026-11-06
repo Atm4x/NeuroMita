@@ -155,6 +155,63 @@ def _timeline_effect_scope(controller):
     return timeline.runtime.writing() if timeline is not None else nullcontext()
 
 
+def _emit_tool_turn_voiceover(
+    *,
+    event_bus,
+    settings,
+    text: str,
+    voice_profile,
+    char_id: str | None,
+    task_uid: str | None,
+    message_id: str,
+    trace_id: str | None,
+    policy,
+) -> None:
+    """Voice the spoken opener of a tool turn.
+
+    The opener is an ordinary character line: the player should hear
+    "let me look" before the tool runs. Skipping it was why a tool turn
+    sounded like silence followed by an answer that came from nowhere.
+    """
+    opener = str(text or "").strip()
+    if not opener or not settings.get("USE_VOICEOVER"):
+        return
+    if not bool(getattr(policy, "allow_voiceover", True)):
+        return
+    if isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False:
+        return
+    if isinstance(voice_profile, dict) and voice_profile.get("character_id") == "GameMaster":
+        if not bool(settings.get("GM_VOICE", False)):
+            return
+
+    speaker = voice_profile.get("silero_command", "") if isinstance(voice_profile, dict) else ""
+    if isinstance(voice_profile, dict) and settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
+        speaker = voice_profile.get("miku_tts_name", "Player")
+    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
+        "text": opener,
+        "speaker": speaker,
+        "task_uid": task_uid,
+        "character_id": char_id,
+        "voice_profile": voice_profile,
+        "message_id": message_id,
+        "trace_id": trace_id,
+    })
+
+
+def _tool_badge_text(tool_name: str, tool_args, tool_result: str) -> str:
+    """One short line shown between the two bubbles of a tool turn."""
+    failed = str(tool_result or "").strip().lower().startswith("[tool error")
+    if tool_name == "load_skill":
+        raw_ids = tool_args.get("ids") if isinstance(tool_args, dict) else None
+        if raw_ids is None and isinstance(tool_args, dict):
+            raw_ids = tool_args.get("id")
+        if isinstance(raw_ids, str):
+            raw_ids = [raw_ids]
+        names = ", ".join(str(item).strip() for item in (raw_ids or []) if str(item).strip())
+        return f"\U0001F9E9 Навык: {names or 'по запросу'}" + (" — ошибка" if failed else "")
+    return f"\U0001F527 Инструмент: {tool_name}" + (" — ошибка" if failed else "")
+
+
 class ModelController(GenerationService, ModelStateService):
     """
     ModelController:
@@ -2641,62 +2698,6 @@ class ModelController(GenerationService, ModelStateService):
     # Tool call handler (structured output tools)
     # ---------------------------------------------------------------------
 
-    def _emit_tool_turn_voiceover(
-        self,
-        *,
-        text: str,
-        voice_profile,
-        char_id: str | None,
-        task_uid: str | None,
-        message_id: str,
-        trace_id: str | None,
-        policy,
-    ) -> None:
-        """Voice the spoken opener of a tool turn.
-
-        The opener is an ordinary character line: the player should hear
-        "let me look" before the tool runs. Skipping it here was why a tool
-        turn sounded like silence followed by an answer that came from nowhere.
-        """
-        opener = str(text or "").strip()
-        if not opener or not self.settings.get("USE_VOICEOVER"):
-            return
-        if not bool(getattr(policy, "allow_voiceover", True)):
-            return
-        if isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False:
-            return
-        if isinstance(voice_profile, dict) and voice_profile.get("character_id") == "GameMaster":
-            if not bool(self.settings.get("GM_VOICE", False)):
-                return
-
-        speaker = voice_profile.get("silero_command", "") if isinstance(voice_profile, dict) else ""
-        if isinstance(voice_profile, dict) and self.settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
-            speaker = voice_profile.get("miku_tts_name", "Player")
-        self.event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
-            "text": opener,
-            "speaker": speaker,
-            "task_uid": task_uid,
-            "character_id": char_id,
-            "voice_profile": voice_profile,
-            "message_id": message_id,
-            "trace_id": trace_id,
-        })
-
-    @staticmethod
-    def _tool_badge_text(tool_name: str, tool_args, tool_result: str) -> str:
-        """One short line shown between the two bubbles of a tool turn."""
-        failed = str(tool_result or "").strip().lower().startswith("[tool error")
-        if tool_name == "load_skill":
-            raw_ids = tool_args.get("ids") if isinstance(tool_args, dict) else None
-            if raw_ids is None and isinstance(tool_args, dict):
-                raw_ids = tool_args.get("id")
-            if isinstance(raw_ids, str):
-                raw_ids = [raw_ids]
-            names = ", ".join(str(item).strip() for item in (raw_ids or []) if str(item).strip())
-            label = f"Навык: {names or 'по запросу'}"
-            return f"\U0001F9E9 {label}" + (" — ошибка" if failed else "")
-        return f"\U0001F527 Инструмент: {tool_name}" + (" — ошибка" if failed else "")
-
     def _handle_tool_call(
         self,
         structured,
@@ -2825,7 +2826,9 @@ class ModelController(GenerationService, ModelStateService):
             "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
 
-        self._emit_tool_turn_voiceover(
+        _emit_tool_turn_voiceover(
+            event_bus=self.event_bus,
+            settings=self.settings,
             text=first_text,
             voice_profile=voice_profile,
             char_id=char_id,
@@ -2866,7 +2869,7 @@ class ModelController(GenerationService, ModelStateService):
             "role": "event",
             "response": [
                 {"type": "meta", "speaker": "Инструмент"},
-                {"type": "text", "text": self._tool_badge_text(tool_name, tool_args, tool_result)},
+                {"type": "text", "text": _tool_badge_text(tool_name, tool_args, tool_result)},
             ],
             "is_initial": False,
             "emotion": "",
