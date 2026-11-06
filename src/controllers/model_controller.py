@@ -2890,8 +2890,15 @@ class ModelController(GenerationService, ModelStateService):
             "Do NOT call any tools again unless the question explicitly requires it. "
             "Respond in JSON format."
         )
-        _system_content = f"[Tool result: {tool_name}]\n{tool_result}{_instruction}"
-        _user_content   = f"[SYSTEM INFO] [Tool result: {tool_name}]\n{tool_result}{_instruction}"
+        if tool_name == "load_skill":
+            # A loaded skill is authored instruction, not a system-prompt
+            # appendix. Its own block keeps the model and the context viewer
+            # from mixing skills into the rest of the prompt.
+            _result_body = f"[LOADED SKILLS]\n{tool_result}\n[/LOADED SKILLS]"
+        else:
+            _result_body = f"[Tool result: {tool_name}]\n{tool_result}"
+        _system_content = f"{_result_body}{_instruction}"
+        _user_content = f"[SYSTEM INFO] {_result_body}{_instruction}"
 
         # Build messages for second call: append first response JSON + tool result
         combined_messages_v2 = list(combined_messages)
