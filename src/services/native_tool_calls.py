@@ -7,7 +7,7 @@ import json
 
 from handlers.llm_providers.base import ToolResult
 from handlers.llm_providers.protocols.history import normalize_history_message, normalize_tool_call_history
-from schemas.structured_response import StructuredResponse
+from schemas.structured_response import StructuredResponse, ToolCall
 from services.structured_response_capabilities import StructuredResponseCapabilities
 
 
@@ -117,6 +117,40 @@ def native_tool_followup_messages(call, result):
     if history:
         assistant['protocol_history'] = history
     return [assistant, {'role': 'tool', 'tool_call_id': output.id, 'content': output.content}]
+
+
+def lift_tool_intent(structured: StructuredResponse, enabled_tools) -> str:
+    """Move a tool the model named in intents onto the tool-call field.
+
+    A model that cannot emit tool_call sometimes asks through intents:
+    {"type": "load_skill", "payload": "wardrobe"}. Unity knows no such intent,
+    so the request would be dropped and the turn would end without the
+    follow-up request that reads the skill. Returns the tool name it lifted.
+    """
+    names = {str(name).strip() for name in (enabled_tools or ()) if str(name).strip()}
+    if not names:
+        return ""
+
+    lifted = ""
+    for segment in getattr(structured, "segments", None) or []:
+        intents = list(getattr(segment, "intents", None) or [])
+        kept = []
+        changed = False
+        for intent in intents:
+            name = str(getattr(intent, "type", "") or "").strip()
+            if name not in names:
+                kept.append(intent)
+                continue
+            changed = True
+            args = getattr(intent, "payload", None)
+            args = dict(args) if isinstance(args, dict) else {}
+            if lifted or (name == "load_skill" and not str(args.get("id") or "").strip()):
+                continue
+            lifted = name
+            structured.tool_call = ToolCall(name=name, args=args)
+        if changed:
+            segment.intents = kept
+    return lifted
 
 
 def _has_schema_tool_call(data):
