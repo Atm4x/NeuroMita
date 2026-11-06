@@ -71,6 +71,55 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         reopened = HistoryManager(storage_name="Test", character_id="char:test")
         self.assertEqual(reopened.with_presentation_metadata([message])[0]["thinking"], "thought")
 
+    def test_presentation_metadata_restores_request_provenance(self) -> None:
+        self.hm.rag = None
+        snapshot_id = "ctx_0123456789abcdef0123456789abcdef"
+        self.hm.add_messages([
+            {
+                "message_id": "out:1",
+                "role": "assistant",
+                "content": "answer",
+                "sample_id": "sample-1",
+                "context_snapshot_id": snapshot_id,
+            },
+        ])
+        timeline_only = [{"message_id": "out:1", "role": "assistant", "content": "answer"}]
+        enriched = self.hm.with_presentation_metadata(timeline_only)
+        self.assertEqual(enriched[0]["sample_id"], "sample-1")
+        self.assertEqual(enriched[0]["context_snapshot_id"], snapshot_id)
+
+        edited = self.hm.with_presentation_metadata([
+            {"message_id": "out:1", "role": "assistant", "content": "edited answer"},
+        ])
+        self.assertNotIn("context_snapshot_id", edited[0])
+
+    def test_block_content_preserves_provenance_across_cache_rebuild(self) -> None:
+        self.hm.rag = None
+        message = {
+            "message_id": "out:blocks",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+        }
+        metadata = {
+            "thinking": "thought",
+            "sample_id": "sample-blocks",
+            "context_snapshot_id": "ctx_0123456789abcdef0123456789abcdef",
+        }
+        self.hm.add_message(dict(message, **metadata))
+        enriched = self.hm.with_presentation_metadata([message])[0]
+        for key, value in metadata.items():
+            self.assertEqual(enriched[key], value)
+            self.assertNotIn(key, message)
+
+        edited = dict(message, content=[{"type": "text", "text": "edited"}])
+        for key in metadata:
+            self.assertNotIn(key, self.hm.with_presentation_metadata([edited])[0])
+        self.hm.replace_timeline_cache([message])
+        reopened = HistoryManager(storage_name="Test", character_id="char:test")
+        restored = reopened.with_presentation_metadata([message])[0]
+        for key, value in metadata.items():
+            self.assertEqual(restored[key], value)
+
     def test_timeline_export_retains_archived_facts_and_excludes_deleted_rows(self) -> None:
         self.hm.rag = None
         rows = self.hm.add_messages([

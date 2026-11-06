@@ -53,7 +53,10 @@ class HistoryController(HistoryService):
         "{current_character_name}. Preserve important events, decisions, "
         "relationships, names, promises, and unresolved topics. Do not invent "
         "facts. If a previous summary exists, merge it without duplicating "
-        "information.\n\nPrevious summary:\n{previous_summary}\n\n"
+        "information. Treat temporary cognitive effects as past subjective "
+        "experience rather than permanent facts, and do not keep a second "
+        "consciousness or altered identity present after it ended.\n\n"
+        "Previous summary:\n{previous_summary}\n\n"
         "Conversation:\n{history_messages}\n\nSummary:"
     )
 

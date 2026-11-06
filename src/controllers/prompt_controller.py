@@ -13,6 +13,7 @@ from main_logger import logger
 from services.contracts import (
     AppVarsService,
     CharacterEnvironmentContextService,
+    DesktopWatchService,
     HistoryService,
     PlayerMessageSource,
     PromptBuildRequest,
@@ -31,6 +32,11 @@ from services.structured_response_capabilities import StructuredResponseCapabili
 from domain.world_character_relations import get_world_character_context
 from managers.mini_game_session_registry import mini_game_sessions
 from services.conversation_timeline import ConversationTimeline
+from utils.cognitive_effect_notes import (
+    build_cognitive_effect_notice,
+    cognitive_effect_change_ids,
+    normalize_cognitive_effect_changes,
+)
 
 _TYPE_MAP = {"float": "number", "double": "number", "int": "integer",
              "bool": "boolean", "str": "string", "string": "string"}
@@ -662,6 +668,9 @@ class PromptController(PromptBuilderService):
         "Unity Runtime Capabilities",
         "Unity Intent Contract",
         "Unity Runtime Events",
+        "Active Cognitive Effects",
+        "Recent Effect Aftermath",
+        "Cognitive Effect",
         "SYSTEM",
         "SYSTEM INFO",
         "GAME_MASTER",
@@ -707,6 +716,55 @@ class PromptController(PromptBuilderService):
             "[/NeuroMita World State]"
         )
         return {"role": "event", "content": content}
+
+    @classmethod
+    def _build_active_cognitive_effects_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Wrap the prepared Unity cognitive rules for this exact dialogue turn."""
+        effects = game_state.get("cognitive_effects")
+        if not isinstance(effects, list):
+            return None
+        valid = [
+            item for item in effects
+            if isinstance(item, dict) and str(item.get("prompt_text") or "").strip()
+        ]
+        if not valid:
+            return None
+
+        opener = "[Active Cognitive Effects]"
+        closing = "[/Active Cognitive Effects]"
+        sections = []
+        for item in valid:
+            text = str(item["prompt_text"]).strip()
+            if text.startswith(opener) and text.endswith(closing):
+                text = text[len(opener):-len(closing)]
+            safe = cls._neutralize_world_state_tags(text).strip()
+            if safe:
+                sections.append(safe)
+        if not sections:
+            return None
+        return {"role": "system", "content": opener + "\n" + "\n\n".join(sections) + "\n" + closing}
+
+    @classmethod
+    def _build_cognitive_effect_aftermath_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Keep a just-finished effect available for reflection for a short time."""
+        aftermath = game_state.get("cognitive_effect_aftermath")
+        if not isinstance(aftermath, list):
+            return None
+        opener = "[Recent Effect Aftermath]"
+        closing = "[/Recent Effect Aftermath]"
+        sections = []
+        for item in aftermath:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("prompt_text") or "").strip()
+            if text.startswith(opener) and text.endswith(closing):
+                text = text[len(opener):-len(closing)]
+            safe = cls._neutralize_world_state_tags(text).strip()
+            if safe:
+                sections.append(safe)
+        if not sections:
+            return None
+        return {"role": "system", "content": opener + "\n" + "\n\n".join(sections) + "\n" + closing}
 
     @classmethod
     def _build_shared_world_info_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -929,6 +987,22 @@ class PromptController(PromptBuilderService):
                 "[/GAME_MASTER_TASK]"
             ),
         }
+    @staticmethod
+    def _desktop_context_for_character(character_id: str) -> str:
+        if character_id != "Kind":
+            return ""
+        registry = services()
+        settings = registry.get_optional(SettingsService)
+        if settings is None or settings.get("DESKTOP_MODE_ACTIVE", False) is not True:
+            return ""
+        watch = registry.get_optional(DesktopWatchService)
+        if watch is None or not watch.desktop_state():
+            return ""
+        from core.desktop_context import format_desktop_context
+        state = dict(watch.desktop_state())
+        state["watching_screen"] = watch.is_watching() is True
+        return format_desktop_context(state)
+
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
         cartridge = getattr(character, "cartridge_definition", None)
@@ -938,6 +1012,9 @@ class PromptController(PromptBuilderService):
         char_id = str(getattr(character, "char_id", "") or "")
         if not char_id:
             raise ValueError("build_prompt: character без char_id")
+
+        from services.mita_stages import get_mita_stage_service
+        get_mita_stage_service().prepare_prompt_context(character)
 
         event_type = request.event_type
         user_input = request.user_input or ""
@@ -954,7 +1031,8 @@ class PromptController(PromptBuilderService):
         image_cfg = request.image_quality or {}
         separate_prompts = bool(request.separate_prompts)
         extra_system_infos = request.extra_system_infos or []
-        game_state = request.game_state or {}
+        desktop_context = self._desktop_context_for_character(char_id)
+        game_state = {} if desktop_context else (request.game_state or {})
         character_profile = runtime_profile_for(character)
         capabilities = request.capabilities or {}
         profile = capabilities.get("structured_response_profile")
@@ -987,13 +1065,17 @@ class PromptController(PromptBuilderService):
 
         game_state_prompt_content: Optional[str] = None
         try:
-            if character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
+            if not desktop_context and character.get_variable("playingGame", False) and hasattr(character, "game_manager"):
                 game_state_prompt_content = character.game_manager.get_active_game_state_prompt()
         except Exception as e:
             logger.warning(f"[PromptController][{char_id}] Ошибка при формировании промпта игры: {format_exception(e)}", exc_info=True)
 
         messages: List[Dict[str, Any]] = []
         prepared = None
+        cognitive_effect_changes = normalize_cognitive_effect_changes(
+            game_state.get("cognitive_effect_changes")
+        )
+        cognitive_effect_note = None
 
         history_limited: List[Dict[str, Any]] = []
         history_summary: str = ""
@@ -1057,7 +1139,7 @@ class PromptController(PromptBuilderService):
         # ниже): снимок game_state персистентен и липко хранит последние
         # значения даже после отключения мода, иначе десктоп-чат без игры
         # показывал бы устаревший мир в противоречии с [System State].
-        if request_runtime.connected is False:
+        if desktop_context or request_runtime.connected is False:
             unity_static_messages: List[Dict[str, Any]] = []
             unity_dynamic_messages: List[Dict[str, Any]] = []
         elif character_profile.scene_context_key:
@@ -1084,6 +1166,8 @@ class PromptController(PromptBuilderService):
             unity_dynamic_messages = [m for m in (
                 self._build_unity_runtime_capabilities_message(game_state),
                 self._build_unity_world_state_message(game_state),
+                self._build_active_cognitive_effects_message(game_state),
+                self._build_cognitive_effect_aftermath_message(game_state),
                 self._build_shared_world_info_message(game_state),
                 self._build_character_world_context_message(game_state),
                 self._build_unity_runtime_events_message(game_state),
@@ -1119,7 +1203,9 @@ class PromptController(PromptBuilderService):
                     "open loops, and immediate next steps. Do not copy dialogue, long-term memories, "
                     "or chain-of-thought. When present, working_state must be an object with focus, "
                     "situation, assumptions, open_loops and next_steps. Current observations, game state "
-                    "and newer dialogue override it.\n"
+                    "and newer dialogue override it. When [Active Cognitive Effects] is present, treat it "
+                    "as current game state: if it conflicts with [WORKING STATE], the active effect wins "
+                    "for this turn and the working-state handoff must be revised to match it.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })
@@ -1131,6 +1217,24 @@ class PromptController(PromptBuilderService):
             messages.append({"role": "assistant", "content": action_context})
 
         messages.extend(history_limited)
+        seen_cognitive_change_ids = {
+            change_id
+            for message in history_limited
+            for change_id in cognitive_effect_change_ids(message)
+        }
+        cognitive_effect_note = build_cognitive_effect_notice(
+            char_id,
+            cognitive_effect_changes,
+            seen_change_ids=seen_cognitive_change_ids,
+        )
+        if cognitive_effect_note is not None:
+            existing_ids = {
+                str(message.get("message_id") or "")
+                for message in history_limited
+                if isinstance(message, dict)
+            }
+            if cognitive_effect_note["message_id"] not in existing_ids:
+                messages.append(cognitive_effect_note)
 
         # These blocks are model-produced data, never system instructions. Put
         # them after the stable summary/history prefix so their frequent updates
@@ -1166,7 +1270,7 @@ class PromptController(PromptBuilderService):
             }
         if game_state_prompt_content:
             messages.append({"role": "system", "content": game_state_prompt_content})
-        shared_minigame_context = None if character_profile.scene_context_key else self._build_shared_minigame_context(char_id)
+        shared_minigame_context = None if desktop_context or character_profile.scene_context_key else self._build_shared_minigame_context(char_id)
         if shared_minigame_context is not None:
             messages.append(shared_minigame_context)
 
@@ -1231,7 +1335,9 @@ class PromptController(PromptBuilderService):
         else:
             messages.append(self._build_system_state_message(source, runtime=request_runtime))
             character_environment_message = self._build_character_environment_message(source, runtime=request_runtime)
-        if character_environment_message is not None:
+        if desktop_context:
+            messages.append({"role": "system", "content": desktop_context})
+        elif character_environment_message is not None:
             messages.append(character_environment_message)
         if dialogue_context_message is not None:
             messages.append(dialogue_context_message)
@@ -1346,6 +1452,7 @@ class PromptController(PromptBuilderService):
             history_messages=history_limited,
             user_message=user_message_for_history,
             support_intents=support_intents,
+            cognitive_effect_changes=cognitive_effect_changes,
         )
 
 

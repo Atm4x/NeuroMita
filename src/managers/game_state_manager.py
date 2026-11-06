@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 _ROOM_NAMES = {
@@ -31,6 +31,7 @@ class GameState:
     runtime_static_catalog: str = ""
     runtime_capabilities: str = ""
     intent_rules: str = ""
+    cognitive_effects: List[Dict[str, Any]] = None
 
     def update_from_event_data(self, data: Dict[str, Any]) -> None:
         self.distance = float(data.get("distance", self.distance) or 0.0)
@@ -44,6 +45,10 @@ class GameState:
         self.runtime_static_catalog = str(data.get("runtime_static_catalog", self.runtime_static_catalog) or "")
         self.runtime_capabilities = str(data.get("runtime_capabilities", self.runtime_capabilities) or "")
         self.intent_rules = str(data.get("intent_rules", self.intent_rules) or "")
+        effects = data.get("cognitive_effects")
+        self.cognitive_effects = [
+            dict(item) for item in effects if isinstance(item, dict)
+        ] if isinstance(effects, list) else []
 
     def to_prompt_dict(self) -> Dict[str, Any]:
         return {
@@ -58,4 +63,7 @@ class GameState:
             "runtime_static_catalog": str(self.runtime_static_catalog),
             "runtime_capabilities": str(self.runtime_capabilities),
             "intent_rules": str(self.intent_rules),
+            "cognitive_effects": [
+                dict(item) for item in (self.cognitive_effects or []) if isinstance(item, dict)
+            ],
         }

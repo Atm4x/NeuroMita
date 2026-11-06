@@ -103,7 +103,9 @@ def format_desktop_context(value: Any) -> str:
     if desktop["last_event"]:
         lines.append(f"Last desktop event: {desktop['last_event']}")
     lines.append(
-        "The attached frames show the player's desktop as it looks right now; your own window is excluded from them."
+        "Only describe screen contents when image frames are actually attached to this turn; "
+        "your own window is excluded from desktop capture. The game window may also be open, "
+        "but your current location is the desktop, not the apartment."
     )
     lines.append(
         "You cannot open doors, walk into rooms or handle in-game objects here; "

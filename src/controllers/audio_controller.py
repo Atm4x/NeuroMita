@@ -20,6 +20,7 @@ from services.contracts import (
     RemoteVoiceService,
     LoopService,
     TelegramService,
+    TaskService,
 )
 from managers.task_manager import TaskStatus
 from utils import process_text_to_voice
@@ -31,6 +32,12 @@ class AudioController(AudioStateService):
     Получает на вход уже определённый speaker и voice_profile (если есть),
     не делает повторных запросов персонажа в рамках одного запроса.
     """
+
+    @staticmethod
+    def _desktop_task(task_uid: str) -> bool:
+        tasks = services().get_optional(TaskService)
+        task = tasks.get_task(task_uid) if tasks is not None and task_uid else None
+        return task is not None and task.data.get("client_role") == "desktop"
 
     def __init__(self, main_controller):
         self.main_controller = main_controller
@@ -411,7 +418,7 @@ class AudioController(AudioStateService):
             # задачи не имеет, и раньше его озвучка терялась: локальное
             # воспроизведение пропускалось, а SET_PATCH_TO_SOUND_FILE никто не
             # слушает. Решает наличие task_uid, а не сам факт связи.
-            delivered_to_game = bool(task_uid) and use(GameLinkService).is_connected()
+            delivered_to_game = bool(task_uid) and (self._desktop_task(task_uid) or use(GameLinkService).is_connected())
 
             if delivered_to_game:
                 # Начало и конец воспроизведения сообщит сам мод (speech_state);

@@ -335,6 +335,8 @@ class ChatModel:
             tool_decision = configure_native_tools(req, self.settings, self.tool_manager)
             if tool_decision["reason"] == "native_protocol_unsupported":
                 logger.info("Native tools unavailable for %s; using schema tools", req.dialect_id)
+            elif tool_decision["reason"] == "native_tools_with_structured_output_unsupported":
+                logger.info("Native tools cannot be combined with structured output for %s; using schema tools", req.protocol_id)
             req.extra["tool_manager"] = self.tool_manager
             # UI context inspection must identify this exact request even when
             # finetune collection is disabled or several Mitas answer at once.

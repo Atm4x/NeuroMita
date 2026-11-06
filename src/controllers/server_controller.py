@@ -189,6 +189,9 @@ class ServerController:
 
         eb.subscribe(Events.Server.SEND_ASR_TEXT, self._on_send_asr_text, weak=False)
         eb.subscribe(Events.Server.SEND_ASR_CAPTURE_STATE, self._on_send_asr_capture_state, weak=False)
+        eb.subscribe(Events.Server.SEND_STAGE_UI, self._on_send_stage_ui, weak=False)
+        eb.subscribe(Events.Character.CURRENT_CHANGED, self._on_stage_context_changed, weak=False)
+        eb.subscribe(Events.Character.DATA_RELOADED, self._on_stage_context_changed, weak=False)
 
     def _unsubscribe_from_events(self):
         if self.event_bus and not self._destroyed:
@@ -203,6 +206,9 @@ class ServerController:
 
             eb.unsubscribe(Events.Server.SEND_ASR_TEXT, self._on_send_asr_text)
             eb.unsubscribe(Events.Server.SEND_ASR_CAPTURE_STATE, self._on_send_asr_capture_state)
+            eb.unsubscribe(Events.Server.SEND_STAGE_UI, self._on_send_stage_ui)
+            eb.unsubscribe(Events.Character.CURRENT_CHANGED, self._on_stage_context_changed)
+            eb.unsubscribe(Events.Character.DATA_RELOADED, self._on_stage_context_changed)
 
     def _init_server(self):
         from game_connections.server import ChatServerNew
@@ -349,6 +355,7 @@ class ServerController:
                 self.server.schedule_send_loaded_settings(client_id, body)
             except Exception as exc:
                 logger.warning(f"Failed to send initial settings to {client_id}: {format_exception(exc)}")
+            self._broadcast_stage_ui(force=True)
         elif not bool(client_connected) and client_id:
             self.echo_suppressor.forget_client(client_id)
             self.event_bus.emit(
@@ -424,6 +431,48 @@ class ServerController:
             self.server.schedule_broadcast_loaded_settings(body)
         except Exception as e:
             logger.warning(f"LOAD_SERVER_SETTINGS broadcast failed: {format_exception(e)}")
+
+    def _on_send_stage_ui(self, event: Event):
+        if self._destroyed or not self.server:
+            return
+        data = event.data if isinstance(event.data, dict) else {}
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return
+        character_id = str(data.get("character_id") or "")
+        if character_id:
+            try:
+                current_id = str(use(CharacterRegistry).current_id() or "")
+            except Exception:
+                current_id = character_id
+            if current_id and current_id != character_id:
+                return
+        self.server.schedule_broadcast_json(payload)
+
+    def _on_stage_context_changed(self, event: Event):
+        data = event.data if isinstance(event.data, dict) else {}
+        character_id = str(data.get("character_id") or "")
+        try:
+            current_id = str(use(CharacterRegistry).current_id() or "")
+        except Exception:
+            current_id = ""
+        if character_id and current_id and character_id != current_id:
+            return
+        self._broadcast_stage_ui(force=True)
+
+    def _broadcast_stage_ui(self, *, force: bool = False) -> None:
+        if self._destroyed or not self.server:
+            return
+        try:
+            character = use(CharacterRegistry).current()
+        except Exception:
+            character = None
+        if character is None:
+            payload = {"type": "stage_ui", "stage_ui": {"visible": False}}
+        else:
+            from services.mita_stages import get_mita_stage_service
+            payload = get_mita_stage_service().ui_payload(character)
+        self.server.schedule_broadcast_json(payload)
 
     def _get_character_stats(self, character_id: str) -> Dict[str, float]:
         cid = str(character_id or "").strip()

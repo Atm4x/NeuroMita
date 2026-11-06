@@ -12,6 +12,7 @@ from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
 from services.conversation_timeline import ConversationTimeline
+from utils.cognitive_effect_notes import build_cognitive_effect_notice, cognitive_effect_change_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +227,7 @@ class ConversationEventWriter:
         user_event: dict | None,
         assistant_event: dict,
         participants: list[str],
+        notices: dict[str, dict] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Persist both sides of the completed turn in one batch per recipient."""
         committed: list[str] = []
@@ -240,6 +242,9 @@ class ConversationEventWriter:
                 continue
 
             local_messages: list[dict] = []
+            notice = (notices or {}).get(pid)
+            if isinstance(notice, dict):
+                local_messages.append(dict(notice))
             for event_msg in (user_event, assistant_event):
                 if not isinstance(event_msg, dict):
                     continue
@@ -248,7 +253,8 @@ class ConversationEventWriter:
                     continue
                 local = dict(event_msg)
                 speaker = str(local.get("speaker") or "")
-                local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
+                if local.get("role") not in {"system", "event"}:
+                    local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
                 local.setdefault("sender", speaker)
                 local_messages.append(local)
 
@@ -338,6 +344,7 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         is_deleted: bool = False,
         turn_id: str,
     ) -> dict:
@@ -361,6 +368,8 @@ class ConversationEventWriter:
             msg.update(llm_usage)
         if sample_id:
             msg["sample_id"] = sample_id
+        if context_snapshot_id:
+            msg["context_snapshot_id"] = context_snapshot_id
         if is_deleted:
             # Internal HistoryManager flag. It intentionally does not use a
             # public protocol field and is persisted as is_deleted=1.
@@ -430,7 +439,9 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         assistant_is_deleted: bool = False,
+        cognitive_effect_changes: list[dict] | None = None,
         dialogue: Any = None,
     ) -> ConversationWriteResult:
         resolved_speaker = self._identity_resolver.resolve(sender, dialogue)
@@ -452,6 +463,10 @@ class ConversationEventWriter:
             pts,
             dialogue=dialogue,
             responder_character_id=responder_character_id,
+        )
+        notices = self._build_cognitive_effect_notices(
+            responder_character_id,
+            [] if assistant_is_deleted else cognitive_effect_changes,
         )
 
         turn_id = ConversationMessageIds.turn(task_uid or req_id)
@@ -483,6 +498,7 @@ class ConversationEventWriter:
             thinking=thinking,
             llm_usage=llm_usage,
             sample_id=sample_id,
+            context_snapshot_id=context_snapshot_id,
             is_deleted=assistant_is_deleted,
             turn_id=turn_id,
         )
@@ -508,6 +524,13 @@ class ConversationEventWriter:
             assistant_event.update(assistant_metadata)
 
         if self.timeline is not None:
+            for recipient_id, notice in notices.items():
+                self.timeline.record_message(
+                    notice,
+                    (recipient_id,),
+                    actor_id="World",
+                    note=True,
+                )
             _incoming, outgoing = self.timeline.complete_turn(
                 user_event, assistant_event, history_recipients,
                 player=resolved_speaker.kind is DialogueActorKind.PLAYER,
@@ -527,10 +550,50 @@ class ConversationEventWriter:
                 user_event["timeline_event_id"] = incoming.event_id
             if outgoing is not None:
                 assistant_event["timeline_event_id"] = outgoing.event_id
-        committed, failed = self._fanout_turn(user_event, assistant_event, history_recipients)
+        committed, failed = self._fanout_turn(
+            user_event,
+            assistant_event,
+            history_recipients,
+            notices=notices,
+        )
         return ConversationWriteResult(
             user_message_id=str((user_event or {}).get("message_id") or ""),
             assistant_message_id=str(assistant_event.get("message_id") or ""),
             committed_recipient_ids=committed,
             failed_recipient_ids=failed,
         )
+
+    def _build_cognitive_effect_notices(
+        self,
+        observer_character_id: str,
+        changes: list[dict] | None,
+    ) -> dict[str, dict]:
+        observer_character_id = str(observer_character_id or "").strip()
+        if not changes or not observer_character_id:
+            return {}
+        character = self._get_character_ref(observer_character_id)
+        if character is None:
+            return {}
+        seen_change_ids: set[str] = set()
+        history = getattr(character, "history_manager", None)
+        get_recent = getattr(history, "get_recent_messages", None)
+        if callable(get_recent):
+            try:
+                for message in get_recent(limit=64):
+                    seen_change_ids.update(cognitive_effect_change_ids(message))
+            except Exception as exc:
+                logger.warning(
+                    f"[ConversationEventWriter] cognitive notice dedupe failed for "
+                    f"{observer_character_id}: {format_exception(exc)}",
+                    exc_info=True,
+                )
+        notice = build_cognitive_effect_notice(
+            observer_character_id,
+            changes,
+            seen_change_ids=seen_change_ids,
+        )
+        if notice is None:
+            return {}
+        if history is not None and history.contains_message_id(notice["message_id"]):
+            return {}
+        return {observer_character_id: notice}
