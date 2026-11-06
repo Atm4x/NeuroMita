@@ -397,6 +397,22 @@ class MemoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+    def has_active_memories(self) -> bool:
+        """Есть ли у персонажа хоть одно активное воспоминание.
+
+        Дешевле, чем собирать и форматировать весь блок памяти: нужен только
+        факт наличия для миграции состояния знакомства.
+        """
+        cols = self._mem_cols()
+        where = "character_id=? AND is_deleted=0"
+        params = [self.storage_key]
+        if "is_forgotten" in cols:
+            where += " AND is_forgotten=0"
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT 1 FROM memories WHERE {where} LIMIT 1", tuple(params))
+            return cursor.fetchone() is not None
+
     # ------------------------------------------------------------------
     # Forget mechanism
     # ------------------------------------------------------------------

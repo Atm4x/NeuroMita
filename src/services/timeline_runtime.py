@@ -57,6 +57,7 @@ class SessionTimelineRuntime:
         self, *, trigger_id: str | None = None, kind: TurnKind = TurnKind.INITIATE,
         character_id: str = "", include_target: bool = False,
         input_event_ids: tuple[str, ...] = (),
+        consumed_event_ids: tuple[str, ...] = (),
     ) -> TimelineTurn:
         with self.state.access(wait=True), self._lock:
             selection = self.selection
@@ -64,7 +65,10 @@ class SessionTimelineRuntime:
             head = timeline.branch.head_sequence
             epoch = (self.repository.context_epoch(selection.branch_id, character_id, through=head)
                      if character_id else 0)
-            return TimelineTurn(selection, head, trigger_id, kind, character_id, epoch, include_target, input_event_ids)
+            return TimelineTurn(
+                selection, head, trigger_id, kind, character_id, epoch,
+                include_target, input_event_ids, consumed_event_ids,
+            )
 
     @contextmanager
     def turn_scope(self, turn: TimelineTurn, *, cancellation: CancellationToken | None = None) -> Iterator[SessionTimeline]:

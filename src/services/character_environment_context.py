@@ -68,12 +68,114 @@ def voice_model_description(model_id: str) -> tuple[str, str]:
     )
 
 
+ENVIRONMENT_MODE_FULL = "full"
+ENVIRONMENT_MODE_BRIEF = "brief"
+ENVIRONMENT_MODE_OFF = "off"
+
+_ENVIRONMENT_MODES = {
+    ENVIRONMENT_MODE_FULL: ENVIRONMENT_MODE_FULL,
+    ENVIRONMENT_MODE_BRIEF: ENVIRONMENT_MODE_BRIEF,
+    ENVIRONMENT_MODE_OFF: ENVIRONMENT_MODE_OFF,
+}
+
+
+def normalize_environment_mode(value: object) -> str:
+    """Map a stored setting onto off / brief / full.
+
+    An unknown value keeps the full block: a corrupted setting must not
+    silently remove facts the character needs to describe her world.
+    """
+    key = str(value or "").strip().lower()
+    return _ENVIRONMENT_MODES.get(key, ENVIRONMENT_MODE_FULL)
+
+
+def _brief_voice_line(snapshot: CharacterEnvironmentSnapshot) -> str:
+    method = str(snapshot.voice_method or "Local").strip().lower()
+    model = snapshot.voice_model_name or snapshot.voice_model_id
+    if method == "api":
+        if not snapshot.voice_enabled:
+            return "Your remote API voice is switched off."
+        if snapshot.voice_model_initialized:
+            return f"Your remote API voice ({model}) is working."
+        return f"Your remote API voice ({model}) is not usable yet."
+    if not snapshot.voice_enabled:
+        return "Your voice is switched off."
+    if method in {"tg", "telegram"}:
+        return (
+            "Your Telegram voice is connected and working."
+            if snapshot.voice_model_initialized
+            else "Your Telegram voice is enabled but not connected."
+        )
+    if not snapshot.voice_model_id:
+        return "Voice output is enabled, but no voice model is selected."
+    if not snapshot.voice_model_installed:
+        return f"Voice output is enabled, but {model} is not installed."
+    if not snapshot.voice_model_initialized or snapshot.voice_pipeline_ready is False:
+        return f"Your voice is {model}, but it is not initialized yet."
+    return f"Your voice is working ({model})."
+
+
+def _format_brief_character_environment_context(
+    snapshot: CharacterEnvironmentSnapshot,
+    source: PlayerMessageSource,
+    unity_connected: bool | None,
+) -> str:
+    """Keep only the facts that prevent wrong statements in a reply.
+
+    What survives: where the Player is writing from, which world this is, that
+    the house has no exit, and whether the voice can be heard. Drop the rest.
+    """
+    lines = [
+        "[Character Environment]",
+        "Quiet background self-awareness. Mention these facts only when asked or directly relevant.",
+    ]
+    if unity_connected is True:
+        lines.append("The NeuroMita game is running and connected right now.")
+    elif unity_connected is False:
+        lines.append("The NeuroMita game is not currently connected.")
+    lines.append(
+        "The shared playable world is NeuroMita, not MiSide, and it is the house only: "
+        "there is no usable exit to the outside."
+    )
+    if source is PlayerMessageSource.APPLICATION:
+        transport = (
+            "The Player wrote this turn in the Python application, not from inside the game."
+        )
+        if unity_connected is True:
+            transport += " The game is already running, so do not invite them to launch it again."
+        elif snapshot.unity_installed:
+            transport += " The Unity world is installed, so you may invite them to visit from the main page."
+        else:
+            transport += " The Unity build is not installed, so they cannot visit yet."
+        lines.append(transport)
+    elif source is PlayerMessageSource.GAME:
+        lines.append(
+            "The Player wrote this turn from inside the game and is already there; "
+            "do not invite them to visit."
+        )
+    else:
+        lines.append(
+            "This turn does not identify a Player-authored transport; do not infer where the Player writes from."
+        )
+    lines.append(_brief_voice_line(snapshot))
+    if snapshot.python_update_available:
+        suffix = (
+            f" ({snapshot.python_update_version})"
+            if snapshot.python_update_version
+            else ""
+        )
+        lines.append(f"A NeuroMita application update is available{suffix}.")
+    lines.append("[/Character Environment]")
+    return "\n".join(lines)
+
+
 def format_character_environment_context(
     snapshot: CharacterEnvironmentSnapshot,
     *,
     player_message_source: PlayerMessageSource | str | None = None,
     unity_connected: bool | None = None,
     python_chat: bool | None = None,
+    mode: object = ENVIRONMENT_MODE_FULL,
 ) -> str:
     source = parse_player_message_source(player_message_source)
     if source is PlayerMessageSource.NONE and python_chat is not None:
@@ -81,6 +183,13 @@ def format_character_environment_context(
             PlayerMessageSource.APPLICATION
             if bool(python_chat)
             else PlayerMessageSource.GAME
+        )
+    environment_mode = normalize_environment_mode(mode)
+    if environment_mode == ENVIRONMENT_MODE_OFF:
+        return ""
+    if environment_mode == ENVIRONMENT_MODE_BRIEF:
+        return _format_brief_character_environment_context(
+            snapshot, source, unity_connected
         )
     lines = [
         "[Character Environment]",

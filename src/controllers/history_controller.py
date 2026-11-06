@@ -14,13 +14,13 @@ from io import BytesIO
 from core.character_locks import character_lock
 from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
-from core.message_content import MessageContentCodec
+from core.message_content import IMAGE_PART, MessageContentCodec
 from managers.action_memory import (
     append_requested_actions,
     cap_requested_actions,
     render_requested_actions,
-    requested_actions_from_messages,
-    requested_actions_from_structured,
+    requested_action_records,
+    requested_action_records_from_messages,
 )
 from core.response_status import response_status_kind
 from core.services import services, use
@@ -67,6 +67,11 @@ class HistoryController(HistoryService):
     #   memory  — сводка уходит отдельной памятью в MemorySystem (легаси).
     _DEFAULT_OUTPUT_TARGET = "layered"
     _EXTERNAL_SUMMARY_TARGETS = ("history", "layered")
+
+    # Сколько последних сообщений с картинками оставлять картинками. Для более
+    # старых окно использует сохранённое текстовое описание: оно дешевле по
+    # токенам и не теряет смысл кадра.
+    _IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT = 1
 
     def __init__(self):
         self.event_bus = get_event_bus()
@@ -227,6 +232,8 @@ class HistoryController(HistoryService):
                 window_overflow=window_overflow,
             )
 
+        history_limited = self._replace_older_images_with_descriptions(history_limited)
+
         if image_quality.get('enabled', False):
             history_limited = self._apply_history_image_quality_reduction(history_limited, image_quality)
 
@@ -275,7 +282,24 @@ class HistoryController(HistoryService):
             parsed = []
         if not isinstance(parsed, list):
             return []
-        return [str(item).strip() for item in parsed if str(item).strip()]
+        records: list[dict] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                ref = str(item.get("ref") or "").strip()
+            else:
+                text = str(item).strip()
+                ref = ""
+            if text:
+                records.append({"text": text, "ref": ref})
+        return records
+
+    @staticmethod
+    def _receipt_lookup(character):
+        try:
+            return character.action_receipts.status_for
+        except Exception:
+            return None
 
     def _build_action_memory_context(
         self,
@@ -310,7 +334,7 @@ class HistoryController(HistoryService):
                 warned.add(char_id)
         else:
             warned.discard(char_id)
-        return render_requested_actions(records)
+        return render_requested_actions(records, self._receipt_lookup(character))
 
     def _next_retained_action_requests(
         self,
@@ -320,7 +344,7 @@ class HistoryController(HistoryService):
         if not self._action_memory_enabled():
             return None
         records = self._load_retained_action_requests(character)
-        records.extend(requested_actions_from_messages(messages_to_compress))
+        records.extend(requested_action_records_from_messages(messages_to_compress))
         return records[-self._action_memory_keep_last():]
 
     def _compression_enabled(self) -> bool:
@@ -1668,6 +1692,133 @@ class HistoryController(HistoryService):
         )
         return fallback_summary
 
+    @classmethod
+    def _message_has_inline_image(cls, message: Dict[str, Any]) -> bool:
+        if not isinstance(message, dict):
+            return False
+        return any(
+            MessageContentCodec.part_type(part) == IMAGE_PART
+            for part in MessageContentCodec.parts(message.get("content"))
+        )
+
+    @classmethod
+    def _message_image_description(cls, message: Dict[str, Any]) -> str:
+        """Текст, который был сохранён вместе с картинкой при её получении."""
+        if not isinstance(message, dict):
+            return ""
+
+        def _clean(value: Any) -> str:
+            return " ".join(str(value or "").split())
+
+        description_map = message.get("image_descriptions")
+        if isinstance(description_map, dict) and description_map:
+            # Ключи — варианты одного и того же описания, а не описания разных
+            # кадров. Берём лучший доступный вариант, а не склеиваем их все.
+            for key in ("manual", "detailed", "normal", "brief"):
+                value = _clean(description_map.get(key))
+                if value:
+                    return value
+            for value in description_map.values():
+                text = _clean(value)
+                if text:
+                    return text
+        return _clean(message.get("image_description"))
+
+    @classmethod
+    def _count_inline_images(cls, message: Dict[str, Any]) -> int:
+        return sum(
+            1
+            for part in MessageContentCodec.parts(message.get("content"))
+            if MessageContentCodec.part_type(part) == IMAGE_PART
+        )
+
+    @classmethod
+    def _is_player_image_message(cls, message: Dict[str, Any]) -> bool:
+        if str(message.get("role") or "") != "user":
+            return False
+        return str(message.get("image_source") or "").lower() != "mita_camera"
+
+    def _replace_older_images_with_descriptions(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Заменяет base64 картинок в старых сообщениях их описаниями.
+
+        Окно истории отправляется модели целиком на каждом ходу, поэтому
+        встроенные изображения стоят токенов постоянно. У сообщения уже есть
+        текстовое описание изображения (image_descriptions или
+        image_description); для промпта оно несёт тот же смысл, что и сам
+        кадр. Самые свежие сообщения с картинками остаются нетронутыми,
+        остальные получают текст.
+        """
+        if not messages:
+            return messages
+
+        keep_recent = int(
+            self._get_setting(
+                "HISTORY_IMAGE_DESCRIPTION_KEEP_RECENT",
+                self._IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT,
+            )
+            or 0
+        )
+        keep_recent = max(0, keep_recent)
+
+        image_positions = [
+            index for index, message in enumerate(messages)
+            if self._message_has_inline_image(message)
+        ]
+        if not image_positions:
+            return messages
+
+        # Игрок мог прислать скриншот, который обсуждается прямо сейчас, а Мита
+        # следом отправить свой кадр. Свежесть сама по себе выбрала бы кадр Миты,
+        # поэтому при наличии кадров игрока сохраняем именно их.
+        player_positions = [
+            index for index in image_positions
+            if self._is_player_image_message(messages[index])
+        ]
+        keep_source = player_positions or image_positions
+        keep_positions = set(keep_source[-keep_recent:]) if keep_recent else set()
+
+        updated_messages: List[Dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if index in keep_positions or not self._message_has_inline_image(message):
+                updated_messages.append(message)
+                continue
+
+            # Одно описание не привязано к конкретному кадру из нескольких:
+            # замена в таком сообщении перепутала бы изображения и текст.
+            if self._count_inline_images(message) != 1:
+                updated_messages.append(message)
+                continue
+
+            description = self._message_image_description(message)
+            if not description:
+                updated_messages.append(message)
+                continue
+
+            new_parts: List[Dict[str, Any]] = []
+            replaced = False
+            for part in MessageContentCodec.parts(message.get("content")):
+                if MessageContentCodec.part_type(part) == IMAGE_PART:
+                    if not replaced:
+                        new_parts.append({
+                            "type": "text",
+                            "text": f"[Earlier image — description: {description}]",
+                        })
+                        replaced = True
+                    continue
+                new_parts.append(part)
+
+            if not replaced:
+                updated_messages.append(message)
+                continue
+            updated = dict(message)
+            updated["content"] = new_parts
+            updated_messages.append(updated)
+
+        return updated_messages
+
     def _process_image_quality(self, image_bytes: bytes, target_quality: int) -> Optional[bytes]:
         if not image_bytes:
             return None
@@ -1736,7 +1887,7 @@ class HistoryController(HistoryService):
             # The description replaces the image in history; no base64 to degrade.
             # Supports both new dict format and legacy string.
             _has_desc = bool(msg.get("image_descriptions") or msg.get("image_description"))
-            if _has_desc:
+            if _has_desc and not self._message_has_inline_image(msg):
                 updated_messages.append(msg)
                 continue
 
@@ -1897,7 +2048,11 @@ class HistoryController(HistoryService):
             if role == "assistant" and self._action_memory_enabled():
                 content = append_requested_actions(
                     content,
-                    requested_actions_from_structured(m.get("structured_data")),
+                    requested_action_records(
+                        m.get("structured_data"),
+                        turn_uid=str(m.get("task_uid") or ""),
+                    ),
+                    self._receipt_lookup(character),
                 )
 
             speaker = str(m.get("speaker") or m.get("sender") or ("Player" if role == "user" else owner_id) or "Player")

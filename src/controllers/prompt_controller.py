@@ -60,6 +60,11 @@ def _build_custom_params_schema(custom_params: list) -> str:
     return '  "custom_fields": {\n' + "\n".join(field_lines) + "\n  },\n"
 
 
+# Actors that are the player rather than one of the Mitas. A dialogue snapshot
+# naming only these plus a single character is an ordinary one-on-one turn.
+_PLAYER_ACTOR_IDS = frozenset({"player", "playercharacter", "игрок"})
+
+
 class PromptController(PromptBuilderService):
     """Сборка промпта. Чистая функция над персонажем и историей — шина не нужна."""
 
@@ -68,6 +73,21 @@ class PromptController(PromptBuilderService):
 
     def _get_setting(self, key: str, default=None):
         return use(SettingsService).get(key, default)
+
+    def _resolve_environment_mode(self) -> str:
+        """How much of [Character Environment] this prompt carries.
+
+        Reads the setting when a SettingsService is registered. Prompt-build
+        tests build a controller without one; the environment provider is
+        absent there too, so the full default never reaches a request.
+        """
+        settings = services().get_optional(SettingsService)
+        if settings is None:
+            return "full"
+        try:
+            return str(settings.get("CHARACTER_ENVIRONMENT_MODE", "full") or "full")
+        except Exception:
+            return "full"
 
     # Human-readable groupings of unity-only effect fields, used to tell the
     # model which in-world effects are unavailable when the game is not linked.
@@ -270,24 +290,30 @@ class PromptController(PromptBuilderService):
     def _build_character_environment_message(
         player_message_source: PlayerMessageSource | str | None = None,
         runtime: RuntimeCapabilities | None = None,
+        mode: object = "full",
     ) -> Dict[str, str] | None:
         provider = services().get_optional(CharacterEnvironmentContextService)
         if provider is None:
             return None
         try:
             from services.character_environment_context import (
+                ENVIRONMENT_MODE_OFF,
                 format_character_environment_context,
+                normalize_environment_mode,
             )
 
+            if normalize_environment_mode(mode) == ENVIRONMENT_MODE_OFF:
+                return None
             capabilities = runtime or runtime_capabilities()
-            return {
-                "role": "system",
-                "content": format_character_environment_context(
-                    provider.snapshot(),
-                    player_message_source=player_message_source,
-                    unity_connected=capabilities.connected,
-                ),
-            }
+            content = format_character_environment_context(
+                provider.snapshot(),
+                player_message_source=player_message_source,
+                unity_connected=capabilities.connected,
+                mode=mode,
+            )
+            if not content.strip():
+                return None
+            return {"role": "system", "content": content}
         except Exception as exc:
             logger.debug("Character environment context is unavailable: %s", format_exception(exc))
             return None
@@ -897,6 +923,165 @@ class PromptController(PromptBuilderService):
         }
 
     @staticmethod
+    def _prompt_contract_version(game_state: Any) -> int:
+        """Which prompt contract the runtime sent; 0 is the pre-skill format."""
+        if not isinstance(game_state, dict):
+            return 0
+        try:
+            return int(game_state.get("prompt_contract_version") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _scene_mechanic_entries(game_state: Any) -> List[Dict[str, str]]:
+        """Normalise the runtime's mechanic descriptors, keeping their state."""
+        if not isinstance(game_state, dict):
+            return []
+        raw = game_state.get("scene_mechanics")
+        if not isinstance(raw, (list, tuple)):
+            return []
+
+        entries: List[Dict[str, str]] = []
+        seen = set()
+        for item in raw:
+            if isinstance(item, str):
+                mechanic, skill, state = item.strip(), "", "available"
+            elif isinstance(item, dict):
+                mechanic = str(item.get("mechanic") or item.get("id") or "").strip()
+                skill = str(item.get("skill") or item.get("skill_id") or "").strip()
+                state = str(item.get("state") or "available").strip().lower()
+            else:
+                continue
+            if not mechanic or mechanic.casefold() in seen:
+                continue
+            if state not in {"available", "unavailable", "missing"}:
+                state = "available"
+            seen.add(mechanic.casefold())
+            entries.append({
+                "mechanic": mechanic,
+                "skill": skill or mechanic,
+                "state": state,
+            })
+        return entries
+
+    @classmethod
+    def _build_unity_scene_mechanics_messages(
+        cls,
+        game_state: Any,
+        *,
+        capabilities: Dict[str, Any],
+        skill_catalog: Any,
+    ) -> List[Dict[str, Any]]:
+        """Mechanics the runtime kept out of the contract, with their skills.
+
+        Only a runtime that says which contract it sent gets this block: an
+        older payload already carries every instruction, and adding a pointer
+        there would describe text the model can already read.
+        """
+        if cls._prompt_contract_version(game_state) < 2:
+            return []
+        entries = cls._scene_mechanic_entries(game_state)
+        if not entries:
+            return []
+
+        available = [entry for entry in entries if entry["state"] == "available"]
+        missing = [entry for entry in entries if entry["state"] == "missing"]
+        skills_active = bool(capabilities.get("skills", False))
+        eager_skills = skills_active and str(
+            capabilities.get("skill_mode") or "on_demand"
+        ).strip().lower() == "eager"
+        load_skill_offered = skills_active and not eager_skills
+
+        lines = [
+            "[Unity Scene Mechanics]",
+            "The runtime keeps mechanic instructions out of the intent contract and "
+            "names the mechanics it supports in this scene here.",
+        ]
+        if available:
+            listed = ", ".join(
+                f"{entry['mechanic']} (skill {entry['skill']})" for entry in available
+            )
+            lines.append(f"Available now: {listed}.")
+        for entry in missing:
+            lines.append(
+                f"Reported but not delivered: {entry['mechanic']} (skill {entry['skill']})."
+            )
+
+        if available and eager_skills:
+            # Eager mode already placed every body in the prompt above.
+            lines.append(
+                "Their instructions are already included above; use those payloads "
+                "exactly as written."
+            )
+            lines.append("[/Unity Scene Mechanics]")
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        if available and load_skill_offered:
+            lines.append(
+                "Those mechanics exist here, but their payload shapes are not inlined. "
+                "Call load_skill with the matching skill id before you build an intent "
+                "for one of them, and do not invent argument names."
+            )
+            lines.append("[/Unity Scene Mechanics]")
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        bodies, unsigned = cls._scene_mechanic_bodies(skill_catalog, available)
+        if bodies:
+            # No load_skill to ask with, so the texts are inlined instead of lost.
+            lines.append(
+                "Their instructions are included below because this prompt cannot "
+                "load skills on demand."
+            )
+            if unsigned:
+                lines.append(
+                    "No instructions arrived for: " + ", ".join(unsigned) +
+                    ". Do not use those mechanics this turn."
+                )
+            lines.append("[/Unity Scene Mechanics]")
+            lines.extend(bodies)
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        if unsigned:
+            lines.append(
+                "No instructions arrived for: " + ", ".join(unsigned) +
+                ". Do not use those mechanics this turn."
+            )
+
+        if available and not unsigned:
+            lines.append(
+                "Their instructions are unavailable in this build, so do not use "
+                "these mechanics this turn."
+            )
+        if unsigned:
+            logger.warning(
+                "Unity contract v2 names mechanics %s but no skill text reached the prompt",
+                unsigned,
+            )
+        lines.append("[/Unity Scene Mechanics]")
+        return [{"role": "system", "content": "\n".join(lines)}]
+
+    @staticmethod
+    def _scene_mechanic_bodies(
+        skill_catalog: Any, entries: List[Dict[str, str]],
+    ) -> tuple[List[str], List[str]]:
+        """Bodies found in the catalog, plus the mechanics that had none."""
+        if skill_catalog is None or not entries:
+            return [], [entry["mechanic"] for entry in entries]
+        bodies: List[str] = []
+        unsigned: List[str] = []
+        for entry in entries:
+            try:
+                skill = skill_catalog.get(entry["skill"])
+            except Exception:
+                skill = None
+            body = str(getattr(skill, "render_body", lambda: "")() or "").strip() if skill else ""
+            if not body:
+                unsigned.append(entry["mechanic"])
+                continue
+            bodies.append(f"--- {entry['mechanic']} ---\n{body}")
+        return bodies, unsigned
+
+    @staticmethod
     def _resolve_support_intents(dsl_interpreter: Any, policy: Any) -> bool:
         get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
         support_intents = bool(
@@ -908,35 +1093,235 @@ class PromptController(PromptBuilderService):
             return False
         return support_intents
 
+    @staticmethod
+    def _resolve_skill_catalog(character: Any, game_state: Any):
+        """Prefer the catalog sent by the game runtime over the local files."""
+        from services.skill_catalog import SkillCatalog
+
+        registry = getattr(character, "skill_catalogs", None)
+        payload = None
+        if isinstance(game_state, dict):
+            if "skills_catalog" in game_state:
+                payload = game_state.get("skills_catalog")
+            elif "skills" in game_state:
+                payload = game_state.get("skills")
+
+        if payload is not None:
+            catalog = SkillCatalog.from_payload(payload)
+            scope = ""
+            if isinstance(game_state, dict):
+                scope = str(game_state.get("skills_scope") or "").strip()
+            if registry is not None:
+                try:
+                    if registry.set(catalog, scope=scope):
+                        PromptController._forget_loaded_skills(character)
+                except Exception:
+                    pass
+            return catalog
+
+        if registry is not None:
+            try:
+                cached = registry.get()
+            except Exception:
+                cached = None
+            if cached is not None:
+                return cached
+
+        catalog = SkillCatalog.load(getattr(character, "base_data_path", "") or "")
+        if registry is not None and catalog:
+            try:
+                registry.set(catalog)
+            except Exception:
+                pass
+        return catalog
+
+    @staticmethod
+    def _forget_loaded_skills(character: Any) -> None:
+        """Retained skill text describes one scene; a new scope invalidates it."""
+        skills = getattr(character, "skills", None)
+        if skills is None:
+            return
+        try:
+            skills.clear()
+        except Exception:
+            return
+
+    @staticmethod
+    def _build_dialogue_context_message(dialogue: Any) -> Dict[str, Any] | None:
+        """Instructions for a group turn, only when the turn really has a group.
+
+        Unity sends a dialogue snapshot for an ordinary one-on-one turn too.
+        An empty or single-character snapshot must not become a statement that
+        this is a group scene with an externally owned speaker order.
+        """
+        if not dialogue:
+            return None
+
+        get_value = (
+            dialogue.get
+            if isinstance(dialogue, dict)
+            else lambda key, default=None: getattr(dialogue, key, default)
+        )
+        participants = list(get_value("participants", []) or [])
+
+        names: List[str] = []
+        speakers = 0
+        for participant in participants:
+            if isinstance(participant, str):
+                name = participant.strip()
+                if name and name.casefold() not in _PLAYER_ACTOR_IDS:
+                    speakers += 1
+                    names.append(name)
+                continue
+
+            getter = (
+                participant.get
+                if isinstance(participant, dict)
+                else lambda key, default=None: getattr(participant, key, default)
+            )
+            actor_id = str(getter("actor_id", "") or "").strip()
+            character_id = str(getter("character_id", "") or "").strip()
+            display = str(getter("display_name", "") or "").strip()
+            if (actor_id or character_id).casefold() in _PLAYER_ACTOR_IDS:
+                continue
+            if not (actor_id or character_id or display):
+                continue
+            if bool(getter("can_speak", True)):
+                speakers += 1
+            if display or character_id:
+                names.append(display or character_id)
+
+        if speakers < 2:
+            return None
+
+        lines = [
+            "[Current Group Conversation]",
+            "Reply naturally to the current turn. Unity owns the speaker order and all follow-up scheduling.",
+        ]
+        if names:
+            lines.append("Present: " + ", ".join(names))
+        return {"role": "system", "content": "\n".join(lines)}
+
     _GAME_MASTER_EVENT_RE = re.compile(
         r"\[GAME_MASTER\](?:\[MANDATORY\])?\s*:\s*GameMaster said:\s*(?P<text>[^\r\n]+)",
         re.IGNORECASE,
     )
 
-    @classmethod
-    def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
+    # Unity may resend the same event (a door, a wardrobe, the TV) across
+    # turns. Repetition teaches the model to treat a one-off event as an
+    # ongoing action, so a resend that is separated from its original is
+    # dropped. Consecutive identical lines stay: three knocks are three
+    # occurrences, not stale state.
+    _MAX_RUNTIME_EVENTS = 24
+    _MAX_RUNTIME_EVENT_CHARS = 400
+    _MAX_RUNTIME_EVENT_TOTAL_CHARS = 6000
+    _MAX_GAME_MASTER_DIRECTIVES = 4
+    _MAX_GAME_MASTER_DIRECTIVE_CHARS = 600
+
+    @staticmethod
+    def _raw_runtime_events(game_state: Dict[str, Any]) -> List[Any]:
         raw_events = game_state.get("runtime_events", ()) if isinstance(game_state, dict) else ()
         if not isinstance(raw_events, (list, tuple)):
             raw_events = [raw_events] if raw_events else []
+        return list(raw_events)
+
+    @staticmethod
+    def _runtime_event_text(raw_event: Any) -> str:
+        """Read one event without ever rendering a Python dict repr.
+
+        Unity may send structured event objects. Only their ``text`` is
+        meaningful for the model; ``actor`` becomes a readable prefix. Objects
+        without text are dropped instead of being stringified.
+        """
+        if isinstance(raw_event, dict):
+            text = raw_event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return ""
+            text = " ".join(text.split())
+            actor = raw_event.get("actor")
+            if isinstance(actor, str):
+                actor = " ".join(actor.split())[:80]
+                if actor:
+                    text = f"{actor}: {text}"
+            return text
+        if raw_event is None or isinstance(raw_event, (list, tuple, set)):
+            return ""
+        return " ".join(str(raw_event).split())
+
+    @classmethod
+    def _normalized_runtime_events(cls, game_state: Dict[str, Any]) -> List[str]:
+        events: List[str] = []
+        seen: set[str] = set()
+        previous_key = ""
+        for raw_event in cls._raw_runtime_events(game_state):
+            text = cls._runtime_event_text(raw_event)
+            if not text:
+                continue
+            if len(text) > cls._MAX_RUNTIME_EVENT_CHARS:
+                text = text[: cls._MAX_RUNTIME_EVENT_CHARS].rstrip() + "…"
+            key = text.casefold()
+            if key == previous_key:
+                events.append(text)
+                continue
+            previous_key = key
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(text)
+        return events
+
+    @classmethod
+    def _trim_runtime_events_to_budget(cls, events: List[str]) -> List[str]:
+        """Keep the newest events that fit the character budget."""
+        kept: List[str] = []
+        total = 0
+        for item in reversed(events):
+            cost = len(item) + 2  # list marker and newline
+            if kept and total + cost > cls._MAX_RUNTIME_EVENT_TOTAL_CHARS:
+                break
+            kept.append(item)
+            total += cost
+        kept.reverse()
+        return kept
+
+    @classmethod
+    def _extract_game_master_directives(cls, game_state: Dict[str, Any]) -> List[str]:
         directives: List[str] = []
-        for raw_event in raw_events:
-            for match in cls._GAME_MASTER_EVENT_RE.finditer(str(raw_event or "")):
+        seen: set[str] = set()
+        for raw_event in cls._raw_runtime_events(game_state):
+            # Structured event objects are ordinary observations, never
+            # authority. Only legacy string events may carry a directive, so a
+            # future object-based channel cannot silently gain control-plane
+            # power without an explicit contract.
+            if isinstance(raw_event, dict):
+                continue
+            raw_text = cls._runtime_event_text(raw_event)
+            if not raw_text:
+                continue
+            for match in cls._GAME_MASTER_EVENT_RE.finditer(raw_text):
                 text = str(match.group("text") or "").strip()
-                if text and text not in directives:
+                if len(text) > cls._MAX_GAME_MASTER_DIRECTIVE_CHARS:
+                    text = text[: cls._MAX_GAME_MASTER_DIRECTIVE_CHARS].rstrip() + "…"
+                key = text.casefold()
+                if text and key not in seen:
+                    seen.add(key)
                     directives.append(text)
+                    if len(directives) >= cls._MAX_GAME_MASTER_DIRECTIVES:
+                        return directives
         return directives
+
     @classmethod
     def _build_unity_runtime_events_message(cls, game_state: Dict[str, Any]) -> Optional[Dict[str, str]]:
-        raw_events = game_state.get("runtime_events", ())
-        if not isinstance(raw_events, (list, tuple)):
-            raw_events = [raw_events] if raw_events else []
-        events = [str(item).strip() for item in raw_events if str(item).strip()]
-        if not events:
-            return None
+        events = cls._normalized_runtime_events(game_state)
         # GameMaster directives are promoted to a dedicated final system message
         # by build(). Do not leave a competing copy buried in runtime events.
         events = [cls._GAME_MASTER_EVENT_RE.sub("", item).strip() for item in events]
         events = [item for item in events if item]
+        if not events:
+            return None
+        if len(events) > cls._MAX_RUNTIME_EVENTS:
+            events = events[-cls._MAX_RUNTIME_EVENTS:]
+        events = cls._trim_runtime_events_to_budget(events)
         safe_events = [cls._neutralize_world_state_tags(item) for item in events]
         body = "\n".join(f"- {item}" for item in safe_events)
         return {
@@ -945,6 +1330,7 @@ class PromptController(PromptBuilderService):
                 "[Unity Runtime Events]\n"
                 "These events occurred after the previous dispatched turn and belong to this turn's context.\n"
                 "If an event describes an older state that conflicts with NeuroMita World State, the current world state wins.\n"
+                "Each line describes one occurrence. Repeated wording means the runtime reported the same situation again, not a new action.\n"
                 f"{body}\n"
                 "[/Unity Runtime Events]"
             ),
@@ -1003,6 +1389,40 @@ class PromptController(PromptBuilderService):
         state["watching_screen"] = watch.is_watching() is True
         return format_desktop_context(state)
 
+    _FIRST_ENCOUNTER_TEXT = (
+        "[First Encounter]\n"
+        "You have no established shared history with this player in this story.\n"
+        "Do not invent previous meetings, promises, or experiences.\n"
+        "Learn their name naturally if it is unknown; react only to what you can actually observe.\n"
+        "Your personality and canonical backstory stay unchanged.\n"
+        "[/First Encounter]"
+    )
+
+    @classmethod
+    def _build_relationship_context_message(
+        cls,
+        character,
+        *,
+        has_history: bool,
+        has_summary: bool,
+    ) -> Optional[Dict[str, str]]:
+        phase = str(
+            character.get_variable("relationship_context_phase", "unmet") or "unmet"
+        ).strip().lower()
+        if phase != "unmet":
+            return None
+        if has_history or has_summary:
+            # Старая база без маркера: история уже есть, значит знакомство
+            # состоялось. Блок «мы не знакомы» противоречил бы ей, поэтому не
+            # отправляем его и не стираем память игрока.
+            logger.warning(
+                f"[PromptController][{getattr(character, 'char_id', '?')}] "
+                "relationship_context_phase=unmet contradicts existing history; "
+                "first-encounter block suppressed."
+            )
+            return None
+        return {"role": "system", "content": cls._FIRST_ENCOUNTER_TEXT}
+
     def build(self, request: PromptBuildRequest) -> PromptBuildResult:
         character = request.character
         cartridge = getattr(character, "cartridge_definition", None)
@@ -1059,6 +1479,48 @@ class PromptController(PromptBuilderService):
             except Exception as exc:
                 logger.warning(
                     "[PromptController][%s] Failed to read working state: %s",
+                    char_id,
+                    format_exception(exc),
+                )
+
+        skill_catalog = None
+        skill_catalog_block = ""
+        loaded_skills_context = ""
+        eager_skills_context = ""
+        contract_version = self._prompt_contract_version(request.game_state)
+        if capabilities.get("skills", False) or contract_version >= 2:
+            # A versioned contract defers mechanic text to skills, so the catalog
+            # has to be readable even when load_skill itself is turned off.
+            try:
+                skill_catalog = self._resolve_skill_catalog(character, request.game_state)
+            except Exception as exc:
+                logger.warning(
+                    "[PromptController][%s] Failed to read the skill catalog: %s",
+                    char_id,
+                    format_exception(exc),
+                )
+                skill_catalog = None
+
+        if capabilities.get("skills", False) and skill_catalog is not None:
+            try:
+                if capabilities.get("skill_mode") == "eager":
+                    # Eager mode keeps every skill in the stable prefix and never
+                    # asks the model to load anything.
+                    eager_skills_context = skill_catalog.render_loaded_block(
+                        sorted(skill_catalog.entries),
+                        max_chars=int(capabilities.get("skill_eager_max_chars") or 12000),
+                    )
+                else:
+                    skill_catalog_block = skill_catalog.render_catalog_block(
+                        capabilities=capabilities.get("skill_capabilities") or (),
+                        max_chars=int(capabilities.get("skill_catalog_max_chars") or 1200),
+                    )
+                    loaded_skills_context = skill_catalog.render_loaded_block(
+                        character.skills.loaded(),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[PromptController][%s] Failed to read the skill catalog: %s",
                     char_id,
                     format_exception(exc),
                 )
@@ -1172,6 +1634,14 @@ class PromptController(PromptBuilderService):
                 self._build_character_world_context_message(game_state),
                 self._build_unity_runtime_events_message(game_state),
             ) if m]
+
+        unity_static_messages.extend(
+            self._build_unity_scene_mechanics_messages(
+                game_state,
+                capabilities=capabilities,
+                skill_catalog=skill_catalog,
+            )
+        )
         messages.extend(stable_system_messages)
 
         for s in dsl_system_infos:
@@ -1187,6 +1657,12 @@ class PromptController(PromptBuilderService):
         if core_memory_context:
             messages.append({"role": "system", "content": core_memory_context})
 
+        if eager_skills_context:
+            messages.append({"role": "system", "content": eager_skills_context})
+
+        if skill_catalog_block:
+            messages.append({"role": "system", "content": skill_catalog_block})
+
         if history_summary:
             messages.append({
                 "role": "system",
@@ -1198,14 +1674,23 @@ class PromptController(PromptBuilderService):
                 "role": "system",
                 "content": (
                     "[WORKING STATE PROTOCOL]\n"
-                    "Use the working_state response field as a compact handoff to your next turn. "
-                    "Keep only the current focus, established understanding, tentative assumptions, "
-                    "open loops, and immediate next steps. Do not copy dialogue, long-term memories, "
-                    "or chain-of-thought. When present, working_state must be an object with focus, "
-                    "situation, assumptions, open_loops and next_steps. Current observations, game state "
-                    "and newer dialogue override it. When [Active Cognitive Effects] is present, treat it "
-                    "as current game state: if it conflicts with [WORKING STATE], the active effect wins "
-                    "for this turn and the working-state handoff must be revised to match it.\n"
+                    "The working_state response field is a compact handoff to your next turn, "
+                    "not a summary of the conversation. Use it only while a concrete task is "
+                    "still unfinished and will continue later: a greeting, small talk, a "
+                    "question you just answered, or simply standing in a room needs no note. "
+                    "When there is nothing unfinished, leave the field out. "
+                    "Keep only the current focus (one short sentence), current understanding, "
+                    "tentative assumptions, at most 3 open loops and at most 2 immediate next steps. "
+                    "A note without an open loop is discarded, so put the unfinished part there. "
+                    "Use short phrases; the whole note must stay under 1000 characters. "
+                    "Do not copy dialogue, long-term memories, or chain-of-thought. "
+                    "When present, working_state is an object with focus, situation, assumptions, "
+                    "open_loops and next_steps. Omitting the field keeps the previous note; send an "
+                    "explicit null only when that note no longer applies. "
+                    "It is never a memory and never overrides current observations, game state "
+                    "or newer dialogue. When [Active Cognitive Effects] is present, treat it as "
+                    "current game state: if it conflicts with [WORKING STATE], the active effect "
+                    "wins for this turn and the working-state handoff must be revised to match it.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })
@@ -1236,38 +1721,28 @@ class PromptController(PromptBuilderService):
             if cognitive_effect_note["message_id"] not in existing_ids:
                 messages.append(cognitive_effect_note)
 
+        if not is_game_master:
+            relationship_context_message = self._build_relationship_context_message(
+                character,
+                has_history=bool(history_limited),
+                has_summary=bool(history_summary),
+            )
+            if relationship_context_message is not None:
+                messages.append(relationship_context_message)
+
         # These blocks are model-produced data, never system instructions. Put
         # them after the stable summary/history prefix so their frequent updates
         # do not invalidate provider prompt caching for the dialogue itself.
         if working_state_context:
             messages.append({"role": "assistant", "content": working_state_context})
 
-        dialogue_context_message = None
-        dialogue = request.dialogue
-        if dialogue:
-            get_value = dialogue.get if isinstance(dialogue, dict) else lambda key, default=None: getattr(dialogue, key, default)
-            snapshot = get_value("participants", []) or []
-            participant_names = []
-            for participant in snapshot:
-                getter = participant.get if isinstance(participant, dict) else lambda key, default=None: getattr(participant, key, default)
-                display_name = str(
-                    getter("display_name", "")
-                    or getter("character_id", "")
-                    or ""
-                ).strip()
-                if display_name:
-                    participant_names.append(display_name)
+        if loaded_skills_context:
+            messages.append({"role": "system", "content": loaded_skills_context})
 
-            lines = [
-                "[Current Group Conversation]",
-                "Reply naturally to the current turn. Unity owns the speaker order and all follow-up scheduling.",
-            ]
-            if participant_names:
-                lines.append("Present: " + ", ".join(participant_names))
-            dialogue_context_message = {
-                "role": "system",
-                "content": "\n".join(lines),
-            }
+        dialogue = request.dialogue
+        dialogue_context_message = PromptController._build_dialogue_context_message(
+            dialogue
+        )
         if game_state_prompt_content:
             messages.append({"role": "system", "content": game_state_prompt_content})
         shared_minigame_context = None if desktop_context or character_profile.scene_context_key else self._build_shared_minigame_context(char_id)
@@ -1329,12 +1804,20 @@ class PromptController(PromptBuilderService):
         })
 
         source = parse_player_message_source(request.player_message_source)
+        environment_mode = self._resolve_environment_mode()
         if source is PlayerMessageSource.NONE:
             messages.append(self._build_system_state_message(runtime=request_runtime))
-            character_environment_message = self._build_character_environment_message(runtime=request_runtime)
+            character_environment_message = self._build_character_environment_message(
+                runtime=request_runtime,
+                mode=environment_mode,
+            )
         else:
             messages.append(self._build_system_state_message(source, runtime=request_runtime))
-            character_environment_message = self._build_character_environment_message(source, runtime=request_runtime)
+            character_environment_message = self._build_character_environment_message(
+                source,
+                runtime=request_runtime,
+                mode=environment_mode,
+            )
         if desktop_context:
             messages.append({"role": "system", "content": desktop_context})
         elif character_environment_message is not None:

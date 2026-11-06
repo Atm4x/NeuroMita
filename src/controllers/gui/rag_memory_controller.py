@@ -710,15 +710,15 @@ def _build_memory_limits_config(self) -> list:
              'Adds a hidden compact handoff of the current focus, situation understanding and open threads between replies. '
              'It is not history, long-term memory, or chain-of-thought.')},
         {'label': _('Лимит оперативного состояния (символы)', 'Working state limit (chars)'),
-         'key': 'WORKING_STATE_MAX_CHARS', 'type': 'entry', 'default': 2000,
+         'key': 'WORKING_STATE_MAX_CHARS', 'type': 'entry', 'default': 1000,
          'validation': self.validate_positive_integer,
          'depends_on': 'ENABLE_WORKING_STATE',
          'hide_when_disabled': True,
          'tooltip': _(
-             'Жёсткий максимум для скрытого состояния на одного персонажа. 2000 символов — примерно 300–500 токенов; '
-             'при переполнении поздние поля обрезаются.',
-             'Hard maximum for one character\'s hidden state. 2000 characters is roughly 300–500 tokens; '
-             'later fields are trimmed on overflow.')},
+             'Жёсткий максимум для скрытого состояния на одного персонажа. 1000 символов — примерно 150–250 токенов; '
+             'допустимый диапазон 400–2000. При переполнении сначала отбрасываются менее важные поля.',
+             'Hard maximum for one character\'s hidden state. 1000 characters is roughly 150–250 tokens; '
+             'allowed range 400–2000. On overflow the least important fields are dropped first.')},
 
         {'label': _('Память запрошенных действий', 'Requested-action memory'), 'type': 'subsection'},
         {'label': _('Включить память действий', 'Enable action memory'),

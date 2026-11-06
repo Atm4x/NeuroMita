@@ -49,6 +49,9 @@ _HTML_BG = "#1E1E2E"
 _TEXT    = "#EAEAEA"
 _MUTED   = "#9CA3AF"
 _BORDER  = "#3A3A4A"
+# Тот же зелёный, что у отдельных строк Event: свёрнутая пачка читается как
+# «это те же события, только вместе».
+_EVENT_CLUSTER_COLOR = "#4ADE80"
 
 # ── Actor (говорящий, в отличие от провайдерской role) ────────────────────────
 _ACTOR_OWNER   = "#A78BFA"
@@ -167,6 +170,10 @@ _COARSE_GROUPS = {
 }
 _SECTION_TO_GROUP = {
     "character prompts": "prompt",
+    # Блоки стадии ставит скрипт набора промптов: это такая же инструкция
+    # промпта, поэтому в дереве они стоят рядом с остальным промптом,
+    # а не посреди истории.
+    "stage": "prompt",
     "tools": "prompt",               # каталог [Available Tools] — статика промпта
     "Unity contract": "prompt",      # статический контракт Unity в статике промпта
     "history": "history",
@@ -600,24 +607,17 @@ class ContextViewerDialog(QDialog):
             parent.setExpanded(True)
             self._items.append((parent, "group", gkey))
 
+            # Пачку событий подряд сворачиваем в один узел: иначе десяток
+            # «Event» подряд прячет под собой реплики диалога.
+            run: list[int] = []
             for idx in idxs:
-                msg = self._messages[idx]
-                child = QTreeWidgetItem(parent, [self._msg_labels[idx] + self._est_suffix(idx)])
-                role = str(msg.get("role") or "unknown")
-                child.setIcon(
-                    0,
-                    qta.icon(
-                        self._message_icon_name(msg, role),
-                        color=self._msg_actor_color[idx],
-                    ),
-                )
-                child.setForeground(0, QColor(self._msg_actor_color[idx]))
-                speaker, target = self._msg_actor[idx]
-                who = f"{speaker} → {target}" if target else speaker
-                child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
-                self._items.append((child, "message", msg))
-                self._message_items[idx] = child
-                self._msg_index_by_id[id(msg)] = idx
+                if self._is_event_row(idx):
+                    run.append(idx)
+                    continue
+                self._flush_event_run(parent, run)
+                run = []
+                self._add_message_row(parent, idx)
+            self._flush_event_run(parent, run)
 
         self._render_response_tab()
 
@@ -625,6 +625,66 @@ class ContextViewerDialog(QDialog):
         """Крупная группа сообщения по его секции из оценки токенов."""
         section = (self._est_by_index.get(idx) or {}).get("section") or ""
         return _SECTION_TO_GROUP.get(section, "context")
+
+    # ──────────────────────────── Строки дерева ──────────────────────────────
+
+    def _is_event_row(self, idx: int) -> bool:
+        """Событие прошлого хода из таймлайна сессии."""
+        text = self._content_plain(self._messages[idx].get("content")).lstrip()
+        head = next((line.strip() for line in text.split("\n") if line.strip()), "")
+        head = re.sub(r"^\[\s*RUNTIME EVENT\s*\]\s*", "", head)
+        return head.startswith("[Past session event")
+
+    def _add_message_row(self, parent: QTreeWidgetItem, idx: int) -> None:
+        msg = self._messages[idx]
+        child = QTreeWidgetItem(parent, [self._msg_labels[idx] + self._est_suffix(idx)])
+        role = str(msg.get("role") or "unknown")
+        child.setIcon(
+            0,
+            qta.icon(
+                self._message_icon_name(msg, role),
+                color=self._msg_actor_color[idx],
+            ),
+        )
+        child.setForeground(0, QColor(self._msg_actor_color[idx]))
+        speaker, target = self._msg_actor[idx]
+        who = f"{speaker} → {target}" if target else speaker
+        child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
+        self._items.append((child, "message", msg))
+        self._message_items[idx] = child
+        self._msg_index_by_id[id(msg)] = idx
+
+    def _flush_event_run(self, parent: QTreeWidgetItem, run: list[int]) -> None:
+        """Свернуть пачку событий в раскрываемый узел со сводкой справа."""
+        if not run:
+            return
+        if len(run) == 1:
+            self._add_message_row(parent, run[0])
+            return
+
+        tokens = sum((self._est_by_index.get(i) or {}).get("tokens", 0) for i in run)
+        label = _("События", "Events") + f" ({len(run)})"
+        if tokens:
+            label += f" · ~{self._fmt_int(tokens)}"
+            pct = self._fmt_pct(tokens, self._est_total)
+            if pct:
+                label += f" · {pct}"
+
+        node = QTreeWidgetItem(parent, [label])
+        node.setIcon(0, qta.icon("fa6s.bolt", color=_EVENT_CLUSTER_COLOR))
+        node.setForeground(0, QColor(_EVENT_CLUSTER_COLOR))
+        node.setToolTip(
+            0,
+            _(
+                "События прошлых ходов. Разверните узел, чтобы открыть каждое.",
+                "Past turn events. Expand the node to open each one.",
+            ),
+        )
+        node.setExpanded(False)
+        self._items.append((node, "cluster", list(run)))
+
+        for idx in run:
+            self._add_message_row(node, idx)
 
     # ─────────────────────────────────── Rendering ───────────────────────────────
 
@@ -692,6 +752,11 @@ class ContextViewerDialog(QDialog):
 
         elif kind == "group":
             self._viewer.setHtml(self._wrap(self._render_group_html(str(payload or ""))))
+
+        elif kind == "cluster":
+            self._viewer.setHtml(
+                self._wrap(self._render_cluster_html(list(payload or [])))
+            )
 
         elif kind == "message":
             msg: dict = payload or {}
@@ -763,6 +828,35 @@ class ContextViewerDialog(QDialog):
             lines.append(
                 f"<p><a href='msg:{i}' style='color:{col};font-weight:bold;"
                 f"text-decoration:none'>{i + 1}. {self._esc(tag)}</a>{est_html}"
+                f"&nbsp;<span style='color:{_MUTED}'>{self._esc(preview)}</span></p>"
+            )
+        return "".join(lines)
+
+    def _render_cluster_html(self, idxs: list[int]) -> str:
+        """Сводка по свёрнутой пачке событий: что это и сколько занимает."""
+        total = sum((self._est_by_index.get(i) or {}).get("tokens", 0) for i in idxs)
+        pct = self._fmt_pct(total, self._est_total) if self._est_total else ""
+        head = (
+            f"<p><b style='color:{_EVENT_CLUSTER_COLOR};font-size:14px'>"
+            f"{_('События', 'Events')}</b>"
+            f"&nbsp;<span style='color:{_MUTED}'>· {len(idxs)} "
+            f"{_('сообщ.', 'msgs')}"
+        )
+        if total:
+            head += f" · ~{self._fmt_int(total)}"
+        if pct:
+            head += f" · {pct} {_('контекста', 'of context')}"
+        head += "</span></p>"
+
+        lines = [head, f"<hr style='border-color:{_BORDER}'>"]
+        for i in idxs:
+            msg = self._messages[i]
+            color = self._msg_actor_color.get(i) or _EVENT_CLUSTER_COLOR
+            tag = self._msg_labels.get(i) or ""
+            preview = self._get_preview(msg.get("content") or "", 160)
+            lines.append(
+                f"<p><a href='msg:{i}' style='color:{color};font-weight:bold;"
+                f"text-decoration:none'>{i + 1}. {self._esc(tag)}</a>"
                 f"&nbsp;<span style='color:{_MUTED}'>{self._esc(preview)}</span></p>"
             )
         return "".join(lines)
@@ -1448,6 +1542,16 @@ class ContextViewerDialog(QDialog):
 
         if first.startswith("[Runtime Core Directive:"):
             return "Code 23 runtime directive", _ROLE_COLORS.get("system", _TEXT)
+
+        # Авторский блок стадии: "# STAGE: introduction — Знакомство".
+        stage_block = re.match(r"^#\s*STAGE:\s*([^\r\n—–-]{1,40})", first)
+        if stage_block:
+            return (
+                _("Стадия: {name}", "Stage: {name}").format(
+                    name=stage_block.group(1).strip()
+                ),
+                _COARSE_GROUPS["prompt"][1],
+            )
 
         if idx is not None and role in ("user", "assistant", "event"):
             if _RE_SPEAKER_PREFIX.match(first):

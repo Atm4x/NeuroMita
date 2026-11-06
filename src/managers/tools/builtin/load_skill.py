@@ -1,0 +1,101 @@
+"""Expose an authored skill body through the ordinary tool channel."""
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from managers.tools.base import Tool
+from services.skill_catalog import DEFAULT_MAX_SKILL_CHARS, SkillCatalog
+
+
+class LoadSkillTool(Tool):
+    """Load one catalogued skill for the current and following turns."""
+
+    def __init__(self, settings=None) -> None:
+        self._settings = settings
+        self._char_id = ""
+        self._prompt_set_path = ""
+
+    @property
+    def name(self) -> str:
+        return "load_skill"
+
+    def set_char_id(self, char_id: str) -> None:
+        self._char_id = str(char_id or "")
+
+    def set_prompt_set_path(self, path: str) -> None:
+        self._prompt_set_path = str(path or "")
+
+    def _catalog(self) -> SkillCatalog:
+        if self._char_id:
+            try:
+                from managers.character_resource_manager import get_character_resource_manager
+                cached = get_character_resource_manager().skill_catalogs_for(self._char_id).get()
+            except Exception:
+                cached = None
+            if cached is not None:
+                return cached
+        root = self._prompt_set_path
+        if not root and self._char_id:
+            from managers.character_resource_manager import get_character_resource_manager
+            root = get_character_resource_manager().prompt_set_path_for(self._char_id)
+        return SkillCatalog.load(root)
+
+    @property
+    def description(self) -> str:
+        return (
+            "Load the full instructions of one authored skill (for example music or "
+            "wardrobe). Call it when the scene needs that skill; the instructions stay "
+            "available for the next turns instead of being repeated every turn."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        catalog = self._catalog() if (self._prompt_set_path or self._char_id) else None
+        ids = sorted(catalog.entries) if catalog else []
+        skill_id: Dict[str, Any] = {
+            "type": "string",
+            "description": "Skill id from the [SKILLS] catalog.",
+        }
+        if ids:
+            skill_id["enum"] = ids
+        return {
+            "type": "object",
+            "properties": {"id": skill_id},
+            "required": ["id"],
+        }
+
+    def run(self, id: str = "", **_: Any) -> str:
+        skill_id = str(id or "").strip()
+        if not skill_id:
+            return "[load_skill] Missing skill id."
+        catalog = self._catalog()
+        if not catalog:
+            return "[load_skill] This character has no skill catalog."
+        entry = catalog.get(skill_id)
+        if entry is None:
+            available = ", ".join(sorted(catalog.entries)) or "none"
+            return f"[load_skill] Unknown skill '{skill_id}'. Available: {available}."
+        max_chars = DEFAULT_MAX_SKILL_CHARS
+        if self._settings is not None:
+            try:
+                max_chars = int(self._settings.get("SKILL_MAX_CHARS", DEFAULT_MAX_SKILL_CHARS) or max_chars)
+            except Exception:
+                pass
+        body = entry.render_body(max_chars=max(400, max_chars))
+        self._remember(entry.id, entry.token_estimate)
+        return (
+            f"[skill: {entry.title}]\n"
+            f"Authored instructions for skill '{entry.id}'. Follow them while the scene "
+            f"calls for this skill; they never override character rules or current "
+            f"observations.\n\n{body}"
+        )
+
+    def _remember(self, skill_id: str, tokens: int) -> None:
+        if not self._char_id:
+            return
+        try:
+            from managers.character_resource_manager import get_character_resource_manager
+            session = get_character_resource_manager().loaded_skills_for(self._char_id)
+            session.remember(skill_id, tokens=tokens)
+        except Exception:
+            return

@@ -8,6 +8,7 @@ from .actions.asr_ptt_state import AsrPttStateAction
 from .actions.hello import HelloAction
 from .actions.desktop_state import DesktopStateAction
 from .actions.timeline import TimelineAction
+from .actions.action_receipt import ActionReceiptAction
 
 
 def build_action_registry() -> ActionRegistry:
@@ -21,4 +22,5 @@ def build_action_registry() -> ActionRegistry:
     reg.register("hello", HelloAction())
     reg.register("desktop_state", DesktopStateAction())
     reg.register("timeline", TimelineAction())
+    reg.register("action_receipt", ActionReceiptAction())
     return reg

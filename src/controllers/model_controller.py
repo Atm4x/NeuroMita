@@ -54,6 +54,7 @@ from services.structured_response_capabilities import (
 )
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
+from domain.working_state import working_state_transition
 from services.conversation_timeline import ConversationTimeline
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
@@ -61,7 +62,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "load_skill"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -69,6 +70,7 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "load_skill": False,
 }
 
 
@@ -201,8 +203,10 @@ class ModelController(GenerationService, ModelStateService):
 
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
+        from managers.tools.builtin.load_skill import LoadSkillTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
         self.model.tool_manager.register(ReminderTool())
+        self.model.tool_manager.register(LoadSkillTool(settings=self.settings))
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()
@@ -1569,11 +1573,19 @@ class ModelController(GenerationService, ModelStateService):
         _tools_mode = str(self.settings.get("TOOLS_MODE", "native"))
         if _tools_mode == "off":
             _tools_on = False
+        skill_mode = str(
+            self.settings.get("SKILL_LOADING_MODE", "on_demand") or "on_demand"
+        ).strip().lower()
+        eager_skills = skill_mode == "eager"
         _enabled_tools = [
             n for n in _ALL_TOOLS_LIST
             if self.settings.get(f"TOOL_ENABLED_{n}", _DEFAULT_TOOL_ENABLED.get(n, False))
             and (n != "reminder" or bool(self.settings.get("REMINDERS_ENABLED", True)))
         ]
+        if eager_skills:
+            # Eager mode already keeps every skill body in the prompt; offering
+            # load_skill would only spend a turn loading text the model has.
+            _enabled_tools = [n for n in _enabled_tools if n != "load_skill"]
         if not _enabled_tools:
             _tools_on = False
 
@@ -1592,6 +1604,14 @@ class ModelController(GenerationService, ModelStateService):
             except Exception as e:
                 logger.warning(f"[ModelController] Failed to build tools prompt: {format_exception(e)}")
                 _tools_on = False
+
+        # On-demand skills only make sense while load_skill is actually offered
+        # to the model; the catalog block is derived from that capability.
+        effective_capabilities["skill_mode"] = "eager" if eager_skills else "on_demand"
+        effective_capabilities["skills"] = bool(
+            "load_skill" in (_enabled_tools or [])
+            or effective_capabilities["skill_mode"] == "eager"
+        )
 
         with character_lock(char_id):
             _custom_params = copy.deepcopy(getattr(char, "custom_params", []) or [])
@@ -1743,6 +1763,9 @@ class ModelController(GenerationService, ModelStateService):
             effective_capabilities["tools_prompt"] = "Use the advertised native functions to call tools."
         effective_capabilities["working_state"] = "working_state" not in profile.excluded_fields
         effective_capabilities["structured_prompt_features"] = profile.prompt_features()
+        effective_capabilities["history_epoch_at_request"] = int(
+            getattr(char, "history_epoch", 0) or 0
+        )
         effective_capabilities.update({
             "structured_exclude_fields": profile.excluded_fields,
             "structured_segment_exclude_fields": profile.excluded_segment_fields,
@@ -1932,6 +1955,7 @@ class ModelController(GenerationService, ModelStateService):
 
             if is_structured_output:
                 sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+                context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
                 structured_result = self._process_structured_output(
                     visible_raw=visible_raw,
                     think_text=think_text,
@@ -2012,8 +2036,10 @@ class ModelController(GenerationService, ModelStateService):
                 cost_fallback_source=getattr(active_pricing, "source", None),
             )
             sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+            context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
             assistant_message_id = ""
+
             if policy.write_to_history:
                 with perf_span(trace_id, "generation.history_write"):
                     history_write = self.event_writer.write_turn(
@@ -2457,12 +2483,14 @@ class ModelController(GenerationService, ModelStateService):
         # a stale plan for the next player message.
         if capabilities.get("working_state", False):
             try:
-                if structured.working_state is None:
+                commit_working_state, working_state_value = working_state_transition(structured)
+                if commit_working_state and working_state_value is None:
                     char.working_state.clear()
-                else:
+                elif commit_working_state:
                     char.working_state.update(
-                        structured.working_state,
-                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
+                        working_state_value,
+                        epoch=capabilities.get("history_epoch_at_request"),
+                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 1000) or 1000),
                     )
             except Exception as exc:
                 logger.warning(
@@ -2876,6 +2904,7 @@ class ModelController(GenerationService, ModelStateService):
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
         sample_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+        context_snapshot_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
@@ -2914,9 +2943,7 @@ class ModelController(GenerationService, ModelStateService):
             image_descriptions=image_descriptions,
             structured_model_cls=structured_model_cls,
             sample_id=sample_id_2,
-            context_snapshot_id=str(
-                (llm_response_2.raw or {}).get("context_snapshot_id") or ""
-            ),
+            context_snapshot_id=context_snapshot_id_2,
             dialogue=dialogue,
             native_tool_call=(llm_response_2.raw or {}).get("native_tool_call"),
             request_cancellation=request_cancellation,

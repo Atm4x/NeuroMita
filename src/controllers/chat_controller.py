@@ -1118,8 +1118,11 @@ class ChatController(ChatService, GenerationActivityService):
         with trace_scope(trace_id):
             conversation_timeline = services().get_optional(ConversationTimeline)
             if conversation_timeline is not None:
+                game_state = kwargs.get("game_state") or {}
+                consumed = game_state.get("_timeline_event_ids") or ()
                 kwargs["timeline_turn"] = conversation_timeline.runtime.capture(
                     character_id=str(kwargs.get("character_id") or ""),
+                    consumed_event_ids=tuple(str(item) for item in consumed if item),
                 )
             operation_id = str(trace_id or uuid.uuid4().hex)
             cancellation = CancellationToken()

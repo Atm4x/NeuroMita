@@ -90,6 +90,74 @@ def _normalise_reaction_events(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return events
 
 
+def build_game_state_payload(
+    context: Dict[str, Any],
+    character_id: str,
+    dialogue: Any = None,
+) -> Dict[str, Any]:
+    """Project the Unity snapshot onto the fields the prompt knows about.
+
+    The snapshot is a union of everything Unity sends; this projection is what
+    stops stray keys from reaching the prompt. Every field Unity starts sending
+    for the prompt must be listed here or it silently disappears.
+    """
+    dialogue_world_id = (
+        str(dialogue.get("world_id") or "").strip()
+        if isinstance(dialogue, dict)
+        else ""
+    )
+    # New Unity clients send explicit worldPlayer/worldMita fields. The
+    # world_id fallbacks keep Python compatible while Unity is migrated.
+    world_player = str(
+        context.get("worldPlayer")
+        or context.get("world_id")
+        or dialogue_world_id
+        or ""
+    ).strip()
+    world_mita = str(
+        context.get("worldMita")
+        or context.get("world_id")
+        or dialogue_world_id
+        or world_player
+        or ""
+    ).strip()
+
+    try:
+        contract_version = int(context.get("prompt_contract_version") or 0)
+    except (TypeError, ValueError):
+        contract_version = 0
+
+    return {
+        "distance": float(str(context.get("distance", "0")).replace(",", ".")),
+        "roomPlayer": int(context.get("roomPlayer", 0)),
+        "roomMita": int(context.get("roomMita", 0)),
+        "nearObjects": context.get("hierarchy", ""),
+        "world_state": context.get("world_state", ""),
+        "worldPlayer": world_player,
+        "worldMita": world_mita,
+        "runtime_rules": context.get("runtime_rules", ""),
+        "runtime_static_catalog": context.get("runtime_static_catalog", ""),
+        "runtime_capabilities": context.get("runtime_capabilities", ""),
+        "intent_rules": context.get("intent_rules", ""),
+        "cognitive_effects": context.get("cognitive_effects", []),
+        "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
+        "cognitive_effect_aftermath": context.get("cognitive_effect_aftermath", []),
+        "runtime_events": context.get("runtime_events", []),
+        "tv_observation": context.get("tv_observation", {}),
+        "novel": context.get("novel", {}) if character_id == "TwoD" else {},
+        # The game owns the skill catalog: it ships the entries together with
+        # the snapshot, so the prompt can render the catalog without keeping
+        # its own copy of the authored text.
+        "skills_catalog": context.get("skills_catalog", []),
+        "skills_catalog_revision": context.get("skills_catalog_revision", ""),
+        "skills_scope": context.get("skills_scope", ""),
+        # A runtime that defers mechanic instructions into skills says so here;
+        # without the marker the payload is the old, self-contained contract.
+        "prompt_contract_version": contract_version,
+        "scene_mechanics": context.get("scene_mechanics", []),
+    }
+
+
 def _build_react_prompt(
     data: Dict[str, Any],
 ) -> tuple[List[str], str, float, List[Dict[str, Any]]]:
@@ -146,34 +214,6 @@ _TRANSIENT_GAME_STATE_KEYS = (
     "cognitive_effect_changes",
     "cognitive_effect_aftermath",
 )
-
-
-def _build_game_state_payload(
-    context: Dict[str, Any],
-    *,
-    character_id: str,
-    world_player: str,
-    world_mita: str,
-) -> Dict[str, Any]:
-    return {
-        "distance": float(str(context.get("distance", "0")).replace(",", ".")),
-        "roomPlayer": int(context.get("roomPlayer", 0)),
-        "roomMita": int(context.get("roomMita", 0)),
-        "nearObjects": context.get("hierarchy", ""),
-        "world_state": context.get("world_state", ""),
-        "worldPlayer": world_player,
-        "worldMita": world_mita,
-        "runtime_rules": context.get("runtime_rules", ""),
-        "runtime_static_catalog": context.get("runtime_static_catalog", ""),
-        "runtime_capabilities": context.get("runtime_capabilities", ""),
-        "intent_rules": context.get("intent_rules", ""),
-        "cognitive_effects": context.get("cognitive_effects", []),
-        "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
-        "cognitive_effect_aftermath": context.get("cognitive_effect_aftermath", []),
-        "runtime_events": context.get("runtime_events", []),
-        "tv_observation": context.get("tv_observation", {}),
-        "novel": context.get("novel", {}) if character_id == "TwoD" else {},
-    }
 
 
 def _build_persistent_game_state(
@@ -419,33 +459,7 @@ class CreateTaskAction:
 
         character_stats = _get_character_stats(character_id)
 
-        dialogue_world_id = (
-            str(dialogue_payload.get("world_id") or "").strip()
-            if isinstance(dialogue_payload, dict)
-            else ""
-        )
-        # New Unity clients send explicit worldPlayer/worldMita fields. The
-        # world_id fallbacks keep Python compatible while Unity is migrated.
-        world_player = str(
-            context.get("worldPlayer")
-            or context.get("world_id")
-            or dialogue_world_id
-            or ""
-        ).strip()
-        world_mita = str(
-            context.get("worldMita")
-            or context.get("world_id")
-            or dialogue_world_id
-            or world_player
-            or ""
-        ).strip()
-
-        game_state_payload = _build_game_state_payload(
-            context,
-            character_id=character_id,
-            world_player=world_player,
-            world_mita=world_mita,
-        )
+        game_state_payload = build_game_state_payload(context, character_id, dialogue_payload)
         if not desktop_turn:
             # Runtime events are consumable by this exact turn and must never leak
             # into the persistent fallback state used by non-Unity requests.
@@ -461,12 +475,13 @@ class CreateTaskAction:
 
             timeline_ingress = services().get_optional(UnityTimelineIngress)
             if timeline_ingress is not None:
-                timeline_event_id = await asyncio.to_thread(
+                ingest = await asyncio.to_thread(
                     timeline_ingress.ingest, request, str(character_id), list(participants or []),
                 )
-                req_id = request.get("req_id")
-                if timeline_event_id:
-                    game_state_payload["_timeline_event_id"] = timeline_event_id
+                if ingest.trigger_id:
+                    game_state_payload["_timeline_event_id"] = ingest.trigger_id
+                if ingest.event_ids:
+                    game_state_payload["_timeline_event_ids"] = list(ingest.event_ids)
 
         if server._should_block_event(event_type):
             await server._send_aborted_update(ctx.client_id, event_type, character_id, req_id=req_id)

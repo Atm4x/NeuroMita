@@ -368,8 +368,9 @@ class ConversationEventWriter:
             msg.update(llm_usage)
         if sample_id:
             msg["sample_id"] = sample_id
-        if context_snapshot_id:
-            msg["context_snapshot_id"] = context_snapshot_id
+        snapshot_id = str(context_snapshot_id or "").strip()
+        if snapshot_id:
+            msg["context_snapshot_id"] = snapshot_id
         if is_deleted:
             # Internal HistoryManager flag. It intentionally does not use a
             # public protocol field and is persisted as is_deleted=1.
