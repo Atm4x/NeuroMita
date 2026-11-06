@@ -570,6 +570,16 @@ class ContextViewerDialog(QDialog):
         # фактическую позицию в запросе.
         group_order: list[str] = []
         group_idxs: Dict[str, list[int]] = {}
+        # Индекс первого сообщения истории: нераспознанная секция до него —
+        # это статика промпта, а не «живой» контекст. Иначе любой новый блок
+        # промпта (как [SKILLS]) поднимает «Активный контекст» выше истории.
+        self._first_history_idx: int | None = None
+        for idx in range(len(self._messages)):
+            section = (self._est_by_index.get(idx) or {}).get("section") or ""
+            if _SECTION_TO_GROUP.get(section) == "history":
+                self._first_history_idx = idx
+                break
+
         for idx in range(len(self._messages)):
             gkey = self._group_key(idx)
             if gkey not in group_idxs:
@@ -624,7 +634,14 @@ class ContextViewerDialog(QDialog):
     def _group_key(self, idx: int) -> str:
         """Крупная группа сообщения по его секции из оценки токенов."""
         section = (self._est_by_index.get(idx) or {}).get("section") or ""
-        return _SECTION_TO_GROUP.get(section, "context")
+        group = _SECTION_TO_GROUP.get(section)
+        if group is not None:
+            return group
+
+        first_history = getattr(self, "_first_history_idx", None)
+        if first_history is not None and idx < first_history:
+            return "prompt"
+        return "context"
 
     # ──────────────────────────── Строки дерева ──────────────────────────────
 
