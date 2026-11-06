@@ -132,6 +132,7 @@ class NativeSkillHistoryTests(unittest.TestCase):
         call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["missing"]}}
         result = native_tool_followup_messages(call, "[load_skill] Unknown skill.")
         self.assertEqual(result[1]["content"], "[load_skill] Unknown skill.")
+        self.assertEqual(persisted_native_tool_messages({"native_tool_history": result}), result)
 
 
 class ToolModeTests(unittest.TestCase):
