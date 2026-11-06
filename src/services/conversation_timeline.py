@@ -371,7 +371,13 @@ class ConversationTimeline:
             description = payload.get("description") or payload.get("name") or event.kind.value
             details = {key: value for key, value in payload.items() if key not in {"description", "name"}}
             from domain.timeline import JsonDocument
-            content = f"[Past session event: {event.kind.value}] {description}"
+            # Compact marker: the row role already says "event", so the long
+            # "[Past session event: UnityEvent]" prefix only spent tokens. The
+            # marker stays short but explicit so the text is never mistaken for
+            # Player speech; rarer kinds keep their name for diagnosis.
+            kind = str(event.kind.value)
+            marker = "[Event]" if kind == "UnityEvent" else f"[Event: {kind}]"
+            content = f"{marker} {description}"
             if details:
                 content += " " + JsonDocument(details).canonical
             messages[event.event_id] = {

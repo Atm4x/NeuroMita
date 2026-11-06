@@ -654,7 +654,10 @@ class ContextViewerDialog(QDialog):
         text = self._content_plain(self._messages[idx].get("content")).lstrip()
         head = next((line.strip() for line in text.split("\n") if line.strip()), "")
         head = re.sub(r"^\[\s*RUNTIME EVENT\s*\]\s*", "", head)
-        return head.startswith("[Past session event")
+        # Old histories keep the verbose marker, new ones use "[Event]".
+        return head.startswith("[Past session event") or bool(
+            re.match(r"^\[Event(?::[^\]]*)?\]", head)
+        )
 
     def _add_message_row(self, parent: QTreeWidgetItem, idx: int) -> None:
         msg = self._messages[idx]

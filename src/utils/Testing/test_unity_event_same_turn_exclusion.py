@@ -73,7 +73,7 @@ class UnityEventSameTurnExclusionTests(unittest.TestCase):
         with self.runtime.turn_scope(second):
             history = self._history_texts("Crazy")
 
-        self.assertIn("[Past session event", history)
+        self.assertIn("[Event]", history)
         self.assertIn("Player moved about 8 m nearby.", history)
 
     def test_a_turn_without_consumed_events_keeps_the_full_window(self):

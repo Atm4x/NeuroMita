@@ -24,14 +24,16 @@ def _viewer(messages: list[dict]) -> ContextViewerDialog:
 class EventRowTests(unittest.TestCase):
     def test_past_session_events_are_recognised(self):
         viewer = _viewer([
-            {"role": "event", "content": "[Past session event: UnityEvent] Player crouched nearby."},
+            {"role": "event", "content": "[Event] Player crouched nearby."},
             {"role": "user", "content": "[RUNTIME EVENT] [Past session event: UnityEvent] Player moved."},
+            {"role": "event", "content": "[Event: GAME_STARTED] Game started."},
             {"role": "event", "content": "[Unity Runtime Events] These events occurred after the previous dispatch."},
         ])
         self.assertTrue(viewer._is_event_row(0))
         self.assertTrue(viewer._is_event_row(1))
+        self.assertTrue(viewer._is_event_row(2))
         # Блок рантайм-событий текущего хода остаётся отдельной строкой.
-        self.assertFalse(viewer._is_event_row(2))
+        self.assertFalse(viewer._is_event_row(3))
 
 
 class StageSectionTests(unittest.TestCase):
