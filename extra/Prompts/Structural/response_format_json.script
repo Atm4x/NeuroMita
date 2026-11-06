@@ -142,6 +142,7 @@ IF response_has_timers == True THEN
 ENDIF
 IF response_has_tools == True THEN
     SET p_wire_rules = p_wire_rules + '\n- tool_call may name only a tool listed in [Available Tools].\n'
+    SET p_wire_rules = p_wire_rules + '\n- tool_call may name only a tool listed in [Available Tools]; tool names never belong in intents or commands.\n'
 ENDIF
 
 SET LOCAL p_schema_fields = """  "segments": [
@@ -298,10 +299,11 @@ Example response:
 IF response_has_tools == True THEN
     SET LOCAL p_tool_footer = """
 
-tool_call: Use this TOP-LEVEL field when you need to call an external tool (internet search, calculator, etc.).
-- NEVER put tool names in the "commands" array. commands is ONLY for character game actions.
+tool_call: Use this TOP-LEVEL field to call a Python tool of this chat — web search, calculator, memory search, reminders, or load_skill for skills. These tools are not Unity actions.
+- NEVER put tool names in "commands" or "intents": those are ONLY for character game actions.
 - "segments" is REQUIRED: write a very short phrase (2-5 words): "One moment.", "Let me check.", "Just a sec." — nothing else.
 - ALL required args MUST be filled with actual values from the conversation. Never leave args empty {}.
+- Write "args" the way the active schema asks: an object of arguments, or a JSON-encoded string where the schema types it as a string.
 - Use ONLY tools listed in the [Available Tools] message.
 - You will receive the tool result in the next message and can then answer fully.
 - You can chain tools: e.g. first call web_search to get URLs, then call web_reader on the best result URL.

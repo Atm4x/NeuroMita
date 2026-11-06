@@ -57,6 +57,7 @@ from services.structured_response_capabilities import (
     StructuredResponseCapabilities,
     resolve_structured_response_capabilities,
 )
+from services.tool_prompt import render_tools_for_prompt
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
 from domain.working_state import working_state_transition
@@ -93,26 +94,6 @@ def extract_shared_world_info(snapshot: dict[str, Any]) -> dict[str, Any]:
     return shared
 
 
-def _render_tools_for_prompt(schema: list) -> str:
-    """Format tool JSON schema list into a human-readable prompt block."""
-    if not schema:
-        return ""
-    lines = ["Available tools:"]
-    for tool in schema:
-        name = tool.get("name", "?")
-        desc = tool.get("description", "")
-        params_def = tool.get("parameters", {})
-        props = params_def.get("properties", {})
-        required_set = set(params_def.get("required", []))
-        param_parts = []
-        for pname, pdef in props.items():
-            ptype = pdef.get("type", "any")
-            pdesc = pdef.get("description", "")
-            req_marker = " (REQUIRED)" if pname in required_set else ""
-            param_parts.append(f"{pname}: {ptype}{req_marker}" + (f" — {pdesc}" if pdesc else ""))
-        params_str = ", ".join(param_parts) if param_parts else "no parameters"
-        lines.append(f"- {name}({params_str}) — {desc}")
-    return "\n".join(lines)
 
 
 _GRAPH_TAG_RE = re.compile(r"<graph>([\s\S]*?)</graph>", re.IGNORECASE)
@@ -1604,7 +1585,13 @@ class ModelController(GenerationService, ModelStateService):
                 })
                 _tools_on = bool(_enabled_tools)
                 effective_capabilities["tools_prompt"] = (
-                    _render_tools_for_prompt(schema) if _tools_on else ""
+                    render_tools_for_prompt(
+                        schema,
+                        # Gemini schema encodes tool_call.args as a string.
+                        args_as_json_string=(
+                            getattr(effective_preset, "dialect_id", "") == "gemini"
+                        ),
+                    ) if _tools_on else ""
                 )
             except Exception as e:
                 logger.warning(f"[ModelController] Failed to build tools prompt: {format_exception(e)}")
@@ -2406,15 +2393,21 @@ class ModelController(GenerationService, ModelStateService):
                 name=native_tool_call["name"], args=native_tool_call["arguments"],
             )
 
-        if structured.tool_call is None and tools_on and enabled_tools:
-            # Gemini sometimes asks for a tool through intents instead of the
-            # tool_call field. Unity has no such intent, so lift it here or the
-            # request is dropped and the turn ends without the follow-up call.
+        # Compatibility bridge for models that ask for a tool through intents
+        # instead of tool_call. Allowlisted and validated in native_tool_calls,
+        # schema mode only, and never past the depth limit: a well-formed
+        # tool_call never reaches it.
+        _bridge_allowed = (
+            tool_mode in ('', 'schema')
+            and (not isinstance(profile, StructuredResponseCapabilities)
+                 or profile.at_tool_depth(tool_depth).can_call_tools)
+        )
+        if _bridge_allowed and structured.tool_call is None and tools_on and enabled_tools:
             lifted_tool = lift_tool_intent(structured, enabled_tools)
             if lifted_tool:
                 logger.warning(
-                    "[ModelController] Model asked for tool '%s' inside intents; "
-                    "running it as a tool call.", lifted_tool,
+                    "[ModelController] Tool-intent fallback: model asked for '%s' "
+                    "inside intents; running it as a tool call.", lifted_tool,
                 )
 
         # Apply and snapshot character state in a short critical section. Tool

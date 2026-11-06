@@ -238,11 +238,20 @@ def _remove_segment_schema_properties(schema: dict, field_names: set[str]) -> No
 class ToolCall(BaseModel):
     """Describes a tool the LLM wants to invoke during its response."""
 
-    name: str = Field(..., description="Exact name of the tool to call, chosen from the available tools list in the prompt")
+    name: str = Field(
+        ...,
+        description=(
+            "Exact name of the Python tool to call, copied from [Available Tools]. "
+            "Tool names are never written into intents or commands."
+        ),
+    )
     # Union allows Gemini to return args as a JSON string (Gemini can't freely use object type)
     args: Union[Dict[str, Any], str] = Field(
         default_factory=dict,
-        description='Tool arguments as key-value pairs, e.g. {"query": "search term"}'
+        description=(
+            'Tool arguments as key-value pairs, e.g. {"id": "wardrobe"}. '
+            "Arguments of a Python tool belong here, never in intents."
+        ),
     )
 
     @model_validator(mode="after")
@@ -263,10 +272,20 @@ class SegmentIntent(BaseModel):
     The field is available by default when a connected Unity runtime can execute
     it. Prompt sets may explicitly disable it; L1 reactions always omit intents.
     The parser accepts and forwards valid intent objects for protocol compatibility.
+    Python tools are not intents: they belong to tool_call only.
     """
 
-    type: str = Field(..., description="Intent type identifier, e.g. 'inventory.collect'")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Intent payload object")
+    type: str = Field(
+        ...,
+        description=(
+            "Unity intent type identifier, e.g. 'inventory.collect'. Never a Python "
+            "tool name; tools are called through tool_call."
+        ),
+    )
+    payload: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Intent payload object, following [Unity Intent Contract] only",
+    )
 
 
 class ResponseSegment(BaseModel):
@@ -288,6 +307,13 @@ class ResponseSegment(BaseModel):
     # Structured intents forwarded to Unity. Exposed by DSL opt-in and sanitized
     # here so malformed entries are dropped instead of failing the whole reply.
     intents: List[SegmentIntent] = Field(default_factory=list, description="Structured intents (type + payload) forwarded to the game runtime")
+    intents: List[SegmentIntent] = Field(
+        default_factory=list,
+        description=(
+            "Structured Unity intents (type + payload) forwarded to the game runtime. "
+            "Python tools go to tool_call, not here."
+        ),
+    )
 
     start_game: Optional[str] = Field(default=None, description="Game ID to start")
     end_game: Optional[str] = Field(default=None, description="Game ID to end")
@@ -621,7 +647,10 @@ class StructuredResponse(BaseModel):
             tc_props = schema["properties"]["tool_call"]["properties"]
             tc_props["args"] = {
                 "type": "string",
-                "description": 'JSON-encoded tool arguments, e.g. {"query": "search term"}',
+                "description": (
+                    'JSON-encoded tool arguments, e.g. {"id": "wardrobe"}. '
+                    "This field is the only place for Python tool arguments."
+                ),
             }
         except (KeyError, TypeError):
             pass
@@ -636,9 +665,11 @@ class StructuredResponse(BaseModel):
             intent_props["payload"] = {
                 "type": "string",
                 "description": (
-                    "JSON-encoded intent payload object. Its keys and values "
-                    "MUST exactly follow [Unity Intent Contract]. Use {} only "
-                    "when that contract explicitly allows an empty payload."
+                    "JSON-encoded Unity intent payload object. Its keys and "
+                    "values MUST exactly follow [Unity Intent Contract]. "
+                    "Use {} only when that contract explicitly allows an "
+                    "empty payload. Never put a Python tool name or the "
+                    "arguments of a tool here; tools live in tool_call."
                 ),
             }
         except (KeyError, TypeError):

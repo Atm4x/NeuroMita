@@ -15,6 +15,7 @@ from managers.character_resource_manager import get_character_resource_manager
 from managers.skill_session_manager import SkillSessionManager
 from managers.tools.builtin.load_skill import LoadSkillTool
 from services.skill_catalog import SkillCatalog
+from services.native_tool_calls import BRIDGEABLE_TOOL_INTENTS
 
 
 def _prompt_set(root: Path, skills: list[dict], files: dict[str, str]) -> None:
@@ -100,6 +101,14 @@ class LoadSkillToolTests(unittest.TestCase):
     def test_missing_catalog_is_reported(self):
         self.tool.set_prompt_set_path(str(self.root / "nowhere"))
         self.assertIn("no skill catalog", self.tool.run(id="music"))
+
+
+    def test_bridge_expects_exactly_the_tool_arguments(self):
+        params = self.tool.parameters
+        self.assertEqual(
+            set(BRIDGEABLE_TOOL_INTENTS["load_skill"]),
+            set(params.get("required") or ()),
+        )
 
 
 class LoadedSkillsPromptTests(unittest.TestCase):
