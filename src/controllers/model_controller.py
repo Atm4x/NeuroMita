@@ -1944,6 +1944,7 @@ class ModelController(GenerationService, ModelStateService):
 
             if is_structured_output:
                 sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+                context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
                 structured_result = self._process_structured_output(
                     visible_raw=visible_raw,
                     think_text=think_text,
@@ -1977,6 +1978,7 @@ class ModelController(GenerationService, ModelStateService):
                     image_descriptions=image_descriptions,
                     structured_model_cls=structured_model_cls,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
                     dialogue=request.dialogue,
                 )
                 if structured_result is not None:
@@ -2028,8 +2030,10 @@ class ModelController(GenerationService, ModelStateService):
                 cost_fallback_source=getattr(active_pricing, "source", None),
             )
             sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+            context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
             assistant_message_id = ""
+
             if policy.write_to_history:
                 with perf_span(trace_id, "generation.history_write"):
                     history_write = self.event_writer.write_turn(
@@ -2050,6 +2054,7 @@ class ModelController(GenerationService, ModelStateService):
                         thinking=think_text or None,
                         llm_usage=usage_snapshot,
                         sample_id=sample_id,
+                        context_snapshot_id=context_snapshot_id,
                         dialogue=request.dialogue,
                     )
                     assistant_message_id = history_write.assistant_message_id
@@ -2264,6 +2269,7 @@ class ModelController(GenerationService, ModelStateService):
         image_descriptions: dict[str, str] | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         dialogue: Any = None,
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
@@ -2319,6 +2325,7 @@ class ModelController(GenerationService, ModelStateService):
                             thinking=think_text or None,
                             llm_usage=usage_snapshot,
                             sample_id=sample_id,
+                            context_snapshot_id=context_snapshot_id,
                             assistant_is_deleted=True,
                             dialogue=dialogue,
                         )
@@ -2452,6 +2459,7 @@ class ModelController(GenerationService, ModelStateService):
                 tool_depth=tool_depth,
                 structured_model_cls=structured_model_cls,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
                 image_descriptions=image_descriptions,
                 voice_profile=voice_profile,
                 dialogue=dialogue,
@@ -2551,6 +2559,7 @@ class ModelController(GenerationService, ModelStateService):
                     thinking=think_text or None,
                     llm_usage=usage_snapshot,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
                     dialogue=dialogue,
                 )
                 assistant_message_id = history_write.assistant_message_id
@@ -2640,6 +2649,7 @@ class ModelController(GenerationService, ModelStateService):
         trace_id: str | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         image_descriptions: dict[str, str] | None = None,
         voice_profile=None,
         dialogue: Any = None,
@@ -2710,6 +2720,7 @@ class ModelController(GenerationService, ModelStateService):
                 thinking=think_text or None,
                 llm_usage=usage_snapshot,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
                 dialogue=dialogue,
             )
             first_assistant_message_id = history_write.assistant_message_id
@@ -2874,6 +2885,7 @@ class ModelController(GenerationService, ModelStateService):
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
         sample_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+        context_snapshot_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
@@ -2912,6 +2924,7 @@ class ModelController(GenerationService, ModelStateService):
             image_descriptions=image_descriptions,
             structured_model_cls=structured_model_cls,
             sample_id=sample_id_2,
+            context_snapshot_id=context_snapshot_id_2,
             dialogue=dialogue,
             native_tool_call=(llm_response_2.raw or {}).get("native_tool_call"),
             request_cancellation=request_cancellation,

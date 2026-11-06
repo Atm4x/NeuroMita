@@ -218,3 +218,56 @@ def test_write_turn_reports_partial_fanout_rollback() -> None:
     assert not result.history_committed
     assert result.committed_recipient_ids == ("Kind",)
     assert result.failed_recipient_ids == ("Crazy",)
+
+
+def test_assistant_message_keeps_the_snapshot_it_answered() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-snapshot",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-snapshot",
+        sample_id="sample-1",
+        context_snapshot_id="ctx_0123456789abcdef0123456789abcdef",
+    )
+
+    user_event, assistant_event = character.batches[0]
+    assert assistant_event["context_snapshot_id"] == "ctx_0123456789abcdef0123456789abcdef"
+    assert assistant_event["sample_id"] == "sample-1"
+    assert "context_snapshot_id" not in user_event
+
+
+def test_missing_snapshot_stays_absent_instead_of_empty() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-nosnapshot",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-nosnapshot",
+        context_snapshot_id="",
+    )
+
+    _user_event, assistant_event = character.batches[0]
+    assert "context_snapshot_id" not in assistant_event
