@@ -210,6 +210,9 @@ class TimelineTurn:
     context_epoch: int = 0
     include_target: bool = False
     input_event_ids: tuple[str, ...] = ()
+    # Facts this request brought with it. They are part of the turn's input,
+    # not its history, so the prompt must not project them twice.
+    consumed_event_ids: tuple[str, ...] = ()
 
     @property
     def reply(self) -> bool:

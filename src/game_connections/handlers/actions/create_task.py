@@ -439,12 +439,14 @@ class CreateTaskAction:
 
         timeline_ingress = services().get_optional(UnityTimelineIngress)
         if timeline_ingress is not None:
-            timeline_event_id = await asyncio.to_thread(
+            ingest = await asyncio.to_thread(
                 timeline_ingress.ingest, request, str(character_id), list(participants or []),
             )
             req_id = request.get("req_id")
-            if timeline_event_id:
-                game_state_payload["_timeline_event_id"] = timeline_event_id
+            if ingest.trigger_id:
+                game_state_payload["_timeline_event_id"] = ingest.trigger_id
+            if ingest.event_ids:
+                game_state_payload["_timeline_event_ids"] = list(ingest.event_ids)
 
         if server._should_block_event(event_type):
             await server._send_aborted_update(ctx.client_id, event_type, character_id, req_id=req_id)

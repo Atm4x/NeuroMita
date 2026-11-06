@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from domain.timeline import EventKind, JsonDocument, TimelineConflict, new_id
 from services.contracts import parse_dialogue_turn_context
 from .timeline_runtime import SessionTimelineRuntime
+
+
+@dataclass(frozen=True)
+class UnityIngestResult:
+    """What one Unity request contributed to the timeline.
+
+    event_ids lists every fact the request brought. The prompt for this same
+    request renders those facts in their own block; projecting them from
+    history as well would describe one event twice.
+    """
+
+    trigger_id: str | None = None
+    event_ids: tuple[str, ...] = field(default_factory=tuple)
 
 
 class UnityTimelineIngress:
@@ -19,7 +33,14 @@ class UnityTimelineIngress:
         return next((event.event_id for event in reversed(events)
                      if event.kind in kinds and character_id in event.observers), None)
 
-    def ingest(self, request: dict[str, Any], character_id: str, recipients: list[str]) -> str | None:
+    @staticmethod
+    def _result(events, character_id) -> UnityIngestResult:
+        return UnityIngestResult(
+            trigger_id=UnityTimelineIngress._trigger(events, character_id),
+            event_ids=tuple(event.event_id for event in events),
+        )
+
+    def ingest(self, request: dict[str, Any], character_id: str, recipients: list[str]) -> UnityIngestResult:
         context = request.get("context") or {}
         data = request.get("data") or {}
         request_id = str(request.get("req_id") or new_id())
@@ -39,7 +60,7 @@ class UnityTimelineIngress:
             if receipt is not None:
                 if receipt.command != command:
                     raise TimelineConflict("Unity request identity was reused for different session facts")
-                return self._trigger(receipt.events, character_id)
+                return self._result(receipt.events, character_id)
             head = timeline.branch.head_sequence
             present = set(timeline.present())
             witnesses = {character_id}
@@ -96,4 +117,4 @@ class UnityTimelineIngress:
                               else EventKind.PROACTIVE_OPPORTUNITY)
                 drafts.append(timeline.draft(event_kind, {"name": kind}, observers=witnesses, key=f"{key}:timer"))
             events = timeline.append(drafts, expected_head=head, key=key, command=command)
-            return self._trigger(events, character_id)
+            return self._result(events, character_id)
