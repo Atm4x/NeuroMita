@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import json
+import logging
 
 from handlers.llm_providers.base import ToolResult
 from handlers.llm_providers.protocols.history import normalize_history_message, normalize_tool_call_history
@@ -12,6 +13,16 @@ from services.structured_response_capabilities import StructuredResponseCapabili
 
 
 NATIVE_DIALECTS = frozenset({'openai_chat_completions', 'openai_responses'})
+
+logger = logging.getLogger(__name__)
+
+
+# Intents that may be lifted into tool calls, with the arguments each one needs.
+# Nothing outside this table is ever converted, so a Unity intent cannot turn
+# into a tool call just because the two share a name.
+BRIDGEABLE_TOOL_INTENTS = {
+    "load_skill": ("id",),
+}
 
 
 def resolve_tool_mode(settings, capabilities, dialect_id):
@@ -114,12 +125,17 @@ def native_tool_followup_messages(call, result):
 
 
 def lift_tool_intent(structured: StructuredResponse, enabled_tools) -> str:
-    """Move a tool the model named in intents onto the tool-call field.
+    """Move an explicitly bridged tool from intents onto the tool-call field.
 
     A model that cannot emit tool_call sometimes asks through intents:
-    {"type": "load_skill", "payload": "wardrobe"}. Unity knows no such intent,
-    so the request would be dropped and the turn would end without the
-    follow-up request that reads the skill. Returns the tool name it lifted.
+    {"type": "load_skill", "payload": "wardrobe"}. Unity knows no such
+    intent, so the request would be dropped and the turn would end without the
+    follow-up request that reads the skill.
+
+    Only BRIDGEABLE_TOOL_INTENTS entries are converted, only while that tool is
+    enabled for the request, and only with a complete, correctly typed argument
+    set. Anything else stays where the model put it: guessing arguments would
+    run a tool the model did not actually ask for. Returns the lifted name.
     """
     names = {str(name).strip() for name in (enabled_tools or ()) if str(name).strip()}
     if not names:
@@ -132,19 +148,48 @@ def lift_tool_intent(structured: StructuredResponse, enabled_tools) -> str:
         changed = False
         for intent in intents:
             name = str(getattr(intent, "type", "") or "").strip()
-            if name not in names:
+            required = BRIDGEABLE_TOOL_INTENTS.get(name)
+            if required is None or name not in names:
                 kept.append(intent)
                 continue
             changed = True
-            args = getattr(intent, "payload", None)
-            args = dict(args) if isinstance(args, dict) else {}
-            if lifted or (name == "load_skill" and not str(args.get("id") or "").strip()):
+            args = _bridge_arguments(name, getattr(intent, "payload", None), required)
+            if args is None:
+                continue
+            if lifted:
+                logger.warning(
+                    "[ToolIntentBridge] Dropping a second %r request: one tool call per turn.",
+                    name,
+                )
                 continue
             lifted = name
             structured.tool_call = ToolCall(name=name, args=args)
         if changed:
             segment.intents = kept
     return lifted
+
+
+def _bridge_arguments(name, payload, required):
+    """Return validated arguments for a bridged intent, or None when unsure."""
+    payload = payload if isinstance(payload, dict) else {}
+    args = {}
+    for key in required:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            logger.warning(
+                "[ToolIntentBridge] %r came through intents without a valid %r; "
+                "not lifting it.",
+                name, key,
+            )
+            return None
+        args[key] = value.strip()
+    unknown = sorted(set(payload) - set(required))
+    if unknown:
+        logger.warning(
+            "[ToolIntentBridge] Ignoring unknown %r arguments from intents: %s",
+            name, unknown,
+        )
+    return args
 
 
 def _has_schema_tool_call(data):

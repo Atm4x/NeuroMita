@@ -21,6 +21,7 @@ from utils.structured_response_parser import (
     structured_response_to_result_dict,
 )
 from services.native_tool_calls import lift_tool_intent
+from services.tool_prompt import render_tools_for_prompt
 
 
 def _segment_excl_for_caps(caps: dict) -> set:
@@ -275,6 +276,66 @@ class ToolIntentLiftTests(unittest.TestCase):
         self.assertEqual(lift_tool_intent(response, ["load_skill"]), "")
         self.assertIsNone(response.tool_call)
         self.assertEqual(response.segments[0].intents, [])
+
+    def test_tool_outside_the_bridge_stays_a_unity_intent(self) -> None:
+        response = self._response([
+            {"type": "web_search", "payload": {"query": "wardrobe"}},
+        ])
+        self.assertEqual(lift_tool_intent(response, ["web_search", "load_skill"]), "")
+        self.assertIsNone(response.tool_call)
+        self.assertEqual(len(response.segments[0].intents), 1)
+
+    def test_arguments_are_never_guessed(self) -> None:
+        response = self._response([{"type": "load_skill", "payload": {"id": 42}}])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "")
+        self.assertIsNone(response.tool_call)
+
+    def test_only_the_first_request_becomes_a_call(self) -> None:
+        response = self._response([
+            {"type": "load_skill", "payload": "wardrobe"},
+            {"type": "load_skill", "payload": "music"},
+        ])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "load_skill")
+        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+        self.assertEqual(response.segments[0].intents, [])
+
+    def test_unknown_tool_arguments_are_not_forwarded(self) -> None:
+        response = self._response([
+            {"type": "load_skill", "payload": {"id": "wardrobe", "force": True}},
+        ])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "load_skill")
+        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+
+
+class ToolContractTests(unittest.TestCase):
+    """Схема и промпт разводят Python-инструменты и действия Unity."""
+
+    SCHEMA = [
+        {"name": "web_search", "description": "Search the web",
+         "parameters": {"properties": {"query": {"type": "string"}}, "required": ["query"]}},
+        {"name": "load_skill", "description": "Load a skill",
+         "parameters": {"properties": {"id": {"type": "string"}}, "required": ["id"]}},
+    ]
+
+    def test_gemini_schema_marks_tools_as_not_intents(self) -> None:
+        schema = StructuredResponse.gemini_schema_dict()
+        args = schema["properties"]["tool_call"]["properties"]["args"]
+        self.assertEqual(args["type"], "string")
+        self.assertIn("only place for Python tool arguments", args["description"])
+        intent_props = _gemini_segment_props(schema)["intents"]["items"]["properties"]
+        self.assertIn("tool_call", intent_props["payload"]["description"])
+        self.assertIn("Never a Python tool", intent_props["type"]["description"])
+
+    def test_prompt_block_names_the_tool_call_field(self) -> None:
+        block = render_tools_for_prompt(self.SCHEMA)
+        self.assertIn("not Unity actions", block)
+        self.assertIn('"tool_call"', block)
+        self.assertIn('"intents"', block)
+        self.assertIn('"name": "load_skill", "args": {"id": "<id>"}', block)
+
+    def test_prompt_example_matches_the_provider_argument_shape(self) -> None:
+        block = render_tools_for_prompt(self.SCHEMA, args_as_json_string=True)
+        self.assertIn('"args": "{\\"id\\": \\"<id>\\"}"', block)
 
 
 class StatSanitizeTests(unittest.TestCase):
