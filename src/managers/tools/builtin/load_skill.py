@@ -4,11 +4,29 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from managers.tools.base import Tool
+from managers.skill_session_manager import MAX_LOADED_SKILLS
 from services.skill_catalog import DEFAULT_MAX_SKILL_CHARS, SkillCatalog
 
 
+def _requested_ids(ids, legacy_id: str) -> list[str]:
+    """Skill ids of this call, including the older single-id form."""
+    values = []
+    if isinstance(ids, str):
+        values.append(ids)
+    elif isinstance(ids, (list, tuple)):
+        values.extend(ids)
+    if legacy_id:
+        values.append(legacy_id)
+    ordered = []
+    for value in values:
+        skill_id = str(value or "").strip()
+        if skill_id and skill_id not in ordered:
+            ordered.append(skill_id)
+    return ordered
+
+
 class LoadSkillTool(Tool):
-    """Load one catalogued skill for the current and following turns."""
+    """Load one or two catalogued skills for the current and following turns."""
 
     def __init__(self, settings=None) -> None:
         self._settings = settings
@@ -43,52 +61,71 @@ class LoadSkillTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Load the full instructions of one authored skill (for example music or "
-            "wardrobe). Call it when the scene needs that skill; the instructions stay "
-            "available for the next turns instead of being repeated every turn."
+            "Load the full instructions of one or two authored skills (for example "
+            "music or wardrobe). Call it when the scene needs them; the loaded "
+            "instructions stay available for the next turns instead of being "
+            "repeated every turn."
         )
 
     @property
     def parameters(self) -> Dict[str, Any]:
         catalog = self._catalog() if (self._prompt_set_path or self._char_id) else None
         ids = sorted(catalog.entries) if catalog else []
-        skill_id: Dict[str, Any] = {
+        item: Dict[str, Any] = {
             "type": "string",
             "description": "Skill id from the [SKILLS] catalog.",
         }
         if ids:
-            skill_id["enum"] = ids
+            item["enum"] = ids
         return {
             "type": "object",
-            "properties": {"id": skill_id},
-            "required": ["id"],
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": item,
+                    "description": (
+                        "Skill ids to load. Pass one, or two in the same call when "
+                        "the scene needs both at once."
+                    ),
+                },
+            },
+            "required": ["ids"],
         }
 
-    def run(self, id: str = "", **_: Any) -> str:
-        skill_id = str(id or "").strip()
-        if not skill_id:
+    def run(self, ids=None, id: str = "", **_: Any) -> str:
+        requested = _requested_ids(ids, id)
+        if not requested:
             return "[load_skill] Missing skill id."
         catalog = self._catalog()
         if not catalog:
             return "[load_skill] This character has no skill catalog."
-        entry = catalog.get(skill_id)
-        if entry is None:
-            available = ", ".join(sorted(catalog.entries)) or "none"
-            return f"[load_skill] Unknown skill '{skill_id}'. Available: {available}."
         max_chars = DEFAULT_MAX_SKILL_CHARS
         if self._settings is not None:
             try:
                 max_chars = int(self._settings.get("SKILL_MAX_CHARS", DEFAULT_MAX_SKILL_CHARS) or max_chars)
             except Exception:
                 pass
-        body = entry.render_body(max_chars=max(400, max_chars))
-        self._remember(entry.id, entry.token_estimate)
-        return (
-            f"[skill: {entry.title}]\n"
-            f"Authored instructions for skill '{entry.id}'. Follow them while the scene "
-            f"calls for this skill; they never override character rules or current "
-            f"observations.\n\n{body}"
-        )
+        blocks = []
+        for skill_id in requested[:MAX_LOADED_SKILLS]:
+            entry = catalog.get(skill_id)
+            if entry is None:
+                available = ", ".join(sorted(catalog.entries)) or "none"
+                blocks.append(f"[load_skill] Unknown skill '{skill_id}'. Available: {available}.")
+                continue
+            body = entry.render_body(max_chars=max(400, max_chars))
+            self._remember(entry.id, entry.token_estimate)
+            blocks.append(
+                f"[skill: {entry.title}]\n"
+                f"Authored instructions for skill '{entry.id}'. Follow them while the scene "
+                f"calls for this skill; they never override character rules or current "
+                f"observations.\n\n{body}"
+            )
+        if len(requested) > MAX_LOADED_SKILLS:
+            blocks.append(
+                f"[load_skill] Only {MAX_LOADED_SKILLS} skills stay in the prompt; "
+                f"the rest was ignored."
+            )
+        return "\n\n".join(blocks)
 
     def _remember(self, skill_id: str, tokens: int) -> None:
         if not self._char_id:

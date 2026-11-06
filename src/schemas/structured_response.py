@@ -374,7 +374,7 @@ class ResponseSegment(BaseModel):
                 elif itype.strip() == "load_skill" and isinstance(decoded, str) and decoded.strip():
                     # Модель просит скил голым id: сохраняем его, чтобы
                     # инструмент получил аргумент вместо пустого payload.
-                    payload = {"id": decoded.strip()}
+                    payload = {"ids": [decoded.strip()]}
                 else:
                     logger.warning(
                         "[StructuredResponse] Intent '%s' payload is not an object, defaulting to {}",

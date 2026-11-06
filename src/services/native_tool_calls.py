@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Nothing outside this table is ever converted, so a Unity intent cannot turn
 # into a tool call just because the two share a name.
 BRIDGEABLE_TOOL_INTENTS = {
-    "load_skill": ("id",),
+    "load_skill": ("ids", "id"),
 }
 
 
@@ -190,14 +190,19 @@ def _bridge_arguments(name, payload, required):
     args = {}
     for key in required:
         value = payload.get(key)
-        if not isinstance(value, str) or not value.strip():
-            logger.warning(
-                "[ToolIntentBridge] %r came through intents without a valid %r; "
-                "not lifting it.",
-                name, key,
-            )
-            return None
-        args[key] = value.strip()
+        if isinstance(value, str) and value.strip():
+            args[key] = value.strip()
+        elif isinstance(value, (list, tuple)):
+            values = [str(item).strip() for item in value if isinstance(item, str) and str(item).strip()]
+            if values:
+                args[key] = values
+    if not args:
+        logger.warning(
+            "[ToolIntentBridge] %r came through intents without a usable argument; "
+            "not lifting it.",
+            name,
+        )
+        return None
     unknown = sorted(set(payload) - set(required))
     if unknown:
         logger.warning(

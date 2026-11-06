@@ -248,14 +248,14 @@ class ToolIntentLiftTests(unittest.TestCase):
 
     def test_string_payload_of_load_skill_keeps_the_id(self) -> None:
         response = self._response([{"type": "load_skill", "payload": "wardrobe"}])
-        self.assertEqual(response.segments[0].intents[0].payload, {"id": "wardrobe"})
+        self.assertEqual(response.segments[0].intents[0].payload, {"ids": ["wardrobe"]})
 
     def test_tool_named_intent_becomes_a_tool_call(self) -> None:
         response = self._response([{"type": "load_skill", "payload": "wardrobe"}])
         lifted = lift_tool_intent(response, ["load_skill"])
         self.assertEqual(lifted, "load_skill")
         self.assertEqual(response.tool_call.name, "load_skill")
-        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+        self.assertEqual(response.tool_call.args, {"ids": ["wardrobe"]})
         self.assertEqual(response.segments[0].intents, [])
 
     def test_unknown_intent_stays_with_the_runtime(self) -> None:
@@ -296,15 +296,22 @@ class ToolIntentLiftTests(unittest.TestCase):
             {"type": "load_skill", "payload": "music"},
         ])
         self.assertEqual(lift_tool_intent(response, ["load_skill"]), "load_skill")
-        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+        self.assertEqual(response.tool_call.args, {"ids": ["wardrobe"]})
         self.assertEqual(response.segments[0].intents, [])
 
     def test_unknown_tool_arguments_are_not_forwarded(self) -> None:
         response = self._response([
-            {"type": "load_skill", "payload": {"id": "wardrobe", "force": True}},
+            {"type": "load_skill", "payload": {"ids": ["wardrobe"], "force": True}},
         ])
         self.assertEqual(lift_tool_intent(response, ["load_skill"]), "load_skill")
-        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+        self.assertEqual(response.tool_call.args, {"ids": ["wardrobe"]})
+
+    def test_two_skill_ids_survive_the_bridge(self) -> None:
+        response = self._response([
+            {"type": "load_skill", "payload": {"ids": ["wardrobe", "music"]}},
+        ])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "load_skill")
+        self.assertEqual(response.tool_call.args, {"ids": ["wardrobe", "music"]})
 
 
 class ToolContractTests(unittest.TestCase):

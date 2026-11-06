@@ -82,33 +82,44 @@ class LoadSkillToolTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_loading_returns_the_body_and_remembers_the_skill(self):
-        result = self.tool.run(id="music")
+        result = self.tool.run(ids=["music"])
         self.assertIn("Pick a calm track.", result)
         self.assertIn("skill: Music", result)
         self.assertEqual(self.resources.loaded_skills_for(self.char_id).loaded(), ["music"])
 
     def test_unknown_skill_lists_what_exists(self):
-        result = self.tool.run(id="dance")
+        result = self.tool.run(ids=["dance"])
         self.assertIn("Unknown skill", result)
         self.assertIn("music", result)
         self.assertEqual(self.resources.loaded_skills_for(self.char_id).loaded(), [])
 
     def test_parameters_enumerate_catalog_ids(self):
         params = self.tool.parameters
-        self.assertEqual(params["properties"]["id"]["enum"], ["music", "wardrobe"])
-        self.assertEqual(params["required"], ["id"])
+        self.assertEqual(params["properties"]["ids"]["items"]["enum"], ["music", "wardrobe"])
+        self.assertEqual(params["required"], ["ids"])
 
     def test_missing_catalog_is_reported(self):
         self.tool.set_prompt_set_path(str(self.root / "nowhere"))
-        self.assertIn("no skill catalog", self.tool.run(id="music"))
+        self.assertIn("no skill catalog", self.tool.run(ids=["music"]))
 
 
     def test_bridge_expects_exactly_the_tool_arguments(self):
         params = self.tool.parameters
-        self.assertEqual(
-            set(BRIDGEABLE_TOOL_INTENTS["load_skill"]),
-            set(params.get("required") or ()),
+        self.assertTrue(
+            set(params.get("required") or ()).issubset(BRIDGEABLE_TOOL_INTENTS["load_skill"])
         )
+
+    def test_two_skills_load_in_one_call(self):
+        result = self.tool.run(ids=["music", "wardrobe"])
+        self.assertIn("Pick a calm track.", result)
+        self.assertIn("Offer two outfits.", result)
+        self.assertEqual(
+            self.resources.loaded_skills_for(self.char_id).loaded(),
+            ["music", "wardrobe"],
+        )
+
+    def test_the_older_single_id_argument_still_works(self):
+        self.assertIn("Pick a calm track.", self.tool.run(id="music"))
 
 
 class LoadedSkillsPromptTests(unittest.TestCase):
