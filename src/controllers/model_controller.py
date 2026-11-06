@@ -47,7 +47,12 @@ from core.request_policy import RequestPolicy, resolve_policy
 from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
-from services.native_tool_calls import resolve_tool_mode, native_tool_followup_messages, validate_runtime_native_call
+from services.native_tool_calls import (
+    lift_tool_intent,
+    native_tool_followup_messages,
+    resolve_tool_mode,
+    validate_runtime_native_call,
+)
 from services.structured_response_capabilities import (
     StructuredResponseCapabilities,
     resolve_structured_response_capabilities,
@@ -2395,6 +2400,17 @@ class ModelController(GenerationService, ModelStateService):
             structured.tool_call = StructuredToolCall(
                 name=native_tool_call["name"], args=native_tool_call["arguments"],
             )
+
+        if structured.tool_call is None and tools_on and enabled_tools:
+            # Gemini sometimes asks for a tool through intents instead of the
+            # tool_call field. Unity has no such intent, so lift it here or the
+            # request is dropped and the turn ends without the follow-up call.
+            lifted_tool = lift_tool_intent(structured, enabled_tools)
+            if lifted_tool:
+                logger.warning(
+                    "[ModelController] Model asked for tool '%s' inside intents; "
+                    "running it as a tool call.", lifted_tool,
+                )
 
         # Apply and snapshot character state in a short critical section. Tool
         # execution and any follow-up provider request happen after this lock.

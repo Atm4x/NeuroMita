@@ -20,6 +20,7 @@ from utils.structured_response_parser import (
     parse_structured_response,
     structured_response_to_result_dict,
 )
+from services.native_tool_calls import lift_tool_intent
 
 
 def _segment_excl_for_caps(caps: dict) -> set:
@@ -234,6 +235,46 @@ class SchemaVisibilityTests(unittest.TestCase):
     def test_reasoning_present_when_enabled(self) -> None:
         openai = StructuredResponse.openai_response_format()
         self.assertIn("reasoning", openai["json_schema"]["schema"]["properties"])
+
+
+class ToolIntentLiftTests(unittest.TestCase):
+    """Модель может попросить инструмент через intents вместо tool_call."""
+
+    def _response(self, intents):
+        return StructuredResponse.model_validate({
+            "segments": [{"text": "Переоденусь.", "intents": intents}],
+        })
+
+    def test_string_payload_of_load_skill_keeps_the_id(self) -> None:
+        response = self._response([{"type": "load_skill", "payload": "wardrobe"}])
+        self.assertEqual(response.segments[0].intents[0].payload, {"id": "wardrobe"})
+
+    def test_tool_named_intent_becomes_a_tool_call(self) -> None:
+        response = self._response([{"type": "load_skill", "payload": "wardrobe"}])
+        lifted = lift_tool_intent(response, ["load_skill"])
+        self.assertEqual(lifted, "load_skill")
+        self.assertEqual(response.tool_call.name, "load_skill")
+        self.assertEqual(response.tool_call.args, {"id": "wardrobe"})
+        self.assertEqual(response.segments[0].intents, [])
+
+    def test_unknown_intent_stays_with_the_runtime(self) -> None:
+        response = self._response([
+            {"type": "appearance.hair.glow", "payload": {"enabled": True}},
+        ])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "")
+        self.assertIsNone(response.tool_call)
+        self.assertEqual(len(response.segments[0].intents), 1)
+
+    def test_disabled_tool_is_not_lifted(self) -> None:
+        response = self._response([{"type": "load_skill", "payload": "wardrobe"}])
+        self.assertEqual(lift_tool_intent(response, []), "")
+        self.assertIsNone(response.tool_call)
+
+    def test_load_skill_without_an_id_is_dropped(self) -> None:
+        response = self._response([{"type": "load_skill", "payload": {}}])
+        self.assertEqual(lift_tool_intent(response, ["load_skill"]), "")
+        self.assertIsNone(response.tool_call)
+        self.assertEqual(response.segments[0].intents, [])
 
 
 class StatSanitizeTests(unittest.TestCase):
