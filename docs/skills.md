@@ -101,3 +101,18 @@ The catalog reaches the prompt through the Unity snapshot:
 game_connections/handlers/actions/create_task.py projects the request onto a
 whitelist of prompt fields, so a new field has to be listed there or the prompt
 never sees it.
+
+## Versioned contracts
+
+A runtime may keep mechanic instructions out of the prompt contract and name the
+mechanics instead. It then sends prompt_contract_version (2 or later) together
+with scene_mechanics entries shaped as {mechanic, skill, state}, where state is
+available, unavailable or missing.
+
+Python answers that with a [Unity Scene Mechanics] block. On demand it names the
+mechanics and their skills and asks for load_skill before an intent is built; in
+eager mode it points at the bodies already in the prompt; without tools it
+inlines the bodies itself, because a client that cannot load skills must not be
+left without the text. A mechanic whose body never arrived is named as unusable
+instead of being advertised. A payload without the marker renders exactly as it
+did before, so an older Unity build keeps its self-contained contract.

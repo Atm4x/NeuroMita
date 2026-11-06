@@ -122,6 +122,11 @@ def build_game_state_payload(
         or ""
     ).strip()
 
+    try:
+        contract_version = int(context.get("prompt_contract_version") or 0)
+    except (TypeError, ValueError):
+        contract_version = 0
+
     return {
         "distance": float(str(context.get("distance", "0")).replace(",", ".")),
         "roomPlayer": int(context.get("roomPlayer", 0)),
@@ -143,6 +148,10 @@ def build_game_state_payload(
         "skills_catalog": context.get("skills_catalog", []),
         "skills_catalog_revision": context.get("skills_catalog_revision", ""),
         "skills_scope": context.get("skills_scope", ""),
+        # A runtime that defers mechanic instructions into skills says so here;
+        # without the marker the payload is the old, self-contained contract.
+        "prompt_contract_version": contract_version,
+        "scene_mechanics": context.get("scene_mechanics", []),
     }
 
 

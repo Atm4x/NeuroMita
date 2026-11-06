@@ -36,6 +36,8 @@ class GameState:
     skills_catalog: list = field(default_factory=list)
     skills_catalog_revision: str = ""
     skills_scope: str = ""
+    prompt_contract_version: int = 0
+    scene_mechanics: list = field(default_factory=list)
 
     def update_from_event_data(self, data: Dict[str, Any]) -> None:
         self.distance = float(data.get("distance", self.distance) or 0.0)
@@ -56,6 +58,14 @@ class GameState:
             data.get("skills_catalog_revision", self.skills_catalog_revision) or ""
         )
         self.skills_scope = str(data.get("skills_scope", self.skills_scope) or "")
+        try:
+            version = int(data.get("prompt_contract_version", self.prompt_contract_version) or 0)
+        except (TypeError, ValueError):
+            version = self.prompt_contract_version
+        self.prompt_contract_version = version
+        mechanics = data.get("scene_mechanics")
+        if isinstance(mechanics, list):
+            self.scene_mechanics = mechanics
 
     def to_prompt_dict(self) -> Dict[str, Any]:
         return {
@@ -73,4 +83,6 @@ class GameState:
             "skills_catalog": list(self.skills_catalog),
             "skills_catalog_revision": str(self.skills_catalog_revision),
             "skills_scope": str(self.skills_scope),
+            "prompt_contract_version": int(self.prompt_contract_version),
+            "scene_mechanics": list(self.scene_mechanics),
         }

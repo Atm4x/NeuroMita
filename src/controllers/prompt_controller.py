@@ -844,6 +844,165 @@ class PromptController(PromptBuilderService):
         }
 
     @staticmethod
+    def _prompt_contract_version(game_state: Any) -> int:
+        """Which prompt contract the runtime sent; 0 is the pre-skill format."""
+        if not isinstance(game_state, dict):
+            return 0
+        try:
+            return int(game_state.get("prompt_contract_version") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _scene_mechanic_entries(game_state: Any) -> List[Dict[str, str]]:
+        """Normalise the runtime's mechanic descriptors, keeping their state."""
+        if not isinstance(game_state, dict):
+            return []
+        raw = game_state.get("scene_mechanics")
+        if not isinstance(raw, (list, tuple)):
+            return []
+
+        entries: List[Dict[str, str]] = []
+        seen = set()
+        for item in raw:
+            if isinstance(item, str):
+                mechanic, skill, state = item.strip(), "", "available"
+            elif isinstance(item, dict):
+                mechanic = str(item.get("mechanic") or item.get("id") or "").strip()
+                skill = str(item.get("skill") or item.get("skill_id") or "").strip()
+                state = str(item.get("state") or "available").strip().lower()
+            else:
+                continue
+            if not mechanic or mechanic.casefold() in seen:
+                continue
+            if state not in {"available", "unavailable", "missing"}:
+                state = "available"
+            seen.add(mechanic.casefold())
+            entries.append({
+                "mechanic": mechanic,
+                "skill": skill or mechanic,
+                "state": state,
+            })
+        return entries
+
+    @classmethod
+    def _build_unity_scene_mechanics_messages(
+        cls,
+        game_state: Any,
+        *,
+        capabilities: Dict[str, Any],
+        skill_catalog: Any,
+    ) -> List[Dict[str, Any]]:
+        """Mechanics the runtime kept out of the contract, with their skills.
+
+        Only a runtime that says which contract it sent gets this block: an
+        older payload already carries every instruction, and adding a pointer
+        there would describe text the model can already read.
+        """
+        if cls._prompt_contract_version(game_state) < 2:
+            return []
+        entries = cls._scene_mechanic_entries(game_state)
+        if not entries:
+            return []
+
+        available = [entry for entry in entries if entry["state"] == "available"]
+        missing = [entry for entry in entries if entry["state"] == "missing"]
+        skills_active = bool(capabilities.get("skills", False))
+        eager_skills = skills_active and str(
+            capabilities.get("skill_mode") or "on_demand"
+        ).strip().lower() == "eager"
+        load_skill_offered = skills_active and not eager_skills
+
+        lines = [
+            "[Unity Scene Mechanics]",
+            "The runtime keeps mechanic instructions out of the intent contract and "
+            "names the mechanics it supports in this scene here.",
+        ]
+        if available:
+            listed = ", ".join(
+                f"{entry['mechanic']} (skill {entry['skill']})" for entry in available
+            )
+            lines.append(f"Available now: {listed}.")
+        for entry in missing:
+            lines.append(
+                f"Reported but not delivered: {entry['mechanic']} (skill {entry['skill']})."
+            )
+
+        if available and eager_skills:
+            # Eager mode already placed every body in the prompt above.
+            lines.append(
+                "Their instructions are already included above; use those payloads "
+                "exactly as written."
+            )
+            lines.append("[/Unity Scene Mechanics]")
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        if available and load_skill_offered:
+            lines.append(
+                "Those mechanics exist here, but their payload shapes are not inlined. "
+                "Call load_skill with the matching skill id before you build an intent "
+                "for one of them, and do not invent argument names."
+            )
+            lines.append("[/Unity Scene Mechanics]")
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        bodies, unsigned = cls._scene_mechanic_bodies(skill_catalog, available)
+        if bodies:
+            # No load_skill to ask with, so the texts are inlined instead of lost.
+            lines.append(
+                "Their instructions are included below because this prompt cannot "
+                "load skills on demand."
+            )
+            if unsigned:
+                lines.append(
+                    "No instructions arrived for: " + ", ".join(unsigned) +
+                    ". Do not use those mechanics this turn."
+                )
+            lines.append("[/Unity Scene Mechanics]")
+            lines.extend(bodies)
+            return [{"role": "system", "content": "\n".join(lines)}]
+
+        if unsigned:
+            lines.append(
+                "No instructions arrived for: " + ", ".join(unsigned) +
+                ". Do not use those mechanics this turn."
+            )
+
+        if available and not unsigned:
+            lines.append(
+                "Their instructions are unavailable in this build, so do not use "
+                "these mechanics this turn."
+            )
+        if unsigned:
+            logger.warning(
+                "Unity contract v2 names mechanics %s but no skill text reached the prompt",
+                unsigned,
+            )
+        lines.append("[/Unity Scene Mechanics]")
+        return [{"role": "system", "content": "\n".join(lines)}]
+
+    @staticmethod
+    def _scene_mechanic_bodies(
+        skill_catalog: Any, entries: List[Dict[str, str]],
+    ) -> tuple[List[str], List[str]]:
+        """Bodies found in the catalog, plus the mechanics that had none."""
+        if skill_catalog is None or not entries:
+            return [], [entry["mechanic"] for entry in entries]
+        bodies: List[str] = []
+        unsigned: List[str] = []
+        for entry in entries:
+            try:
+                skill = skill_catalog.get(entry["skill"])
+            except Exception:
+                skill = None
+            body = str(getattr(skill, "render_body", lambda: "")() or "").strip() if skill else ""
+            if not body:
+                unsigned.append(entry["mechanic"])
+                continue
+            bodies.append(f"--- {entry['mechanic']} ---\n{body}")
+        return bodies, unsigned
+
+    @staticmethod
     def _resolve_support_intents(dsl_interpreter: Any, policy: Any) -> bool:
         get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
         support_intents = bool(
@@ -1230,9 +1389,22 @@ class PromptController(PromptBuilderService):
         skill_catalog_block = ""
         loaded_skills_context = ""
         eager_skills_context = ""
-        if capabilities.get("skills", False):
+        contract_version = self._prompt_contract_version(request.game_state)
+        if capabilities.get("skills", False) or contract_version >= 2:
+            # A versioned contract defers mechanic text to skills, so the catalog
+            # has to be readable even when load_skill itself is turned off.
             try:
                 skill_catalog = self._resolve_skill_catalog(character, request.game_state)
+            except Exception as exc:
+                logger.warning(
+                    "[PromptController][%s] Failed to read the skill catalog: %s",
+                    char_id,
+                    format_exception(exc),
+                )
+                skill_catalog = None
+
+        if capabilities.get("skills", False) and skill_catalog is not None:
+            try:
                 if capabilities.get("skill_mode") == "eager":
                     # Eager mode keeps every skill in the stable prefix and never
                     # asks the model to load anything.
@@ -1358,6 +1530,14 @@ class PromptController(PromptBuilderService):
                 self._build_character_world_context_message(game_state),
                 self._build_unity_runtime_events_message(game_state),
             ) if m]
+
+        unity_static_messages.extend(
+            self._build_unity_scene_mechanics_messages(
+                game_state,
+                capabilities=capabilities,
+                skill_catalog=skill_catalog,
+            )
+        )
         messages.extend(stable_system_messages)
 
         for s in dsl_system_infos:

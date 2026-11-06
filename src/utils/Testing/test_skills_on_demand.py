@@ -276,6 +276,24 @@ class PromptIntegrationTests(unittest.TestCase):
         self.assertIn("[SKILLS]", joined)
         self.assertIn("- tv: TV", joined)
 
+    def test_versioned_contract_points_at_the_mechanic_skill(self):
+        self.character = self._Character(self.root, ["music"])
+        self.game_state = {
+            "prompt_contract_version": 2,
+            "scene_mechanics": [
+                {"mechanic": "tv", "skill": "tv", "state": "available"},
+            ],
+        }
+        joined = "\n".join(self._texts())
+        self.assertIn("[Unity Scene Mechanics]", joined)
+        self.assertIn("tv (skill tv)", joined)
+        self.assertIn("do not invent argument names", joined)
+
+    def test_an_old_payload_never_gets_the_mechanic_block(self):
+        self.character = self._Character(self.root, ["music"])
+        joined = "\n".join(self._texts())
+        self.assertNotIn("[Unity Scene Mechanics]", joined)
+
 
 if __name__ == "__main__":
     unittest.main()
