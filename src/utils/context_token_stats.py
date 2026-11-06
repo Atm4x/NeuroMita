@@ -18,6 +18,8 @@ _SECTION_MARKERS = (
     ("[System State]", "System State"),
     ("[Behavior State]", "System State"),
     ("[Current State]", "System State"),
+    ("[Current Stage]", "stage"),
+    ("# STAGE:", "stage"),
     ("[Pending Reminders]", "reminders"),
     ("[HISTORY SUMMARY]", "history"),
     ("[WORKING STATE PROTOCOL]", "working state protocol"),
