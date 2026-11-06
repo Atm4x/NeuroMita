@@ -54,6 +54,11 @@ def _build_custom_params_schema(custom_params: list) -> str:
     return '  "custom_fields": {\n' + "\n".join(field_lines) + "\n  },\n"
 
 
+# Actors that are the player rather than one of the Mitas. A dialogue snapshot
+# naming only these plus a single character is an ordinary one-on-one turn.
+_PLAYER_ACTOR_IDS = frozenset({"player", "playercharacter", "игрок"})
+
+
 class PromptController(PromptBuilderService):
     """Сборка промпта. Чистая функция над персонажем и историей — шина не нужна."""
 
@@ -903,6 +908,62 @@ class PromptController(PromptBuilderService):
         except Exception:
             return
 
+    @staticmethod
+    def _build_dialogue_context_message(dialogue: Any) -> Dict[str, Any] | None:
+        """Instructions for a group turn, only when the turn really has a group.
+
+        Unity sends a dialogue snapshot for an ordinary one-on-one turn too.
+        An empty or single-character snapshot must not become a statement that
+        this is a group scene with an externally owned speaker order.
+        """
+        if not dialogue:
+            return None
+
+        get_value = (
+            dialogue.get
+            if isinstance(dialogue, dict)
+            else lambda key, default=None: getattr(dialogue, key, default)
+        )
+        participants = list(get_value("participants", []) or [])
+
+        names: List[str] = []
+        speakers = 0
+        for participant in participants:
+            if isinstance(participant, str):
+                name = participant.strip()
+                if name and name.casefold() not in _PLAYER_ACTOR_IDS:
+                    speakers += 1
+                    names.append(name)
+                continue
+
+            getter = (
+                participant.get
+                if isinstance(participant, dict)
+                else lambda key, default=None: getattr(participant, key, default)
+            )
+            actor_id = str(getter("actor_id", "") or "").strip()
+            character_id = str(getter("character_id", "") or "").strip()
+            display = str(getter("display_name", "") or "").strip()
+            if (actor_id or character_id).casefold() in _PLAYER_ACTOR_IDS:
+                continue
+            if not (actor_id or character_id or display):
+                continue
+            if bool(getter("can_speak", True)):
+                speakers += 1
+            if display or character_id:
+                names.append(display or character_id)
+
+        if speakers < 2:
+            return None
+
+        lines = [
+            "[Current Group Conversation]",
+            "Reply naturally to the current turn. Unity owns the speaker order and all follow-up scheduling.",
+        ]
+        if names:
+            lines.append("Present: " + ", ".join(names))
+        return {"role": "system", "content": "\n".join(lines)}
+
     _GAME_MASTER_EVENT_RE = re.compile(
         r"\[GAME_MASTER\](?:\[MANDATORY\])?\s*:\s*GameMaster said:\s*(?P<text>[^\r\n]+)",
         re.IGNORECASE,
@@ -1369,32 +1430,10 @@ class PromptController(PromptBuilderService):
         if loaded_skills_context:
             messages.append({"role": "system", "content": loaded_skills_context})
 
-        dialogue_context_message = None
         dialogue = request.dialogue
-        if dialogue:
-            get_value = dialogue.get if isinstance(dialogue, dict) else lambda key, default=None: getattr(dialogue, key, default)
-            snapshot = get_value("participants", []) or []
-            participant_names = []
-            for participant in snapshot:
-                getter = participant.get if isinstance(participant, dict) else lambda key, default=None: getattr(participant, key, default)
-                display_name = str(
-                    getter("display_name", "")
-                    or getter("character_id", "")
-                    or ""
-                ).strip()
-                if display_name:
-                    participant_names.append(display_name)
-
-            lines = [
-                "[Current Group Conversation]",
-                "Reply naturally to the current turn. Unity owns the speaker order and all follow-up scheduling.",
-            ]
-            if participant_names:
-                lines.append("Present: " + ", ".join(participant_names))
-            dialogue_context_message = {
-                "role": "system",
-                "content": "\n".join(lines),
-            }
+        dialogue_context_message = PromptController._build_dialogue_context_message(
+            dialogue
+        )
         if game_state_prompt_content:
             messages.append({"role": "system", "content": game_state_prompt_content})
         shared_minigame_context = None if character_profile.scene_context_key else self._build_shared_minigame_context(char_id)

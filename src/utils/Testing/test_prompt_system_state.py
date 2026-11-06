@@ -765,5 +765,38 @@ class ExamplesProfileTests(unittest.TestCase):
             self.assertIn(token, script)
 
 
+class DialogueContextTests(unittest.TestCase):
+    build = staticmethod(PromptController._build_dialogue_context_message)
+
+    def test_one_on_one_turn_gets_no_group_instruction(self):
+        self.assertIsNone(self.build(None))
+        self.assertIsNone(self.build({}))
+        self.assertIsNone(self.build({
+            "conversation_id": "conv-1",
+            "participants": [
+                {"actor_id": "actor-crazy", "character_id": "Crazy", "can_speak": True},
+            ],
+        }))
+
+    def test_player_entry_does_not_make_a_group(self):
+        self.assertIsNone(self.build({
+            "participants": [
+                {"actor_id": "player", "can_speak": True},
+                {"actor_id": "actor-crazy", "character_id": "Crazy", "can_speak": True},
+            ],
+        }))
+
+    def test_two_speaking_characters_get_the_group_instruction(self):
+        message = self.build({
+            "participants": [
+                {"actor_id": "actor-kind", "character_id": "Kind", "can_speak": True},
+                {"actor_id": "actor-crazy", "character_id": "Crazy", "can_speak": True},
+                {"actor_id": "player", "can_speak": True},
+            ],
+        })
+        self.assertIn("[Current Group Conversation]", message["content"])
+        self.assertIn("Present: Kind, Crazy", message["content"])
+
+
 if __name__ == "__main__":
     unittest.main()
