@@ -2388,10 +2388,16 @@ class ModelController(GenerationService, ModelStateService):
                 name=native_tool_call["name"], args=native_tool_call["arguments"],
             )
 
-        if structured.tool_call is None and tools_on and enabled_tools:
-            # Compatibility bridge for models that ask for a tool through
-            # intents instead of tool_call. It is allowlisted and validated in
-            # native_tool_calls; a well-formed tool_call never reaches it.
+        # Compatibility bridge for models that ask for a tool through intents
+        # instead of tool_call. Allowlisted and validated in native_tool_calls,
+        # schema mode only, and never past the depth limit: a well-formed
+        # tool_call never reaches it.
+        _bridge_allowed = (
+            tool_mode in ('', 'schema')
+            and (not isinstance(profile, StructuredResponseCapabilities)
+                 or profile.at_tool_depth(tool_depth).can_call_tools)
+        )
+        if _bridge_allowed and structured.tool_call is None and tools_on and enabled_tools:
             lifted_tool = lift_tool_intent(structured, enabled_tools)
             if lifted_tool:
                 logger.warning(
