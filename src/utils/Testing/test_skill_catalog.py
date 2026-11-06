@@ -109,7 +109,7 @@ class SkillCatalogTests(unittest.TestCase):
             )
             catalog = SkillCatalog.load(root)
             block = catalog.render_catalog_block()
-            self.assertIn("[SKILLS]", block)
+            self.assertTrue(block.startswith("[SKILLS]\n"))
             self.assertIn("- music: Music", block)
             self.assertIn("- wardrobe: Wardrobe", block)
             self.assertIn("[/SKILLS]", block)

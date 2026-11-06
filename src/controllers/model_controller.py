@@ -1573,11 +1573,19 @@ class ModelController(GenerationService, ModelStateService):
         _tools_mode = str(self.settings.get("TOOLS_MODE", "native"))
         if _tools_mode == "off":
             _tools_on = False
+        skill_mode = str(
+            self.settings.get("SKILL_LOADING_MODE", "on_demand") or "on_demand"
+        ).strip().lower()
+        eager_skills = skill_mode == "eager"
         _enabled_tools = [
             n for n in _ALL_TOOLS_LIST
             if self.settings.get(f"TOOL_ENABLED_{n}", _DEFAULT_TOOL_ENABLED.get(n, False))
             and (n != "reminder" or bool(self.settings.get("REMINDERS_ENABLED", True)))
         ]
+        if eager_skills:
+            # Eager mode already keeps every skill body in the prompt; offering
+            # load_skill would only spend a turn loading text the model has.
+            _enabled_tools = [n for n in _enabled_tools if n != "load_skill"]
         if not _enabled_tools:
             _tools_on = False
 
@@ -1599,12 +1607,7 @@ class ModelController(GenerationService, ModelStateService):
 
         # On-demand skills only make sense while load_skill is actually offered
         # to the model; the catalog block is derived from that capability.
-        skill_mode = str(
-            self.settings.get("SKILL_LOADING_MODE", "on_demand") or "on_demand"
-        ).strip().lower()
-        effective_capabilities["skill_mode"] = (
-            "eager" if skill_mode == "eager" else "on_demand"
-        )
+        effective_capabilities["skill_mode"] = "eager" if eager_skills else "on_demand"
         effective_capabilities["skills"] = bool(
             "load_skill" in (_enabled_tools or [])
             or effective_capabilities["skill_mode"] == "eager"

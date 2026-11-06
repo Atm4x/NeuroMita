@@ -191,7 +191,7 @@ class SkillCatalog:
         if not entries:
             return ""
         lines = [
-            "[SKILLS]"
+            "[SKILLS]",
             "Skills you can load on demand with load_skill(id). Load one only when the "
             "current scene needs it; loading returns the full instructions for this and "
             "the next turns.",

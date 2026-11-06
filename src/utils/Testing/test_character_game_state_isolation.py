@@ -105,5 +105,56 @@ class CharacterGameStateIsolationTests(unittest.TestCase):
         self.assertEqual(shared, {"worldPlayer": "House", "roomPlayer": 1})
 
 
+class SkillCatalogGameStateTests(unittest.TestCase):
+    CATALOG = [{"id": "music", "title": "Music", "body": "Pick a calm track."}]
+
+    def test_unity_payload_keeps_the_skill_catalog(self):
+        from game_connections.handlers.actions.create_task import build_game_state_payload
+
+        payload = build_game_state_payload({
+            "roomMita": 2,
+            "skills_catalog": self.CATALOG,
+            "skills_catalog_revision": "rev-1",
+            "skills_scope": "world|CrazyHouse|rev-1",
+        }, "Crazy")
+
+        self.assertEqual(payload["skills_catalog"], self.CATALOG)
+        self.assertEqual(payload["skills_catalog_revision"], "rev-1")
+        self.assertEqual(payload["skills_scope"], "world|CrazyHouse|rev-1")
+
+    def test_missing_catalog_projects_to_an_empty_list(self):
+        from game_connections.handlers.actions.create_task import build_game_state_payload
+
+        payload = build_game_state_payload({"roomMita": 2}, "Crazy")
+
+        self.assertEqual(payload["skills_catalog"], [])
+        self.assertEqual(payload["skills_catalog_revision"], "")
+        self.assertEqual(payload["skills_scope"], "")
+
+    def test_game_state_round_trips_the_catalog_into_the_prompt(self):
+        state = GameState()
+        state.update_from_event_data({
+            "roomMita": 2,
+            "skills_catalog": self.CATALOG,
+            "skills_catalog_revision": "rev-1",
+            "skills_scope": "world|CrazyHouse|rev-1",
+        })
+
+        prompt_state = state.to_prompt_dict()
+        self.assertEqual(prompt_state["skills_catalog"], self.CATALOG)
+        self.assertEqual(prompt_state["skills_scope"], "world|CrazyHouse|rev-1")
+
+        # A snapshot without skills must not wipe an already cached catalog.
+        state.update_from_event_data({"roomMita": 3})
+        self.assertEqual(state.to_prompt_dict()["skills_catalog"], self.CATALOG)
+
+    def test_non_list_catalog_is_ignored(self):
+        state = GameState()
+        state.update_from_event_data({"skills_catalog": self.CATALOG})
+        state.update_from_event_data({"skills_catalog": "not-a-list"})
+
+        self.assertEqual(state.to_prompt_dict()["skills_catalog"], self.CATALOG)
+
+
 if __name__ == "__main__":
     unittest.main()

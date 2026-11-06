@@ -88,9 +88,16 @@ arrive through load_skill and stay loaded for a bounded number of turns.
 
 eager places every skill body in the stable prompt prefix and never calls the
 tool: one request per turn, but the context always carries all authored text.
+load_skill is dropped from the tool list in this mode, since a model that
+already has the bodies has nothing left to load.
 
 ## Enabling
 
 TOOLS_ON and TOOL_ENABLED_load_skill must both be on (Settings - Tools -
 On-demand skills). Characters without a Skills/ folder get no catalog block and
 the tool reports that there is nothing to load.
+
+The catalog reaches the prompt through the Unity snapshot:
+game_connections/handlers/actions/create_task.py projects the request onto a
+whitelist of prompt fields, so a new field has to be listed there or the prompt
+never sees it.

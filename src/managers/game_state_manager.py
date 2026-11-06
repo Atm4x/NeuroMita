@@ -1,7 +1,7 @@
 # src/managers/game_state.py
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any
 
 
@@ -31,6 +31,11 @@ class GameState:
     runtime_static_catalog: str = ""
     runtime_capabilities: str = ""
     intent_rules: str = ""
+    # Skill catalog authored by the game. It travels with the snapshot, so the
+    # prompt gets the entries without this repository storing a copy.
+    skills_catalog: list = field(default_factory=list)
+    skills_catalog_revision: str = ""
+    skills_scope: str = ""
 
     def update_from_event_data(self, data: Dict[str, Any]) -> None:
         self.distance = float(data.get("distance", self.distance) or 0.0)
@@ -44,6 +49,13 @@ class GameState:
         self.runtime_static_catalog = str(data.get("runtime_static_catalog", self.runtime_static_catalog) or "")
         self.runtime_capabilities = str(data.get("runtime_capabilities", self.runtime_capabilities) or "")
         self.intent_rules = str(data.get("intent_rules", self.intent_rules) or "")
+        catalog = data.get("skills_catalog")
+        if isinstance(catalog, list):
+            self.skills_catalog = catalog
+        self.skills_catalog_revision = str(
+            data.get("skills_catalog_revision", self.skills_catalog_revision) or ""
+        )
+        self.skills_scope = str(data.get("skills_scope", self.skills_scope) or "")
 
     def to_prompt_dict(self) -> Dict[str, Any]:
         return {
@@ -58,4 +70,7 @@ class GameState:
             "runtime_static_catalog": str(self.runtime_static_catalog),
             "runtime_capabilities": str(self.runtime_capabilities),
             "intent_rules": str(self.intent_rules),
+            "skills_catalog": list(self.skills_catalog),
+            "skills_catalog_revision": str(self.skills_catalog_revision),
+            "skills_scope": str(self.skills_scope),
         }
