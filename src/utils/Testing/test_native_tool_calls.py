@@ -98,23 +98,21 @@ class NativeToolBridgeTests(unittest.TestCase):
             bridge_native_tool_response(response, self._request())
 
 
-
-
 class NativeSkillHistoryTests(unittest.TestCase):
     def test_newly_loaded_skill_is_available_and_labeled_in_current_turn(self):
         call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["tv"]}}
-        body = "[skill: TV]\\nAuthored instructions.\\n\\nUse the remote."
+        body = "[skill: TV]\nAuthored instructions.\n\nUse the remote."
         assistant, reply = native_tool_followup_messages(call, body)
         self.assertEqual(assistant["tool_calls"][0]["id"], "call_skill")
         self.assertEqual(reply["role"], "tool")
         self.assertEqual(reply["tool_call_id"], "call_skill")
         self.assertIn(body, reply["content"])
-        self.assertTrue(reply["content"].startswith("[LOADED SKILLS]\\n"))
-        self.assertTrue(reply["content"].endswith("\\n[/LOADED SKILLS]"))
+        self.assertTrue(reply["content"].startswith("[LOADED SKILLS]\n"))
+        self.assertTrue(reply["content"].endswith("\n[/LOADED SKILLS]"))
 
     def test_old_skill_instructions_are_not_replayed(self):
         call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["tv"]}}
-        body = "[skill: TV]\\nAn instruction that must not persist."
+        body = "[skill: TV]\nAn instruction that must not persist."
         original = native_tool_followup_messages(call, body)
         history = persisted_native_tool_messages({"native_tool_history": original})
         self.assertEqual(history[0], original[0])
