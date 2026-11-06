@@ -12,7 +12,12 @@ if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
 from services.contracts import RuntimeCapabilities
-from services.native_tool_calls import bridge_native_tool_response, resolve_tool_mode
+from services.native_tool_calls import (
+    bridge_native_tool_response,
+    native_tool_followup_messages,
+    persisted_native_tool_messages,
+    resolve_tool_mode,
+)
 from services.structured_response_capabilities import resolve_structured_response_capabilities
 
 
@@ -91,6 +96,44 @@ class NativeToolBridgeTests(unittest.TestCase):
         response = self._response('{"segments": [{"text": "Смотрю."}]}', [self._call(name='web_search')])
         with self.assertRaises(ValueError):
             bridge_native_tool_response(response, self._request())
+
+
+
+
+class NativeSkillHistoryTests(unittest.TestCase):
+    def test_newly_loaded_skill_is_available_and_labeled_in_current_turn(self):
+        call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["tv"]}}
+        body = "[skill: TV]\\nAuthored instructions.\\n\\nUse the remote."
+        assistant, reply = native_tool_followup_messages(call, body)
+        self.assertEqual(assistant["tool_calls"][0]["id"], "call_skill")
+        self.assertEqual(reply["role"], "tool")
+        self.assertEqual(reply["tool_call_id"], "call_skill")
+        self.assertIn(body, reply["content"])
+        self.assertTrue(reply["content"].startswith("[LOADED SKILLS]\\n"))
+        self.assertTrue(reply["content"].endswith("\\n[/LOADED SKILLS]"))
+
+    def test_old_skill_instructions_are_not_replayed(self):
+        call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["tv"]}}
+        body = "[skill: TV]\\nAn instruction that must not persist."
+        original = native_tool_followup_messages(call, body)
+        history = persisted_native_tool_messages({"native_tool_history": original})
+        self.assertEqual(history[0], original[0])
+        self.assertEqual(history[1]["tool_call_id"], "call_skill")
+        self.assertIn("load_skill again", history[1]["content"])
+        self.assertNotIn("must not persist", history[1]["content"])
+        # The current tool response was not edited by history projection.
+        self.assertIn("must not persist", original[1]["content"])
+
+    def test_non_skill_native_results_are_preserved(self):
+        call = {"id": "call_search", "name": "web_search", "arguments": {"query": "hi"}}
+        original = native_tool_followup_messages(call, "Web search result")
+        history = persisted_native_tool_messages({"native_tool_history": original})
+        self.assertEqual(history, original)
+
+    def test_error_results_are_not_wrapped_as_skill_instructions(self):
+        call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["missing"]}}
+        result = native_tool_followup_messages(call, "[load_skill] Unknown skill.")
+        self.assertEqual(result[1]["content"], "[load_skill] Unknown skill.")
 
 
 class ToolModeTests(unittest.TestCase):
