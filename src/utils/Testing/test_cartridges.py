@@ -57,6 +57,32 @@ class CartridgeCatalogTests(unittest.TestCase):
             validate_session(valid, "Cart_divan")
 
 
+    def test_cognition_area_accepts_only_the_unity_shape(self):
+        def payload(**overrides):
+            effect = {
+                "id": "space_fixation", "title": "Tell about space", "type": "cognition.area",
+                "target": "nearby", "magnitude": 0.85, "radius": 8, "durationSeconds": 150,
+                "slotCost": 1, "effectId": "topic_fixation", "topic": "space",
+            }
+            effect.update(overrides)
+            data = catalog()
+            data["cartridges"][0]["effects"] = [effect]
+            return data
+
+        self.assertEqual(parse_catalog(payload())[0].id, "space")
+        for overrides in (
+            {"permanent": True},
+            {"target": "player"},
+            {"effectId": ""},
+            {"magnitude": 0},
+            {"magnitude": 1.5},
+            {"durationSeconds": 0},
+            {"topic": "x" * 201},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                parse_catalog(payload(**overrides))
+
+
 class CartridgePromptTests(unittest.TestCase):
     def request(self):
         from core.request_policy import RequestPolicy
