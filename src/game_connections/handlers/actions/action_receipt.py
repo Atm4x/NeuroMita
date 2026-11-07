@@ -64,6 +64,16 @@ class ActionReceiptAction:
             await ctx.server.send_error(ctx.writer, "Invalid action_receipt payload")
             return
 
+        received = len(items) if isinstance(items, (list, tuple)) else 0
+        accepted = min(received, MAX_RECEIPTS_PER_REQUEST)
+        truncated = received - accepted
+        invalid = accepted - len(receipts)
+        if truncated:
+            logger.warning(
+                "[action_receipt] %s turn=%s truncated %s of %s receipts (limit=%s)",
+                character, turn_uid, truncated, received, MAX_RECEIPTS_PER_REQUEST,
+            )
+
         ledger = get_character_resource_manager().action_receipts_for(character)
         stored = ledger.record_many(receipts, turn_uid=turn_uid)
         logger.debug(
@@ -74,4 +84,7 @@ class ActionReceiptAction:
             "type": "action_receipt_ack",
             "turn_uid": turn_uid,
             "stored": stored,
+            "received": received,
+            "truncated": truncated,
+            "invalid": invalid,
         })
