@@ -949,11 +949,21 @@ class ChatController(ChatService, GenerationActivityService):
                 if isinstance(voice_profile, dict):
                     is_game_master = (voice_profile.get("character_id") == "GameMaster")
                     if (not is_game_master) or bool(self.settings.get("GM_VOICE", False)):
+                        # Carry the complete response into TTS. A fast voice result
+                        # must not depend on an earlier VOICING event being processed.
+                        voice_task_result = (
+                            self._build_task_result(
+                                task_response_text, structured_data,
+                                structured_parse_level=structured_parse_level,
+                                control_plane_trusted=control_plane_trusted,
+                            )
+                            if task_uid else None
+                        )
                         if task_uid:
                             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                                 "uid": task_uid,
                                 "status": TaskStatus.VOICING,
-                                "result": self._build_task_result(task_response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
+                                "result": voice_task_result,
                             })
 
                         speaker = voice_profile.get("silero_command", "")
@@ -965,6 +975,7 @@ class ChatController(ChatService, GenerationActivityService):
                             "text": response_text,
                             "speaker": speaker,
                             "task_uid": task_uid,
+                            "task_result": voice_task_result,
                             "character_id": effective_character_id,
                             "voice_profile": voice_profile,
                             "message_id": assistant_message_id,

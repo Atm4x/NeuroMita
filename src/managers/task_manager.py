@@ -111,6 +111,18 @@ class TaskManager:
             task = self._tasks[uid]
             if task._state_lease is not None and not task._state_lease.current:
                 return task.snapshot()
+            # TTS can complete faster than the queued VOICING event is handled.
+            # Never downgrade a terminal result to an in-progress state.
+            if status == TaskStatus.VOICING and task.status in {
+                TaskStatus.SUCCESS,
+                TaskStatus.FAILED_ON_VOICEOVER,
+                TaskStatus.FAILED_ON_GENERATION,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+                TaskStatus.ABORTED,
+            }:
+                logger.warning("Ignoring late VOICING update for completed task %s", uid)
+                return task.snapshot()
             task.status = status
             task.updated_at = time.time()
             task.revision += 1

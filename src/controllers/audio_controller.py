@@ -131,8 +131,16 @@ class AudioController(AudioStateService):
             return self.textSpeakerMiku
         return self.textSpeaker
 
+    @staticmethod
+    def _with_generated_task_result(task_result: Optional[dict], update: dict) -> dict:
+        """Preserve the structured reply even if TTS finishes before VOICING is handled."""
+        return {**(task_result if isinstance(task_result, dict) else {}), **update}
+
     @state_operation(wait=True)
-    def _update_task_failed_voiceover(self, task_uid: str, error: BaseException | str | VoiceFailure):
+    def _update_task_failed_voiceover(
+        self, task_uid: str, error: BaseException | str | VoiceFailure,
+        task_result: Optional[dict] = None,
+    ):
         failure = classify_voice_failure(error)
         diagnostic = format_exception(error) if isinstance(error, BaseException) else str(error)
         self.event_bus.emit(
@@ -141,7 +149,9 @@ class AudioController(AudioStateService):
                 "uid": task_uid,
                 "status": TaskStatus.FAILED_ON_VOICEOVER,
                 "error": diagnostic,
-                "result": {"error_details": failure.to_dict()},
+                "result": self._with_generated_task_result(
+                    task_result, {"error_details": failure.to_dict()}
+                ),
             },
         )
 
@@ -180,6 +190,7 @@ class AudioController(AudioStateService):
         task_uid = data.get("task_uid")
         message_id = data.get("message_id")
         trace_id = str(data.get("trace_id") or "").strip() or None
+        task_result = data.get("task_result")
         perf_mark(trace_id, "tts.controller_received")
 
         character_id = data.get("character_id")
@@ -211,7 +222,10 @@ class AudioController(AudioStateService):
         if not loop_service.is_running():
             logger.error("Ошибка: Цикл событий не готов.")
             if task_uid:
-                self._update_task_failed_voiceover(task_uid, VoiceFailure(VoiceFailureCode.RUNTIME_UNAVAILABLE))
+                self._update_task_failed_voiceover(
+                    task_uid, VoiceFailure(VoiceFailureCode.RUNTIME_UNAVAILABLE),
+                    task_result=task_result,
+                )
             self.waiting_answer = False
             (
                 performance_traces().finish(trace_id, "error", error_stage="tts")
@@ -238,6 +252,7 @@ class AudioController(AudioStateService):
                         task_uid,
                         message_id=message_id,
                         trace_id=trace_id,
+                        task_result=task_result,
                         state_lease=lease, cancellation=cancellation,
                     ), character_id, cancellation,
                 ))
@@ -252,6 +267,7 @@ class AudioController(AudioStateService):
                         voice_profile=voice_profile,
                         message_id=message_id,
                         trace_id=trace_id,
+                        task_result=task_result,
                         method=self.voiceover_method,
                         state_lease=lease, cancellation=cancellation,
                     ), character_id, cancellation,
@@ -261,7 +277,8 @@ class AudioController(AudioStateService):
                 logger.warning(f"Неизвестный метод озвучки: {self.voiceover_method}")
                 if task_uid:
                     self._update_task_failed_voiceover(
-                        task_uid, VoiceFailure(VoiceFailureCode.CONFIGURATION)
+                        task_uid, VoiceFailure(VoiceFailureCode.CONFIGURATION),
+                        task_result=task_result,
                     )
                 self.waiting_answer = False
                 (
@@ -293,7 +310,7 @@ class AudioController(AudioStateService):
                 f"Ошибка при отправке текста на озвучку: {format_exception(e)}"
             )
             if task_uid:
-                self._update_task_failed_voiceover(task_uid, e)
+                self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
             self.waiting_answer = False
 
     async def run_send_and_receive(
@@ -304,6 +321,7 @@ class AudioController(AudioStateService):
         task_uid=None,
         message_id=None,
         trace_id=None,
+        task_result=None,
         state_lease=None,
         cancellation=None,
     ):
@@ -337,7 +355,9 @@ class AudioController(AudioStateService):
                     {
                         "uid": task_uid,
                         "status": TaskStatus.SUCCESS,
-                        "result": {"voiceover_path": voiceover_path},
+                        "result": self._with_generated_task_result(
+                            task_result, {"voiceover_path": voiceover_path}
+                        ),
                     },
                 )
         except (StateUnavailable, OperationCancelledError):
@@ -351,7 +371,7 @@ class AudioController(AudioStateService):
                 f"Ошибка при получении озвучки через Telegram: {format_exception(e)}"
             )
             if task_uid:
-                self._update_task_failed_voiceover(task_uid, e)
+                self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
         finally:
             if self._voice_scope_current(state_lease, cancellation):
                 self.waiting_answer = False
@@ -377,6 +397,7 @@ class AudioController(AudioStateService):
         message_id: Optional[str] = None,
         trace_id: Optional[str] = None,
         method: str = "Local",
+        task_result: Optional[dict] = None,
         state_lease=None,
         cancellation=None,
     ):
@@ -409,7 +430,9 @@ class AudioController(AudioStateService):
                     {
                         "uid": task_uid,
                         "status": TaskStatus.SUCCESS,
-                        "result": {"voiceover_path": result_path},
+                        "result": self._with_generated_task_result(
+                            task_result, {"voiceover_path": result_path}
+                        ),
                     },
                 )
 
@@ -472,7 +495,7 @@ class AudioController(AudioStateService):
             error_description = format_exception(e)
             logger.error("Ошибка озвучки (%s): %s", method, error_description)
             if task_uid:
-                self._update_task_failed_voiceover(task_uid, e)
+                self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
         finally:
             if method == "API" and result_path and not delivered_to_game:
                 try:
