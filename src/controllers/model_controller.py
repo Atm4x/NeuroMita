@@ -58,6 +58,7 @@ from services.structured_response_capabilities import (
     resolve_structured_response_capabilities,
 )
 from services.tool_prompt import render_tools_for_prompt
+from services.interim_tool_speech import supports_interim_tool_speech
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
 from domain.working_state import working_state_transition
@@ -165,6 +166,7 @@ def _emit_tool_turn_voiceover(
     message_id: str,
     trace_id: str | None,
     policy,
+    interim_tool: dict | None = None,
 ) -> None:
     """Voice the spoken opener of a tool turn.
 
@@ -176,30 +178,38 @@ def _emit_tool_turn_voiceover(
     completion could mark it SUCCESS before the tool follow-up is ready.
     """
     opener = str(text or "").strip()
-    if not opener or not settings.get("USE_VOICEOVER"):
+    if not opener:
         return
-    if not bool(getattr(policy, "allow_voiceover", True)):
-        return
+    voice_allowed = bool(settings.get("USE_VOICEOVER")) and bool(
+        getattr(policy, "allow_voiceover", True)
+    )
     if isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False:
-        return
+        voice_allowed = False
     if isinstance(voice_profile, dict) and voice_profile.get("character_id") == "GameMaster":
-        if not bool(settings.get("GM_VOICE", False)):
-            return
+        voice_allowed = voice_allowed and bool(settings.get("GM_VOICE", False))
+    if not voice_allowed:
+        if interim_tool:
+            event_bus.emit(Events.Server.SEND_DIALOGUE_INTERIM, {
+                **interim_tool, "phase": "ready", "text": opener, "voiceover_path": "",
+            })
+        return
 
     speaker = voice_profile.get("silero_command", "") if isinstance(voice_profile, dict) else ""
     if isinstance(voice_profile, dict) and settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
         speaker = voice_profile.get("miku_tts_name", "Player")
-    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
+    payload = {
         "text": opener,
         "speaker": speaker,
-        # The opener is deliberately detached from the generation task.
-        # AudioController must not emit SUCCESS for an intermediate tool turn.
+        # Audio completion must never finish the parent generation task.
         "task_uid": None,
         "character_id": char_id,
         "voice_profile": voice_profile,
         "message_id": message_id,
         "trace_id": trace_id,
-    })
+    }
+    if interim_tool:
+        payload["interim_tool"] = {**interim_tool, "text": opener}
+    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, payload)
 
 
 def _tool_badge_text(tool_name: str, tool_args, tool_result: str) -> str:
@@ -2836,11 +2846,16 @@ class ModelController(GenerationService, ModelStateService):
             "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
 
-        if task_uid:
-            # Unity presents speech only when the task completes. Keep this
-            # opener for the final delivery, not an undeliverable standalone WAV.
-            logger.debug("[ModelController] Buffering tool opener for Unity: %s", tool_name)
-        else:
+        interim_tool = None
+        opener = str(first_text or "").strip()
+        if task_uid and opener and supports_interim_tool_speech(task_uid):
+            # Announce before executing the tool. Unity will keep this opener
+            # ahead of the final answer, even if synthesis finishes later.
+            interim_tool = {"uid": task_uid, "opener_id": f"{task_uid}:{tool_depth}"}
+            self.event_bus.emit(Events.Server.SEND_DIALOGUE_INTERIM, {
+                **interim_tool, "phase": "pending", "text": opener,
+            })
+        if not task_uid or interim_tool is not None:
             _emit_tool_turn_voiceover(
                 event_bus=self.event_bus,
                 settings=self.settings,
@@ -2850,7 +2865,10 @@ class ModelController(GenerationService, ModelStateService):
                 message_id=first_assistant_message_id,
                 trace_id=trace_id,
                 policy=policy,
+                interim_tool=interim_tool,
             )
+        else:
+            logger.debug("[ModelController] Buffering tool opener for legacy Unity: %s", tool_name)
 
         # Emit tool executing indicator for UI
         self.event_bus.emit(Events.Model.ON_TOOL_EXECUTING, {
