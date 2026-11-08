@@ -311,5 +311,30 @@ class PromptIntegrationTests(unittest.TestCase):
         self.assertNotIn("[Unity Scene Mechanics]", joined)
 
 
+class SkillHistoryLimitTests(unittest.TestCase):
+    def test_profile_limit_never_keeps_an_orphan_skill_reply(self):
+        from controllers.prompt_controller import PromptController
+
+        native = [
+            {"role": "assistant", "content": "Loading", "tool_calls": [{"id": "call_1"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "[LOADED SKILLS]\n..."},
+        ]
+        self.assertEqual(PromptController._trim_history_messages(native, 1), [])
+        self.assertEqual(PromptController._trim_history_messages(native, 2), native)
+
+        schema = [
+            {"role": "assistant", "content": "Loading"},
+            {"role": "system", "content": "[LOADED SKILLS]\n[skill: TV]"},
+        ]
+        self.assertEqual(PromptController._trim_history_messages(schema, 1), [])
+        self.assertEqual(PromptController._trim_history_messages(schema, 2), schema)
+
+        plain = [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+        self.assertEqual(PromptController._trim_history_messages(plain, 1), plain[-1:])
+
+
 if __name__ == "__main__":
     unittest.main()
