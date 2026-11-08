@@ -701,6 +701,36 @@ class MemoryManager(CharacterScopedService):
         except Exception as e:
             logging.warning(f"RAG failed to schedule memory embedding (ignored): {format_exception(e)}", exc_info=True)
 
+    def retire_seed_memories(self, old_contents) -> int:
+        """Soft-delete only exact obsolete seed facts from this character's store.
+
+        Lore edits previously produced two versions because seeds deduplicate by
+        content. This intentionally never searches by similarity or touches
+        personal memories with different wording. Safe to call on every init.
+        """
+        contents = list(dict.fromkeys(str(x).strip() for x in (old_contents or []) if str(x).strip()))
+        if not contents:
+            return 0
+        removed = 0
+        try:
+            with self.db.connection() as conn:
+                cur = conn.cursor()
+                for offset in range(0, len(contents), 300):
+                    batch = contents[offset:offset + 300]
+                    placeholders = ",".join("?" for _ in batch)
+                    cur.execute(
+                        f"UPDATE memories SET is_deleted=1 WHERE character_id=? "
+                        f"AND type='fact' AND is_deleted=0 AND content IN ({placeholders})",
+                        (self.storage_key, *batch),
+                    )
+                    removed += max(int(cur.rowcount or 0), 0)
+                conn.commit()
+            if removed:
+                self._calculate_total_characters()
+        except Exception as exc:
+            logging.warning("Failed to retire obsolete lore seeds: %s", format_exception(exc), exc_info=True)
+        return removed
+
     def seed_rag_memory(self, content, priority="normal", entities=None) -> Optional[int]:
         """Create a RAG-only memory: indexed and retrievable by search, but never
         part of the always-on ``<active_memory>`` block.
