@@ -930,6 +930,13 @@ class ChatController(ChatService, GenerationActivityService):
                 return None
 
             task_response_text = " " if structured_game_master_result and not response_text else response_text
+            task_structured_data = structured_data
+            if task_uid and getattr(result, "tool_preludes", ()):
+                task_response_text, task_structured_data = self._compose_unity_tool_reply(
+                    task_response_text,
+                    structured_data,
+                    result.tool_preludes,
+                )
             effective_character_name = self._resolve_character_name(effective_character_id)
 
             if is_streaming and eff_policy.echo_to_ui:
@@ -953,7 +960,7 @@ class ChatController(ChatService, GenerationActivityService):
                         # must not depend on an earlier VOICING event being processed.
                         voice_task_result = (
                             self._build_task_result(
-                                task_response_text, structured_data,
+                                task_response_text, task_structured_data,
                                 structured_parse_level=structured_parse_level,
                                 control_plane_trusted=control_plane_trusted,
                             )
@@ -972,7 +979,7 @@ class ChatController(ChatService, GenerationActivityService):
 
                         perf_mark(trace_id, "tts.requested")
                         self.event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
-                            "text": response_text,
+                            "text": task_response_text,
                             "speaker": speaker,
                             "task_uid": task_uid,
                             "task_result": voice_task_result,
@@ -987,21 +994,21 @@ class ChatController(ChatService, GenerationActivityService):
                             self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                                 "uid": task_uid,
                                 "status": TaskStatus.SUCCESS,
-                                "result": self._build_task_result(task_response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
+                                "result": self._build_task_result(task_response_text, task_structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                             })
                 else:
                     if task_uid:
                         self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                             "uid": task_uid,
                             "status": TaskStatus.SUCCESS,
-                            "result": self._build_task_result(task_response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
+                            "result": self._build_task_result(task_response_text, task_structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                         })
             else:
                 if task_uid:
                     self.event_bus.emit(Events.Task.UPDATE_TASK_STATUS, {
                         "uid": task_uid,
                         "status": TaskStatus.SUCCESS,
-                        "result": self._build_task_result(task_response_text, structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
+                        "result": self._build_task_result(task_response_text, task_structured_data, structured_parse_level=structured_parse_level, control_plane_trusted=control_plane_trusted)
                     })
 
             if is_streaming and eff_policy.echo_to_ui:
@@ -1257,6 +1264,44 @@ class ChatController(ChatService, GenerationActivityService):
             gm_instruction_override=data.get("gm_instruction_override"),
             trace_id=trace_id,
         )
+
+    @staticmethod
+    def _compose_unity_tool_reply(
+        final_text: str,
+        structured_data: dict | None,
+        tool_preludes: tuple[str, ...],
+    ) -> tuple[str, dict | None]:
+        """Deliver every spoken tool opener with the final Unity task.
+
+        The game has one terminal response per task. Intermediate voice clips
+        are not individually deliverable in that protocol; combining the
+        transcript and TTS at completion preserves order and avoids an early
+        SUCCESS that would consume the task before its final text arrives.
+        """
+        openers = [
+            str(text).strip()
+            for text in (tool_preludes or ())
+            if str(text).strip()
+        ]
+        if not openers:
+            return final_text, structured_data
+
+        combined_text = "\n".join([*openers, str(final_text or "")])
+        if not isinstance(structured_data, dict):
+            return combined_text, structured_data
+
+        combined_data = dict(structured_data)
+        segments = structured_data.get("segments")
+        if isinstance(segments, list) and segments:
+            # Copy the list, not the segment dictionaries: final intents and
+            # their target speakers still belong to the final LLM response.
+            combined_data["segments"] = [
+                *({"text": text} for text in openers),
+                *segments,
+            ]
+        else:
+            combined_data["segments"] = [{"text": combined_text}]
+        return combined_text, combined_data
 
     @staticmethod
     def _build_task_result(
