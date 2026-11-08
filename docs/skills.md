@@ -42,17 +42,19 @@ SkillCatalog.issues; the rest of the catalog keeps working.
 
 When load_skill is enabled, the prompt carries a compact [SKILLS] block with one
 line per skill. The bodies are not included. The model calls load_skill with one
-or two ids when the current scene needs them; the tool returns the bodies and the
-next turn renders them in a [LOADED SKILLS] block. Two ids in one call cost a
-single tool request, which is why the argument is a list.
+or two ids when the current scene needs them; the tool returns the bodies in
+the immediate tool continuation (under [LOADED SKILLS]). Two ids in one call
+cost a single tool request, which is why the argument is a list.
 
-Loaded skills are kept per character for the following turns, capped at two
-entries and 2000 estimated tokens. The least recently loaded skill is evicted
-first; history reset or character removal clears the set.
+The complete tool result is also saved alongside its originating assistant turn
+in conversation history. In native mode, the tool-role reply keeps the original
+tool-call ID; in schema mode, history projects a [LOADED SKILLS] system message
+after the assistant turn. In both cases the instruction ages out when that turn
+leaves the bounded history/context window. The model can call load_skill again
+if a skill is needed later.
 
-The catalog block is derived from the character prompt set, so it only changes
-when the set does. Loaded bodies change per turn and are placed after the
-history, in the volatile part of the prompt.
+There is no session-level re-injection of the last two on-demand skills. The
+catalog block is derived from the character prompt set and stays compact.
 
 ## Modes
 
@@ -76,16 +78,16 @@ has no per-connection acknowledgement, so a memo of what a client already has
 could leave it without any text at all. The payload is small JSON, and the
 revision lets the two sides tell a real change from a repetition.
 
-When skills_scope changes, the catalog is replaced and the retained skill text
-is dropped, because open skill bodies describe the scene they were loaded in.
-Loading a wardrobe skill inside one location and keeping its instructions
-after a scene change would describe furniture and clothing that no longer
-exist.
+When skills_scope changes, the catalog is replaced. Older tool results still
+belong to historical turns and leave context naturally as history is trimmed;
+their instructions must never override current scene state. The model should
+reload a scene-specific skill when the location or available mechanics change.
 
 SKILL_LOADING_MODE picks one of two policies over the same catalog and renderer:
 
-on_demand (default) keeps only the compact [SKILLS] list in the prompt; bodies
-arrive through load_skill and stay loaded for a bounded number of turns.
+on_demand (default) keeps only the compact [SKILLS] list in the static prompt.
+Bodies arrive through load_skill, remain in conversation history while their
+originating turn is in the context window, and can be reloaded when needed.
 
 eager places every skill body in the stable prompt prefix and never calls the
 tool: one request per turn, but the context always carries all authored text.
