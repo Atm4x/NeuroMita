@@ -1485,7 +1485,6 @@ class PromptController(PromptBuilderService):
 
         skill_catalog = None
         skill_catalog_block = ""
-        loaded_skills_context = ""
         eager_skills_context = ""
         contract_version = self._prompt_contract_version(request.game_state)
         if capabilities.get("skills", False) or contract_version >= 2:
@@ -1514,9 +1513,6 @@ class PromptController(PromptBuilderService):
                     skill_catalog_block = skill_catalog.render_catalog_block(
                         capabilities=capabilities.get("skill_capabilities") or (),
                         max_chars=int(capabilities.get("skill_catalog_max_chars") or 1200),
-                    )
-                    loaded_skills_context = skill_catalog.render_loaded_block(
-                        character.skills.loaded(),
                     )
             except Exception as exc:
                 logger.warning(
@@ -1735,9 +1731,6 @@ class PromptController(PromptBuilderService):
         # do not invalidate provider prompt caching for the dialogue itself.
         if working_state_context:
             messages.append({"role": "assistant", "content": working_state_context})
-
-        if loaded_skills_context:
-            messages.append({"role": "system", "content": loaded_skills_context})
 
         dialogue = request.dialogue
         dialogue_context_message = PromptController._build_dialogue_context_message(
