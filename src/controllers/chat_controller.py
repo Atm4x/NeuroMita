@@ -937,6 +937,11 @@ class ChatController(ChatService, GenerationActivityService):
                     structured_data,
                     result.tool_preludes,
                 )
+                logger.info(
+                    "[ChatController] Unity task %s: included %d historical tool opener(s) "
+                    "in final text and voice.",
+                    task_uid, len(result.tool_preludes),
+                )
             effective_character_name = self._resolve_character_name(effective_character_id)
 
             if is_streaming and eff_policy.echo_to_ui:
