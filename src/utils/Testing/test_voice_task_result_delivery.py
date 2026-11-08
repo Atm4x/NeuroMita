@@ -135,3 +135,51 @@ def test_tool_turn_voiceover_does_not_complete_parent_unity_task():
     assert payload["task_uid"] is None
     assert payload["message_id"] == "out:tool-opener"
     assert manager.get_task(task.uid).status == TaskStatus.PENDING
+
+
+def test_unity_tool_openers_are_spoken_and_displayed_in_order():
+    final_data = {
+        "segments": [{
+            "text": "The beach is ready.",
+            "target": "Player",
+            "intents": [{"type": "easel.draw", "payload": {"color": "blue"}}],
+        }],
+        "attitude_change": 0.5,
+    }
+    text, payload = ChatController._compose_unity_tool_reply(
+        "The beach is ready.",
+        final_data,
+        ("I'll check the easel.", "Now I'll draw."),
+    )
+
+    assert text == "I'll check the easel.\\nNow I'll draw.\\nThe beach is ready."
+    assert [segment["text"] for segment in payload["segments"]] == [
+        "I'll check the easel.", "Now I'll draw.", "The beach is ready.",
+    ]
+    assert payload["segments"][2]["intents"] == final_data["segments"][0]["intents"]
+    assert payload["attitude_change"] == 0.5
+    assert final_data["segments"] == [{
+        "text": "The beach is ready.",
+        "target": "Player",
+        "intents": [{"type": "easel.draw", "payload": {"color": "blue"}}],
+    }]
+
+    game_result = ChatController._build_task_result(text, payload)
+    assert game_result["response_protocol_version"] == 3
+    assert game_result["response"] == text
+    assert len(game_result["segments"]) == 3
+
+
+def test_unity_tool_opener_text_fallback_and_empty_openers():
+    text, unchanged = ChatController._compose_unity_tool_reply(
+        "Final", None, ("Before tool",),
+    )
+    assert text == "Before tool\\nFinal"
+    assert unchanged is None
+
+    original = {"segments": [{"text": "Final"}]}
+    text, untouched = ChatController._compose_unity_tool_reply(
+        "Final", original, (" ",),
+    )
+    assert text == "Final"
+    assert untouched is original
