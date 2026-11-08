@@ -957,12 +957,6 @@ class PromptController(PromptBuilderService):
             history_limited = list(prepared.messages)
             history_summary = prepared.summary.strip()
             last_message_at = prepared.last_message_at
-            if amnesia_mode == "identity":
-                history_summary = ""
-                history_limited = []
-                last_message_at = None
-            elif amnesia_mode == "recent":
-                history_limited = visible_history(history_limited, amnesia_mode)
 
         for s in dsl_system_infos:
             if isinstance(s, str):
@@ -977,13 +971,15 @@ class PromptController(PromptBuilderService):
         if core_memory_context:
             messages.append({"role": "system", "content": core_memory_context})
 
-        if history_summary:
+        if history_summary and amnesia_mode != "identity":
             messages.append({
                 "role": "system",
                 "content": f"[HISTORY SUMMARY]\n{history_summary}",
             })
 
-        messages.extend(history_limited)
+        # Mask only the LLM-visible list. Keep history_limited intact for the
+        # prompt result / downstream history persistence.
+        messages.extend(visible_history(history_limited, amnesia_mode))
 
         dialogue_context_message = None
         dialogue = request.dialogue
