@@ -196,8 +196,9 @@ class SkillCatalog:
             "through the top-level tool_call field next to segments, passing its "
             "id or ids (two at once when the scene needs both); [Available Tools] "
             "shows the exact shape. "
-            "Load one only when the current scene needs it; loading returns the "
-            "full instructions for this and the next turns.",
+            "Load one only when the current scene needs it; the result is placed "
+            "in the conversation history, and eventually leaves the context "
+            "window like older dialogue. Call load_skill again if needed.",
         ]
         budget = max(200, int(max_chars or DEFAULT_CATALOG_BLOCK_CHARS))
         for entry in entries:
