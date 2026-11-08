@@ -91,8 +91,13 @@ def classify_message_section(msg: Dict[str, Any], is_last_user: bool,
     core = head[len("[RUNTIME EVENT]"):].lstrip() if is_runtime_event else head
 
     # 1) Явно оформленные нами блоки контекста — по маркерам.
+    role = str(msg.get("role") or "")
     for marker, section in _SECTION_MARKERS:
         if core.startswith(marker) or marker in core:
+            # Eager skills precede the dialogue as prompt instructions;
+            # on-demand tool results are ordinary historical messages.
+            if section == "loaded skills" and role == "system" and not seen_dialogue:
+                return "character prompts"
             return section
     # Статический контракт Unity (Rules/Intent) теперь физически стоит в
     # статической части промпта (до истории) — это часть промпта; если вдруг
@@ -106,7 +111,6 @@ def classify_message_section(msg: Dict[str, Any], is_last_user: bool,
     # 2) Текущий триггер хода и реальный диалог. Последнее «пользовательское»
     # сообщение (is_last_user) — реальная реплика игрока ИЛИ idle-событие «игрок
     # молчит» — это ввод текущего хода: показываем внизу, «как игрок написал».
-    role = str(msg.get("role") or "")
     if is_last_user:
         return "user input"
     if role == "user" and not is_runtime_event:
