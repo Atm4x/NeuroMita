@@ -164,7 +164,7 @@ _RE_HDR_ESC = re.compile(r"^\[([A-Za-z][A-Za-z0-9 _/\-]{1,48})\]$")
 # (память/состояние/мир игры) и текущий ввод игрока. Ключ → (иконка, цвет, (ru,en)).
 _COARSE_GROUPS = {
     "prompt":  ("fa6s.book-open", "#F0A868", ("Промпт", "Prompt")),
-    "skills":  ("fa6s.puzzle-piece", "#C084FC", ("Скиллы", "Skills")),
+    "skills":  ("fa6s.puzzle-piece", "#C084FC", ("Загруженные скиллы", "Loaded skills")),
     "history": ("fa6s.clock-rotate-left", "#60A5FA", ("История", "History")),
     "context": ("fa6s.brain", "#34D399", ("Активный контекст", "Active context")),
     "input":   ("fa6s.comment", "#F4D35E", ("Ввод игрока", "Player input")),
@@ -595,6 +595,11 @@ class ContextViewerDialog(QDialog):
                 group_order.append(gkey)
             group_idxs[gkey].append(idx)
 
+        # Скиллы держим рядом с историей в дереве, хотя в самом запросе
+        # их system-блок физически идёт после истории (ради prompt caching).
+        # Индексы исходных сообщений при этом не меняются.
+        group_order = self._order_groups(group_order)
+
         # Ярлыки и «role #N» считаем в порядке ИНДЕКСОВ (не групп), чтобы
         # нумерация совпадала с обзором справа.
         self._msg_labels: Dict[int, str] = {}
@@ -622,6 +627,13 @@ class ContextViewerDialog(QDialog):
                 glabel += f" · ~{self._fmt_int(group_tokens)} · {self._fmt_pct(group_tokens, self._est_total)}"
             parent = QTreeWidgetItem(msgs_item, [glabel])
             parent.setIcon(0, qta.icon(icon, color=color))
+            if gkey == "skills":
+                parent.setToolTip(0, _(
+                    "Инструкции загруженных скиллов, повторно добавленные к этому запросу. "
+                    "Не являются сообщениями истории диалога.",
+                    "Loaded skill instructions repeated in this request. "
+                    "These are not dialogue history messages.",
+                ))
             parent.setExpanded(True)
             self._items.append((parent, "group", gkey))
 
@@ -639,8 +651,27 @@ class ContextViewerDialog(QDialog):
 
         self._render_response_tab()
 
+    @staticmethod
+    def _order_groups(group_order: list[str]) -> list[str]:
+        """Show retained skills beside history, not among live runtime state."""
+        ordered = list(group_order)
+        if "skills" not in ordered:
+            return ordered
+        ordered.remove("skills")
+        anchor = "history" if "history" in ordered else "prompt"
+        if anchor in ordered:
+            ordered.insert(ordered.index(anchor) + 1, "skills")
+        else:
+            ordered.insert(0, "skills")
+        return ordered
+
     def _group_key(self, idx: int) -> str:
         """Крупная группа сообщения по его секции из оценки токенов."""
+        # Старые дампы могут иметь устаревшую/неполную оценку токенов:
+        # распознаём блок по фактическому тексту отправленного сообщения.
+        content = self._content_plain(self._messages[idx].get("content")).lstrip()
+        if content.startswith("[LOADED SKILLS]"):
+            return "skills"
         section = (self._est_by_index.get(idx) or {}).get("section") or ""
         group = _SECTION_TO_GROUP.get(section)
         if group is not None:
@@ -677,7 +708,15 @@ class ContextViewerDialog(QDialog):
         child.setForeground(0, QColor(self._msg_actor_color[idx]))
         speaker, target = self._msg_actor[idx]
         who = f"{speaker} → {target}" if target else speaker
-        child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
+        if self._group_key(idx) == "skills":
+            child.setToolTip(0, _(
+                "Эти инструкции повторно включены в текущий запрос и не "
+                "являются записью истории диалога.",
+                "These instructions are repeated in this request; "
+                "they are not part of the dialogue history.",
+            ) + f"\nprovider role: {self._msg_role_ord[idx]}")
+        else:
+            child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
         self._items.append((child, "message", msg))
         self._message_items[idx] = child
         self._msg_index_by_id[id(msg)] = idx
@@ -1538,6 +1577,8 @@ class ContextViewerDialog(QDialog):
         first = re.sub(r"^\[\s*RUNTIME EVENT\s*\]\s*", "", first)
         if first.startswith("[Runtime Core Directive:"):
             return "fa6s.book-open"
+        if first.startswith("[LOADED SKILLS]"):
+            return _COARSE_GROUPS["skills"][0]
         match = _RE_TAG_RAW.match(first) or _RE_HDR_RAW.match(first)
         if first.startswith("[GAME_MASTER_DIRECTIVE]"):
             return _SECTION_STYLE["game"][0]
@@ -1570,6 +1611,20 @@ class ContextViewerDialog(QDialog):
 
         if first.startswith("[Runtime Core Directive:"):
             return "Code 23 runtime directive", _ROLE_COLORS.get("system", _TEXT)
+
+        if first.startswith("[LOADED SKILLS]"):
+            # В дереве показываем реальные скиллы, а не безликий Loaded Skills.
+            # Их тела остаются в исходном сообщении и доступны по клику.
+            skills = re.findall(
+                r"(?m)^##\s+(.+?)\s+\(([a-z0-9_-]{1,40})\)\s*$", text
+            )
+            names = [f"{title.strip()} ({skill_id})" for title, skill_id in skills]
+            label = _("Загруженные скиллы", "Loaded skills")
+            if names:
+                label += ": " + ", ".join(names[:2])
+                if len(names) > 2:
+                    label += f" (+{len(names) - 2})"
+            return label, _COARSE_GROUPS["skills"][1]
 
         # Авторский блок стадии: "# STAGE: introduction — Знакомство".
         stage_block = re.match(r"^#\s*STAGE:\s*([^\r\n—–-]{1,40})", first)
