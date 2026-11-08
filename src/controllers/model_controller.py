@@ -162,7 +162,6 @@ def _emit_tool_turn_voiceover(
     text: str,
     voice_profile,
     char_id: str | None,
-    task_uid: str | None,
     message_id: str,
     trace_id: str | None,
     policy,
@@ -172,6 +171,10 @@ def _emit_tool_turn_voiceover(
     The opener is an ordinary character line: the player should hear
     "let me look" before the tool runs. Skipping it was why a tool turn
     sounded like silence followed by an answer that came from nowhere.
+
+    This is not the final response. Never attach its audio to the parent
+    task UID: that would let the early TTS completion mark the whole Unity
+    task SUCCESS with only an audio path, before the tool follow-up is ready.
     """
     opener = str(text or "").strip()
     if not opener or not settings.get("USE_VOICEOVER"):
@@ -190,7 +193,9 @@ def _emit_tool_turn_voiceover(
     event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
         "text": opener,
         "speaker": speaker,
-        "task_uid": task_uid,
+        # The opener is deliberately detached from the generation task.
+        # AudioController must not emit SUCCESS for an intermediate tool turn.
+        "task_uid": None,
         "character_id": char_id,
         "voice_profile": voice_profile,
         "message_id": message_id,
@@ -2838,7 +2843,6 @@ class ModelController(GenerationService, ModelStateService):
             text=first_text,
             voice_profile=voice_profile,
             char_id=char_id,
-            task_uid=task_uid,
             message_id=first_assistant_message_id,
             trace_id=trace_id,
             policy=policy,
