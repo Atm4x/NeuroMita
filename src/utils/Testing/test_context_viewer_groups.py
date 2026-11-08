@@ -126,7 +126,7 @@ class LoadedSkillsViewerTests(unittest.TestCase):
         self.assertEqual(viewer._group_key(0), "prompt")
 
     def test_native_tool_reply_is_history(self):
-        msg = {"role": "tool", "content": "[LOADED SKILLS]\\n[skill: Drawing]\\nText"}
+        msg = {"role": "tool", "content": "[LOADED SKILLS]\n[skill: Drawing]\nText"}
         section = classify_message_section(msg, is_last_user=False, seen_dialogue=True)
         self.assertEqual(section, "loaded skills")
         viewer = _viewer([{"role": "assistant", "content": "loading"}, msg])
