@@ -2807,7 +2807,9 @@ class ModelController(GenerationService, ModelStateService):
             first_assistant_message_id = history_write.assistant_message_id
             self._publish_history_commit(history_write, character_id=char_id)
 
-        if policy.write_to_history and native_tool_call is None:
+        # Schema-mode load_skill must be saved with its result, not before
+        # execution, otherwise there is no historical instruction to replay.
+        if policy.write_to_history and native_tool_call is None and tool_name != "load_skill":
             persist_tool_turn(result_dict)
 
         # Emit first response to UI (shows "I'll check that" message)
@@ -2859,6 +2861,17 @@ class ModelController(GenerationService, ModelStateService):
         if policy.write_to_history and native_tool_call is not None:
             history_data = dict(result_dict)
             history_data['native_tool_history'] = native_tool_followup_messages(native_tool_call, tool_result)
+            persist_tool_turn(history_data)
+        elif policy.write_to_history and tool_name == "load_skill":
+            # Gemini and other schema-tool providers have no native tool-role
+            # reply to persist. Store the full skill result with this assistant
+            # turn; HistoryController projects it right after the turn while
+            # it stays in the bounded dialogue history.
+            history_data = dict(result_dict)
+            if "[skill:" in str(tool_result):
+                history_data["skill_result_history"] = (
+                    f"[LOADED SKILLS]\\n{tool_result}\\n[/LOADED SKILLS]"
+                )
             persist_tool_turn(history_data)
 
         self.event_bus.emit(Events.Model.ON_TOOL_DONE, {
