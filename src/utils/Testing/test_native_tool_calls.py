@@ -11,6 +11,7 @@ PROJECT_SRC = Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
+from controllers.history_controller import HistoryController
 from services.contracts import RuntimeCapabilities
 from services.native_tool_calls import (
     bridge_native_tool_response,
@@ -142,6 +143,44 @@ class NativeSkillHistoryTests(unittest.TestCase):
         result = native_tool_followup_messages(call, "[load_skill] Unknown skill.")
         self.assertEqual(result[1]["content"], "[load_skill] Unknown skill.")
         self.assertEqual(persisted_native_tool_messages({"native_tool_history": result}), result)
+
+
+class HistoricalSkillProjectionTests(unittest.TestCase):
+    def test_schema_skill_follows_its_turn_and_disappears_when_turn_is_trimmed(self):
+        controller = HistoryController.__new__(HistoryController)
+        controller._time_gap_marker_threshold_seconds = lambda: 0
+        controller._action_memory_enabled = lambda: False
+        controller._message_time = lambda _msg: None
+        controller._apply_llm_prefix = lambda _role, _speaker, _target, text: text
+        char = SimpleNamespace(char_id="Crazy")
+        skill = "[LOADED SKILLS]\n[skill: Drawing]\nPaint something.\n[/LOADED SKILLS]"
+        tool_turn = {
+            "role": "assistant",
+            "content": "Loading drawing instructions.",
+            "structured_data": {"skill_result_history": skill},
+        }
+        output = controller._sanitize_history_for_llm(char, [tool_turn])
+        self.assertEqual([item["role"] for item in output], ["assistant", "system"])
+        self.assertEqual(output[1]["content"], skill)
+        self.assertEqual(
+            controller._sanitize_history_for_llm(char, [{"role": "user", "content": "Later"}]),
+            [{"role": "user", "content": "Later"}],
+        )
+
+    def test_native_skill_keeps_tool_role_and_id_when_replayed(self):
+        controller = HistoryController.__new__(HistoryController)
+        controller._time_gap_marker_threshold_seconds = lambda: 0
+        controller._action_memory_enabled = lambda: False
+        controller._message_time = lambda _msg: None
+        controller._apply_llm_prefix = lambda _role, _speaker, _target, text: text
+        call = {"id": "skill_7", "name": "load_skill", "arguments": {"ids": ["easel"]}}
+        history = native_tool_followup_messages(call, "[skill: Easel]\nDraw arcs.")
+        tool_turn = {"role": "assistant", "content": "...",
+                     "structured_data": {"native_tool_history": history}}
+        output = controller._sanitize_history_for_llm(SimpleNamespace(char_id="Crazy"), [tool_turn])
+        self.assertEqual([item["role"] for item in output], ["assistant", "tool"])
+        self.assertEqual(output[1]["tool_call_id"], "skill_7")
+        self.assertIn("Draw arcs.", output[1]["content"])
 
 
 class ToolModeTests(unittest.TestCase):
