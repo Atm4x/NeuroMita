@@ -122,7 +122,7 @@ class NativeSkillHistoryTests(unittest.TestCase):
         self.assertIn("must not persist", history[1]["content"])
 
     def test_schema_skill_result_replays_as_a_historical_system_message(self):
-        content = "[LOADED SKILLS]\\n[skill: TV]\\nUse the remote.\\n[/LOADED SKILLS]"
+        content = "[LOADED SKILLS]\n[skill: TV]\nUse the remote.\n[/LOADED SKILLS]"
         self.assertEqual(
             persisted_schema_skill_message({"skill_result_history": content}),
             {"role": "system", "content": content},
