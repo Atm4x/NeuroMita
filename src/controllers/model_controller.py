@@ -47,13 +47,20 @@ from core.request_policy import RequestPolicy, resolve_policy
 from core.performance_trace import get_trace, perf_mark, perf_span
 from handlers.llm_providers.base import LLMUsage
 from services.runtime_capabilities import runtime_capabilities
-from services.native_tool_calls import resolve_tool_mode, native_tool_followup_messages, validate_runtime_native_call
+from services.native_tool_calls import (
+    lift_tool_intent,
+    native_tool_followup_messages,
+    resolve_tool_mode,
+    validate_runtime_native_call,
+)
 from services.structured_response_capabilities import (
     StructuredResponseCapabilities,
     resolve_structured_response_capabilities,
 )
+from services.tool_prompt import render_tools_for_prompt
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
+from domain.working_state import working_state_transition
 from services.conversation_timeline import ConversationTimeline
 from utils.structured_response_parser import (
     parse_structured_response_with_meta,
@@ -61,7 +68,7 @@ from utils.structured_response_parser import (
     StructuredResponseParseError,
 )
 
-_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder"]
+_ALL_TOOLS_LIST = ["calculator", "web_search", "google_search", "web_reader", "memory_search", "reminder", "load_skill"]
 _DEFAULT_TOOL_ENABLED = {
     "calculator": False,
     "web_search": False,
@@ -69,6 +76,7 @@ _DEFAULT_TOOL_ENABLED = {
     "web_reader": False,
     "memory_search": True,
     "reminder": True,
+    "load_skill": False,
 }
 
 
@@ -86,26 +94,6 @@ def extract_shared_world_info(snapshot: dict[str, Any]) -> dict[str, Any]:
     return shared
 
 
-def _render_tools_for_prompt(schema: list) -> str:
-    """Format tool JSON schema list into a human-readable prompt block."""
-    if not schema:
-        return ""
-    lines = ["Available tools:"]
-    for tool in schema:
-        name = tool.get("name", "?")
-        desc = tool.get("description", "")
-        params_def = tool.get("parameters", {})
-        props = params_def.get("properties", {})
-        required_set = set(params_def.get("required", []))
-        param_parts = []
-        for pname, pdef in props.items():
-            ptype = pdef.get("type", "any")
-            pdesc = pdef.get("description", "")
-            req_marker = " (REQUIRED)" if pname in required_set else ""
-            param_parts.append(f"{pname}: {ptype}{req_marker}" + (f" — {pdesc}" if pdesc else ""))
-        params_str = ", ".join(param_parts) if param_parts else "no parameters"
-        lines.append(f"- {name}({params_str}) — {desc}")
-    return "\n".join(lines)
 
 
 _GRAPH_TAG_RE = re.compile(r"<graph>([\s\S]*?)</graph>", re.IGNORECASE)
@@ -167,6 +155,67 @@ def _timeline_effect_scope(controller):
     return timeline.runtime.writing() if timeline is not None else nullcontext()
 
 
+def _emit_tool_turn_voiceover(
+    *,
+    event_bus,
+    settings,
+    text: str,
+    voice_profile,
+    char_id: str | None,
+    message_id: str,
+    trace_id: str | None,
+    policy,
+) -> None:
+    """Voice the spoken opener of a tool turn.
+
+    For standalone Python chat, speak the tool opener immediately so "let me
+    look" is audible before the tool runs. Unity tasks deliberately skip this
+    path: the caller buffers openers and ships them with the final response.
+
+    Never attach intermediate audio to the parent task UID: early TTS
+    completion could mark it SUCCESS before the tool follow-up is ready.
+    """
+    opener = str(text or "").strip()
+    if not opener or not settings.get("USE_VOICEOVER"):
+        return
+    if not bool(getattr(policy, "allow_voiceover", True)):
+        return
+    if isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False:
+        return
+    if isinstance(voice_profile, dict) and voice_profile.get("character_id") == "GameMaster":
+        if not bool(settings.get("GM_VOICE", False)):
+            return
+
+    speaker = voice_profile.get("silero_command", "") if isinstance(voice_profile, dict) else ""
+    if isinstance(voice_profile, dict) and settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
+        speaker = voice_profile.get("miku_tts_name", "Player")
+    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
+        "text": opener,
+        "speaker": speaker,
+        # The opener is deliberately detached from the generation task.
+        # AudioController must not emit SUCCESS for an intermediate tool turn.
+        "task_uid": None,
+        "character_id": char_id,
+        "voice_profile": voice_profile,
+        "message_id": message_id,
+        "trace_id": trace_id,
+    })
+
+
+def _tool_badge_text(tool_name: str, tool_args, tool_result: str) -> str:
+    """One short line shown between the two bubbles of a tool turn."""
+    failed = str(tool_result or "").strip().lower().startswith("[tool error")
+    if tool_name == "load_skill":
+        raw_ids = tool_args.get("ids") if isinstance(tool_args, dict) else None
+        if raw_ids is None and isinstance(tool_args, dict):
+            raw_ids = tool_args.get("id")
+        if isinstance(raw_ids, str):
+            raw_ids = [raw_ids]
+        names = ", ".join(str(item).strip() for item in (raw_ids or []) if str(item).strip())
+        return f"\U0001F9E9 Навык: {names or 'по запросу'}" + (" — ошибка" if failed else "")
+    return f"\U0001F527 Инструмент: {tool_name}" + (" — ошибка" if failed else "")
+
+
 class ModelController(GenerationService, ModelStateService):
     """
     ModelController:
@@ -201,8 +250,10 @@ class ModelController(GenerationService, ModelStateService):
 
         from managers.tools.builtin.memory_search import MemorySearchTool
         from managers.tools.builtin.reminder_tool import ReminderTool
+        from managers.tools.builtin.load_skill import LoadSkillTool
         self.model.tool_manager.register(MemorySearchTool(settings=self.settings))
         self.model.tool_manager.register(ReminderTool())
+        self.model.tool_manager.register(LoadSkillTool(settings=self.settings))
 
         self.context_counter = ContextCounter(encoding_model="gpt-4o-mini")
         self.model_pricing_manager = ModelPricingManager()
@@ -1569,11 +1620,19 @@ class ModelController(GenerationService, ModelStateService):
         _tools_mode = str(self.settings.get("TOOLS_MODE", "native"))
         if _tools_mode == "off":
             _tools_on = False
+        skill_mode = str(
+            self.settings.get("SKILL_LOADING_MODE", "on_demand") or "on_demand"
+        ).strip().lower()
+        eager_skills = skill_mode == "eager"
         _enabled_tools = [
             n for n in _ALL_TOOLS_LIST
             if self.settings.get(f"TOOL_ENABLED_{n}", _DEFAULT_TOOL_ENABLED.get(n, False))
             and (n != "reminder" or bool(self.settings.get("REMINDERS_ENABLED", True)))
         ]
+        if eager_skills:
+            # Eager mode already keeps every skill body in the prompt; offering
+            # load_skill would only spend a turn loading text the model has.
+            _enabled_tools = [n for n in _enabled_tools if n != "load_skill"]
         if not _enabled_tools:
             _tools_on = False
 
@@ -1587,11 +1646,25 @@ class ModelController(GenerationService, ModelStateService):
                 })
                 _tools_on = bool(_enabled_tools)
                 effective_capabilities["tools_prompt"] = (
-                    _render_tools_for_prompt(schema) if _tools_on else ""
+                    render_tools_for_prompt(
+                        schema,
+                        # Gemini schema encodes tool_call.args as a string.
+                        args_as_json_string=(
+                            getattr(effective_preset, "dialect_id", "") == "gemini"
+                        ),
+                    ) if _tools_on else ""
                 )
             except Exception as e:
                 logger.warning(f"[ModelController] Failed to build tools prompt: {format_exception(e)}")
                 _tools_on = False
+
+        # On-demand skills only make sense while load_skill is actually offered
+        # to the model; the catalog block is derived from that capability.
+        effective_capabilities["skill_mode"] = "eager" if eager_skills else "on_demand"
+        effective_capabilities["skills"] = bool(
+            "load_skill" in (_enabled_tools or [])
+            or effective_capabilities["skill_mode"] == "eager"
+        )
 
         with character_lock(char_id):
             _custom_params = copy.deepcopy(getattr(char, "custom_params", []) or [])
@@ -1743,6 +1816,9 @@ class ModelController(GenerationService, ModelStateService):
             effective_capabilities["tools_prompt"] = "Use the advertised native functions to call tools."
         effective_capabilities["working_state"] = "working_state" not in profile.excluded_fields
         effective_capabilities["structured_prompt_features"] = profile.prompt_features()
+        effective_capabilities["history_epoch_at_request"] = int(
+            getattr(char, "history_epoch", 0) or 0
+        )
         effective_capabilities.update({
             "structured_exclude_fields": profile.excluded_fields,
             "structured_segment_exclude_fields": profile.excluded_segment_fields,
@@ -1804,6 +1880,9 @@ class ModelController(GenerationService, ModelStateService):
 
         profile = effective_capabilities["structured_response_profile"].with_prompt_intents(
             bool(prompt_data.support_intents)
+        )
+        cognitive_effect_changes = list(
+            getattr(prompt_data, "cognitive_effect_changes", ()) or ()
         )
         effective_capabilities["structured_response_profile"] = profile
         effective_capabilities["schema_intents"] = profile.prompt_intents
@@ -1910,6 +1989,11 @@ class ModelController(GenerationService, ModelStateService):
                 trace.set_attribute("model", llm_response.model or "")
                 trace.set_attribute("response_chars", len(raw_text or ""))
             visible_raw, think_text = self._split_response_thinking(llm_response)
+            # The snapshot id names the exact request behind this reply; persist
+            # it with the turn so history reloads can still open that request.
+            context_snapshot_id = str(
+                (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
+            )
 
             if original_image_data and bool(self.settings.get("IMAGE_INLINE_DESCRIPTION", False)):
                 _detail = str(self.settings.get("IMAGE_DESCRIPTION_DETAIL", "normal") or "normal")
@@ -1924,6 +2008,7 @@ class ModelController(GenerationService, ModelStateService):
 
             if is_structured_output:
                 sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+                context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
                 structured_result = self._process_structured_output(
                     visible_raw=visible_raw,
                     think_text=think_text,
@@ -1957,15 +2042,11 @@ class ModelController(GenerationService, ModelStateService):
                     image_descriptions=image_descriptions,
                     structured_model_cls=structured_model_cls,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
                     dialogue=request.dialogue,
+                    cognitive_effect_changes=cognitive_effect_changes,
                 )
                 if structured_result is not None:
-                    structured_result = dataclasses.replace(
-                        structured_result,
-                        context_snapshot_id=str(
-                            (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
-                        ),
-                    )
                     self._consume_temporary_system_infos(char_id, extra_system_infos)
                 return structured_result
 
@@ -2008,8 +2089,10 @@ class ModelController(GenerationService, ModelStateService):
                 cost_fallback_source=getattr(active_pricing, "source", None),
             )
             sample_id = str((getattr(llm_response, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+            context_snapshot_id = str((getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
             assistant_message_id = ""
+
             if policy.write_to_history:
                 with perf_span(trace_id, "generation.history_write"):
                     history_write = self.event_writer.write_turn(
@@ -2030,6 +2113,8 @@ class ModelController(GenerationService, ModelStateService):
                         thinking=think_text or None,
                         llm_usage=usage_snapshot,
                         sample_id=sample_id,
+                        context_snapshot_id=context_snapshot_id,
+                        cognitive_effect_changes=cognitive_effect_changes,
                         dialogue=request.dialogue,
                     )
                     assistant_message_id = history_write.assistant_message_id
@@ -2064,9 +2149,7 @@ class ModelController(GenerationService, ModelStateService):
                 think=think_text or None,
                 message_id=assistant_message_id,
                 sample_id=sample_id or "",
-                context_snapshot_id=str(
-                    (getattr(llm_response, "raw", {}) or {}).get("context_snapshot_id") or ""
-                ),
+                context_snapshot_id=context_snapshot_id,
             )
 
         except OperationCancelledError:
@@ -2244,10 +2327,12 @@ class ModelController(GenerationService, ModelStateService):
         image_descriptions: dict[str, str] | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         dialogue: Any = None,
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
         tv_observation: dict | None = None,
+        cognitive_effect_changes: list | None = None,
     ) -> Optional[ChatGenerationResult]:
         if request_cancellation is not None:
             request_cancellation.raise_if_cancelled()
@@ -2299,6 +2384,7 @@ class ModelController(GenerationService, ModelStateService):
                             thinking=think_text or None,
                             llm_usage=usage_snapshot,
                             sample_id=sample_id,
+                            context_snapshot_id=context_snapshot_id,
                             assistant_is_deleted=True,
                             dialogue=dialogue,
                         )
@@ -2333,6 +2419,7 @@ class ModelController(GenerationService, ModelStateService):
                 character_id=char_id,
                 voice_profile=None,
                 sample_id=sample_id or "",
+                context_snapshot_id=context_snapshot_id or "",
                 error=safe_message,
                 error_details=error_details,
                 structured_parse_level="rejected",
@@ -2353,6 +2440,7 @@ class ModelController(GenerationService, ModelStateService):
         except ValueError:
             return ChatGenerationResult(
                 text='', character_id=char_id, error='The model requested a tool forbidden by this request.',
+                sample_id=sample_id or "", context_snapshot_id=context_snapshot_id or "",
                 error_details={'code': 'native_tool_call_invalid', 'stage': 'tools'},
                 structured_parse_level='rejected', control_plane_trusted=False,
             )
@@ -2366,6 +2454,23 @@ class ModelController(GenerationService, ModelStateService):
                 name=native_tool_call["name"], args=native_tool_call["arguments"],
             )
 
+        # Compatibility bridge for models that ask for a tool through intents
+        # instead of tool_call. Allowlisted and validated in native_tool_calls,
+        # schema mode only, and never past the depth limit: a well-formed
+        # tool_call never reaches it.
+        _bridge_allowed = (
+            tool_mode in ('', 'schema')
+            and (not isinstance(profile, StructuredResponseCapabilities)
+                 or profile.at_tool_depth(tool_depth).can_call_tools)
+        )
+        if _bridge_allowed and structured.tool_call is None and tools_on and enabled_tools:
+            lifted_tool = lift_tool_intent(structured, enabled_tools)
+            if lifted_tool:
+                logger.warning(
+                    "[ModelController] Tool-intent fallback: model asked for '%s' "
+                    "inside intents; running it as a tool call.", lifted_tool,
+                )
+
         # Apply and snapshot character state in a short critical section. Tool
         # execution and any follow-up provider request happen after this lock.
         with _timeline_effect_scope(self), character_lock(char_id):
@@ -2378,6 +2483,8 @@ class ModelController(GenerationService, ModelStateService):
                 if not isinstance(normalized, StructuredResponse):
                     raise TypeError("Character postprocessing must return StructuredResponse or None")
                 structured = normalized
+            from services.mita_stages import get_mita_stage_service
+            get_mita_stage_service().observe_response(char, structured)
             if hasattr(char, "flush_variables"):
                 char.flush_variables()
             created_memory_ids = list(getattr(char, "_last_created_memory_ids", None) or [])
@@ -2432,11 +2539,13 @@ class ModelController(GenerationService, ModelStateService):
                 tool_depth=tool_depth,
                 structured_model_cls=structured_model_cls,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
                 image_descriptions=image_descriptions,
                 voice_profile=voice_profile,
                 dialogue=dialogue,
                 native_tool_call=native_tool_call,
                 request_cancellation=request_cancellation,
+                cognitive_effect_changes=cognitive_effect_changes,
             )
 
         # A tool-call response is only an intermediate turn. Commit its working
@@ -2444,12 +2553,14 @@ class ModelController(GenerationService, ModelStateService):
         # a stale plan for the next player message.
         if capabilities.get("working_state", False):
             try:
-                if structured.working_state is None:
+                commit_working_state, working_state_value = working_state_transition(structured)
+                if commit_working_state and working_state_value is None:
                     char.working_state.clear()
-                else:
+                elif commit_working_state:
                     char.working_state.update(
-                        structured.working_state,
-                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 2000) or 2000),
+                        working_state_value,
+                        epoch=capabilities.get("history_epoch_at_request"),
+                        max_chars=int(self.settings.get("WORKING_STATE_MAX_CHARS", 1000) or 1000),
                     )
             except Exception as exc:
                 logger.warning(
@@ -2529,6 +2640,8 @@ class ModelController(GenerationService, ModelStateService):
                     thinking=think_text or None,
                     llm_usage=usage_snapshot,
                     sample_id=sample_id,
+                    context_snapshot_id=context_snapshot_id,
+                    cognitive_effect_changes=cognitive_effect_changes,
                     dialogue=dialogue,
                 )
                 assistant_message_id = history_write.assistant_message_id
@@ -2580,6 +2693,7 @@ class ModelController(GenerationService, ModelStateService):
             structured=result_dict,
             message_id=assistant_message_id,
             sample_id=sample_id or "",
+            context_snapshot_id=context_snapshot_id or "",
             structured_parse_level=parse_outcome.parse_level,
             control_plane_trusted=parse_outcome.control_plane_trusted,
         )
@@ -2618,12 +2732,14 @@ class ModelController(GenerationService, ModelStateService):
         trace_id: str | None = None,
         structured_model_cls=None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
         image_descriptions: dict[str, str] | None = None,
         voice_profile=None,
         dialogue: Any = None,
         native_tool_call: dict | None = None,
         request_cancellation: Any = None,
         tv_observation: dict | None = None,
+        cognitive_effect_changes: list | None = None,
     ) -> Optional[ChatGenerationResult]:
         """
         Handle a tool_call from a structured response:
@@ -2666,6 +2782,10 @@ class ModelController(GenerationService, ModelStateService):
             first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
         else:
             history_task_uid = f"{task_uid or req_id or char_id}:tool:{tool_depth}"
+            if tool_name == "load_skill" and policy.write_to_history:
+                # The schema result is saved after execution; reserve the same
+                # deterministic UI ID so the first tool bubble remains linked.
+                first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
 
         def persist_tool_turn(history_data):
             nonlocal first_assistant_message_id
@@ -2688,12 +2808,16 @@ class ModelController(GenerationService, ModelStateService):
                 thinking=think_text or None,
                 llm_usage=usage_snapshot,
                 sample_id=sample_id,
+                context_snapshot_id=context_snapshot_id,
+                cognitive_effect_changes=cognitive_effect_changes,
                 dialogue=dialogue,
             )
             first_assistant_message_id = history_write.assistant_message_id
             self._publish_history_commit(history_write, character_id=char_id)
 
-        if policy.write_to_history and native_tool_call is None:
+        # Schema-mode load_skill must be saved with its result, not before
+        # execution, otherwise there is no historical instruction to replay.
+        if policy.write_to_history and native_tool_call is None and tool_name != "load_skill":
             persist_tool_turn(result_dict)
 
         # Emit first response to UI (shows "I'll check that" message)
@@ -2708,7 +2832,25 @@ class ModelController(GenerationService, ModelStateService):
             "speaker_name": char_name or "",
             "structured_data": result_dict,
             "message_id": first_assistant_message_id,
+            "sample_id": sample_id or "",
+            "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
+
+        if task_uid:
+            # Unity presents speech only when the task completes. Keep this
+            # opener for the final delivery, not an undeliverable standalone WAV.
+            logger.debug("[ModelController] Buffering tool opener for Unity: %s", tool_name)
+        else:
+            _emit_tool_turn_voiceover(
+                event_bus=self.event_bus,
+                settings=self.settings,
+                text=first_text,
+                voice_profile=voice_profile,
+                char_id=char_id,
+                message_id=first_assistant_message_id,
+                trace_id=trace_id,
+                policy=policy,
+            )
 
         # Emit tool executing indicator for UI
         self.event_bus.emit(Events.Model.ON_TOOL_EXECUTING, {
@@ -2732,14 +2874,28 @@ class ModelController(GenerationService, ModelStateService):
             history_data = dict(result_dict)
             history_data['native_tool_history'] = native_tool_followup_messages(native_tool_call, tool_result)
             persist_tool_turn(history_data)
+        elif policy.write_to_history and tool_name == "load_skill":
+            # Gemini and other schema-tool providers have no native tool-role
+            # reply to persist. Store the full skill result with this assistant
+            # turn; HistoryController projects it right after the turn while
+            # it stays in the bounded dialogue history.
+            history_data = dict(result_dict)
+            if "[skill:" in str(tool_result):
+                history_data["skill_result_history"] = (
+                    f"[LOADED SKILLS]\n{tool_result}\n[/LOADED SKILLS]"
+                )
+            persist_tool_turn(history_data)
 
         self.event_bus.emit(Events.Model.ON_TOOL_DONE, {
             "tool_name": tool_name,
             "character_id": char_id,
         })
         self.event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
-            "role": "system",
-            "response": f"[Tool: {tool_name}]\n{tool_result}",
+            "role": "event",
+            "response": [
+                {"type": "meta", "speaker": "Инструмент"},
+                {"type": "text", "text": _tool_badge_text(tool_name, tool_args, tool_result)},
+            ],
             "is_initial": False,
             "emotion": "",
             "character_id": char_id or "",
@@ -2759,8 +2915,15 @@ class ModelController(GenerationService, ModelStateService):
             "Do NOT call any tools again unless the question explicitly requires it. "
             "Respond in JSON format."
         )
-        _system_content = f"[Tool result: {tool_name}]\n{tool_result}{_instruction}"
-        _user_content   = f"[SYSTEM INFO] [Tool result: {tool_name}]\n{tool_result}{_instruction}"
+        if tool_name == "load_skill":
+            # A loaded skill is authored instruction, not a system-prompt
+            # appendix. Its own block keeps the model and the context viewer
+            # from mixing skills into the rest of the prompt.
+            _result_body = f"[LOADED SKILLS]\n{tool_result}\n[/LOADED SKILLS]"
+        else:
+            _result_body = f"[Tool result: {tool_name}]\n{tool_result}"
+        _system_content = f"{_result_body}{_instruction}"
+        _user_content = f"[SYSTEM INFO] {_result_body}{_instruction}"
 
         # Build messages for second call: append first response JSON + tool result
         combined_messages_v2 = list(combined_messages)
@@ -2835,6 +2998,8 @@ class ModelController(GenerationService, ModelStateService):
                 think=think_text or None,
                 structured=result_dict,
                 message_id=first_assistant_message_id,
+                sample_id=sample_id or "",
+                context_snapshot_id=context_snapshot_id or "",
                 structured_parse_level="tool_intermediate",
                 control_plane_trusted=False,
             )
@@ -2852,10 +3017,11 @@ class ModelController(GenerationService, ModelStateService):
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
         sample_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("finetune_sample_id") or "").strip() or None
+        context_snapshot_id_2 = str((getattr(llm_response_2, "raw", {}) or {}).get("context_snapshot_id") or "").strip() or None
 
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
-        return self._process_structured_output(
+        final_result = self._process_structured_output(
             visible_raw=visible_raw_2,
             think_text=combined_think or "",
             usage=merged_usage,
@@ -2890,10 +3056,22 @@ class ModelController(GenerationService, ModelStateService):
             image_descriptions=image_descriptions,
             structured_model_cls=structured_model_cls,
             sample_id=sample_id_2,
+            context_snapshot_id=context_snapshot_id_2,
             dialogue=dialogue,
             native_tool_call=(llm_response_2.raw or {}).get("native_tool_call"),
             request_cancellation=request_cancellation,
+            cognitive_effect_changes=cognitive_effect_changes,
         )
+        if task_uid and final_result is not None and not final_result.error and final_result.text:
+            opener = str(first_text or "").strip()
+            if opener:
+                # Every tool-depth prepends its opener to preserve spoken order.
+                # The result is immutable; do not alter the Python UI/history.
+                final_result = dataclasses.replace(
+                    final_result,
+                    tool_preludes=(opener, *final_result.tool_preludes),
+                )
+        return final_result
 
     # ---------------------------------------------------------------------
     # Reload prompts

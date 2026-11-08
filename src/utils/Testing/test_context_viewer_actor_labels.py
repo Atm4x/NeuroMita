@@ -55,3 +55,17 @@ def test_working_state_and_retained_actions_have_distinct_context_labels() -> No
 
     assert viewer._classify_message_label(working_state, "assistant", 1, 0) == "Working State"
     assert viewer._classify_message_label(actions, "assistant", 2, 1) == "Recent Actions Before Summary Boundary"
+
+
+def test_active_cognitive_effects_join_the_active_context_group() -> None:
+    viewer = _viewer()
+    viewer._est_by_index = {0: {"section": "Active Cognitive Effects"}}
+
+    assert viewer._group_key(0) == "context"
+
+
+def test_cognitive_effect_history_event_joins_the_history_group() -> None:
+    viewer = _viewer()
+    viewer._est_by_index = {0: {"section": "Cognitive Effect"}}
+
+    assert viewer._group_key(0) == "history"

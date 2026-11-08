@@ -4,14 +4,25 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import json
+import logging
 
 from handlers.llm_providers.base import ToolResult
 from handlers.llm_providers.protocols.history import normalize_history_message, normalize_tool_call_history
-from schemas.structured_response import StructuredResponse
+from schemas.structured_response import StructuredResponse, ToolCall
 from services.structured_response_capabilities import StructuredResponseCapabilities
 
 
 NATIVE_DIALECTS = frozenset({'openai_chat_completions', 'openai_responses'})
+
+logger = logging.getLogger(__name__)
+
+
+# Intents that may be lifted into tool calls, with the arguments each one needs.
+# Nothing outside this table is ever converted, so a Unity intent cannot turn
+# into a tool call just because the two share a name.
+BRIDGEABLE_TOOL_INTENTS = {
+    "load_skill": ("ids", "id"),
+}
 
 
 def resolve_tool_mode(settings, capabilities, dialect_id):
@@ -20,6 +31,12 @@ def resolve_tool_mode(settings, capabilities, dialect_id):
     active = isinstance(profile, StructuredResponseCapabilities) and profile.can_call_tools
     if not active or requested == 'off':
         return {'requested': requested, 'effective': 'off', 'reason': 'tools_unavailable'}
+    if (requested == 'native'
+            and capabilities.get('structured_output', False)
+            and capabilities.get('native_structured_output', True)
+            and not capabilities.get('native_tools_with_structured_output', True)):
+        return {'requested': requested, 'effective': 'schema',
+                'reason': 'native_tools_with_structured_output_unsupported'}
     if requested == 'native' and dialect_id in NATIVE_DIALECTS and capabilities.get('tools_native', False):
         return {'requested': requested, 'effective': 'native', 'reason': None}
     return {'requested': requested, 'effective': 'schema',
@@ -103,7 +120,13 @@ def bridge_native_tool_response(response, req, *, model_cls=StructuredResponse):
 
 
 def native_tool_followup_messages(call, result):
-    output = ToolResult(id=call['id'], content=str(result))
+    content = str(result)
+    if (call.get('name') == 'load_skill' and '[skill:' in content
+            and not content.lstrip().startswith('[LOADED SKILLS]')):
+        # The native tool-role reply needs the same section marker as schema
+        # mode so the context viewer can identify freshly loaded instructions.
+        content = f'[LOADED SKILLS]\n{content}\n[/LOADED SKILLS]'
+    output = ToolResult(id=call['id'], content=content)
     assistant = {'role': 'assistant', 'content': call.get('assistant_text'), 'tool_calls': [{
         'id': call['id'], 'type': 'function', 'function': {
             'name': call['name'], 'arguments': json.dumps(call['arguments'], ensure_ascii=False)}}]}
@@ -111,6 +134,88 @@ def native_tool_followup_messages(call, result):
     if history:
         assistant['protocol_history'] = history
     return [assistant, {'role': 'tool', 'tool_call_id': output.id, 'content': output.content}]
+
+
+def lift_tool_intent(structured: StructuredResponse, enabled_tools) -> str:
+    """Move an explicitly bridged tool from intents onto the tool-call field.
+
+    A model that cannot emit tool_call sometimes asks through intents:
+    {"type": "load_skill", "payload": "wardrobe"}. Unity knows no such
+    intent, so the request would be dropped and the turn would end without the
+    follow-up request that reads the skill.
+
+    Only BRIDGEABLE_TOOL_INTENTS entries are converted, only while that tool is
+    enabled for the request, and only with a complete, correctly typed argument
+    set. Anything else stays where the model put it: guessing arguments would
+    run a tool the model did not actually ask for. Returns the lifted name.
+    """
+    names = {str(name).strip() for name in (enabled_tools or ()) if str(name).strip()}
+    if not names:
+        return ""
+
+    lifted = ""
+    for segment in getattr(structured, "segments", None) or []:
+        intents = list(getattr(segment, "intents", None) or [])
+        kept = []
+        changed = False
+        for intent in intents:
+            name = str(getattr(intent, "type", "") or "").strip()
+            required = BRIDGEABLE_TOOL_INTENTS.get(name)
+            if required is None:
+                if name in names:
+                    logger.warning(
+                        "[ToolIntentBridge] Tool %r was sent as a Unity intent; "
+                        "only %s can be bridged.",
+                        name, sorted(BRIDGEABLE_TOOL_INTENTS),
+                    )
+                kept.append(intent)
+                continue
+            if name not in names:
+                kept.append(intent)
+                continue
+            changed = True
+            args = _bridge_arguments(name, getattr(intent, "payload", None), required)
+            if args is None:
+                continue
+            if lifted:
+                logger.warning(
+                    "[ToolIntentBridge] Dropping a second %r request: one tool call per turn.",
+                    name,
+                )
+                continue
+            lifted = name
+            structured.tool_call = ToolCall(name=name, args=args)
+        if changed:
+            segment.intents = kept
+    return lifted
+
+
+def _bridge_arguments(name, payload, required):
+    """Return validated arguments for a bridged intent, or None when unsure."""
+    payload = payload if isinstance(payload, dict) else {}
+    args = {}
+    for key in required:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            args[key] = value.strip()
+        elif isinstance(value, (list, tuple)):
+            values = [str(item).strip() for item in value if isinstance(item, str) and str(item).strip()]
+            if values:
+                args[key] = values
+    if not args:
+        logger.warning(
+            "[ToolIntentBridge] %r came through intents without a usable argument; "
+            "not lifting it.",
+            name,
+        )
+        return None
+    unknown = sorted(set(payload) - set(required))
+    if unknown:
+        logger.warning(
+            "[ToolIntentBridge] Ignoring unknown %r arguments from intents: %s",
+            name, unknown,
+        )
+    return args
 
 
 def _has_schema_tool_call(data):
@@ -149,3 +254,21 @@ def persisted_native_tool_messages(structured_data):
     return [deepcopy({key: value for key, value in assistant.items()
                       if key in {'role', 'content', 'tool_calls', 'protocol_history'}}),
             {'role': 'tool', 'tool_call_id': result['tool_call_id'], 'content': result['content']}]
+
+
+def persisted_schema_skill_message(structured_data):
+    """Reconstruct the historical skill result of a schema-mode tool turn.
+
+    It is attached to the assistant turn so ordinary dialogue trimming removes
+    the instruction along with that turn, instead of keeping a sticky system
+    message beyond the conversation window.
+    """
+    if not isinstance(structured_data, dict):
+        return None
+    content = structured_data.get('skill_result_history')
+    if not isinstance(content, str) or not content.startswith('[LOADED SKILLS]\n'):
+        return None
+    if not content.rstrip().endswith('[/LOADED SKILLS]'):
+        return None
+    return {'role': 'system', 'content': content}
+

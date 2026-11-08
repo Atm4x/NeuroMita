@@ -77,6 +77,10 @@ class Character:
         "LongMemoryRememberCount": 0,
         "player_name": "Игрок",
         "player_name_known": False,
+        # "unmet" — в текущей истории ещё не было состоявшегося обмена
+        # репликами; "acquainted" — игрок уже представлен этой Мите. Это факт
+        # знакомства, а не шкала симпатии и не замена attitude.
+        "relationship_context_phase": "unmet",
     }
 
     def __init__(
@@ -222,6 +226,18 @@ class Character:
     @property
     def working_state(self):
         return self._resources().working_state_for(self.char_id, self.storage_name)
+
+    @property
+    def skills(self):
+        return self._resources().loaded_skills_for(self.char_id, self.storage_name)
+
+    @property
+    def action_receipts(self):
+        return self._resources().action_receipts_for(self.char_id, self.storage_name)
+
+    @property
+    def skill_catalogs(self):
+        return self._resources().skill_catalogs_for(self.char_id, self.storage_name)
 
     @state_operation(wait=True)
     def ensure_runtime_loaded(self) -> None:
@@ -1106,7 +1122,107 @@ class Character:
             logger.info(
                 f"[{self.char_id}] No variables found in history, using composed initial values."
             )
+
+        if "relationship_context_phase" not in (loaded_vars or {}):
+            migrated_phase = self._relationship_phase_after_load(
+                loaded_vars,
+                has_history=bool(data.get("messages")),
+                has_memory=self._story_has_memories(),
+            )
+            if migrated_phase:
+                self.set_variable("relationship_context_phase", migrated_phase)
+                logger.info(
+                    f"[{self.char_id}] relationship_context_phase migrated to "
+                    f"'{migrated_phase}' from existing history/memory."
+                )
         return data
+
+    @staticmethod
+    def _relationship_phase_after_load(
+        loaded_vars: Dict[str, Any],
+        *,
+        has_history: bool,
+        has_memory: bool,
+    ) -> Optional[str]:
+        """Фаза знакомства для баз, созданных до появления маркера.
+
+        Отсутствие ключа в БД означает старую базу: если в ней уже есть
+        история или память, игрок и Мита давно знакомы. Свежая база остаётся
+        в "unmet".
+        """
+        if "relationship_context_phase" in (loaded_vars or {}):
+            return None
+        return "acquainted" if (has_history or has_memory) else None
+
+    def _story_has_memories(self) -> bool:
+        try:
+            return bool(self.memory_system.has_active_memories())
+        except Exception:
+            return False
+
+    _ENCOUNTER_EVENT_TYPES = frozenset({"chat", "answer"})
+
+    @staticmethod
+    def _message_has_visible_text(message: Dict[str, Any]) -> bool:
+        content = message.get("content")
+        if isinstance(content, str):
+            return bool(content.strip())
+        if isinstance(content, list):
+            return any(
+                isinstance(part, dict)
+                and str(part.get("type") or "") == "text"
+                and str(part.get("text") or "").strip()
+                for part in content
+            )
+        return False
+
+    def _history_has_player_message(self) -> bool:
+        messages = (self.history_manager.load_history() or {}).get("messages") or []
+        return any(
+            isinstance(message, dict)
+            and str(message.get("role") or "") == "user"
+            and self._message_has_visible_text(message)
+            for message in messages[-40:]
+        )
+
+    def _maybe_mark_encounter(self, messages: List[Dict[str, Any]]) -> None:
+        """Переводит "unmet" в "acquainted" только по состоявшемуся обмену.
+
+        Нужен реальный ответ персонажа в диалоговом событии и реплика игрока
+        в том же пакете или в текущей истории. Автономные таймеры, реакции и
+        неудачные генерации сюда не попадают.
+        """
+        if str(self.get_variable("relationship_context_phase", "unmet")).lower() != "unmet":
+            return
+
+        batch = [message for message in (messages or []) if isinstance(message, dict)]
+        has_dialog_reply = any(
+            str(message.get("role") or "") == "assistant"
+            and str(message.get("event_type") or "") in self._ENCOUNTER_EVENT_TYPES
+            and self._message_has_visible_text(message)
+            for message in batch
+        )
+        if not has_dialog_reply:
+            return
+
+        has_player = any(
+            str(message.get("role") or "") == "user"
+            and self._message_has_visible_text(message)
+            for message in batch
+        )
+        if not has_player:
+            try:
+                has_player = self._history_has_player_message()
+            except Exception as exc:
+                logger.warning(
+                    f"[{self.char_id}] encounter check could not read history: {format_exception(exc)}"
+                )
+                has_player = False
+        if not has_player:
+            return
+
+        self.set_variable("relationship_context_phase", "acquainted")
+        logger.info(f"[{self.char_id}] relationship_context_phase -> acquainted")
 
     def save_character_state_to_history(self, messages: List[Dict[str, str]]):
         """Force-sync full state to DB: flushes dirty variables, then persists
@@ -1138,7 +1254,19 @@ class Character:
         except Exception:
             pass
         try:
-            self.working_state.clear()
+            self.working_state.clear(epoch=self.history_epoch)
+        except Exception:
+            pass
+        try:
+            self.skills.clear()
+        except Exception:
+            pass
+        try:
+            self.action_receipts.clear()
+        except Exception:
+            pass
+        try:
+            self.skill_catalogs.clear()
         except Exception:
             pass
 
@@ -1185,6 +1313,7 @@ class Character:
         # [NEW] Используем точечное добавление вместо перезаписи всего списка
         # Это сильно ускорит работу на длинных историях
         self.history_manager.add_message(message)
+        self._maybe_mark_encounter([message])
 
         # Обновлять локальный список в памяти (если он нужен для контекста) можно перезагрузкой
         # или просто не хранить его в классе Character, полагаясь на history_manager.load_history()
@@ -1193,7 +1322,10 @@ class Character:
 
     def add_messages_to_history(self, messages: List[Dict[str, str]]):
         """Atomically append one completed dialog turn for this character."""
-        return self.history_manager.add_messages(messages)
+        result = self.history_manager.add_messages(messages)
+        if result:
+            self._maybe_mark_encounter(messages)
+        return result
 
     # endregion
 

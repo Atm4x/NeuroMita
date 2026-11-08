@@ -328,7 +328,9 @@ class ChatServerNew:
             await self.send_error(writer, f"Unknown action: {action}")
             return
 
-        ctx = RequestContext(server=self, client_id=client_id, writer=writer, event_bus=self.event_bus)
+        with self._clients_lock:
+            role = self.client_roles.get(client_id, "")
+        ctx = RequestContext(server=self, client_id=client_id, writer=writer, event_bus=self.event_bus, client_role=role)
         try:
             await handler.handle(request, ctx)
         except asyncio.CancelledError:

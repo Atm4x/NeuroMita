@@ -25,6 +25,12 @@ def semantic_message(message: dict) -> dict:
         "conversation_id", "conversation_epoch", "turn_index", "speaker_actor_id",
         "source_actor_id", "responder_actor_id", "participant_actor_ids",
         "context_world",
+        "notice_type", "notice_subject_actor_id",
+        "notice_subject_character_id",
+        # Provenance of the exact generation behind this message. Provider
+        # requests are stripped to role/content later, so keeping these ids in
+        # the timeline does not leak diagnostics into prompts.
+        "sample_id", "context_snapshot_id",
     )
     result = {key: message[key] for key in allowed if key in message}
     structured = result.get("structured_data")
@@ -347,7 +353,10 @@ class ConversationTimeline:
         turn = self.runtime.turn
         through = turn.context_head if turn else None
         known_events = timeline.character_view(character_id, through=through, after=after)
-        excluded = {*turn.input_event_ids, turn.trigger_id} if turn else set()
+        excluded = (
+            {*turn.input_event_ids, turn.trigger_id, *turn.consumed_event_ids}
+            if turn else set()
+        )
         messages = {message["timeline_event_id"]: message for message in character_messages(known_events, character_id)
                     if message["timeline_event_id"] not in excluded}
         facts = {
@@ -356,13 +365,19 @@ class ConversationTimeline:
         }
         for known in known_events:
             event = known.event
-            if event.kind not in facts or (turn and event.event_id == turn.trigger_id):
+            if event.kind not in facts or event.event_id in excluded:
                 continue
             payload = event.payload.to_dict()
             description = payload.get("description") or payload.get("name") or event.kind.value
             details = {key: value for key, value in payload.items() if key not in {"description", "name"}}
             from domain.timeline import JsonDocument
-            content = f"[Past session event: {event.kind.value}] {description}"
+            # Compact marker: the row role already says "event", so the long
+            # "[Past session event: UnityEvent]" prefix only spent tokens. The
+            # marker stays short but explicit so the text is never mistaken for
+            # Player speech; rarer kinds keep their name for diagnosis.
+            kind = str(event.kind.value)
+            marker = "[Event]" if kind == "UnityEvent" else f"[Event: {kind}]"
+            content = f"{marker} {description}"
             if details:
                 content += " " + JsonDocument(details).canonical
             messages[event.event_id] = {

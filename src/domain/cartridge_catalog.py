@@ -7,7 +7,7 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 _ID = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
-_TYPES = {"player.speed", "mita.calm", "animation.unlock"}
+_TYPES = {"player.speed", "mita.calm", "animation.unlock", "cognition.area"}
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,20 @@ class CartridgeDefinition:
 
 def _number(value: Any, minimum: float, maximum: float) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and minimum <= value <= maximum
+
+
+def _valid_cognition(effect: dict, permanent: bool, target: Any, magnitude: Any) -> bool:
+    # Unity applies these effects itself; Python only has to accept the same shape.
+    effect_id = effect.get("effectId")
+    topic = effect.get("topic")
+    return (
+        not permanent
+        and target == "nearby"
+        and isinstance(effect_id, str) and bool(effect_id.strip())
+        and _number(magnitude, 0, 1) and magnitude > 0
+        and _number(effect.get("durationSeconds"), 0, 3600) and effect.get("durationSeconds") > 0
+        and (topic is None or (isinstance(topic, str) and len(topic) <= 200))
+    )
 
 
 def parse_catalog(payload: Any) -> tuple[CartridgeDefinition, ...]:
@@ -87,6 +101,8 @@ def parse_catalog(payload: Any) -> tuple[CartridgeDefinition, ...]:
                 raise ValueError("Invalid calm effect")
             if kind == "animation.unlock" and (not permanent or target != "player" or not isinstance(effect.get("animation"), str) or not effect["animation"].strip()):
                 raise ValueError("Invalid animation effect")
+            if kind == "cognition.area" and not _valid_cognition(effect, permanent, target, magnitude):
+                raise ValueError("Invalid cognition effect")
         definitions.append(CartridgeDefinition(cid, character_id, row["title"], row["prompt"], history, context))
     return tuple(definitions)
 

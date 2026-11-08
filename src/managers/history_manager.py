@@ -1121,13 +1121,21 @@ class HistoryManager(CharacterScopedService):
         }
 
     def with_presentation_metadata(self, messages: Iterable[dict]) -> list[dict]:
-        """Attach stored reasoning without letting cache rows define conversation facts."""
+        """Attach UI-only provenance without letting cache rows define facts.
+
+        The timeline owns the conversation itself, but reasoning and request
+        provenance are presentation data. A bubble rendered from the timeline
+        must keep its exact request snapshot id, otherwise the context viewer
+        can only fall back to the global last request.
+        """
         result = [dict(message) for message in messages]
         identities = list(dict.fromkeys(
             str(message["message_id"]) for message in result if message.get("message_id")
         ))
-        stored = {}
-        columns = ["id", "role", "content", "meta_data", "message_id", "thinking"]
+        columns = ["id", "role", "content", "meta_data", "message_id"]
+        if "thinking" in self._history_cols:
+            columns.append("thinking")
+        stored: dict[str, dict] = {}
         with self.db.connection() as conn:
             for start in range(0, len(identities), 400):
                 batch = identities[start:start + 400]
@@ -1135,16 +1143,19 @@ class HistoryManager(CharacterScopedService):
                 rows = conn.execute(
                     f"SELECT {', '.join(columns)} FROM history "
                     f"WHERE character_id=? AND message_id IN ({placeholders}) "
-                    "AND thinking IS NOT NULL AND thinking != '' ORDER BY id",
+                    "ORDER BY id",
                     (self.storage_key, *batch),
                 ).fetchall()
-                for message in self._decode_history_rows(rows, columns):
-                    stored[str(message["message_id"])] = message
+                for record in self._decode_history_rows(rows, columns):
+                    stored[str(record["message_id"])] = record
+        provenance_keys = ("thinking", "sample_id", "context_snapshot_id")
         for message in result:
             cached = stored.get(str(message.get("message_id") or ""))
-            if (cached and cached.get("content") == message.get("content")
-                    and not message.get("thinking")):
-                message["thinking"] = cached["thinking"]
+            if not cached or cached.get("content") != message.get("content"):
+                continue
+            for key in provenance_keys:
+                if cached.get(key) and not message.get(key):
+                    message[key] = cached[key]
         return result
 
     def export_timeline_history(self) -> list[dict]:
@@ -1444,6 +1455,29 @@ class HistoryManager(CharacterScopedService):
             cursor.execute(
                 f"DELETE FROM variables WHERE character_id = ? AND key IN ({placeholders})",
                 (self.storage_key, *keys),
+            )
+            deleted = cursor.rowcount or 0
+            conn.commit()
+            return deleted
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def clear_variables(self) -> int:
+        """Удаляет все сохранённые переменные персонажа.
+
+        Нужен для полного сброса неразрешённых (не загруженных в память)
+        персонажей: одного clear_history() недостаточно, иначе их переменные
+        переживают сброс и воскресают при следующей загрузке.
+        """
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM variables WHERE character_id = ?",
+                (self.storage_key,),
             )
             deleted = cursor.rowcount or 0
             conn.commit()

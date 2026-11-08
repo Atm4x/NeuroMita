@@ -594,6 +594,23 @@ class DslInterpreter:
                         returned_value_for_log = returned is not None
                         return (returned or "", sys_msgs)
 
+                    if command == "RETIRE_SEED_MEMORIES":
+                        # A UTF-8, one-fact-per-line migration file in Prompts.
+                        # The resolver enforces the allowed root; the memory manager
+                        # only retires exact matches, never player-written variants.
+                        if not args or not args.strip():
+                            raise DslError("RETIRE_SEED_MEMORIES requires a file path", resolved_script_id, num, raw)
+                        old_file_id = self.resolver.resolve_path(args.strip())
+                        old_text = self.resolver.load_text(old_file_id, "retired lore seeds")
+                        obsolete = [
+                            line.strip() for line in old_text.splitlines()
+                            if line.strip() and not line.lstrip().startswith(("#", "//"))
+                        ]
+                        mem_sys = getattr(self.character, "memory_system", None)
+                        if mem_sys is not None:
+                            mem_sys.retire_seed_memories(obsolete)
+                        continue
+
                     if command in ("SEED_MEMORY", "SEED_RAG_MEMORY"):
                         fmt = f"{command} requires format: {command} priority | content [ENTITIES e1, e2]"
                         if not args or "|" not in args:

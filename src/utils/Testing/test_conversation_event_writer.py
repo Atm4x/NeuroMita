@@ -22,6 +22,17 @@ class _FailingCharacter(_Character):
         raise HistoryBatchWriteError("simulated rollback")
 
 
+class _History:
+    def __init__(self, *messages: dict) -> None:
+        self.messages = list(messages)
+
+    def contains_message_id(self, message_id: str) -> bool:
+        return any(message.get("message_id") == message_id for message in self.messages)
+
+    def get_recent_messages(self, limit: int = 50):
+        return self.messages[-limit:]
+
+
 def test_write_turn_fans_out_user_and_assistant_as_one_batch() -> None:
     character = _Character("Mita")
     writer = ConversationEventWriter(
@@ -81,6 +92,129 @@ def test_write_turn_can_mark_only_rejected_assistant_output_as_deleted() -> None
     assert assistant_event["_history_is_deleted"] is True
 
 
+def test_write_turn_persists_cognitive_effect_as_history_event() -> None:
+    character = _Character("Kind")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Kind" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Kind",
+        sender="Player",
+        participants=["Player", "Kind"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-cognitive",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-cognitive",
+        cognitive_effect_changes=[{
+            "change_id": "change-1",
+            "sequence": 1,
+            "instance_id": "instance-1",
+            "id": "literalism",
+            "effect_name": "Literalism",
+            "kind": "effect_ended",
+            "subject_character_id": "Kind",
+            "subject_label": "Kind",
+            "notice_template": "Ты чувствуешь, что внутри всё стало прежним.",
+        }],
+    )
+
+    notice, user_event, assistant_event = character.batches[0]
+    assert notice["role"] == "event"
+    assert notice["notice_type"] == "cognitive_effect"
+    assert "всё стало прежним" in notice["content"]
+    assert user_event["role"] == "user"
+    assert assistant_event["role"] == "assistant"
+
+
+def test_write_turn_keeps_cognitive_effect_notice_for_the_responder_only() -> None:
+    kind = _Character("Kind")
+    crazy = _Character("Crazy")
+    characters = {"Kind": kind, "Crazy": crazy}
+    writer = ConversationEventWriter(character_ref_resolver=characters.get)
+    dialogue = SimpleNamespace(
+        conversation_id="conv-1",
+        epoch=1,
+        turn_index=1,
+        speaker_actor_id="player-actor",
+        responder_actor_id="kind-actor",
+        participants=[
+            SimpleNamespace(actor_id="kind-actor", character_id="Kind"),
+            SimpleNamespace(actor_id="crazy-actor", character_id="Crazy"),
+        ],
+    )
+
+    writer.write_turn(
+        responder_character_id="Kind",
+        sender="Player",
+        participants=["Kind", "Crazy"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-scoped-effect",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-scoped-effect",
+        dialogue=dialogue,
+        cognitive_effect_changes=[{
+            "change_id": "change-scoped",
+            "sequence": 1,
+            "instance_id": "instance-scoped",
+            "id": "literalism",
+            "effect_name": "Literalism",
+            "kind": "effect_started",
+            "subject_character_id": "Kind",
+            "subject_label": "Kind",
+        }],
+    )
+
+    assert [message["role"] for message in kind.batches[0]] == ["event", "user", "assistant"]
+    assert [message["role"] for message in crazy.batches[0]] == ["user", "user"]
+    assert all(message.get("notice_type") != "cognitive_effect" for message in crazy.batches[0])
+
+
+def test_write_turn_deduplicates_cognitive_notices_by_change_id() -> None:
+    character = _Character("Kind")
+    character.history_manager = _History({
+        "message_id": "cognitive:previous",
+        "role": "event",
+        "notice_type": "cognitive_effect",
+        "cognitive_effect_change_ids": ["change-seen"],
+    })
+    writer = ConversationEventWriter(character_ref_resolver={"Kind": character}.get)
+
+    writer.write_turn(
+        responder_character_id="Kind",
+        sender="Player",
+        participants=["Player", "Kind"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-dedupe-effect",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-dedupe-effect",
+        cognitive_effect_changes=[
+            {"change_id": "change-seen", "sequence": 1, "instance_id": "instance-1",
+             "id": "literalism", "effect_name": "Literalism", "kind": "effect_started",
+             "subject_character_id": "Kind", "awareness": "unaware"},
+            {"change_id": "change-new", "sequence": 2, "instance_id": "instance-2",
+             "id": "theatricality", "effect_name": "Theatricality", "kind": "effect_started",
+             "subject_character_id": "Kind", "awareness": "unaware"},
+        ],
+    )
+
+    notice = character.batches[0][0]
+    assert notice["notice_type"] == "cognitive_effect"
+    assert notice["cognitive_effect_change_ids"] == ["change-new"]
+
+
 def test_write_turn_separates_source_and_responder_actor_metadata() -> None:
     character = _Character("Mita")
     writer = ConversationEventWriter(
@@ -116,6 +250,34 @@ def test_write_turn_separates_source_and_responder_actor_metadata() -> None:
     assert user_event["speaker_actor_id"] == "actor-crazy"
     assert assistant_event["speaker_actor_id"] == "actor-kind"
     assert assistant_event["source_actor_id"] == "actor-crazy"
+
+
+def test_write_turn_persists_request_provenance_on_the_assistant_turn() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-3",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-3",
+        sample_id="sample-3",
+        context_snapshot_id="ctx_0123456789abcdef0123456789abcdef",
+    )
+
+    user_event, assistant_event = character.batches[0]
+    assert "context_snapshot_id" not in user_event
+    assert assistant_event["sample_id"] == "sample-3"
+    assert assistant_event["context_snapshot_id"] == "ctx_0123456789abcdef0123456789abcdef"
 
 
 def test_write_turn_uses_dialogue_speaker_when_transport_sender_is_player() -> None:
@@ -218,3 +380,56 @@ def test_write_turn_reports_partial_fanout_rollback() -> None:
     assert not result.history_committed
     assert result.committed_recipient_ids == ("Kind",)
     assert result.failed_recipient_ids == ("Crazy",)
+
+
+def test_assistant_message_keeps_the_snapshot_it_answered() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-snapshot",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-snapshot",
+        sample_id="sample-1",
+        context_snapshot_id="ctx_0123456789abcdef0123456789abcdef",
+    )
+
+    user_event, assistant_event = character.batches[0]
+    assert assistant_event["context_snapshot_id"] == "ctx_0123456789abcdef0123456789abcdef"
+    assert assistant_event["sample_id"] == "sample-1"
+    assert "context_snapshot_id" not in user_event
+
+
+def test_missing_snapshot_stays_absent_instead_of_empty() -> None:
+    character = _Character("Mita")
+    writer = ConversationEventWriter(
+        character_ref_resolver=lambda character_id: character if character_id == "Mita" else None
+    )
+
+    writer.write_turn(
+        responder_character_id="Mita",
+        sender="Player",
+        participants=["Player", "Mita"],
+        user_input="Hello",
+        image_data=[],
+        req_id="request-nosnapshot",
+        origin_message_id=None,
+        assistant_text="Hi",
+        assistant_target="Player",
+        event_type="chat",
+        task_uid="task-nosnapshot",
+        context_snapshot_id="",
+    )
+
+    _user_event, assistant_event = character.batches[0]
+    assert "context_snapshot_id" not in assistant_event

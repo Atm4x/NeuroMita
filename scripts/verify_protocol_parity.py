@@ -17,6 +17,7 @@ TESTS = (
     "tests/test_protocol_contract.py",
     "tests/test_protocol_routing_runner.py",
     "tests/test_native_tools_runtime.py",
+    "src/utils/Testing/test_native_tool_calls.py",
     "tests/test_protocol_parity_e2e.py",
     "tests/test_chatgpt_plan_protocol.py",
     "tests/test_chatgpt_plan_provider.py",

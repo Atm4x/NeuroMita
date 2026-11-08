@@ -49,6 +49,9 @@ _HTML_BG = "#1E1E2E"
 _TEXT    = "#EAEAEA"
 _MUTED   = "#9CA3AF"
 _BORDER  = "#3A3A4A"
+# Тот же зелёный, что у отдельных строк Event: свёрнутая пачка читается как
+# «это те же события, только вместе».
+_EVENT_CLUSTER_COLOR = "#4ADE80"
 
 # ── Actor (говорящий, в отличие от провайдерской role) ────────────────────────
 _ACTOR_OWNER   = "#A78BFA"
@@ -139,6 +142,7 @@ _SECTION_STYLE = {
     "state":       ("fa6s.clock", "#22D3EE"),
     "sysstate":    ("fa6s.plug", "#38BDF8"),
     "behavior":    ("fa6s.chart-column", "#F472B6"),
+    "cognitive":   ("fa6s.eye", "#F472B6"),
     "participant": ("fa6s.user-group", "#FBBF24"),
     "unity":       ("fa6s.gamepad", "#8B5CF6"),
     "world":       ("fa6s.house", "#4ADE80"),
@@ -160,14 +164,26 @@ _RE_HDR_ESC = re.compile(r"^\[([A-Za-z][A-Za-z0-9 _/\-]{1,48})\]$")
 # (память/состояние/мир игры) и текущий ввод игрока. Ключ → (иконка, цвет, (ru,en)).
 _COARSE_GROUPS = {
     "prompt":  ("fa6s.book-open", "#F0A868", ("Промпт", "Prompt")),
+    "skills":  ("fa6s.puzzle-piece", "#C084FC", ("Загруженные скиллы", "Loaded skills")),
     "history": ("fa6s.clock-rotate-left", "#60A5FA", ("История", "History")),
     "context": ("fa6s.brain", "#34D399", ("Активный контекст", "Active context")),
     "input":   ("fa6s.comment", "#F4D35E", ("Ввод игрока", "Player input")),
 }
 _SECTION_TO_GROUP = {
     "character prompts": "prompt",
+    # Блоки стадии ставит скрипт набора промптов: это такая же инструкция
+    # промпта, поэтому в дереве они стоят рядом с остальным промптом,
+    # а не посреди истории.
+    "stage": "prompt",
     "tools": "prompt",               # каталог [Available Tools] — статика промпта
     "Unity contract": "prompt",      # статический контракт Unity в статике промпта
+    # [SKILLS] стоит перед историей вместе с остальной статикой промпта; без
+    # этой строки блок уходил в «Активный контекст» и поднимал группу выше
+    # истории, хотя по порядку сообщений она идёт раньше.
+    "skills catalog": "prompt",
+    # On-demand tools are replayed alongside historical dialogue, not kept
+    # in a standalone persistent prompt group.
+    "loaded skills": "history",
     "history": "history",
     "working state protocol": "prompt",
     "working state": "context",
@@ -182,6 +198,9 @@ _SECTION_TO_GROUP = {
     "Unity runtime": "context",
     "group conversation": "context",
     "game master directive": "context",
+    "Active Cognitive Effects": "context",
+    "Recent Effect Aftermath": "context",
+    "Cognitive Effect": "history",
     "System State": "context",
     "reminders": "context",
     "core memories": "context",
@@ -559,6 +578,16 @@ class ContextViewerDialog(QDialog):
         # фактическую позицию в запросе.
         group_order: list[str] = []
         group_idxs: Dict[str, list[int]] = {}
+        # Индекс первого сообщения истории: нераспознанная секция до него —
+        # это статика промпта, а не «живой» контекст. Иначе любой новый блок
+        # промпта (как [SKILLS]) поднимает «Активный контекст» выше истории.
+        self._first_history_idx: int | None = None
+        for idx in range(len(self._messages)):
+            section = (self._est_by_index.get(idx) or {}).get("section") or ""
+            if _SECTION_TO_GROUP.get(section) == "history":
+                self._first_history_idx = idx
+                break
+
         for idx in range(len(self._messages)):
             gkey = self._group_key(idx)
             if gkey not in group_idxs:
@@ -596,31 +625,116 @@ class ContextViewerDialog(QDialog):
             parent.setExpanded(True)
             self._items.append((parent, "group", gkey))
 
+            # Пачку событий подряд сворачиваем в один узел: иначе десяток
+            # «Event» подряд прячет под собой реплики диалога.
+            run: list[int] = []
             for idx in idxs:
-                msg = self._messages[idx]
-                child = QTreeWidgetItem(parent, [self._msg_labels[idx] + self._est_suffix(idx)])
-                role = str(msg.get("role") or "unknown")
-                child.setIcon(
-                    0,
-                    qta.icon(
-                        self._message_icon_name(msg, role),
-                        color=self._msg_actor_color[idx],
-                    ),
-                )
-                child.setForeground(0, QColor(self._msg_actor_color[idx]))
-                speaker, target = self._msg_actor[idx]
-                who = f"{speaker} → {target}" if target else speaker
-                child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
-                self._items.append((child, "message", msg))
-                self._message_items[idx] = child
-                self._msg_index_by_id[id(msg)] = idx
+                if self._is_event_row(idx):
+                    run.append(idx)
+                    continue
+                self._flush_event_run(parent, run)
+                run = []
+                self._add_message_row(parent, idx)
+            self._flush_event_run(parent, run)
 
         self._render_response_tab()
 
     def _group_key(self, idx: int) -> str:
         """Крупная группа сообщения по его секции из оценки токенов."""
+        # Старые дампы могут иметь устаревшую/неполную оценку токенов:
+        # распознаём блок по фактическому тексту отправленного сообщения.
+        content = self._content_plain(self._messages[idx].get("content")).lstrip()
+        if content.startswith("[LOADED SKILLS]"):
+            section = (self._est_by_index.get(idx) or {}).get("section") or ""
+            first_history = getattr(self, "_first_history_idx", None)
+            if section == "character prompts" or (
+                first_history is not None and idx < first_history
+            ):
+                return "prompt"
+            return "history"
         section = (self._est_by_index.get(idx) or {}).get("section") or ""
-        return _SECTION_TO_GROUP.get(section, "context")
+        group = _SECTION_TO_GROUP.get(section)
+        if group is not None:
+            return group
+
+        first_history = getattr(self, "_first_history_idx", None)
+        if first_history is not None and idx < first_history:
+            return "prompt"
+        return "context"
+
+    # ──────────────────────────── Строки дерева ──────────────────────────────
+
+    def _is_event_row(self, idx: int) -> bool:
+        """Событие прошлого хода из таймлайна сессии."""
+        text = self._content_plain(self._messages[idx].get("content")).lstrip()
+        head = next((line.strip() for line in text.split("\n") if line.strip()), "")
+        head = re.sub(r"^\[\s*RUNTIME EVENT\s*\]\s*", "", head)
+        # Old histories keep the verbose marker, new ones use "[Event]".
+        return head.startswith("[Past session event") or bool(
+            re.match(r"^\[Event(?::[^\]]*)?\]", head)
+        )
+
+    def _add_message_row(self, parent: QTreeWidgetItem, idx: int) -> None:
+        msg = self._messages[idx]
+        child = QTreeWidgetItem(parent, [self._msg_labels[idx] + self._est_suffix(idx)])
+        role = str(msg.get("role") or "unknown")
+        child.setIcon(
+            0,
+            qta.icon(
+                self._message_icon_name(msg, role),
+                color=self._msg_actor_color[idx],
+            ),
+        )
+        child.setForeground(0, QColor(self._msg_actor_color[idx]))
+        speaker, target = self._msg_actor[idx]
+        who = f"{speaker} → {target}" if target else speaker
+        if self._content_plain(msg.get("content")).lstrip().startswith("[LOADED SKILLS]"):
+            history_skill = self._group_key(idx) == "history"
+            tooltip = (
+                _("Инструкция находится в истории и со временем выходит из контекста.",
+                  "This instruction lives in history and eventually leaves the context window.")
+                if history_skill else
+                _("Скиллы встроены в промпт режимом eager.",
+                  "Skills were embedded by eager mode into the prompt.")
+            )
+            child.setToolTip(0, tooltip + f"\nprovider role: {self._msg_role_ord[idx]}")
+        else:
+            child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
+        self._items.append((child, "message", msg))
+        self._message_items[idx] = child
+        self._msg_index_by_id[id(msg)] = idx
+
+    def _flush_event_run(self, parent: QTreeWidgetItem, run: list[int]) -> None:
+        """Свернуть пачку событий в раскрываемый узел со сводкой справа."""
+        if not run:
+            return
+        if len(run) == 1:
+            self._add_message_row(parent, run[0])
+            return
+
+        tokens = sum((self._est_by_index.get(i) or {}).get("tokens", 0) for i in run)
+        label = _("События", "Events") + f" ({len(run)})"
+        if tokens:
+            label += f" · ~{self._fmt_int(tokens)}"
+            pct = self._fmt_pct(tokens, self._est_total)
+            if pct:
+                label += f" · {pct}"
+
+        node = QTreeWidgetItem(parent, [label])
+        node.setIcon(0, qta.icon("fa6s.bolt", color=_EVENT_CLUSTER_COLOR))
+        node.setForeground(0, QColor(_EVENT_CLUSTER_COLOR))
+        node.setToolTip(
+            0,
+            _(
+                "События прошлых ходов. Разверните узел, чтобы открыть каждое.",
+                "Past turn events. Expand the node to open each one.",
+            ),
+        )
+        node.setExpanded(False)
+        self._items.append((node, "cluster", list(run)))
+
+        for idx in run:
+            self._add_message_row(node, idx)
 
     # ─────────────────────────────────── Rendering ───────────────────────────────
 
@@ -688,6 +802,11 @@ class ContextViewerDialog(QDialog):
 
         elif kind == "group":
             self._viewer.setHtml(self._wrap(self._render_group_html(str(payload or ""))))
+
+        elif kind == "cluster":
+            self._viewer.setHtml(
+                self._wrap(self._render_cluster_html(list(payload or [])))
+            )
 
         elif kind == "message":
             msg: dict = payload or {}
@@ -759,6 +878,35 @@ class ContextViewerDialog(QDialog):
             lines.append(
                 f"<p><a href='msg:{i}' style='color:{col};font-weight:bold;"
                 f"text-decoration:none'>{i + 1}. {self._esc(tag)}</a>{est_html}"
+                f"&nbsp;<span style='color:{_MUTED}'>{self._esc(preview)}</span></p>"
+            )
+        return "".join(lines)
+
+    def _render_cluster_html(self, idxs: list[int]) -> str:
+        """Сводка по свёрнутой пачке событий: что это и сколько занимает."""
+        total = sum((self._est_by_index.get(i) or {}).get("tokens", 0) for i in idxs)
+        pct = self._fmt_pct(total, self._est_total) if self._est_total else ""
+        head = (
+            f"<p><b style='color:{_EVENT_CLUSTER_COLOR};font-size:14px'>"
+            f"{_('События', 'Events')}</b>"
+            f"&nbsp;<span style='color:{_MUTED}'>· {len(idxs)} "
+            f"{_('сообщ.', 'msgs')}"
+        )
+        if total:
+            head += f" · ~{self._fmt_int(total)}"
+        if pct:
+            head += f" · {pct} {_('контекста', 'of context')}"
+        head += "</span></p>"
+
+        lines = [head, f"<hr style='border-color:{_BORDER}'>"]
+        for i in idxs:
+            msg = self._messages[i]
+            color = self._msg_actor_color.get(i) or _EVENT_CLUSTER_COLOR
+            tag = self._msg_labels.get(i) or ""
+            preview = self._get_preview(msg.get("content") or "", 160)
+            lines.append(
+                f"<p><a href='msg:{i}' style='color:{color};font-weight:bold;"
+                f"text-decoration:none'>{i + 1}. {self._esc(tag)}</a>"
                 f"&nbsp;<span style='color:{_MUTED}'>{self._esc(preview)}</span></p>"
             )
         return "".join(lines)
@@ -1370,6 +1518,8 @@ class ContextViewerDialog(QDialog):
             cat = "summary"
         elif "entity" in key or "graph" in key or "knowledge" in key:
             cat = "entity"
+        elif "active cognitive" in key or "cognitive effect" in key:
+            cat = "cognitive"
         elif "behavior" in key or "behaviour" in key:
             cat = "behavior"
         elif "action" in key:
@@ -1410,6 +1560,8 @@ class ContextViewerDialog(QDialog):
         first = re.sub(r"^\[\s*RUNTIME EVENT\s*\]\s*", "", first)
         if first.startswith("[Runtime Core Directive:"):
             return "fa6s.book-open"
+        if first.startswith("[LOADED SKILLS]"):
+            return _COARSE_GROUPS["skills"][0]
         match = _RE_TAG_RAW.match(first) or _RE_HDR_RAW.match(first)
         if first.startswith("[GAME_MASTER_DIRECTIVE]"):
             return _SECTION_STYLE["game"][0]
@@ -1442,6 +1594,41 @@ class ContextViewerDialog(QDialog):
 
         if first.startswith("[Runtime Core Directive:"):
             return "Code 23 runtime directive", _ROLE_COLORS.get("system", _TEXT)
+
+        if first.startswith("[LOADED SKILLS]"):
+            # В дереве показываем реальные скиллы, а не безликий Loaded Skills.
+            # Их тела остаются в исходном сообщении и доступны по клику.
+            skills = re.findall(
+                r"(?m)^##\s+(.+?)\s+\(([a-z0-9_-]{1,40})\)\s*$", text
+            )
+            names = [f"{title.strip()} ({skill_id})" for title, skill_id in skills]
+            if not names:
+                # On-demand history uses [skill: Title], unlike the eager
+                # [LOADED SKILLS] block which has ## Title (id) headings.
+                titles = re.findall(r"(?m)^\[skill:\s*(.+?)\]\s*$", text)
+                ids = re.findall(
+                    r"Authored instructions for skill '([a-z0-9_-]{1,40})'", text
+                )
+                names = [
+                    f"{title.strip()} ({ids[i]})" if i < len(ids) else title.strip()
+                    for i, title in enumerate(titles)
+                ]
+            label = _("Загруженные скиллы", "Loaded skills")
+            if names:
+                label += ": " + ", ".join(names[:2])
+                if len(names) > 2:
+                    label += f" (+{len(names) - 2})"
+            return label, _COARSE_GROUPS["skills"][1]
+
+        # Авторский блок стадии: "# STAGE: introduction — Знакомство".
+        stage_block = re.match(r"^#\s*STAGE:\s*([^\r\n—–-]{1,40})", first)
+        if stage_block:
+            return (
+                _("Стадия: {name}", "Stage: {name}").format(
+                    name=stage_block.group(1).strip()
+                ),
+                _COARSE_GROUPS["prompt"][1],
+            )
 
         if idx is not None and role in ("user", "assistant", "event"):
             if _RE_SPEAKER_PREFIX.match(first):

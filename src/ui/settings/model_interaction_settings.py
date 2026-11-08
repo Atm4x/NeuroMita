@@ -190,6 +190,123 @@ def setup_model_interaction_controls(
 
     build_memory_section(self, parent, provider_options)
     build_rag_section(self, parent, provider_options)
+
+    # Скиллы — не «инструмент», а механика промпта: игра присылает авторские
+    # инструкции, а режим решает, лежат ли их тексты в промпте всегда или
+    # подгружаются по требованию. Поэтому карточка живёт отдельно от Tools.
+    skills_config = [
+        {
+            'type': 'text',
+            'label': _(
+                'Скиллы — авторские инструкции, которые уже содержит игра: как выбрать '
+                'музыку, что надеть, как обращаться с телевизором. Их отдаёт подключённая '
+                'игра вместе с контекстом, в Python они не хранятся, поэтому смена сцены '
+                'или каталога в игре сразу меняет то, что видит Мита.\n'
+                'Сейчас это только то, что зашито в игру; свои внешние скиллы появятся позже.',
+                'Skills are authored instructions the game already contains: how to pick '
+                'music, what to wear, how to treat the television. The connected game sends '
+                'them with the context and Python keeps no copy, so changing the scene or the '
+                'catalog in the game immediately changes what Mita sees.\n'
+                'For now these are the instructions built into the game; external skills are '
+                'planned later.',
+            ),
+        },
+        {
+            'label': _('Подключать скиллы по требованию', 'Load skills on demand'),
+            'key': 'TOOL_ENABLED_load_skill', 'type': 'checkbutton',
+            'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+            'tooltip': _(
+                'Даёт Мите инструмент load_skill: она запрашивает текст скилла, когда сцена '
+                'его требует, вместо того чтобы держать все тексты в промпте каждый ход. '
+                'В промпте остаётся короткий каталог с названиями скиллов.',
+                'Gives Mita the load_skill tool: she asks for a skill body when the scene needs '
+                'it instead of keeping every body in the prompt on each turn. Only the short '
+                'catalog of skill names stays in the prompt.',
+            ),
+        },
+        {
+            'label': _('Где держать текст скиллов', 'Where skill text lives'),
+            'key': 'SKILL_LOADING_MODE', 'type': 'combobox',
+            'options': [
+                (_('По требованию', 'On demand'), 'on_demand'),
+                (_('Всегда в промпте', 'Always in prompt'), 'eager'),
+            ],
+            'default': 'on_demand',
+            'tooltip': _(
+                'По требованию — в промпте только короткий каталог, тексты подгружаются '
+                'инструментом, когда нужны: меньше токенов на каждом ходу.\n'
+                'Всегда в промпте — тексты всех скиллов лежат в стабильной части промпта: '
+                'модель не тратит ход на загрузку, но каждый запрос дороже.',
+                'On demand — only the short catalog sits in the prompt and bodies are loaded '
+                'when needed: fewer tokens on every turn.\n'
+                'Always in prompt — every skill body sits in the stable prompt prefix: no turn '
+                'spent on loading, but every request is more expensive.',
+            ),
+        },
+    ]
+    create_settings_section(
+        self,
+        parent,
+        _("Скиллы", "Skills"),
+        skills_config,
+        icon_name='fa5s.graduation-cap',
+    )
+
+    # Окружение персонажа — служебные факты о мире и голосе, а не история.
+    # Блок идёт в каждый запрос, поэтому здесь же живёт его объём.
+    environment_config = [
+        {
+            'type': 'text',
+            'label': _(
+                'Окружение персонажа — фоновая осведомлённость Миты: подключена ли игра, '
+                'откуда пишет игрок, как называется общий мир и что с её голосом. '
+                'Это не память и не история диалога, а справочные факты, которые идут '
+                'в каждом запросе.',
+                'Character environment is Mita\'s background awareness: whether the game '
+                'is connected, where the Player is writing from, what the shared world is '
+                'called and what her voice is doing. It is not memory or chat history; '
+                'these reference facts are sent with every request.',
+            ),
+        },
+        {
+            'label': _('Объём окружения', 'Environment detail'),
+            'key': 'CHARACTER_ENVIRONMENT_MODE', 'type': 'combobox',
+            'options': [
+                (_('Полно', 'Full'), 'full'),
+                (_('Кратко', 'Brief'), 'brief'),
+                (_('Выключено', 'Off'), 'off'),
+            ],
+            'default': 'full',
+            'tooltip': _(
+                'Полно — все фоновые факты: связь с игрой, откуда пишет игрок, название '
+                'мира, доступность обновления и подробности о голосовой модели вместе со '
+                'сравнением моделей. Примерно 1500 символов в запросе.\n'
+                'Кратко — только то, что мешает ошибиться: где находится игрок, что мир '
+                'называется NeuroMita и из дома нет выхода, работает ли голос. Примерно '
+                'втрое короче.\n'
+                'Выключено — блок не отправляется совсем. Мита больше не знает заранее, '
+                'где игрок и что с её голосом, поэтому часть ответов может стать менее '
+                'точной.',
+                'Full — every background fact: game connection, where the Player writes '
+                'from, the world name, update availability, and voice details including the '
+                'model comparison. About 1500 characters per request.\n'
+                'Brief — only what prevents wrong statements: where the Player is, that '
+                'the world is NeuroMita and the house has no exit, and whether the voice '
+                'works. Roughly a third of the size.\n'
+                'Off — the block is not sent at all. Mita no longer knows in advance where '
+                'the Player is or what her voice is doing, so some answers may become less '
+                'accurate.',
+            ),
+        },
+    ]
+    create_settings_section(
+        self,
+        parent,
+        _("Окружение персонажа", "Character environment"),
+        environment_config,
+        icon_name='fa5s.globe',
+    )
+
     register_provider_options(
         self,
         ("REACT_PROVIDER_L2", "HC_PROVIDER", "GRAPH_PROVIDER"),

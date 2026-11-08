@@ -72,6 +72,15 @@ class _StubCharacter:
 
 
 class HistoryControllerCompressionTests(unittest.TestCase):
+    def test_compression_prompt_keeps_effects_as_past_subjective_experience(self):
+        root = Path(__file__).resolve().parents[3]
+        template = (root / "extra" / "Prompts" / "System" / "compression_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("[Active Cognitive Effects]", template)
+        self.assertIn("[Cognitive Effect]", template)
+        self.assertIn("temporary subjective states", template)
+        self.assertIn("experienced in the past", template)
+        self.assertIn("second consciousness", template)
+
     def _make_controller(self, settings: dict | None = None) -> HistoryController:
         controller = HistoryController.__new__(HistoryController)
         controller.event_bus = SimpleNamespace()

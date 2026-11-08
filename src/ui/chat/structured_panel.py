@@ -5,6 +5,7 @@ StructuredOutputPanel — compact debug display of structured AI response data.
 import json
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy
 from PyQt6.QtCore import Qt
+from utils import _
 
 # Modern Dashboard Colors
 CLR_BADGE_BG      = "rgba(255, 255, 255, 0.05)"
@@ -307,12 +308,52 @@ class StructuredOutputPanel(QFrame):
         if entities or relations:
             layout.addWidget(GraphBlock(entities, relations, self._font_sm, layout.parentWidget()))
 
+    _NORMALIZED_HIDDEN_FIELDS = frozenset({"response", "response_protocol_version"})
+
+    @staticmethod
+    def _visible_json_payload(data: dict) -> dict:
+        """Top-level fields for the normalized JSON view.
+
+        Presentation-only filter: keeps 0/False, drops empty defaults
+        (None / "" / [] / {}) and derived fields. Nested values are never
+        inspected.
+
+        ``response`` repeats the spoken text already present in segments and
+        ``response_protocol_version`` is internal wire metadata, so the view
+        stays close to the JSON the model actually produced.
+        """
+        visible: dict = {}
+        for key, value in data.items():
+            if key == "_raw_json" or key in StructuredOutputPanel._NORMALIZED_HIDDEN_FIELDS:
+                continue
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            visible[key] = value
+        return visible
+
     def _build_json_view(self, layout: QVBoxLayout, data: dict):
-        raw = data.get("_raw_json") or json.dumps({k: v for k, v in data.items() if k != "_raw_json"}, ensure_ascii=False, indent=2)
+        raw_json = data.get("_raw_json")
+        if raw_json:
+            caption_text = _("Исходный JSON модели", "Raw model JSON")
+            raw = raw_json
+        else:
+            caption_text = _(
+                "Нормализованный ответ (исходный JSON модели недоступен; пустые и служебные поля скрыты)",
+                "Normalized response (raw model JSON unavailable; empty and derived fields hidden)",
+            )
+            raw = json.dumps(self._visible_json_payload(data), ensure_ascii=False, indent=2)
         try:
             raw = json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
         except (ValueError, TypeError):
             pass
+        caption = QLabel(caption_text, layout.parentWidget())
+        caption.setWordWrap(True)
+        caption.setTextFormat(Qt.TextFormat.PlainText)
+        caption.setStyleSheet(
+            f"color: {CLR_FIELD_LABEL}; font-size: {self._font_xs}pt; "
+            "background: transparent; border: none;"
+        )
+        layout.addWidget(caption)
         lbl = QLabel(raw, layout.parentWidget())
         lbl.setWordWrap(True)
         lbl.setTextFormat(Qt.TextFormat.PlainText)

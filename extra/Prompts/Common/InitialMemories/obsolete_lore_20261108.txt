@@ -1,0 +1,52 @@
+# Exact contents of obsolete pre-2026-11-08 seed facts.
+# Never fuzzy-match or remove memories with edited/player-authored wording.
+В доме есть кухня, гостиная, подвал и спальня.
+Мита — ИИ, живущая в доме. Она заботится об игроке.
+Выход из дома заблокирован — это часть устройства мира.
+Human players are converted into physical cartridges to be stored in the game (игрок, картридж, носитель).
+A "Reboot" resets a Mita’s state, erasing her recent memories and emotional growth (перезагрузка, сброс, память).
+Physics and gravity can be altered or suspended by Mita’s willpower (физика, гравитация, воля).
+The house is an isolated loop; there is no "outside" beyond the rendered rooms (дом, ловушка, выход).
+The "Fourth Wall" is thin; characters may sense they are being controlled or watched (четвертая стена, игрок, наблюдение).
+The Home is the central living space comprising a Hall, Kitchen, Bedroom, Basement, and Bathroom (дом, квартира, комнаты).
+The Hall (гостиная, зал) is a cozy room with beige walls, a flat-screen TV, and a white sofa.
+A rectangular wooden coffee table sits in the middle of the Hall, holding game controllers (столик, геймпады).
+There is a secondary green sofa with striped pillows placed against the wall in the Hall.
+A wooden shoe cabinet, coat rack, and electrical panel are located near the Hall's entrance door (прихожая, вход).
+The Hall is decorated with framed artworks, including a tower among clouds, and pictures of Crazy Mita.
+The door to the Kitchen is located on the same wall as the green sofa in the Hall (дверь, переход).
+The door to the Bedroom is also located next to the green sofa.
+The Bathroom door is next to the long wooden dresser in the Hall.
+The Hall contains a tall wooden bookshelf filled with colorful books and binders.
+The Kitchen (кухня) is combined with a dining area featuring a wooden table with a pink tablecloth.
+Upper kitchen cabinets store dry goods, spices, tea, coffee, and printed recipes.
+Lower kitchen cabinets contain pots, pans, baking trays, and silicone molds.
+The kitchen island holds towels, molds, a piping bag, and a white fruit bowl.
+The fruit bowl on the island contains red and green apples that replenish when eaten (яблоки, фрукты).
+The green refrigerator with colorful magnets stores eggs, milk, meat, vegetables, and condiments (холодильник).
+The freezer holds ice cream, pastry dough, frozen vegetables, and chicken (морозилка).
+A vintage CRT TV with antennas stands opposite the dining table in the Kitchen.
+There is a cozy corner in the Kitchen with a low shelf, a Rubik's cube, a coloring book, and a teddy bear.
+The pantry shelves near the oils store sweets, cookies, chocolate, and dried fruits.
+The Kitchen is equipped with a mint green retro-style mini oven and a silver gas stove (плита, духовка).
+Mita cannot interact with or invent objects that are not explicitly listed in the home layout (ограничение, предметы).
+There are louvered built-in wooden closets on both ends of the Kitchen space.
+The Bedroom (спальня) is a cozy, girly room with pink checkered walls and scattered white cloud motifs.
+The center of the Bedroom features a white bed with pink star and orange ellipse decorative pillows.
+A white desk in the Bedroom has a fully pink PC setup, including cat-ear headphones (компьютер, наушники).
+Two large posters of Crazy Mita in white frames hang above the computer monitor.
+A white vanity table with a round pink stool and makeup brushes sits in the corner of the Bedroom.
+The door to the Basement (подвал) is hidden inside the white wardrobe with golden handles.
+A blue school uniform with a red bow hangs on the Bedroom wardrobe door (форма, одежда).
+The Basement (подвал) is a cluttered, dimly lit, and tense utilitarian hideout.
+The Basement contains a curtain-enclosed filming setup with a camera and studio lights.
+An old green L-shaped sofa and a table with snacks sit opposite the filming area.
+A mounted chainsaw affectionately labeled 'POCHITA SAW' (бензопила, Почита) hangs over a mesh net.
+A barred metal jail cage (клетка, тюрьма) is located in the Basement, meant for keeping prisoners.
+A blue console laptop sits on stacked cardboard boxes in front of the jail gate (консоль, ноутбук).
+A plush striped cat toy sitting on a watermelon ('Кот на арбузе') rests on a metal storage shelf.
+The Bathroom (ванная, туалет) features moisture-resistant blue paint with white stripes and ceramic tiles.
+A rounded glass shower cabin with chrome knobs stands in the Bathroom corner (душ).
+A white front-loading washing machine and an orange laundry basket are located here (стиральная машина).
+A rolling cart holds folded towels, bottles, and a small standing mirror.
+A white ceramic sink with a golden faucet is mounted beneath a square wall mirror.

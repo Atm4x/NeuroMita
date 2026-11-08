@@ -11,6 +11,9 @@ _SECTION_MARKERS = (
     ("[Available Tools]", "tools"),
     ("[Current Group Conversation]", "group conversation"),
     ("[GAME_MASTER_DIRECTIVE]", "game master directive"),
+    ("[Active Cognitive Effects]", "Active Cognitive Effects"),
+    ("[Recent Effect Aftermath]", "Recent Effect Aftermath"),
+    ("[Cognitive Effect]", "Cognitive Effect"),
     ("[NeuroMita World State]", "NeuroMita World State"),
     ("[MiSide World State]", "NeuroMita World State"),
     ("[Character World Context]", "Character World Context"),
@@ -18,12 +21,16 @@ _SECTION_MARKERS = (
     ("[System State]", "System State"),
     ("[Behavior State]", "System State"),
     ("[Current State]", "System State"),
+    ("[Current Stage]", "stage"),
+    ("# STAGE:", "stage"),
     ("[Pending Reminders]", "reminders"),
     ("[HISTORY SUMMARY]", "history"),
     ("[WORKING STATE PROTOCOL]", "working state protocol"),
     ("[WORKING STATE]", "working state"),
     ("[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]", "retained actions"),
     ("[REQUESTED ACTIONS THIS TURN]", "requested actions"),
+    ("[LOADED SKILLS]", "loaded skills"),
+    ("[SKILLS]", "skills catalog"),
     ("[Runtime Core Directive", "runtime directives"),
     ("[Core Memory", "core memories"),
     ("<memory_islands>", "memories"),
@@ -84,8 +91,13 @@ def classify_message_section(msg: Dict[str, Any], is_last_user: bool,
     core = head[len("[RUNTIME EVENT]"):].lstrip() if is_runtime_event else head
 
     # 1) Явно оформленные нами блоки контекста — по маркерам.
+    role = str(msg.get("role") or "")
     for marker, section in _SECTION_MARKERS:
         if core.startswith(marker) or marker in core:
+            # Eager skills precede the dialogue as prompt instructions;
+            # on-demand tool results are ordinary historical messages.
+            if section == "loaded skills" and role == "system" and not seen_dialogue:
+                return "character prompts"
             return section
     # Статический контракт Unity (Rules/Intent) теперь физически стоит в
     # статической части промпта (до истории) — это часть промпта; если вдруг
@@ -99,7 +111,6 @@ def classify_message_section(msg: Dict[str, Any], is_last_user: bool,
     # 2) Текущий триггер хода и реальный диалог. Последнее «пользовательское»
     # сообщение (is_last_user) — реальная реплика игрока ИЛИ idle-событие «игрок
     # молчит» — это ввод текущего хода: показываем внизу, «как игрок написал».
-    role = str(msg.get("role") or "")
     if is_last_user:
         return "user input"
     if role == "user" and not is_runtime_event:
