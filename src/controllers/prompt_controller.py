@@ -8,6 +8,9 @@ import datetime
 
 from core.services import services, use
 from main_logger import logger
+from services.revival_amnesia import (
+    amnesia_prompt_message, get_revival_amnesia_mode, is_amnesia_marker, visible_history,
+)
 from services.contracts import (
     AppVarsService,
     CharacterEnvironmentContextService,
@@ -398,6 +401,7 @@ class PromptController(PromptBuilderService):
         policy: RequestPolicy | None = None,
         capabilities: Dict[str, Any] | None = None,
         gm_instruction_override: str | None = None,
+        hide_stored_memory: bool = False,
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
         self._setup_character_for_prompt(
             character,
@@ -487,7 +491,7 @@ class PromptController(PromptBuilderService):
 
         memory_blocks: list[str] = []
         try:
-            if hasattr(character, "memory_system") and character.memory_system:
+            if not hide_stored_memory and hasattr(character, "memory_system") and character.memory_system:
                 memory_blocks = character.memory_system.get_memory_message_blocks()
         except Exception as e:
             logger.warning(
@@ -509,7 +513,7 @@ class PromptController(PromptBuilderService):
                 volatile_system_messages.append({"role": "system", "content": block})
 
         try:
-            if hasattr(character, "reminder_system") and character.reminder_system:
+            if not hide_stored_memory and hasattr(character, "reminder_system") and character.reminder_system:
                 reminder_content = character.reminder_system.get_reminders_formatted()
                 if reminder_content and reminder_content.strip():
                     volatile_system_messages.append({"role": "system", "content": reminder_content})
@@ -773,7 +777,7 @@ class PromptController(PromptBuilderService):
         raw_events = game_state.get("runtime_events", ())
         if not isinstance(raw_events, (list, tuple)):
             raw_events = [raw_events] if raw_events else []
-        events = [str(item).strip() for item in raw_events if str(item).strip()]
+        events = [str(item).strip() for item in raw_events if str(item).strip() and not is_amnesia_marker(item)]
         if not events:
             return None
         # GameMaster directives are promoted to a dedicated final system message
@@ -856,6 +860,19 @@ class PromptController(PromptBuilderService):
         rag_context = request.rag_context or ""
         core_memory_context = request.core_memory_context or ""
         policy = request.policy
+        # Unity supplies this on EVERY capture, not only on the first revival.
+        # No marker / disconnected game / GameMaster means full memory access.
+        amnesia_mode = (
+            get_revival_amnesia_mode(game_state)
+            if not is_game_master and runtime_capabilities().connected is not False
+            else "none"
+        )
+        if amnesia_mode == "identity":
+            core_memory_context = ""
+            rag_context = ""
+        elif amnesia_mode == "recent":
+            # Relevant memories could reveal the missing recent events.
+            rag_context = ""
 
         game_state_prompt_content: Optional[str] = None
         try:
@@ -873,6 +890,7 @@ class PromptController(PromptBuilderService):
             policy=policy,
             capabilities=capabilities,
             gm_instruction_override=request.gm_instruction_override,
+            hide_stored_memory=amnesia_mode == "identity",
         )
         dsl_interpreter = getattr(character, "dsl_interpreter", None)
         get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
@@ -939,6 +957,12 @@ class PromptController(PromptBuilderService):
             history_limited = list(prepared.messages)
             history_summary = prepared.summary.strip()
             last_message_at = prepared.last_message_at
+            if amnesia_mode == "identity":
+                history_summary = ""
+                history_limited = []
+                last_message_at = None
+            elif amnesia_mode == "recent":
+                history_limited = visible_history(history_limited, amnesia_mode)
 
         for s in dsl_system_infos:
             if isinstance(s, str):
@@ -1024,6 +1048,10 @@ class PromptController(PromptBuilderService):
         # состояние этого хода, вплотную перед [Current State]/[System State] и
         # сообщением игрока, чтобы самые свежие данные были рядом с запросом.
         messages.extend(unity_dynamic_messages)
+        # Sent near the current turn; no writes to HistoryManager/MemoryManager.
+        amnesia_instruction = amnesia_prompt_message(amnesia_mode)
+        if amnesia_instruction is not None:
+            messages.append(amnesia_instruction)
 
         current_time = datetime.datetime.now()
         current_state_lines = [
