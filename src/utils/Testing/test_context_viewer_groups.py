@@ -84,5 +84,55 @@ class SkillCatalogSectionTests(unittest.TestCase):
         self.assertEqual(viewer._group_key(1), "history")
 
 
+
+class LoadedSkillsViewerTests(unittest.TestCase):
+    def test_loaded_skill_names_are_visible_but_not_classified_as_history(self):
+        msg = {
+            "role": "system",
+            "content": (
+                "[LOADED SKILLS]\n"
+                "Instructions for the current scene.\n"
+                "## Easel drawing (easel)\nDraw with varied strokes.\n"
+                "## Tea making (tea)\nPrepare a cup.\n"
+                "[/LOADED SKILLS]"
+            ),
+        }
+        self.assertEqual(
+            classify_message_section(msg, is_last_user=False, seen_dialogue=True),
+            "loaded skills",
+        )
+        viewer = _viewer([msg])
+        viewer._est_by_index = {0: {"tokens": 220, "section": "loaded skills"}}
+        self.assertEqual(viewer._group_key(0), "skills")
+        label = viewer._classify_message_label(msg, "system", 1, 0)
+        self.assertIn("Easel drawing (easel)", label)
+        self.assertIn("Tea making (tea)", label)
+        self.assertEqual(viewer._message_icon_name(msg, "system"), "fa6s.puzzle-piece")
+
+    def test_old_dump_with_missing_or_wrong_token_metadata_still_shows_skills(self):
+        msg = {"role": "system", "content": "[LOADED SKILLS]\n## Drawing (drawing)\n..."}
+        viewer = _viewer([msg])
+        viewer._est_by_index = {0: {"tokens": 100, "section": "history"}}
+        self.assertEqual(viewer._group_key(0), "skills")
+        viewer._est_by_index = {}
+        self.assertEqual(viewer._group_key(0), "skills")
+
+    def test_skills_are_placed_after_history_in_tree_without_reordering_messages(self):
+        original = ["prompt", "history", "context", "skills", "input"]
+        self.assertEqual(
+            ContextViewerDialog._order_groups(original),
+            ["prompt", "history", "skills", "context", "input"],
+        )
+        self.assertEqual(original, ["prompt", "history", "context", "skills", "input"])
+        self.assertEqual(
+            ContextViewerDialog._order_groups(["prompt", "context", "skills", "input"]),
+            ["prompt", "skills", "context", "input"],
+        )
+        self.assertEqual(
+            ContextViewerDialog._order_groups(["prompt", "history", "context"]),
+            ["prompt", "history", "context"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
