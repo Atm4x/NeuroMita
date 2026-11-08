@@ -252,6 +252,7 @@ async def _dispatch_task(
     gm_instruction_override: str | None = None,
     extra_task_data: Optional[dict] = None,
     abort_reason: str = "Failed to create task",
+    interim_tool_speech: bool = False,
 ) -> Any:
     """
     Emit CREATE_TASK then SEND_MESSAGE — the shared boilerplate for most event types.
@@ -270,6 +271,7 @@ async def _dispatch_task(
         "client_id": ctx.client_id,
         "client_role": ctx.client_role,
         "event_type": event_type,
+        "interim_tool_speech": bool(interim_tool_speech),
         "req_id": req_id,
         "sender": sender,
         "participants": participants,
@@ -499,6 +501,7 @@ class CreateTaskAction:
             req_id=req_id,
             origin_message_id=origin_message_id,
             event_type=event_type,
+            interim_tool_speech=request.get("interim_tool_speech") is True,
             dialogue=dialogue_payload,
             game_state=game_state_payload,
         )
