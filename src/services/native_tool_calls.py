@@ -251,17 +251,24 @@ def persisted_native_tool_messages(structured_data):
     function = calls[0].get('function')
     if not isinstance(function, dict) or not function.get('name'):
         return []
-    historical_content = result['content']
-    if function['name'] == 'load_skill' and '[skill:' in historical_content:
-        # Tool replies must remain paired with their assistant tool calls, but
-        # replaying the full skill body from old turns bypasses skill retention,
-        # including scope changes that deliberately invalidate loaded skills.
-        # The immediately following tool request still receives the full body;
-        # this abbreviation is only for replay of earlier conversation turns.
-        historical_content = (
-            '[Previous load_skill result omitted from history. '
-            'Call load_skill again if this scene needs those instructions.]'
-        )
     return [deepcopy({key: value for key, value in assistant.items()
                       if key in {'role', 'content', 'tool_calls', 'protocol_history'}}),
-            {'role': 'tool', 'tool_call_id': result['tool_call_id'], 'content': historical_content}]
+            {'role': 'tool', 'tool_call_id': result['tool_call_id'], 'content': result['content']}]
+
+
+def persisted_schema_skill_message(structured_data):
+    """Reconstruct the historical skill result of a schema-mode tool turn.
+
+    It is attached to the assistant turn so ordinary dialogue trimming removes
+    the instruction along with that turn, instead of keeping a sticky system
+    message beyond the conversation window.
+    """
+    if not isinstance(structured_data, dict):
+        return None
+    content = structured_data.get('skill_result_history')
+    if not isinstance(content, str) or not content.startswith('[LOADED SKILLS]\\n'):
+        return None
+    if not content.rstrip().endswith('[/LOADED SKILLS]'):
+        return None
+    return {'role': 'system', 'content': content}
+
