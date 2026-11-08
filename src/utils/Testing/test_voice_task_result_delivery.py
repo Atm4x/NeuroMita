@@ -152,7 +152,7 @@ def test_unity_tool_openers_are_spoken_and_displayed_in_order():
         ("I'll check the easel.", "Now I'll draw."),
     )
 
-    assert text == "I'll check the easel.\\nNow I'll draw.\\nThe beach is ready."
+    assert text == "I'll check the easel.\nNow I'll draw.\nThe beach is ready."
     assert [segment["text"] for segment in payload["segments"]] == [
         "I'll check the easel.", "Now I'll draw.", "The beach is ready.",
     ]
@@ -174,7 +174,7 @@ def test_unity_tool_opener_text_fallback_and_empty_openers():
     text, unchanged = ChatController._compose_unity_tool_reply(
         "Final", None, ("Before tool",),
     )
-    assert text == "Before tool\\nFinal"
+    assert text == "Before tool\nFinal"
     assert unchanged is None
 
     original = {"segments": [{"text": "Final"}]}
