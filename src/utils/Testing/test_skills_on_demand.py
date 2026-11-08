@@ -303,7 +303,7 @@ class PromptIntegrationTests(unittest.TestCase):
         joined = "\n".join(self._texts())
         self.assertIn("[Unity Scene Mechanics]", joined)
         self.assertIn("tv (skill tv)", joined)
-        self.assertIn("do not invent argument names", joined)
+        self.assertIn("Do not invent argument names.", joined)
 
     def test_an_old_payload_never_gets_the_mechanic_block(self):
         self.character = self._Character(self.root, ["music"])

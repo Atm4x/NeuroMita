@@ -50,7 +50,7 @@ class SceneMechanicsContractTests(unittest.TestCase):
         self.assertIn("[Unity Scene Mechanics]", text)
         self.assertIn("tv (skill tv)", text)
         self.assertIn("load_skill", text)
-        self.assertIn("do not invent argument names", text)
+        self.assertIn("Do not invent argument names.", text)
         self.assertNotIn("TV body", text)
 
     def test_eager_mode_points_at_the_inlined_bodies(self):
