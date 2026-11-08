@@ -837,6 +837,10 @@ class ChatGenerationResult:
     # Repaired structured output remains displayable but cannot authorize routing.
     structured_parse_level: str = ""
     control_plane_trusted: bool = False
+    # Intermediate spoken tool-call openers awaiting the final game response.
+    # The Python chat keeps individual bubbles; Unity receives them in-order
+    # with the final reply because one task has only one terminal delivery.
+    tool_preludes: tuple[str, ...] = ()
 
 
 @dataclass
