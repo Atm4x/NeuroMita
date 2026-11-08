@@ -118,7 +118,7 @@ class LoadedSkillsViewerTests(unittest.TestCase):
         self.assertEqual(viewer._group_key(0), "history")
 
     def test_eager_skills_remain_part_of_the_static_prompt(self):
-        msg = {"role": "system", "content": "[LOADED SKILLS]\\n## Drawing (drawing)\\nText"}
+        msg = {"role": "system", "content": "[LOADED SKILLS]\n## Drawing (drawing)\nText"}
         section = classify_message_section(msg, is_last_user=False, seen_dialogue=False)
         self.assertEqual(section, "character prompts")
         viewer = _viewer([msg])
