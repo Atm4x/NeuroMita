@@ -712,6 +712,14 @@ class MemoryManager(CharacterScopedService):
         if not contents:
             return 0
         removed = 0
+        # Previously seeded facts had type=fact and were RAG-only/forgotten.
+        # Never retire an active personal fact just because its text happens
+        # to coincide with a seed that was later removed from the catalogue.
+        has_forgotten = "is_forgotten" in self._mem_cols()
+        seed_filter = (
+            "AND (type='seed_lore' OR (type='fact' AND is_forgotten=1))"
+            if has_forgotten else "AND type='seed_lore'"
+        )
         try:
             with self.db.connection() as conn:
                 cur = conn.cursor()
@@ -720,7 +728,7 @@ class MemoryManager(CharacterScopedService):
                     placeholders = ",".join("?" for _ in batch)
                     cur.execute(
                         f"UPDATE memories SET is_deleted=1 WHERE character_id=? "
-                        f"AND type='fact' AND is_deleted=0 AND content IN ({placeholders})",
+                        f"AND is_deleted=0 {seed_filter} AND content IN ({placeholders})",
                         (self.storage_key, *batch),
                     )
                     removed += max(int(cur.rowcount or 0), 0)
@@ -735,10 +743,10 @@ class MemoryManager(CharacterScopedService):
         """Create a RAG-only memory: indexed and retrievable by search, but never
         part of the always-on ``<active_memory>`` block.
 
-        Stored as ``is_forgotten=1`` so it stays out of the active block yet is
-        found by RAG (search ignores the forgotten flag). Deduplicates by exact
-        content — re-seeding the same fact updates it in place (no duplicates)
-        and keeps it RAG-only rather than promoting it into the active block.
+        Stored as ``is_forgotten=1`` with ``type='seed_lore'`` so it stays out
+        of the active block yet remains RAG-searchable. Re-seeding by exact
+        content migrates legacy forgotten ``fact`` rows in place, retaining
+        their original ID and date (date is for audit, not RAG recency).
         """
         if not content or not str(content).strip():
             return None
@@ -749,20 +757,28 @@ class MemoryManager(CharacterScopedService):
         if not has_forgotten:
             # Without the forget column we cannot keep a memory out of the active
             # block; fall back to a normal (skip-if-exists) memory.
-            return self.add_memory(content, priority=priority, skip_if_exists=True, entities=entities)
+            return self.add_memory(
+                content, priority=priority, memory_type="seed_lore",
+                skip_if_exists=True, entities=entities,
+            )
 
         with self.db.connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT eternal_id FROM memories WHERE character_id=? AND content=? LIMIT 1",
+                "SELECT eternal_id FROM memories "
+                "WHERE character_id=? AND content=? "
+                "AND (type='seed_lore' OR (type='fact' AND is_forgotten=1)) "
+                "ORDER BY CASE WHEN type='seed_lore' THEN 0 ELSE 1 END, eternal_id "
+                "LIMIT 1",
                 (self.storage_key, content),
             )
             row = cur.fetchone()
             if row:
                 eid = int(row[0])
-                # Keep it RAG-only: undelete but force forgotten, refresh priority.
+                # Keep it RAG-only; migrate previously seeded forgotten fact rows
+                # without resetting their ID or creation timestamp.
                 cur.execute(
-                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=? "
+                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=?, type='seed_lore' "
                     "WHERE character_id=? AND eternal_id=?",
                     (priority, self.storage_key, eid),
                 )
@@ -782,7 +798,7 @@ class MemoryManager(CharacterScopedService):
             insert_cols = ["character_id", "eternal_id", "content", "priority",
                            "type", "date_created", "is_deleted", "is_forgotten"]
             insert_vals = [self.storage_key, new_id, content, priority,
-                           "fact", date, 0, 1]
+                           "seed_lore", date, 0, 1]
             if "entities" in cols and entities:
                 insert_cols.append("entities")
                 insert_vals.append(
