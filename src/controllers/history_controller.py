@@ -1,5 +1,5 @@
 from __future__ import annotations
-from services.native_tool_calls import persisted_native_tool_messages
+from services.native_tool_calls import persisted_native_tool_messages, persisted_schema_skill_message
 from core.error_utils import format_exception
 from domain.character_runtime_profile import runtime_profile_for
 from typing import Dict, Any, List, Optional
@@ -2082,6 +2082,10 @@ class HistoryController(HistoryService):
 
             # sanitize keys: strict role/content only
             out.append({"role": role, "content": content})
+            if role == "assistant":
+                skill_message = persisted_schema_skill_message(m.get("structured_data"))
+                if skill_message is not None:
+                    out.append(skill_message)
 
         return out
 
