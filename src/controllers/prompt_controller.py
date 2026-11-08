@@ -71,6 +71,29 @@ class PromptController(PromptBuilderService):
     def __init__(self):
         services().register(PromptBuilderService, self, replace=True)
 
+    @staticmethod
+    def _trim_history_messages(messages: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        """Bound history without leaving an orphaned native or schema tool reply.
+
+        The history service trims persisted turns together. A second,
+        per-profile message limit can cut through a projected tool-result pair.
+        An orphan result must not survive after its originating assistant turn.
+        """
+        if limit <= 0 or len(messages) <= limit:
+            return list(messages)
+        retained = list(messages[-limit:])
+        if retained:
+            first = retained[0]
+            role = str(first.get("role") or "") if isinstance(first, dict) else ""
+            content = first.get("content") if isinstance(first, dict) else ""
+            if role == "tool" or (
+                role == "system"
+                and isinstance(content, str)
+                and content.lstrip().startswith("[LOADED SKILLS]")
+            ):
+                return retained[1:]
+        return retained
+
     def _get_setting(self, key: str, default=None):
         return use(SettingsService).get(key, default)
 
@@ -1550,7 +1573,9 @@ class PromptController(PromptBuilderService):
             )
             history_limited = list(prepared.messages)
             if character_profile.history_message_limit is not None:
-                history_limited = history_limited[-character_profile.history_message_limit:]
+                history_limited = self._trim_history_messages(
+                    history_limited, character_profile.history_message_limit,
+                )
             history_summary = prepared.summary.strip()
             if bool(capabilities.get("action_memory", False)):
                 action_context = str(getattr(prepared, "action_context", "") or "")
