@@ -1,9 +1,11 @@
 """Regression tests for structured Unity replies racing with voice generation."""
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from controllers.audio_controller import AudioController
 from controllers.chat_controller import ChatController
+from controllers.model_controller import _emit_tool_turn_voiceover
 from core.events import Events
 from managers.task_manager import TaskManager, TaskStatus
 from services.contracts import GameLinkService, LocalVoiceService
@@ -97,3 +99,39 @@ def test_voice_failure_contains_full_reply_without_prior_voicing_update():
     assert failed["result"]["response"] == "I cast a spell"
     assert failed["result"]["segments"] == generated["segments"]
     assert "error_details" in failed["result"]
+
+
+def test_tool_turn_voiceover_does_not_complete_parent_unity_task():
+    """The short 'loading skill' opener must not complete a pending tool chain."""
+    manager = TaskManager()
+    task = manager.create_task("dialogue", {"character": "Crazy"})
+    events = []
+    event_bus = Mock()
+
+    def emit(name, data=None):
+        events.append((name, data))
+        if name == Events.Task.UPDATE_TASK_STATUS:
+            manager.update_task_status(
+                data["uid"], data["status"], data.get("result"), data.get("error"),
+            )
+
+    event_bus.emit.side_effect = emit
+
+    _emit_tool_turn_voiceover(
+        event_bus=event_bus,
+        settings={"USE_VOICEOVER": True, "AUDIO_BOT": ""},
+        text="Let me check the wardrobe.",
+        voice_profile={"silero_command": "/speaker mita", "character_id": "Crazy"},
+        char_id="Crazy",
+        message_id="out:tool-opener",
+        trace_id=None,
+        policy=SimpleNamespace(allow_voiceover=True),
+    )
+
+    assert len(events) == 1
+    event_name, payload = events[0]
+    assert event_name == Events.Audio.VOICEOVER_REQUESTED
+    assert payload["text"] == "Let me check the wardrobe."
+    assert payload["task_uid"] is None
+    assert payload["message_id"] == "out:tool-opener"
+    assert manager.get_task(task.uid).status == TaskStatus.PENDING
