@@ -181,9 +181,9 @@ _SECTION_TO_GROUP = {
     # этой строки блок уходил в «Активный контекст» и поднимал группу выше
     # истории, хотя по порядку сообщений она идёт раньше.
     "skills catalog": "prompt",
-    # Загруженное инструментом тело скилла — авторская инструкция, а не
-    # остаток системного промпта: отдельная группа со своей иконкой.
-    "loaded skills": "skills",
+    # On-demand tools are replayed alongside historical dialogue, not kept
+    # in a standalone persistent prompt group.
+    "loaded skills": "history",
     "history": "history",
     "working state protocol": "prompt",
     "working state": "context",
@@ -595,11 +595,6 @@ class ContextViewerDialog(QDialog):
                 group_order.append(gkey)
             group_idxs[gkey].append(idx)
 
-        # Скиллы держим рядом с историей в дереве, хотя в самом запросе
-        # их system-блок физически идёт после истории (ради prompt caching).
-        # Индексы исходных сообщений при этом не меняются.
-        group_order = self._order_groups(group_order)
-
         # Ярлыки и «role #N» считаем в порядке ИНДЕКСОВ (не групп), чтобы
         # нумерация совпадала с обзором справа.
         self._msg_labels: Dict[int, str] = {}
@@ -651,27 +646,19 @@ class ContextViewerDialog(QDialog):
 
         self._render_response_tab()
 
-    @staticmethod
-    def _order_groups(group_order: list[str]) -> list[str]:
-        """Show retained skills beside history, not among live runtime state."""
-        ordered = list(group_order)
-        if "skills" not in ordered:
-            return ordered
-        ordered.remove("skills")
-        anchor = "history" if "history" in ordered else "prompt"
-        if anchor in ordered:
-            ordered.insert(ordered.index(anchor) + 1, "skills")
-        else:
-            ordered.insert(0, "skills")
-        return ordered
-
     def _group_key(self, idx: int) -> str:
         """Крупная группа сообщения по его секции из оценки токенов."""
         # Старые дампы могут иметь устаревшую/неполную оценку токенов:
         # распознаём блок по фактическому тексту отправленного сообщения.
         content = self._content_plain(self._messages[idx].get("content")).lstrip()
         if content.startswith("[LOADED SKILLS]"):
-            return "skills"
+            section = (self._est_by_index.get(idx) or {}).get("section") or ""
+            first_history = getattr(self, "_first_history_idx", None)
+            if section == "character prompts" or (
+                first_history is not None and idx < first_history
+            ):
+                return "prompt"
+            return "history"
         section = (self._est_by_index.get(idx) or {}).get("section") or ""
         group = _SECTION_TO_GROUP.get(section)
         if group is not None:
@@ -708,13 +695,16 @@ class ContextViewerDialog(QDialog):
         child.setForeground(0, QColor(self._msg_actor_color[idx]))
         speaker, target = self._msg_actor[idx]
         who = f"{speaker} → {target}" if target else speaker
-        if self._group_key(idx) == "skills":
-            child.setToolTip(0, _(
-                "Эти инструкции повторно включены в текущий запрос и не "
-                "являются записью истории диалога.",
-                "These instructions are repeated in this request; "
-                "they are not part of the dialogue history.",
-            ) + f"\nprovider role: {self._msg_role_ord[idx]}")
+        if self._content_plain(msg.get("content")).lstrip().startswith("[LOADED SKILLS]"):
+            history_skill = self._group_key(idx) == "history"
+            tooltip = (
+                _("Инструкция находится в истории и со временем выходит из контекста.",
+                  "This instruction lives in history and eventually leaves the context window.")
+                if history_skill else
+                _("Скиллы встроены в промпт режимом eager.",
+                  "Skills were embedded by eager mode into the prompt.")
+            )
+            child.setToolTip(0, tooltip + f"\nprovider role: {self._msg_role_ord[idx]}")
         else:
             child.setToolTip(0, f"{who}  ·  provider role: {self._msg_role_ord[idx]}")
         self._items.append((child, "message", msg))
