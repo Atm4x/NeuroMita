@@ -622,13 +622,6 @@ class ContextViewerDialog(QDialog):
                 glabel += f" · ~{self._fmt_int(group_tokens)} · {self._fmt_pct(group_tokens, self._est_total)}"
             parent = QTreeWidgetItem(msgs_item, [glabel])
             parent.setIcon(0, qta.icon(icon, color=color))
-            if gkey == "skills":
-                parent.setToolTip(0, _(
-                    "Инструкции загруженных скиллов, повторно добавленные к этому запросу. "
-                    "Не являются сообщениями истории диалога.",
-                    "Loaded skill instructions repeated in this request. "
-                    "These are not dialogue history messages.",
-                ))
             parent.setExpanded(True)
             self._items.append((parent, "group", gkey))
 
@@ -1609,6 +1602,17 @@ class ContextViewerDialog(QDialog):
                 r"(?m)^##\s+(.+?)\s+\(([a-z0-9_-]{1,40})\)\s*$", text
             )
             names = [f"{title.strip()} ({skill_id})" for title, skill_id in skills]
+            if not names:
+                # On-demand history uses [skill: Title], unlike the eager
+                # [LOADED SKILLS] block which has ## Title (id) headings.
+                titles = re.findall(r"(?m)^\[skill:\s*(.+?)\]\s*$", text)
+                ids = re.findall(
+                    r"Authored instructions for skill '([a-z0-9_-]{1,40})'", text
+                )
+                names = [
+                    f"{title.strip()} ({ids[i]})" if i < len(ids) else title.strip()
+                    for i, title in enumerate(titles)
+                ]
             label = _("Загруженные скиллы", "Loaded skills")
             if names:
                 label += ": " + ", ".join(names[:2])
