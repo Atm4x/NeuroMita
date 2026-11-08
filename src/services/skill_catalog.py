@@ -198,7 +198,9 @@ class SkillCatalog:
             "shows the exact shape. "
             "Load one only when the current scene needs it; the result is placed "
             "in the conversation history, and eventually leaves the context "
-            "window like older dialogue. Call load_skill again if needed.",
+            "window like older dialogue. If the body is already visible in "
+            "recent history, use it instead of loading it again. Reload when "
+            "it is no longer available.",
         ]
         budget = max(200, int(max_chars or DEFAULT_CATALOG_BLOCK_CHARS))
         for entry in entries:
