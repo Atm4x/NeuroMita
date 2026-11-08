@@ -266,7 +266,7 @@ def persisted_schema_skill_message(structured_data):
     if not isinstance(structured_data, dict):
         return None
     content = structured_data.get('skill_result_history')
-    if not isinstance(content, str) or not content.startswith('[LOADED SKILLS]\\n'):
+    if not isinstance(content, str) or not content.startswith('[LOADED SKILLS]\n'):
         return None
     if not content.rstrip().endswith('[/LOADED SKILLS]'):
         return None
