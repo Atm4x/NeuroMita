@@ -2870,7 +2870,7 @@ class ModelController(GenerationService, ModelStateService):
             history_data = dict(result_dict)
             if "[skill:" in str(tool_result):
                 history_data["skill_result_history"] = (
-                    f"[LOADED SKILLS]\\n{tool_result}\\n[/LOADED SKILLS]"
+                    f"[LOADED SKILLS]\n{tool_result}\n[/LOADED SKILLS]"
                 )
             persist_tool_turn(history_data)
 
