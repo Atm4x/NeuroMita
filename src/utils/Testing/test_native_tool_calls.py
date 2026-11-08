@@ -16,6 +16,7 @@ from services.native_tool_calls import (
     bridge_native_tool_response,
     native_tool_followup_messages,
     persisted_native_tool_messages,
+    persisted_schema_skill_message,
     resolve_tool_mode,
 )
 from services.structured_response_capabilities import resolve_structured_response_capabilities
@@ -110,17 +111,25 @@ class NativeSkillHistoryTests(unittest.TestCase):
         self.assertTrue(reply["content"].startswith("[LOADED SKILLS]\n"))
         self.assertTrue(reply["content"].endswith("\n[/LOADED SKILLS]"))
 
-    def test_old_skill_instructions_are_not_replayed(self):
+    def test_skill_instructions_remain_in_history_until_the_turn_is_trimmed(self):
         call = {"id": "call_skill", "name": "load_skill", "arguments": {"ids": ["tv"]}}
         body = "[skill: TV]\nAn instruction that must not persist."
         original = native_tool_followup_messages(call, body)
         history = persisted_native_tool_messages({"native_tool_history": original})
         self.assertEqual(history[0], original[0])
         self.assertEqual(history[1]["tool_call_id"], "call_skill")
-        self.assertIn("load_skill again", history[1]["content"])
-        self.assertNotIn("must not persist", history[1]["content"])
-        # The current tool response was not edited by history projection.
-        self.assertIn("must not persist", original[1]["content"])
+        self.assertEqual(history[1]["content"], original[1]["content"])
+        self.assertIn("must not persist", history[1]["content"])
+
+    def test_schema_skill_result_replays_as_a_historical_system_message(self):
+        content = "[LOADED SKILLS]\\n[skill: TV]\\nUse the remote.\\n[/LOADED SKILLS]"
+        self.assertEqual(
+            persisted_schema_skill_message({"skill_result_history": content}),
+            {"role": "system", "content": content},
+        )
+        self.assertIsNone(persisted_schema_skill_message({}))
+        self.assertIsNone(persisted_schema_skill_message({"skill_result_history": "[load_skill] Unknown"}))
+        self.assertIsNone(persisted_schema_skill_message(None))
 
     def test_non_skill_native_results_are_preserved(self):
         call = {"id": "call_search", "name": "web_search", "arguments": {"query": "hi"}}
