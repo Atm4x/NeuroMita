@@ -2837,16 +2837,21 @@ class ModelController(GenerationService, ModelStateService):
             "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
 
-        _emit_tool_turn_voiceover(
-            event_bus=self.event_bus,
-            settings=self.settings,
-            text=first_text,
-            voice_profile=voice_profile,
-            char_id=char_id,
-            message_id=first_assistant_message_id,
-            trace_id=trace_id,
-            policy=policy,
-        )
+        if task_uid:
+            # Unity presents speech only when the task completes. Keep this
+            # opener for the final delivery, not an undeliverable standalone WAV.
+            logger.debug("[ModelController] Buffering tool opener for Unity: %s", tool_name)
+        else:
+            _emit_tool_turn_voiceover(
+                event_bus=self.event_bus,
+                settings=self.settings,
+                text=first_text,
+                voice_profile=voice_profile,
+                char_id=char_id,
+                message_id=first_assistant_message_id,
+                trace_id=trace_id,
+                policy=policy,
+            )
 
         # Emit tool executing indicator for UI
         self.event_bus.emit(Events.Model.ON_TOOL_EXECUTING, {
@@ -3017,7 +3022,7 @@ class ModelController(GenerationService, ModelStateService):
 
         # Process second response (depth+1 prevents infinite tool loops)
         # user_input is empty so the user message is not written to history again
-        return self._process_structured_output(
+        final_result = self._process_structured_output(
             visible_raw=visible_raw_2,
             think_text=combined_think or "",
             usage=merged_usage,
@@ -3058,6 +3063,16 @@ class ModelController(GenerationService, ModelStateService):
             request_cancellation=request_cancellation,
             cognitive_effect_changes=cognitive_effect_changes,
         )
+        if task_uid and final_result is not None and not final_result.error and final_result.text:
+            opener = str(first_text or "").strip()
+            if opener:
+                # Every tool-depth prepends its opener to preserve spoken order.
+                # The result is immutable; do not alter the Python UI/history.
+                final_result = dataclasses.replace(
+                    final_result,
+                    tool_preludes=(opener, *final_result.tool_preludes),
+                )
+        return final_result
 
     # ---------------------------------------------------------------------
     # Reload prompts
