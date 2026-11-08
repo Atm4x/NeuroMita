@@ -86,7 +86,7 @@ class SkillCatalogSectionTests(unittest.TestCase):
 
 
 class LoadedSkillsViewerTests(unittest.TestCase):
-    def test_loaded_skill_names_are_visible_but_not_classified_as_history(self):
+    def test_loaded_skill_names_are_visible_in_history(self):
         msg = {
             "role": "system",
             "content": (
@@ -103,7 +103,7 @@ class LoadedSkillsViewerTests(unittest.TestCase):
         )
         viewer = _viewer([msg])
         viewer._est_by_index = {0: {"tokens": 220, "section": "loaded skills"}}
-        self.assertEqual(viewer._group_key(0), "skills")
+        self.assertEqual(viewer._group_key(0), "history")
         label = viewer._classify_message_label(msg, "system", 1, 0)
         self.assertIn("Easel drawing (easel)", label)
         self.assertIn("Tea making (tea)", label)
@@ -113,25 +113,29 @@ class LoadedSkillsViewerTests(unittest.TestCase):
         msg = {"role": "system", "content": "[LOADED SKILLS]\n## Drawing (drawing)\n..."}
         viewer = _viewer([msg])
         viewer._est_by_index = {0: {"tokens": 100, "section": "history"}}
-        self.assertEqual(viewer._group_key(0), "skills")
+        self.assertEqual(viewer._group_key(0), "history")
         viewer._est_by_index = {}
-        self.assertEqual(viewer._group_key(0), "skills")
+        self.assertEqual(viewer._group_key(0), "history")
 
-    def test_skills_are_placed_after_history_in_tree_without_reordering_messages(self):
-        original = ["prompt", "history", "context", "skills", "input"]
-        self.assertEqual(
-            ContextViewerDialog._order_groups(original),
-            ["prompt", "history", "skills", "context", "input"],
-        )
-        self.assertEqual(original, ["prompt", "history", "context", "skills", "input"])
-        self.assertEqual(
-            ContextViewerDialog._order_groups(["prompt", "context", "skills", "input"]),
-            ["prompt", "skills", "context", "input"],
-        )
-        self.assertEqual(
-            ContextViewerDialog._order_groups(["prompt", "history", "context"]),
-            ["prompt", "history", "context"],
-        )
+    def test_eager_skills_remain_part_of_the_static_prompt(self):
+        msg = {"role": "system", "content": "[LOADED SKILLS]\\n## Drawing (drawing)\\nText"}
+        section = classify_message_section(msg, is_last_user=False, seen_dialogue=False)
+        self.assertEqual(section, "character prompts")
+        viewer = _viewer([msg])
+        viewer._est_by_index = {0: {"tokens": 100, "section": section}}
+        self.assertEqual(viewer._group_key(0), "prompt")
+
+    def test_native_tool_reply_is_history(self):
+        msg = {"role": "tool", "content": "[LOADED SKILLS]\\n[skill: Drawing]\\nText"}
+        section = classify_message_section(msg, is_last_user=False, seen_dialogue=True)
+        self.assertEqual(section, "loaded skills")
+        viewer = _viewer([{"role": "assistant", "content": "loading"}, msg])
+        viewer._first_history_idx = 0
+        viewer._est_by_index = {
+            0: {"tokens": 10, "section": "history"},
+            1: {"tokens": 100, "section": section},
+        }
+        self.assertEqual(viewer._group_key(1), "history")
 
 
 if __name__ == "__main__":
