@@ -137,6 +137,19 @@ class LoadedSkillsViewerTests(unittest.TestCase):
         }
         self.assertEqual(viewer._group_key(1), "history")
 
+    def test_historical_tool_result_shows_loaded_skill_title_and_id(self):
+        msg = {
+            "role": "tool",
+            "content": (
+                "[LOADED SKILLS]\n[skill: Easel drawing]\n"
+                "Authored instructions for skill 'easel'. Follow them.\n"
+                "[/LOADED SKILLS]"
+            ),
+        }
+        viewer = _viewer([msg])
+        label = viewer._classify_message_label(msg, "tool", 1, 0)
+        self.assertIn("Easel drawing (easel)", label)
+
 
 if __name__ == "__main__":
     unittest.main()
