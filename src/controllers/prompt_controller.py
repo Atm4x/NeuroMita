@@ -1019,8 +1019,9 @@ class PromptController(PromptBuilderService):
         if available and load_skill_offered:
             lines.append(
                 "Those mechanics exist here, but their payload shapes are not inlined. "
-                "Call load_skill with the matching skill id before you build an intent "
-                "for one of them, and do not invent argument names."
+                "Before building an intent, use the matching skill instructions "
+                "already visible in conversation history, or call load_skill if "
+                "they are missing. Do not invent argument names."
             )
             lines.append("[/Unity Scene Mechanics]")
             return [{"role": "system", "content": "\n".join(lines)}]
