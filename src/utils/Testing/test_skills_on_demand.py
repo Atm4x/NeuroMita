@@ -1,4 +1,4 @@
-"""Skill retention, the load_skill tool and the rendered prompt blocks."""
+"""History-scoped load_skill results and eager prompt blocks."""
 from __future__ import annotations
 
 import json
@@ -81,11 +81,11 @@ class LoadSkillToolTests(unittest.TestCase):
         self.resources.loaded_skills_for(self.char_id).clear()
         self._tmp.cleanup()
 
-    def test_loading_returns_the_body_and_remembers_the_skill(self):
+    def test_loading_returns_the_body_without_persistent_session_cache(self):
         result = self.tool.run(ids=["music"])
         self.assertIn("Pick a calm track.", result)
         self.assertIn("skill: Music", result)
-        self.assertEqual(self.resources.loaded_skills_for(self.char_id).loaded(), ["music"])
+        self.assertEqual(self.resources.loaded_skills_for(self.char_id).loaded(), [])
 
     def test_unknown_skill_lists_what_exists(self):
         result = self.tool.run(ids=["dance"])
@@ -113,10 +113,7 @@ class LoadSkillToolTests(unittest.TestCase):
         result = self.tool.run(ids=["music", "wardrobe"])
         self.assertIn("Pick a calm track.", result)
         self.assertIn("Offer two outfits.", result)
-        self.assertEqual(
-            self.resources.loaded_skills_for(self.char_id).loaded(),
-            ["music", "wardrobe"],
-        )
+        self.assertEqual(self.resources.loaded_skills_for(self.char_id).loaded(), [])
 
     def test_the_older_single_id_argument_still_works(self):
         self.assertIn("Pick a calm track.", self.tool.run(id="music"))
@@ -268,15 +265,14 @@ class PromptIntegrationTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_catalog_block_precedes_history_and_loaded_block_is_separate(self):
+    def test_on_demand_does_not_reinject_a_previously_cached_skill(self):
         self.character = self._Character(self.root, ["music"])
         texts = self._texts()
         joined = "\n".join(texts)
         self.assertIn("[SKILLS]", joined)
         self.assertIn("- music: Music", joined)
-        self.assertIn("[LOADED SKILLS]", joined)
-        self.assertIn("Pick a calm track.", joined)
-        self.assertLess(joined.index("[SKILLS]"), joined.index("[LOADED SKILLS]"))
+        self.assertNotIn("[LOADED SKILLS]", joined)
+        self.assertNotIn("Pick a calm track.", joined)
 
     def test_eager_mode_embeds_bodies_without_catalog(self):
         self.mode = "eager"
