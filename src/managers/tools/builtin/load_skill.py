@@ -26,7 +26,7 @@ def _requested_ids(ids, legacy_id: str) -> list[str]:
 
 
 class LoadSkillTool(Tool):
-    """Load one or two catalogued skills for the current and following turns."""
+    """Return one or two skill bodies for the ordinary conversation history."""
 
     def __init__(self, settings=None) -> None:
         self._settings = settings
@@ -62,9 +62,9 @@ class LoadSkillTool(Tool):
     def description(self) -> str:
         return (
             "Load the full instructions of one or two authored skills (for example "
-            "music or wardrobe). Call it when the scene needs them; the loaded "
-            "instructions stay available for the next turns instead of being "
-            "repeated every turn."
+            "music or wardrobe). The result becomes part of the conversation "
+            "history and eventually leaves the context window like any older "
+            "message. Load it again if needed."
         )
 
     @property
@@ -113,7 +113,6 @@ class LoadSkillTool(Tool):
                 blocks.append(f"[load_skill] Unknown skill '{skill_id}'. Available: {available}.")
                 continue
             body = entry.render_body(max_chars=max(400, max_chars))
-            self._remember(entry.id, entry.token_estimate)
             blocks.append(
                 f"[skill: {entry.title}]\n"
                 f"Authored instructions for skill '{entry.id}'. Follow them while the scene "
@@ -122,17 +121,8 @@ class LoadSkillTool(Tool):
             )
         if len(requested) > MAX_LOADED_SKILLS:
             blocks.append(
-                f"[load_skill] Only {MAX_LOADED_SKILLS} skills stay in the prompt; "
-                f"the rest was ignored."
+                f"[load_skill] At most {MAX_LOADED_SKILLS} skills can be loaded "
+                f"per call; the rest were ignored."
             )
         return "\n\n".join(blocks)
 
-    def _remember(self, skill_id: str, tokens: int) -> None:
-        if not self._char_id:
-            return
-        try:
-            from managers.character_resource_manager import get_character_resource_manager
-            session = get_character_resource_manager().loaded_skills_for(self._char_id)
-            session.remember(skill_id, tokens=tokens)
-        except Exception:
-            return
