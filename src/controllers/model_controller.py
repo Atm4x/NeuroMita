@@ -168,13 +168,12 @@ def _emit_tool_turn_voiceover(
 ) -> None:
     """Voice the spoken opener of a tool turn.
 
-    The opener is an ordinary character line: the player should hear
-    "let me look" before the tool runs. Skipping it was why a tool turn
-    sounded like silence followed by an answer that came from nowhere.
+    For standalone Python chat, speak the tool opener immediately so "let me
+    look" is audible before the tool runs. Unity tasks deliberately skip this
+    path: the caller buffers openers and ships them with the final response.
 
-    This is not the final response. Never attach its audio to the parent
-    task UID: that would let the early TTS completion mark the whole Unity
-    task SUCCESS with only an audio path, before the tool follow-up is ready.
+    Never attach intermediate audio to the parent task UID: early TTS
+    completion could mark it SUCCESS before the tool follow-up is ready.
     """
     opener = str(text or "").strip()
     if not opener or not settings.get("USE_VOICEOVER"):
