@@ -2778,6 +2778,10 @@ class ModelController(GenerationService, ModelStateService):
             first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
         else:
             history_task_uid = f"{task_uid or req_id or char_id}:tool:{tool_depth}"
+            if tool_name == "load_skill" and policy.write_to_history:
+                # The schema result is saved after execution; reserve the same
+                # deterministic UI ID so the first tool bubble remains linked.
+                first_assistant_message_id = ConversationMessageIds.assistant(history_task_uid)
 
         def persist_tool_turn(history_data):
             nonlocal first_assistant_message_id
