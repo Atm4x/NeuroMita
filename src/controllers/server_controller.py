@@ -11,7 +11,7 @@ from core.events import get_event_bus, Events, Event
 from core.services import use
 from core.executors import Pools, executors
 from domain.dialogue_identity import DialogueActorKind
-from services.contracts import CharacterRegistry, SettingsService
+from services.contracts import CharacterRegistry, SettingsService, TaskService
 
 from managers.task_manager import TaskStatus
 from managers.unity_retry_store import UnityRetryStore
@@ -186,6 +186,7 @@ class ServerController:
 
         eb.subscribe(Events.Task.TASK_STATUS_CHANGED, self._on_task_status_changed, weak=False)
         eb.subscribe(Events.Server.SEND_TASK_UPDATE, self._on_send_task_update, weak=False)
+        eb.subscribe(Events.Server.SEND_DIALOGUE_INTERIM, self._on_send_dialogue_interim, weak=False)
 
         eb.subscribe(Events.Server.SEND_ASR_TEXT, self._on_send_asr_text, weak=False)
         eb.subscribe(Events.Server.SEND_ASR_CAPTURE_STATE, self._on_send_asr_capture_state, weak=False)
@@ -203,6 +204,7 @@ class ServerController:
 
             eb.unsubscribe(Events.Task.TASK_STATUS_CHANGED, self._on_task_status_changed)
             eb.unsubscribe(Events.Server.SEND_TASK_UPDATE, self._on_send_task_update)
+            eb.unsubscribe(Events.Server.SEND_DIALOGUE_INTERIM, self._on_send_dialogue_interim)
 
             eb.unsubscribe(Events.Server.SEND_ASR_TEXT, self._on_send_asr_text)
             eb.unsubscribe(Events.Server.SEND_ASR_CAPTURE_STATE, self._on_send_asr_capture_state)
@@ -786,6 +788,40 @@ class ServerController:
             "message_id": message_id,
             "character_id": character_id,
         })
+
+    def _on_send_dialogue_interim(self, event: Event):
+        """Push one tool opener without changing the parent task status.
+
+        Both phases are tied to the exact task/client that opted in. No intents
+        or final response fields travel through this presentation-only channel.
+        """
+        data = event.data or {}
+        uid = str(data.get("uid") or "")
+        opener_id = str(data.get("opener_id") or "")
+        phase = str(data.get("phase") or "")
+        text = str(data.get("text") or "").strip()
+        if not uid or not opener_id.startswith(uid + ":") or not text:
+            return
+        if phase not in ("pending", "ready") or not self.server:
+            return
+        task = use(TaskService).get_task(uid)
+        if not task or not isinstance(task.data, dict):
+            return
+        if task.data.get("interim_tool_speech") is not True:
+            return
+        client_id = str(task.data.get("client_id") or "")
+        if not client_id:
+            return
+        payload = {
+            "type": "dialogue_interim",
+            "uid": uid,
+            "opener_id": opener_id,
+            "phase": phase,
+            "text": text,
+        }
+        if phase == "ready":
+            payload["voiceover_path"] = str(data.get("voiceover_path") or "")
+        self.server.schedule_send_json(client_id, payload)
 
     def _on_send_task_update(self, event: Event):
         task = (event.data or {}).get('task')
