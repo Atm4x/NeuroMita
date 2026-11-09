@@ -119,7 +119,12 @@ class SkillCatalogTests(unittest.TestCase):
             self.assertNotIn("wardrobe", filtered)
 
             tiny = catalog.render_catalog_block(max_chars=200)
-            self.assertLessEqual(len(tiny), 260)
+            self.assertIn("- ...", tiny)
+            self.assertNotIn("- music: Music", tiny)
+            full = catalog.render_catalog_block()
+            self.assertIn("- music: Music", full)
+            self.assertIn("- wardrobe: Wardrobe", full)
+            self.assertLessEqual(len(full), 1200)
 
     def test_body_is_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:

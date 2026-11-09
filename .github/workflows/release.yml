@@ -79,6 +79,7 @@ jobs:
         env:
           # TEMPORARY TEST-ONLY HARDCODE: move this value into repo secret TESTER_CODE
           # as soon as repository settings access is available again.
+          GH_TOKEN: ${{ github.token }}
           BOOTSTRAP_TESTER_CODE: '23'
           PYTHONUTF8: '1'
         # Берётся последний доступный full runtime со строго меньшей версией тега.

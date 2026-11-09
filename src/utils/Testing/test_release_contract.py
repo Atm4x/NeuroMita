@@ -263,3 +263,13 @@ def test_find_previous_python_full_asset_skips_non_launcher_release():
     release, asset = found
     assert release["tag_name"] == "v2026.06.12_Full"
     assert asset["name"] == "PythonBuild-v2026.06.12.zip"
+
+
+def test_fetch_releases_authenticates_only_when_explicitly_requested():
+    for token in (None, "test-ci-token"):
+        with patch.object(release_contract.urllib.request, "urlopen") as open_url:
+            open_url.return_value.__enter__.return_value.read.return_value = b"[]"
+            assert release_contract.fetch_releases("Atm4x/NeuroMita", github_token=token) == []
+            request = open_url.call_args.args[0]
+            assert request.full_url == "https://api.github.com/repos/Atm4x/NeuroMita/releases?per_page=100"
+            assert request.get_header("Authorization") == (f"Bearer {token}" if token else None)

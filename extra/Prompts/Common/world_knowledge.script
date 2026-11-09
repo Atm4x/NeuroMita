@@ -61,7 +61,9 @@ SEED_RAG_MEMORY Normal | Other character prompts were written by additional cont
 // Раньше файлы InitialMemories/* были сиротами — их никто не подключал (см. план 09).
 // Теперь подключаются здесь, но как SEED_RAG_MEMORY (RAG-only): лор индексируется и
 // всплывает поиском по запросу игрока, но НЕ занимает слоты активной памяти
-// (MEMORY_CAPACITY) — иначе ~110 фактов «High» мгновенно вытеснили бы прожитый опыт.
+// (MEMORY_CAPACITY) — иначе энциклопедия вытесняла бы прожитый опыт.
+// В InitialMemories справочные факты имеют преимущественно Normal: значимость
+// определяет релевантность поиску, а не массовый повышенный приоритет.
 // Всё параметризуемо флагами (по умолчанию всё ВКЛючено — флаги не заданы => грузим).
 // Отключить набор целиком:  SET SEED_INITIAL_MEMORIES = False  (в init.script персонажа
 // ДО RUN world_knowledge). Точечно:  SEED_WORLD_LORE / SEED_ROOMS_LORE / SEED_MITAS_LORE

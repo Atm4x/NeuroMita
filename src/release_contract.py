@@ -449,7 +449,7 @@ def fetch_release(repo: str, tag: str) -> dict:
         return json.loads(resp.read())
 
 
-def fetch_releases(repo: str, per_page: int = 100) -> list[dict]:
+def fetch_releases(repo: str, per_page: int = 100, *, github_token: str | None = None) -> list[dict]:
     url = f"https://api.github.com/repos/{repo}/releases?per_page={int(per_page)}"
     req = urllib.request.Request(
         url,
@@ -458,6 +458,8 @@ def fetch_releases(repo: str, per_page: int = 100) -> list[dict]:
             "Accept": "application/vnd.github+json",
         },
     )
+    if github_token:
+        req.add_header("Authorization", f"Bearer {github_token}")
     with urllib.request.urlopen(req, timeout=15) as resp:
         return list(json.loads(resp.read()) or [])
 

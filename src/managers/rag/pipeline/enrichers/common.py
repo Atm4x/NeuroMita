@@ -19,6 +19,12 @@ class TimeEnricher:
         dr = float(self.cfg.decay_rate or 0.0)
 
         for c in cands:
+            # Static imported knowledge is not a newly lived event.
+            # Preserve the database date for audit, but never score it.
+            if c.source == "memory" and str(c.meta.get("type") or "").strip().lower() == "seed_lore":
+                c.features["time"] = 0.0
+                continue
+
             dt_raw = None
             if c.source == "memory":
                 dt_raw = c.meta.get("date_created")
