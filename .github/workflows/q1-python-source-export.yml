@@ -1,0 +1,33 @@
+name: Q1 Python reference source export
+on:
+  push:
+    branches:
+      - bridge/q1-python-source-export-20261111
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bundle main and releases
+        run: |
+          set -euo pipefail
+          git fetch origin +refs/heads/main:refs/heads/q1-main +refs/heads/releases:refs/heads/q1-releases
+          test "$(git rev-parse refs/heads/q1-main)" = "97310d6aaf6bf7eeb15ae84cf606adc0f024e135"
+          git bundle create "$RUNNER_TEMP/q1-python.bundle" refs/heads/q1-main refs/heads/q1-releases
+          cd "$RUNNER_TEMP"
+          sha256sum q1-python.bundle > q1-python.bundle.sha256
+          git bundle list-heads q1-python.bundle > q1-python-manifest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: q1-python-source-bundle
+          path: |
+            ${{ runner.temp }}/q1-python.bundle
+            ${{ runner.temp }}/q1-python.bundle.sha256
+            ${{ runner.temp }}/q1-python-manifest.txt
+          retention-days: 1
+          compression-level: 0
