@@ -12,6 +12,6 @@ class UnavailableTelegramService(TelegramService):
         return False
 
     async def send_voice(
-        self, text: str, speaker_command: str, message_id: int = 0
+        self, text: str, speaker_command: str, message_id: int = 0, *, return_file: bool = False
     ) -> str:
         raise RuntimeError(self.reason or "Telegram feature is disabled")

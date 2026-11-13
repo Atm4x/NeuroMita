@@ -169,6 +169,8 @@ class TelegramBotHandler:
         speaker_command,
         message_id,
         voice_future: asyncio.Future | None = None,
+        *,
+        return_file: bool = False,
     ):
         if not input_message or not speaker_command:
             return None
@@ -271,9 +273,9 @@ class TelegramBotHandler:
 
             sound_absolute_path = os.path.abspath(file_path)
 
-            connected_to_game = use(GameLinkService).is_connected()
+            connected_to_game = not return_file and use(GameLinkService).is_connected()
 
-            if connected_to_game:
+            if connected_to_game or return_file:
                 logger.info("Подключен к игре, нужна конвертация")
                 base_name = os.path.splitext(os.path.basename(file_path))[0]
                 wav_path = os.path.join(os.path.dirname(file_path), f"{base_name}.wav")
@@ -288,11 +290,9 @@ class TelegramBotHandler:
                 except OSError as remove_error:
                     logger.info(f"Ошибка при удалении файла {sound_absolute_path}: {format_exception(remove_error)}")
 
-                self.event_bus.emit(Events.Server.SET_PATCH_TO_SOUND_FILE, absolute_wav_path)
-                # emit, а не sync EventBus RPC: подписчиков у SET_ID_SOUND нет, ответ
-                # всё равно отбрасывался, а синхронный сбор внутри telegram
-                # asyncio-loop блокирует loop и падает guardrail'ом.
-                self.event_bus.emit(Events.Server.SET_ID_SOUND, {'id': message_id})
+                if connected_to_game:
+                    self.event_bus.emit(Events.Server.SET_PATCH_TO_SOUND_FILE, absolute_wav_path)
+                    self.event_bus.emit(Events.Server.SET_ID_SOUND, {"id": message_id})
 
                 path_to_file = absolute_wav_path
             else:

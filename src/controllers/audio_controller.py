@@ -337,7 +337,7 @@ class AudioController(AudioStateService):
             self._require_voice_scope(state_lease, cancellation)
             with perf_span(trace_id, "tts.telegram", method="telegram"):
                 voiceover_path = await use(TelegramService).send_voice(
-                    voice_text, speaker_command, 0
+                    voice_text, speaker_command, 0, return_file=self._desktop_task(task_uid)
                 )
             self._require_voice_scope(state_lease, cancellation)
             if not voiceover_path or not os.path.isfile(voiceover_path) or os.path.getsize(voiceover_path) == 0:

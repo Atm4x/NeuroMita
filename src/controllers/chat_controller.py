@@ -717,7 +717,7 @@ class ChatController(ChatService, GenerationActivityService):
                 displayed_system_input = (system_input or "").replace(format_tv_observation(tv_observation), "").strip()
                 if effective_event_type == "react":
                     displayed_system_input = ""
-            if displayed_system_input and eff_policy.echo_to_ui and image_source != "mita_camera":
+            if displayed_system_input and eff_policy.echo_to_ui and image_source not in {"mita_camera", "desktop"}:
                 system_message_id = ConversationMessageIds.system()
                 ch = self._get_character_ref(character_id)
                 if ch and hasattr(ch, "history_manager"):

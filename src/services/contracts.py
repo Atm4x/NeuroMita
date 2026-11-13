@@ -944,7 +944,7 @@ class TelegramService(ABC):
 
     @abstractmethod
     async def send_voice(
-        self, text: str, speaker_command: str, message_id: int = 0
+        self, text: str, speaker_command: str, message_id: int = 0, *, return_file: bool = False
     ) -> str: ...
 
 

@@ -374,6 +374,8 @@ class TelegramController(TelegramService):
         text: str,
         speaker_command: str,
         message_id: int = 0,
+        *,
+        return_file: bool = False,
     ) -> str:
         owner_loop = self._loop
         current_loop = asyncio.get_running_loop()
@@ -397,6 +399,7 @@ class TelegramController(TelegramService):
             "text": str(text or ""),
             "speaker_command": str(speaker_command or ""),
             "mid": int(message_id or 0),
+            "return_file": return_file,
             "future": result,
         }
         self._loop.call_soon_threadsafe(self._voice_queue.put_nowait, item)
@@ -471,7 +474,8 @@ class TelegramController(TelegramService):
 
                 self._last_tg_request_ts = time.time()
                 await self._async_send_and_receive(
-                    item['text'], item['speaker_command'], item['mid'], future
+                    item['text'], item['speaker_command'], item['mid'], future,
+                    return_file=item['return_file'],
                 )
             except Exception as e:
                 logger.error(f"TG queue worker: ошибка при обработке запроса: {format_exception(e)}")
@@ -480,9 +484,11 @@ class TelegramController(TelegramService):
             finally:
                 self._voice_queue.task_done()
 
-    async def _async_send_and_receive(self, text, speaker_command, mid, future):
+    async def _async_send_and_receive(self, text, speaker_command, mid, future, *, return_file=False):
         try:
-            voice_path = await self.bot_handler.send_and_receive(text, speaker_command, mid)
+            voice_path = await self.bot_handler.send_and_receive(
+                text, speaker_command, mid, return_file=return_file
+            )
             if future and not future.done():
                 future.set_result(voice_path)
         except Exception as e:

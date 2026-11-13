@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from core.events import Events
 from core.services import services, use
 from services.unity_timeline import UnityTimelineIngress
-from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService
+from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService, DesktopWatchService
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
@@ -26,6 +26,19 @@ def should_update_unity_dialogue_target(event_type: str, speaker) -> bool:
         str(event_type or "").strip().lower() == "answer"
         and getattr(speaker, "kind", None) is DialogueActorKind.PLAYER
     )
+
+
+async def _desktop_images() -> List:
+    watch = services().get_optional(DesktopWatchService)
+    if watch is None or not watch.is_watching():
+        return []
+    try:
+        frames = await asyncio.to_thread(watch.capture_desktop_now, 1)
+        # Re-check consent after capture; it can change while the worker is running.
+        return list(frames or []) if watch.is_watching() else []
+    except Exception:
+        logger.exception("Failed to collect desktop observation")
+        return []
 
 
 def _collect_context_images(context: dict) -> List:
@@ -528,7 +541,8 @@ class CreateTaskAction:
         if event_type == "answer":
             model_event_type = "chat"
             policy = resolve_policy(model_event_type=model_event_type)
-            user_input = data.get("message", "")
+            proactive = desktop_turn and context.get("desktop_proactive") is True
+            user_input = "" if proactive else data.get("message", "")
 
             # The player needs to see their own line in the desktop Sandbox.
             # Inter-Mita auto-turns already have a visible preceding reply and
@@ -548,11 +562,23 @@ class CreateTaskAction:
                     "participants": list(participants or []),
                 })
 
-            system_input = ""
+            system_input = (
+                "[Desktop initiative] Start a brief, natural conversation with the player. "
+                "You chose to speak; the player has not just sent a message. "
+                "Avoid repeating your previous observation or asking the same question. "
+                "If no image is attached, do not claim to see the screen."
+            ) if proactive else ""
+
+            images = (await _desktop_images()) if desktop_turn else collect_context_images(context, client_id=ctx.client_id)
+            if desktop_turn and images:
+                system_input = system_input + (
+                    "\n[Desktop observation] The attached image is a recent capture of the player's "
+                    "computer desktop. Describe only what is visible; this is not your in-game camera."
+                )
 
             # Label continuous in-game camera frames when Unity flags them
-            effective_image_source = str(context.get("image_source") or "")
-            if _should_label_as_mita_camera(event_type, context):
+            effective_image_source = "desktop" if desktop_turn else str(context.get("image_source") or "")
+            if not desktop_turn and _should_label_as_mita_camera(event_type, context):
                 camera_label = "[Your eyes (in-game camera)] The attached image shows what you currently see through your own eyes in-game. It is not a player photo, selfie, or drawing."
                 system_input = camera_label
                 effective_image_source = "mita_camera"
@@ -564,7 +590,7 @@ class CreateTaskAction:
                 policy_dict=policy.to_dict(),
                 user_input=str(user_input or ""),
                 system_input=system_input,
-                images=collect_context_images(context, client_id=ctx.client_id),
+                images=images,
                 image_source=effective_image_source,
                 player_message_source=(
                     (PlayerMessageSource.APPLICATION if desktop_turn else PlayerMessageSource.GAME).value
