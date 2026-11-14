@@ -48,13 +48,18 @@ def test_game_link_keeps_desktop_connection_separate():
 
 
 def test_sandbox_link_row_updates_connection_label():
-    from PyQt6.QtWidgets import QApplication
-    from ui.pages.sandbox_page import _GameLinkStatusRow
-    app = QApplication.instance() or QApplication([])
-    row = _GameLinkStatusRow("Связь", lambda *_: None, lambda: None, "Настройки")
-    for connected, label in [(True, "Подключён десктоп"), (True, "Игра + десктоп"), (False, "Нет связи")]:
-        row.setText(label)
-        row.setChecked(connected)
-        assert row._chip.text() == label
-        assert row._chip.toolTip() == label
-    row.close()
+    import subprocess
+    import sys
+    result = subprocess.run([sys.executable, "-c", '''
+from PyQt6.QtWidgets import QApplication
+from ui.pages.sandbox_page import _GameLinkStatusRow
+app = QApplication([])
+row = _GameLinkStatusRow("Связь", lambda *_: None, lambda: None, "Настройки")
+for connected, label in [(True, "Подключён десктоп"), (True, "Игра + десктоп"), (False, "Нет связи")]:
+    row.setText(label)
+    row.setChecked(connected)
+    assert row._chip.text() == label
+    assert row._chip.toolTip() == label
+row.close()
+'''], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
