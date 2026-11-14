@@ -12,7 +12,9 @@ class AsrPttStateAction:
                 or not 0 <= generation <= 2**63 - 1
                 or type(cancelled) is not bool
                 or not isinstance(session_id, str) or session_id != ctx.client_id
-                or not ctx.server.owns_player_input(ctx.client_id)):
+                or not (ctx.server.owns_player_input(ctx.client_id)
+                        or (getattr(ctx, "client_role", "") == "desktop"
+                            and ctx.server.desktop_voice_target() == ctx.client_id))):
             await ctx.server.send_error(ctx.writer, "Invalid asr_ptt_state or session does not own player input")
             return
         payload = {

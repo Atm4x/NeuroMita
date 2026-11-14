@@ -173,6 +173,55 @@ def test_action_emits_only_for_current_player_input_owner():
     assert len(events) == 1
 
 
+def test_opted_in_desktop_can_request_manual_capture_without_game_ownership():
+    from game_connections.handlers.actions.asr_ptt_state import AsrPttStateAction
+    events = []
+    server = SimpleNamespace(owns_player_input=lambda _: False,
+                             desktop_voice_target=lambda: "overlay", send_error=AsyncMock())
+    ctx = SimpleNamespace(server=server, event_bus=SimpleNamespace(emit=lambda *args: events.append(args)),
+                          client_id="overlay", client_role="desktop", writer=object())
+    request = dict(active=True, generation=1, session_id="overlay")
+    asyncio.run(AsrPttStateAction().handle(request, ctx))
+    assert len(events) == 1
+    ctx.client_role = "diagnostic"
+    asyncio.run(AsrPttStateAction().handle(request, ctx))
+    assert len(events) == 1
+    server.send_error.assert_awaited_once()
+
+
+@pytest.mark.parametrize("mode", ["ptt", "radio"])
+def test_controller_accepts_desktop_press_and_release_without_game_owner(monkeypatch, mode):
+    from controllers import speech_controller
+    from handlers.asr_handler import SpeechRecognition
+    from core.events import Event
+    g = gate()
+    monkeypatch.setattr(SpeechRecognition, "_input_gate", g)
+    monkeypatch.setattr(SpeechRecognition, "publish_input_gate", lambda: None)
+    link = SimpleNamespace(desktop_voice_target=lambda: "overlay")
+    monkeypatch.setattr(speech_controller, "services", lambda: SimpleNamespace(get_optional=lambda _: link))
+    ctrl = object.__new__(speech_controller.SpeechController)
+    ctrl.settings = dict(MIC_ACTIVE=True, ASR_INPUT_MODE=mode, MIC_MUTE_WHILE_SPEAKING=False)
+    ctrl._speaking_window = SimpleNamespace(blocked_until=lambda: 0)
+    ctrl._player_turn_owner = lambda: ""
+    ctrl.mic_recognition_active = ctrl.asr_is_ready = True
+    sent = []
+    ctrl.events_bus = SimpleNamespace(emit=lambda name, data: sent.append((name, data)))
+    ctrl._on_asr_ptt_state(Event("command", dict(active=True, generation=1, session_id="overlay")))
+    assert sent[-1][1]["accepted"] is True
+    context = g.snapshot()
+    assert context["session_id"] == "overlay" and context["target"] == "game"
+    ctrl._on_asr_ptt_state(Event("command", dict(active=False, generation=2, session_id="overlay")))
+    assert sent[-1][1]["accepted"] is True
+    assert not g.snapshot()["active"]
+    assert g.valid(context)
+
+    ctrl._on_asr_ptt_state(Event("command", dict(active=True, generation=3, session_id="overlay")))
+    ctrl._player_turn_owner = lambda: "game"
+    ctrl._on_asr_ptt_state(Event("command", dict(active=True, generation=1, session_id="game")))
+    assert sent[-1][1]["accepted"] is False
+    assert g.snapshot()["session_id"] == "overlay"
+
+
 def test_heartbeat_renews_press_without_splitting_audio():
     g = gate()
     s = segmenter(g)

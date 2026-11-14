@@ -909,7 +909,9 @@ class SpeechController(SpeechService):
         data = event.data or {}
         session_id = data.get("session_id", "")
         # Re-check after EventBus delivery: ownership may have changed since dispatch.
-        if session_id != self._player_turn_owner():
+        link = services().get_optional(GameLinkService)
+        desktop_owner = link.desktop_voice_target() if link is not None else ""
+        if session_id != self._player_turn_owner() and session_id != desktop_owner:
             self.events_bus.emit(Events.Server.SEND_ASR_CAPTURE_STATE, {
                 "client_id": session_id, "phase": "ack", "active": False,
                 "command_generation": data.get("generation"), "accepted": False,
@@ -920,7 +922,10 @@ class SpeechController(SpeechService):
         command = gate.radio if gate.snapshot()["input_mode"] == "radio" else gate.ptt
         extra = {"target": "game"} if gate.snapshot()["input_mode"] == "radio" else {}
         ready = not data.get("active") or self.mic_active()
-        accepted = ready and command(
+        previous = gate.snapshot()
+        busy = (previous["active"] and previous["session_id"] != session_id
+                and (session_id == desktop_owner or previous["session_id"] == desktop_owner))
+        accepted = ready and not busy and command(
             active=data.get("active"), session_id=session_id,
             generation=data.get("generation"), cancelled=data.get("cancelled", False),
             **extra,
