@@ -5,7 +5,7 @@ from typing import Any, Dict
 from core.services import services
 from game_connections.handlers.registry import RequestContext
 from main_logger import logger
-from services.contracts import DesktopWatchService, SettingsService
+from services.contracts import DesktopWatchService, SettingsService, SpeechService
 
 
 class DesktopStateAction:
@@ -31,8 +31,19 @@ class DesktopStateAction:
         watch = services().get_optional(DesktopWatchService)
         effective = server.set_desktop_watch_request(ctx.client_id, state.get("watching_screen") is True)
         desktop = watch.apply_desktop_state({**state, "watching_screen": effective}) if watch is not None else {}
+        speech = services().get_optional(SpeechService)
+        microphone = {"status": "unavailable"}
+        if settings is not None and speech is not None:
+            capture = speech.capture_state()
+            status = ("disabled" if not capture.enabled else
+                      "starting" if not capture.ready else
+                      "manual" if capture.mode != "vad" else
+                      "game" if server.primary_client_id() else
+                      "paused" if not capture.permitted else "ready")
+            microphone = {"status": status, "mode": capture.mode}
         await server.send_json(ctx.writer, {
             "type": "desktop_state_ack",
             "desktop_state": desktop,
             "watching": bool(watch.is_watching()) if watch is not None else False,
+            "microphone": microphone,
         })

@@ -426,6 +426,7 @@ class _GameLinkStatusRow(QWidget):
         h.setSpacing(8)
 
         self._connected = False
+        self._connection_label = ""
         self._ignore = False
         self._level = "Idle events"
 
@@ -500,9 +501,9 @@ class _GameLinkStatusRow(QWidget):
         self._connected = bool(checked)
         self._apply()
 
-    def setText(self, _text: str):
-        # Общий индикатор шлёт для игры только setChecked; текст игнорируем.
-        pass
+    def setText(self, text: str):
+        self._connection_label = str(text or "")
+        self._apply()
 
     def set_mute_state(self, ignore: bool, level: str):
         """Отразить IGNORE_GAME_REQUESTS/GAME_BLOCK_LEVEL на переключателе и
@@ -525,12 +526,10 @@ class _GameLinkStatusRow(QWidget):
         state = "connected" if self._connected else "disconnected"
         bg, fg = self._CHIP_STYLE[state]
         self._chip.setText(
-            _("Активно", "Active") if self._connected else _("Нет связи", "Offline")
+            self._connection_label or (_("Активно", "Active") if self._connected else _("Нет связи", "Offline"))
         )
         self._chip.setToolTip(
-            _("Мод игры подключён", "Game mod connected")
-            if self._connected
-            else _("Мод игры не подключён", "Game mod not connected")
+            self._connection_label or _("Нет связи", "Disconnected")
         )
         self._chip.setStyleSheet(
             f"QLabel#SandboxStatusChip {{"

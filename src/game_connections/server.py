@@ -611,6 +611,9 @@ class ChatServerNew:
         """Whether a live connection can currently represent the game runtime."""
         return bool(self.primary_client_id())
 
+    def has_desktop_connection(self) -> bool:
+        return any(role == self.DESKTOP_ROLE for _, role in self._clients_snapshot())
+
     def schedule_send_asr_text(
         self,
         *,

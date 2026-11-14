@@ -1033,7 +1033,8 @@ class SpeechController(SpeechService):
             performance_traces().finish(trace_id, "sent_to_game") if trace_id else None
             return
 
-        if autosend and not isinstance(capture_context, dict):
+        continuous_capture = not isinstance(capture_context, dict) or capture_context.get("input_mode") == "vad"
+        if autosend and continuous_capture:
             link = services().get_optional(GameLinkService)
             target = link.desktop_voice_target() if link is not None else ""
             if target and not self._is_mita_speaking():

@@ -20,6 +20,7 @@ class ServerGameLinkService(GameLinkService):
         self._probe: Optional[Callable[[], Optional[bool]]] = None
         self._owner_probe: Optional[Callable[[], str]] = None
         self._desktop_voice_probe: Optional[Callable[[], str]] = None
+        self._desktop_probe: Optional[Callable[[], bool]] = None
         self._unity_target_character_id = ""
 
     def attach_probe(self, probe: Callable[[], Optional[bool]]) -> None:
@@ -40,6 +41,15 @@ class ServerGameLinkService(GameLinkService):
         with self._lock:
             probe = self._desktop_voice_probe
         return str(probe() or "") if probe is not None else ""
+
+    def attach_desktop_probe(self, probe: Callable[[], bool]) -> None:
+        with self._lock:
+            self._desktop_probe = probe
+
+    def is_desktop_connected(self) -> bool:
+        with self._lock:
+            probe = self._desktop_probe
+        return bool(probe()) if probe is not None else False
 
     def player_turn_owner(self) -> str:
         with self._lock:

@@ -14,6 +14,7 @@ utterance_id) в протоколе нет, а успешная запись в 
 import asyncio
 import json
 import threading
+import pytest
 
 from core.events import Event
 
@@ -394,3 +395,36 @@ def test_only_opted_in_live_desktop_sessions_are_voice_targets():
         srv.set_desktop_voice_request("first", False)
         assert srv.desktop_voice_target() == ""
         assert srv.primary_client_id() == "game"
+
+
+@pytest.mark.parametrize("game_owner", ["", "game-session"])
+def test_real_vad_context_routes_to_one_owner(monkeypatch, game_owner):
+    from controllers import speech_controller
+    from handlers.asr_handler import SpeechRecognition
+    from handlers.asr_input_gate import ASRInputGate
+
+    gate = ASRInputGate()
+    gate.configure(input_mode="vad", enabled=True)
+    monkeypatch.setattr(SpeechRecognition, "_input_gate", gate)
+    service = type("Services", (), {"get_optional": lambda self, _: self,
+                                   "desktop_voice_target": lambda self: "overlay-session"})()
+    monkeypatch.setattr(speech_controller, "services", lambda: service)
+    speech = _Speech(turn_owner=game_owner)
+    speech.ctrl._is_mita_speaking = lambda: False
+    speech.ctrl._on_speech_text_recognized(Event("speech.text_recognized", {
+        "text": "hello from microphone", "capture_context": gate.snapshot(),
+    }))
+    assert [turn["client_id"] for turn in speech.sent_to_game()] == [game_owner or "overlay-session"]
+    assert speech.desktop == []
+
+
+def test_desktop_connection_status_is_independent_of_voice_opt_in():
+    with _Loop() as loop:
+        writer = _FakeWriter()
+        srv = _server(loop, {"overlay": writer})
+        srv.client_roles["overlay"] = srv.DESKTOP_ROLE
+        assert srv.has_desktop_connection()
+        assert not srv.has_game_connection()
+        assert not srv.desktop_voice_target()
+        writer.is_closing = lambda: True
+        assert not srv.has_desktop_connection()

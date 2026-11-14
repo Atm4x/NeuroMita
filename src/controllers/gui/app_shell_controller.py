@@ -455,6 +455,7 @@ class AppShellController:
             rag = rag_readiness()
             return {
                 "game_connected": bool(use(GameLinkService).is_connected()),
+                "desktop_connected": bool(use(GameLinkService).is_desktop_connected()),
                 "silero_connected": bool(telegram and telegram.is_silero_connected()),
                 "mic_active": bool(speech and speech.mic_active()),
                 "screen_capture_active": bool(

@@ -1749,7 +1749,13 @@ class AppWindowBase(QMainWindow):
                     if indicator is not _UNSET and hasattr(widget, "set_indicator"):
                         widget.set_indicator(indicator)
 
-            apply_to("game_status_checkbox", checked=bool(state.get("game_connected")))
+            game_connected = bool(state.get("game_connected"))
+            desktop_connected = bool(state.get("desktop_connected"))
+            connection_label = (_("Игра + десктоп", "Game + desktop") if game_connected and desktop_connected else
+                                _("Подключён десктоп", "Desktop connected") if desktop_connected else
+                                _("Подключена игра", "Game connected") if game_connected else
+                                _("Нет связи", "Disconnected"))
+            apply_to("game_status_checkbox", checked=game_connected or desktop_connected, text=connection_label)
 
             if registry.get("silero_status_checkbox") or hasattr(
                 self, "silero_status_checkbox"

@@ -129,6 +129,7 @@ class ServerController:
         attach_voice = getattr(self.game_link, "attach_desktop_voice_probe", None)
         if callable(attach_voice):
             attach_voice(self._desktop_voice_target)
+        self.game_link.attach_desktop_probe(self._probe_desktop_connection)
         self.server = None
         self.running = False
         self.ConnectedToGame = False
@@ -385,6 +386,9 @@ class ServerController:
 
     def _desktop_voice_target(self) -> str:
         return self.server.desktop_voice_target() if not self._destroyed and self.server else ""
+
+    def _probe_desktop_connection(self) -> bool:
+        return bool(not self._destroyed and self.server and self.server.has_desktop_connection())
 
     def _on_stop_server(self, event: Event):
         if self._destroyed:

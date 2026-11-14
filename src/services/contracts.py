@@ -456,6 +456,9 @@ class GameLinkService(ABC):
     def desktop_voice_target(self) -> str:
         return ""
 
+    def is_desktop_connected(self) -> bool:
+        return False
+
     def unity_target_character_id(self) -> str:
         """Last character addressed by a Unity request, if known."""
         return ""
