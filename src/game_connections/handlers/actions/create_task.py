@@ -33,7 +33,7 @@ async def _desktop_images() -> List:
     if watch is None or not watch.is_watching():
         return []
     try:
-        frames = await asyncio.to_thread(watch.capture_desktop_now, 1)
+        frames = await asyncio.to_thread(watch.capture_desktop_now)
         # Re-check consent after capture; it can change while the worker is running.
         return list(frames or []) if watch.is_watching() else []
     except Exception:

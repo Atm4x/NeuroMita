@@ -98,10 +98,10 @@ class DesktopWatchController(DesktopWatchService):
         count = max(1, min(int(limit), self._profile.transfer_limit))
         return list(self._capture.get_recent_frames(count))
 
-    def capture_desktop_now(self, limit: int = 1) -> List[Any]:
+    def capture_desktop_now(self, limit: int | None = None) -> List[Any]:
         if not self._capture_allowed():
             return []
-        frames = self.desktop_frames(limit)
+        frames = self.desktop_frames(self._profile.transfer_limit if limit is None else limit)
         if frames:
             return frames
         frame = self._capture.capture_one_shot(
