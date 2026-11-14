@@ -68,6 +68,7 @@ class ChatServerNew:
         # Роль подключения: кто вправе принимать голос игрока. Объявляется
         # рукопожатием (action=hello) или полем client_role в первом запросе.
         self.client_roles: Dict[str, str] = {}
+        self._desktop_voice_clients: set[str] = set()
         # Таблицы подключений меняет цикл событий сервера, а читают их GUI и
         # поток ASR — «кому отдать распознанную фразу» спрашивают оттуда.
         # Без лока читатель видел бы полуобновлённую картину.
@@ -264,6 +265,7 @@ class ChatServerNew:
     def _forget_client_state(self, client_id: str) -> None:
         with self._clients_lock:
             self.active_connections.pop(client_id, None)
+            self._desktop_voice_clients.discard(client_id)
             was_desktop = self.client_roles.pop(client_id, None) == self.DESKTOP_ROLE
             desktop_alive = any(role == self.DESKTOP_ROLE for role in self.client_roles.values())
         if was_desktop:
@@ -283,6 +285,18 @@ class ChatServerNew:
         ]
         for key in stale_dialogue_keys:
             self._last_sent_dialogue_text.pop(key, None)
+
+    def set_desktop_voice_request(self, client_id: str, requested: bool) -> None:
+        with self._clients_lock:
+            if requested and self.client_roles.get(client_id) == self.DESKTOP_ROLE:
+                self._desktop_voice_clients.add(client_id)
+            else:
+                self._desktop_voice_clients.discard(client_id)
+
+    def desktop_voice_target(self) -> str:
+        with self._clients_lock:
+            return next((cid for cid, writer in reversed(self.active_connections.items())
+                         if cid in self._desktop_voice_clients and self._writer_is_live(writer)), "")
 
     def set_desktop_watch_request(self, client_id, requested):
         with self._clients_lock:
@@ -441,6 +455,7 @@ class ChatServerNew:
         with self._clients_lock:
             self.active_connections.clear()
             self.client_roles.clear()
+            self._desktop_voice_clients.clear()
 
     # Runtime setters
     def set_ignore_game_requests(self, value: bool):

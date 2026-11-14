@@ -126,6 +126,9 @@ class ServerController:
         attach_owner = getattr(self.game_link, "attach_owner_probe", None)
         if callable(attach_owner):
             attach_owner(self._player_turn_owner)
+        attach_voice = getattr(self.game_link, "attach_desktop_voice_probe", None)
+        if callable(attach_voice):
+            attach_voice(self._desktop_voice_target)
         self.server = None
         self.running = False
         self.ConnectedToGame = False
@@ -379,6 +382,9 @@ class ServerController:
             return str(self.server.primary_client_id() or "")
         except Exception:
             return ""
+
+    def _desktop_voice_target(self) -> str:
+        return self.server.desktop_voice_target() if not self._destroyed and self.server else ""
 
     def _on_stop_server(self, event: Event):
         if self._destroyed:

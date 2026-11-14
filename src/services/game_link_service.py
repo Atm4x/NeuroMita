@@ -19,6 +19,7 @@ class ServerGameLinkService(GameLinkService):
         self._connected = False
         self._probe: Optional[Callable[[], Optional[bool]]] = None
         self._owner_probe: Optional[Callable[[], str]] = None
+        self._desktop_voice_probe: Optional[Callable[[], str]] = None
         self._unity_target_character_id = ""
 
     def attach_probe(self, probe: Callable[[], Optional[bool]]) -> None:
@@ -30,6 +31,15 @@ class ServerGameLinkService(GameLinkService):
         """probe() -> client_id активной игровой сессии ("" — таковой нет)."""
         with self._lock:
             self._owner_probe = probe
+
+    def attach_desktop_voice_probe(self, probe: Callable[[], str]) -> None:
+        with self._lock:
+            self._desktop_voice_probe = probe
+
+    def desktop_voice_target(self) -> str:
+        with self._lock:
+            probe = self._desktop_voice_probe
+        return str(probe() or "") if probe is not None else ""
 
     def player_turn_owner(self) -> str:
         with self._lock:

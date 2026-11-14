@@ -1033,6 +1033,18 @@ class SpeechController(SpeechService):
             performance_traces().finish(trace_id, "sent_to_game") if trace_id else None
             return
 
+        if autosend and not isinstance(capture_context, dict):
+            link = services().get_optional(GameLinkService)
+            target = link.desktop_voice_target() if link is not None else ""
+            if target and not self._is_mita_speaking():
+                utterance_id = uuid.uuid4().hex
+                self._claim_game_turn(utterance_id)
+                self.events_bus.emit(Events.Server.SEND_ASR_TEXT, {
+                    "id": utterance_id, "client_id": target, "text": text,
+                    "final": True, "autosend": True, "delay_sec": delay_sec,
+                })
+                performance_traces().finish(trace_id, "sent_to_desktop_overlay") if trace_id else None
+                return
         logger.info(f"Распознано: {text}")
         self._route_to_desktop(text, autosend, delay_sec, trace_id=trace_id)
 

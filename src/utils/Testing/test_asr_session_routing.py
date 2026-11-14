@@ -348,3 +348,49 @@ def test_turn_ledger_does_not_grow_without_bound():
         speech.ctrl._claim_game_turn(f"utt-{i}")
 
     assert len(speech.ctrl._turns_in_game) <= SpeechController._MAX_TURNS_IN_GAME
+
+
+def test_overlay_voice_target_receives_one_turn_and_socket_failure_keeps_gui_fallback(monkeypatch):
+    from controllers import speech_controller
+
+    class Services:
+        def get_optional(self, contract):
+            return self
+
+        def desktop_voice_target(self):
+            return "overlay-session"
+
+    monkeypatch.setattr(speech_controller, "services", Services)
+    speech = _Speech()
+    speech.ctrl._is_mita_speaking = lambda: False
+    speech.recognized()
+    sent, = speech.sent_to_game()
+    assert sent["client_id"] == "overlay-session"
+    assert sent["autosend"] is True
+    assert speech.desktop == []
+    speech.undelivered(sent["id"])
+    speech.undelivered(sent["id"])
+    assert speech.desktop == ["привет"]
+
+    game = _Speech(turn_owner="game-session")
+    game.recognized()
+    assert [turn["client_id"] for turn in game.sent_to_game()] == ["game-session"]
+    assert game.desktop == []
+
+
+def test_only_opted_in_live_desktop_sessions_are_voice_targets():
+    with _Loop() as loop:
+        game, first, newer = _FakeWriter(), _FakeWriter(), _FakeWriter()
+        srv = _server(loop, {"game": game, "first": first, "newer": newer})
+        srv.client_roles.update(game=srv.GAME_ROLE, first=srv.DESKTOP_ROLE, newer=srv.DESKTOP_ROLE)
+        srv.set_desktop_voice_request("game", True)
+        assert srv.desktop_voice_target() == ""
+        srv.set_desktop_voice_request("first", True)
+        assert srv.desktop_voice_target() == "first"
+        srv.set_desktop_voice_request("newer", True)
+        assert srv.desktop_voice_target() == "newer"
+        newer.is_closing = lambda: True
+        assert srv.desktop_voice_target() == "first"
+        srv.set_desktop_voice_request("first", False)
+        assert srv.desktop_voice_target() == ""
+        assert srv.primary_client_id() == "game"

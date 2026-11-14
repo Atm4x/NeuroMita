@@ -21,6 +21,7 @@ class DesktopStateAction:
         payload = request.get("desktop_state")
         state = payload if isinstance(payload, dict) else request
 
+        server.set_desktop_voice_request(ctx.client_id, state.get("voice_input") is True)
         settings = services().get_optional(SettingsService)
 
         if settings is not None and not settings.get("DESKTOP_MODE_ACTIVE", False):
