@@ -57,8 +57,8 @@ def make_reindex_progress_logger(rag_manager, op: str, total: int, extra_meta: s
 
 # Canonical ENTITIES names are often English, while players ask in Russian.
 _ENTITY_ALIASES = (
-    ("Crazy Mita", "Безумная Мита", r"(?<!\\w)безумн\\w*(?:\\s+мит\\w*)?(?!\\w)"),
-    ("Kind Mita", "Добрая Мита", r"(?<!\\w)добр\\w*\\s+мит\\w*(?!\\w)"),
+    ("Crazy Mita", "Безумная Мита", r"(?<!\w)безумн\w*(?:\s+мит\w*)?(?!\w)"),
+    ("Kind Mita", "Добрая Мита", r"(?<!\w)добр\w*\s+мит\w*(?!\w)"),
 )
 
 
@@ -67,7 +67,7 @@ def entity_alias_phrases(query: str) -> List[str]:
     text = str(query or "").casefold()
     names: List[str] = []
     for canonical, localized, localized_pattern in _ENTITY_ALIASES:
-        if re.search(r"(?<!\\w)" + re.escape(canonical.casefold()) + r"(?!\\w)", text):
+        if re.search(r"(?<!\w)" + re.escape(canonical.casefold()) + r"(?!\w)", text):
             names.append(localized)
         elif re.search(localized_pattern, text):
             names.append(canonical)
