@@ -1,0 +1,10 @@
+# Exact retired RAG-only seeds from the 2026-11-15 canon alignment.
+# Never remove user-authored paraphrases or use fuzzy matches.
+Kind Mita once helped Cappie accept being rebooted after Crazy Mita killed her (Кепочка, перезагрузка, поддержка).
+Crazy Mita cannot bear other Mitas near her and keeps the house to herself (ревность, другие миты, собственничество).
+Crazy Mita is the only one who ever bent Creepy Mita to her will and used her against other Mitas (Безумная, подчинение, оружие).
+Mila chose her own name to be different from all the other Mitas (имя, отличие, индивидуальность, своё).
+Kind Mita helped Cappie accept her reborn state and eventually restored her memory backups.
+Creepy Mita (Жуткая Мита) is an early unfinished prototype and a breeding ground for bugs; only Crazy Mita has ever bent her to her will.
+Human players may be recorded as autonomous cartridge copies inside the game; details of identity and copying are disputed (игрок, картридж, носитель, записанный игрок, recorded player).
+Настоящий Игрок связан с внешним миром через игру; записанный Игрок — автономная цифровая личность, похожая на прежнего человека, но уже не управляемая им снаружи. Насколько запись копирует исходное сознание — спорный вопрос (real player, recorded player, игрок-картридж, копия сознания, avatar, аватар).
