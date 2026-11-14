@@ -17,7 +17,7 @@ from services.contracts import DesktopWatchService, SettingsService, SpeechServi
 ])
 def test_desktop_ack_reports_microphone_state(monkeypatch, enabled, ready, mode, game, permitted, expected):
     capture = SimpleNamespace(enabled=enabled, ready=ready, mode=mode, permitted=permitted)
-    settings = SimpleNamespace(get=lambda *args: True)
+    settings = SimpleNamespace(get=lambda key, default=None: enabled if key == "MIC_ACTIVE" else True)
     speech = SimpleNamespace(capture_state=lambda: capture)
     providers = {SettingsService: settings, SpeechService: speech, DesktopWatchService: None}
     monkeypatch.setattr(desktop_state, "services", lambda: SimpleNamespace(get_optional=providers.get))
@@ -31,7 +31,9 @@ def test_desktop_ack_reports_microphone_state(monkeypatch, enabled, ready, mode,
                              primary_client_id=lambda: "game" if game else "", send_json=send)
     ctx = SimpleNamespace(server=server, client_id="desktop", writer=object())
     asyncio.run(desktop_state.DesktopStateAction().handle({"voice_input": True}, ctx))
-    assert messages[0]["microphone"] == {"status": expected, "mode": mode}
+    assert messages[0]["microphone"]["status"] == expected
+    if enabled:
+        assert messages[0]["microphone"]["mode"] == mode
 
 
 def test_game_link_keeps_desktop_connection_separate():

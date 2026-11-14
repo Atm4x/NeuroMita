@@ -33,7 +33,9 @@ class DesktopStateAction:
         desktop = watch.apply_desktop_state({**state, "watching_screen": effective}) if watch is not None else {}
         speech = services().get_optional(SpeechService)
         microphone = {"status": "unavailable"}
-        if settings is not None and speech is not None:
+        if settings is not None and not settings.get("MIC_ACTIVE", False):
+            microphone = {"status": "disabled"}
+        elif settings is not None and speech is not None:
             capture = speech.capture_state()
             status = ("disabled" if not capture.enabled else
                       "starting" if not capture.ready else
