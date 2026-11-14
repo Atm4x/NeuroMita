@@ -243,7 +243,7 @@ class MemoryRepository:
                 if self._has_entities:
                     clauses.append("entities LIKE ?")
                     kw_params.append(f"%{k}%")
-                kw_clauses.append("(" + " OR ".join(clauses) + ")
+                kw_clauses.append("(" + " OR ".join(clauses) + ")")
         if not kw_clauses:
             return []
 
