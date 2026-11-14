@@ -238,8 +238,12 @@ class MemoryRepository:
         kw_params: list[str] = []
         for k in keywords:
             if isinstance(k, str) and k.strip():
-                kw_clauses.append("content LIKE ?")
+                clauses = ["content LIKE ?"]
                 kw_params.append(f"%{k}%")
+                if self._has_entities:
+                    clauses.append("entities LIKE ?")
+                    kw_params.append(f"%{k}%")
+                kw_clauses.append("(" + " OR ".join(clauses) + ")
         if not kw_clauses:
             return []
 
