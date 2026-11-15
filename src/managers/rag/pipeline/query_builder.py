@@ -28,7 +28,10 @@ class QueryBuilder:
                     lemmatize=self.cfg.lemmatization,
                 )
                 kw_ctx = extract_keywords(
-                    expanded,
+                    "\n".join(
+                        line.split(": ", 1)[1] if line.startswith(("User: ", "Assistant: ", "Other: ")) else line
+                        for line in expanded.splitlines()
+                    ),
                     max_terms=self.cfg.kw_max_terms,
                     min_len=self.cfg.kw_min_len,
                     from_end=True,

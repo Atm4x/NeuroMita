@@ -58,7 +58,11 @@ def make_reindex_progress_logger(rag_manager, op: str, total: int, extra_meta: s
 # Canonical ENTITIES names are often English, while players ask in Russian.
 _ENTITY_ALIASES = (
     ("Crazy Mita", "Безумная Мита", r"(?<!\w)безумн\w*(?:\s+мит\w*)?(?!\w)"),
-    ("Kind Mita", "Добрая Мита", r"(?<!\w)добр\w*\s+мит\w*(?!\w)"),
+    ("Kind Mita", "Добрая Мита", r"(?<!\w)добр(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
+    ("Cappie", "Кепочка", r"(?<!\w)кепочк\w*(?!\w)"),
+    ("Short-Haired Mita", "Коротковолосая Мита", r"(?<!\w)коротковолос\w*(?:\s+мит\w*)?(?!\w)"),
+    ("Creepy Mita", "Жуткая Мита", r"(?<!\w)жутк(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
+    ("Sleepy Mita", "Сонная Мита", r"(?<!\w)сонн(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
 )
 
 
@@ -261,6 +265,7 @@ def keyword_score(
 
 # --- FTS Helpers (moved from RAGManager) ---
 
+@lru_cache(maxsize=1024)
 def fts_morph_expand_token(token: str, *, max_forms: int = 20) -> List[str]:
     """Return all word forms for a Cyrillic token using pymorphy2.
 
@@ -280,8 +285,7 @@ def fts_morph_expand_token(token: str, *, max_forms: int = 20) -> List[str]:
             w = form.word.strip().lower()
             if w:
                 forms.add(w)
-        result = sorted(forms)
-        return result[:max_forms]
+        return ([t] + sorted(forms - {t}))[:max_forms]
     except Exception:
         return [t]
 
@@ -314,7 +318,7 @@ def fts_build_match_query(
     cleaned = rag_clean_text(str(text or ""))
     if not cleaned:
         return ""
-    tokens = re.findall(r"[0-9A-Za-zА-Яа-я_]+", cleaned.lower())
+    tokens = re.findall(r"[0-9A-Za-zА-Яа-яЁё_]+", cleaned.lower())
 
     all_terms: List[str] = []   # final FTS terms joined by OR
     base_count = 0

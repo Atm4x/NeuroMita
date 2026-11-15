@@ -12,7 +12,6 @@ from managers.rag.rag_utils import (
     json_loads_list,
     entity_alias_phrases,
 )
-from handlers.embedding_presets import resolve_full_config
 from ..types import Candidate, QueryState
 from ..config import RAGConfig
 from ..repositories import HistoryRepository, MemoryRepository
@@ -33,10 +32,13 @@ class FTSRetriever:
         self.memory_repo = memory_repo
         self.rag = rag
         self.cfg = cfg
-        cfg_full = resolve_full_config()
-        self._model_name = str(
-            cfg_full.get("db_model_key") or cfg_full.get("hf_name") or cfg_full.get("model") or ""
-        )
+        self._model_name = None
+        if cfg.vector_search_enabled or (cfg.search_graph and cfg.graph_vector_search):
+            from handlers.embedding_presets import resolve_full_config
+            cfg_full = resolve_full_config()
+            self._model_name = str(
+                cfg_full.get("db_model_key") or cfg_full.get("hf_name") or cfg_full.get("model") or ""
+            )
 
     def retrieve(self, qs: QueryState) -> List[Candidate]:
         out: list[Candidate] = []
