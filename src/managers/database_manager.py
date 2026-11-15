@@ -663,6 +663,7 @@ class DatabaseManager:
                    priority TEXT DEFAULT 'Normal',
                    type TEXT DEFAULT 'fact',
                    date_created TEXT,
+                   lore_age_days INTEGER,
                    is_deleted INTEGER DEFAULT 0,
                    embedding_id INTEGER,
                    tags TEXT,
@@ -777,6 +778,7 @@ class DatabaseManager:
                 ("priority", "TEXT DEFAULT 'Normal'"),
                 ("type", "TEXT DEFAULT 'fact'"),
                 ("date_created", "TEXT"),
+                ("lore_age_days", "INTEGER"),
                 ("is_deleted", "INTEGER DEFAULT 0"),
                 ("is_forgotten", "INTEGER DEFAULT 0"),
                 ("embedding_id", "INTEGER"),
@@ -981,6 +983,14 @@ class DatabaseManager:
                 }
             except Exception:
                 self._history_columns_cache = set()
+
+            # One immutable world-time anchor per world.db, shared by all Mitas.
+            # Existing installations prefer their earliest recorded dialogue.
+            try:
+                from managers.lore_timeline import ensure_world_anchor
+                ensure_world_anchor(cursor)
+            except Exception as exc:
+                logging.warning("DB: failed to initialise lore timeline anchor: %s", format_exception(exc))
 
             conn.commit()
         finally:

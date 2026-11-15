@@ -2206,6 +2206,15 @@ class ModelController(GenerationService, ModelStateService):
                     results = conversation.filter_retrieval(char_id, results)
                 forgotten_count = rag.get_forgotten_count()
 
+                # Lore timestamps describe events in the world, never DB ingestion.
+                # Resolve once for the whole result batch (shared world anchor).
+                lore_dates = {}
+                try:
+                    from managers.lore_timeline import lore_dates_for_results
+                    lore_dates = lore_dates_for_results(rag.db, rag.character_id, results)
+                except Exception as exc:
+                    logger.debug("[%s] Lore-date display unavailable: %s", char_id, format_exception(exc))
+
                 if results:
                     mem_tpl = load_optional_template(
                         prompt_set_path, "Structural/rag_memory_item.txt", self._DEFAULT_RAG_MEM_ITEM
@@ -2238,7 +2247,11 @@ class ModelController(GenerationService, ModelStateService):
                                     id=r.get("id", "?"),
                                     type=r.get("type", ""),
                                     priority=r.get("priority", ""),
-                                    date=r.get("date_created", ""),
+                                    date=(
+                                        lore_dates.get(int(r.get("id") or 0), "время события неизвестно")
+                                        if str(r.get("type") or "").strip().lower() == "seed_lore"
+                                        else r.get("date_created", "")
+                                    ),
                                     content=_clip(r.get("content")),
                                 ))
                             except (KeyError, IndexError, ValueError):
@@ -2269,7 +2282,10 @@ class ModelController(GenerationService, ModelStateService):
                                 hist_lines.append(f"- [{r.get('score', 0):.3f}] {_clip(r.get('content'))}")
 
                     if mem_lines or hist_lines or graph_lines:
-                        mem_header = "# score=RAG relevance (0..1); forgotten memories — use N:id with memory ops\n"
+                        mem_header = (
+                            "# score=RAG relevance (0..1); forgotten memories — use N:id with memory ops; "
+                            "seed_lore dates are approximate dates of events, not when facts were added to the database\n"
+                        )
                         memory_block_str = (mem_header + "\n".join(mem_lines)) if mem_lines else ""
                         graph_block_str = "\n".join(graph_lines) if graph_lines else ""
                         try:

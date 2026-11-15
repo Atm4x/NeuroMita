@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 
 from core.safe_eval import SafeEvalError, UnknownNameError, safe_eval_expression
+from managers.lore_timeline import strip_age_before_start
 from .primitives import random
 from main_logger import logger
 
@@ -623,6 +624,12 @@ class DslInterpreter:
                             entities_str = args[ent_idx + len(" ENTITIES "):]
                             raw_args = args[:ent_idx]
                             entities = [e.strip() for e in entities_str.split(",") if e.strip()]
+                        try:
+                            raw_args, lore_age_days = strip_age_before_start(raw_args)
+                        except ValueError as exc:
+                            raise DslError(str(exc), resolved_script_id, num, raw) from exc
+                        if command != "SEED_RAG_MEMORY" and lore_age_days is not None:
+                            raise DslError("AGE_BEFORE_START is only supported for SEED_RAG_MEMORY", resolved_script_id, num, raw)
                         if "|" not in raw_args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = raw_args.split("|", 1)
@@ -634,7 +641,10 @@ class DslInterpreter:
                             if command == "SEED_RAG_MEMORY":
                                 # RAG-only: indexed and retrievable, but not part of
                                 # the always-on active memory block.
-                                mem_sys.seed_rag_memory(str(content), priority=priority, entities=ents)
+                                mem_sys.seed_rag_memory(
+                                    str(content), priority=priority, entities=ents,
+                                    lore_age_days=lore_age_days,
+                                )
                             else:
                                 mem_sys.add_memory(
                                     str(content), priority=priority, skip_if_exists=True,

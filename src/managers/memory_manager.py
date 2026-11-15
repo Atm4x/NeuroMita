@@ -739,7 +739,7 @@ class MemoryManager(CharacterScopedService):
             logging.warning("Failed to retire obsolete lore seeds: %s", format_exception(exc), exc_info=True)
         return removed
 
-    def seed_rag_memory(self, content, priority="normal", entities=None) -> Optional[int]:
+    def seed_rag_memory(self, content, priority="normal", entities=None, lore_age_days=None) -> Optional[int]:
         """Create a RAG-only memory: indexed and retrievable by search, but never
         part of the always-on ``<active_memory>`` block.
 
@@ -751,6 +751,10 @@ class MemoryManager(CharacterScopedService):
         if not content or not str(content).strip():
             return None
         content = str(content).strip()
+        if lore_age_days is not None:
+            lore_age_days = int(lore_age_days)
+            if not 0 <= lore_age_days <= 36500:
+                raise ValueError("lore_age_days must be in 0..36500")
 
         cols = self._mem_cols()
         has_forgotten = "is_forgotten" in cols
@@ -777,10 +781,14 @@ class MemoryManager(CharacterScopedService):
                 eid = int(row[0])
                 # Keep it RAG-only; migrate previously seeded forgotten fact rows
                 # without resetting their ID or creation timestamp.
+                # Updating the timeline does not modify the embedded text,
+                # original date_created, memory ID or the player's lived facts.
+                age_update = ", lore_age_days=?" if "lore_age_days" in cols else ""
+                age_params = (lore_age_days,) if age_update else ()
                 cur.execute(
-                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=?, type='seed_lore' "
-                    "WHERE character_id=? AND eternal_id=?",
-                    (priority, self.storage_key, eid),
+                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=?, type='seed_lore'"
+                    + age_update + " WHERE character_id=? AND eternal_id=?",
+                    (priority, *age_params, self.storage_key, eid),
                 )
                 conn.commit()
                 self._schedule_embed(eid, content)
@@ -799,6 +807,9 @@ class MemoryManager(CharacterScopedService):
                            "type", "date_created", "is_deleted", "is_forgotten"]
             insert_vals = [self.storage_key, new_id, content, priority,
                            "seed_lore", date, 0, 1]
+            if "lore_age_days" in cols:
+                insert_cols.append("lore_age_days")
+                insert_vals.append(lore_age_days)
             if "entities" in cols and entities:
                 insert_cols.append("entities")
                 insert_vals.append(

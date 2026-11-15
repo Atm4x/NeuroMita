@@ -32,7 +32,7 @@ def test_cappie_memory_is_not_automatically_restored():
     kind = read("Common/CharacterSeeds/Kind.script")
     assert "restored her memory backups" not in general
     assert "no complete restoration is known" in general
-    assert "утраченные воспоминания Кепочки при этом не восстановились" in kind
+    assert "нынешняя Кепочка тоже не восстановила свою прежнюю жизнь" in kind
 
 
 def test_crazy_creepy_shared_history_is_consistent():
@@ -109,7 +109,7 @@ def test_kind_story_acknowledges_reboots_and_does_not_remember_her_death():
     assert "вернулись не все" in kind
     assert "не помня ни собственной смерти" in kind
     assert "обрывкам логов" in kind
-    assert "Мила говорила" in kind
+    assert "Мила рассказала мне" in kind
 
 
 def test_retired_previous_character_memory_seeds_do_not_linger():
@@ -117,3 +117,18 @@ def test_retired_previous_character_memory_seeds_do_not_linger():
     assert "взлом или прямое программное подчинение" in retired
     assert "permanent technical control" in retired
     assert "eventually grew bored of each of them" in retired
+
+
+def test_relative_lore_ages_are_metadata_not_character_dialogue():
+    from managers.lore_timeline import strip_age_before_start
+    for character in ("Kind", "Crazy", "Mila", "Cappie", "Creepy"):
+        content = read(f"Common/CharacterSeeds/{character}.script")
+        dated = [line for line in content.splitlines() if line.startswith("SEED_RAG_MEMORY ") and " AGE_BEFORE_START " in line]
+        assert dated, character
+        for line in dated:
+            pre_entities, entities = line.rsplit(" ENTITIES ", 1)
+            plain, days = strip_age_before_start(pre_entities)
+            assert plain.startswith("SEED_RAG_MEMORY ")
+            assert days and 0 < days <= 36500
+            assert "AGE_BEFORE_START" not in plain
+            assert entities.strip()
