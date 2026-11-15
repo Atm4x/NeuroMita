@@ -545,10 +545,10 @@ class RagTesterService:
     - поиск + prod-like overrides + превью инжекта
     - batch testing с метриками
     """
-    def __init__(self, *, lexical_only: bool = False):
+    def __init__(self, *, lexical_only: bool = False, bootstrap_engine: bool = True):
         self.db = DatabaseManager()
         self.lexical_only = lexical_only
-        if not lexical_only:
+        if bootstrap_engine and not lexical_only:
             self._ensure_rag_enabled()
 
     @staticmethod

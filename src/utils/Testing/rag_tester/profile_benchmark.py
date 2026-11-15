@@ -47,6 +47,12 @@ PROFILES = {
     "lexical_graph": {"RAG_VECTOR_SEARCH_ENABLED": False, "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": False},
     "hybrid_graph": {"RAG_VECTOR_SEARCH_ENABLED": True, "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": True},
 }
+TUNING_PROFILES = {
+    "lexical_keyword": {**PROFILES["lexical_graph"], "RAG_WEIGHT_KEYWORDS": 0.8},
+    "lexical_fts": {**PROFILES["lexical_graph"], "RAG_WEIGHT_LEXICAL": 0.5},
+    "hybrid_lexical": {**PROFILES["hybrid_graph"], "RAG_WEIGHT_SIMILARITY": 0.35,
+                       "RAG_WEIGHT_KEYWORDS": 0.8, "RAG_WEIGHT_LEXICAL": 0.5},
+}
 
 
 class LocalONNXService(EmbeddingService):
@@ -83,15 +89,26 @@ def main():
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", choices=("cpu", "dml", "auto"), default="cpu")
-    parser.add_argument("--profiles", nargs="+", choices=tuple(PROFILES), default=list(PROFILES))
+    choices = {**PROFILES, **TUNING_PROFILES}
+    parser.add_argument("--profiles", nargs="+", choices=tuple(choices), default=list(PROFILES))
+    parser.add_argument("--cases", choices=("all", "original", "new"), default="all")
+    parser.add_argument("--cache-queries", action="store_true",
+                        help="Reuse query vectors for a quality sweep; reported wall time is not a latency benchmark")
     args = parser.parse_args()
+    if args.snapshot and args.output.resolve() == args.snapshot.resolve():
+        parser.error("The report path must differ from the input snapshot")
     logging.disable(logging.CRITICAL)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    cases = json.loads((HERE / "canon_cases.json").read_text(encoding="utf-8"))
-    cases += json.loads((HERE / "zero_memory_cases.json").read_text(encoding="utf-8"))
+    cases = []
+    if args.cases in ("all", "original"):
+        cases += json.loads((HERE / "canon_cases.json").read_text(encoding="utf-8"))
+    if args.cases in ("all", "new"):
+        cases += json.loads((HERE / "zero_memory_cases.json").read_text(encoding="utf-8"))
+    needs_vectors = any(choices[name]["RAG_VECTOR_SEARCH_ENABLED"] for name in args.profiles)
     report = {"scope": "all character memories and seeded graph; history retrieval disabled",
-              "cases": len(cases), "settings": COMMON, "profiles": {}, "diagnostics": {}}
+              "cases": len(cases), "case_set": args.cases, "cached_queries": args.cache_queries,
+              "settings": COMMON, "profiles": {}, "diagnostics": {}}
 
     def forbidden(*_args, **_kwargs):
         raise RuntimeError("Network access is forbidden in the offline memory benchmark")
@@ -103,20 +120,21 @@ def main():
                 with closing(sqlite3.connect(path)) as copy:
                     original.backup(copy)
         setup_test_db(str(path))
-        tester = RagTesterService()
-        with SettingsOverride({**COMMON, "RAG_VECTOR_SEARCH_ENABLED": True,
-                               "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": True}):
+        tester = RagTesterService(bootstrap_engine=False)
+        with SettingsOverride({**COMMON, "RAG_VECTOR_SEARCH_ENABLED": needs_vectors,
+                               "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": needs_vectors}):
             started = time.perf_counter()
-            embedder = LocalONNXService(args.device)
-            report["model_load_seconds"] = time.perf_counter() - started
-            services().register(EmbeddingService, embedder)
+            embedder = LocalONNXService(args.device) if needs_vectors else None
+            if embedder:
+                report["model_load_seconds"] = time.perf_counter() - started
+                services().register(EmbeddingService, embedder)
             characters = sorted({case[0] for case in cases})
             with patch.object(MemoryManager, "_schedule_embed"):
                 for cid in characters:
                     seed_character(cid)
             started = time.perf_counter()
             indexed = {}
-            for cid in characters:
+            for cid in characters if embedder else ():
                 rag = RAGManager(cid)
                 indexer = RagIndexer(rag)
                 pending = indexer.store.sources("memories", rag._current_model_name(), missing=True)
@@ -134,10 +152,12 @@ def main():
                 print(json.dumps({"indexed": cid, **indexed[cid]}), flush=True)
             report["indexed"] = indexed
             report["index_seconds"] = time.perf_counter() - started
-            report["unique_index_texts"] = len(embedder.cache)
-            embedder.cache_indexing = False
+            if embedder:
+                report["unique_index_texts"] = len(embedder.cache)
+                embedder.cache.clear()
+                embedder.cache_indexing = args.cache_queries
             for name in args.profiles:
-                options = PROFILES[name]
+                options = choices[name]
                 diagnostics = []
                 report["profiles"][name] = evaluate(
                     tester, cases, "combined", diagnostics=diagnostics,

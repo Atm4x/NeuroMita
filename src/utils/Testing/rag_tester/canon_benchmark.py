@@ -76,6 +76,8 @@ def evaluate(service, cases, mode, *, diagnostics=None, profile_options=None):
                     "mode": mode, "case": case_id, "target_count": len(targets),
                     "retrieved": [{
                         "source": result.get("source"), "score": result.get("score"), "expected": hit,
+                        "signals": {key: value for key, value in (result.get("features") or {}).items()
+                                    if key in {"sim", "time", "kw", "lex", "prio", "entity", "graph_evidence"}},
                     } for result, hit in zip(results, hits)],
                     "wide_target_ranks": [rank for rank, hit in enumerate(memory_hits(wide, targets), 1) if hit],
                 })

@@ -30,6 +30,8 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
     obsolete = (ROOT / "extra/Prompts/Common/InitialMemories/obsolete_lore_knowledge_boundaries.txt"
                 ).read_text(encoding="utf-8")
     old_seed = next(line for line in obsolete.splitlines() if line.startswith("Настоящий человек остаётся"))
+    removed = (ROOT / "extra/Prompts/Common/InitialMemories/obsolete_lore_20261116.txt").read_text(encoding="utf-8")
+    old_travel = next(line for line in removed.splitlines() if line.startswith("Не каждая Мита может"))
     unrelated = "У игрока на столе стоит вымышленная орхидея."
     kind_seed = (ROOT / "extra/Prompts/Common/CharacterSeeds/Kind.script").read_text(encoding="utf-8")
     seed = next(line for line in kind_seed.splitlines() if line.startswith("SEED_ISLAND relationship"))
@@ -39,6 +41,7 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
         relationship_id = kind_memory.seed_island("relationship", old_relationship)
         mm = MemoryManager("Cappie")
         legacy_id = mm.seed_rag_memory(old_seed)
+        travel_id = mm.seed_rag_memory(old_travel)
         lived_id = mm.add_memory(unrelated, skip_if_exists=True)
         for cid in (*KNOWN, *OTHER):
             seed_character(cid)
@@ -72,9 +75,9 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
     with db.connection() as conn:
         states = dict(conn.execute(
             "SELECT eternal_id,is_deleted FROM memories WHERE character_id='Cappie' "
-            "AND eternal_id IN (?,?)", (legacy_id, lived_id),
+            "AND eternal_id IN (?,?,?)", (legacy_id, travel_id, lived_id),
         ))
-        assert states == {legacy_id: 1, lived_id: 0}
+        assert states == {legacy_id: 1, travel_id: 1, lived_id: 0}
 
     controller = object.__new__(ModelController)
     controller.settings = SettingsManager
@@ -90,6 +93,9 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
         assert "Из расследований" in context("Kind", "Что такое картриджизация?")
         assert "слышала от других" in context("ShortHair", "Что такое картриджизация?")
         assert "уже существующую цифровую личность" in context("Crazy", "Как записать человека на картридж?")
+        assert "Одного желания выйти из дома недостаточно" in context(
+            "Cappie", "Можешь просто захотеть и выйти из дома?",
+        )
 
         kind = context("Kind", "Когда вы впервые встретились?")
         crazy = context("Crazy", "Когда вы впервые встретились?")

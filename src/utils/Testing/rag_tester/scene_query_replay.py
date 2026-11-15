@@ -27,6 +27,7 @@ from managers.database_manager import DatabaseManager
 from managers.memory_manager import MemoryManager
 from managers.rag.rag_manager import RAGManager
 from managers.settings_manager import SettingsManager
+from profile_benchmark import PROFILES, TUNING_PROFILES
 from rag_tester_core import LEXICAL_ONLY_OVERRIDES, SettingsOverride, setup_test_db, RagTesterService
 from services.contracts import PromptBuildRequest, RequestPolicy
 
@@ -61,7 +62,7 @@ def selected_tail(sample, entries):
     return selected
 
 
-def replay(scenario, sample, snapshot):
+def replay(scenario, sample, snapshot, profiles):
     cid = sample["character_id"]
     if cid != scenario["character"]:
         raise ValueError("Scenario and sample character differ")
@@ -77,7 +78,7 @@ def replay(scenario, sample, snapshot):
         db = DatabaseManager()
         with db.connection() as connection, connection:
             connection.execute("UPDATE history SET is_active=0 WHERE character_id=?", (cid,))
-        with SettingsOverride(CONFIG), patch.object(MemoryManager, "_schedule_embed"):
+        with SettingsOverride({**CONFIG, "RAG_SEARCH_GRAPH": True}), patch.object(MemoryManager, "_schedule_embed"):
             seed_character(cid)
             inserted = RagTesterService(lexical_only=True).insert_history_messages(
                 cid, tail, is_active=1, embed_now=False,
@@ -93,26 +94,33 @@ def replay(scenario, sample, snapshot):
         report = []
         with patch.object(RAGManager, "_track_access_async"):
             for question in scenario["questions"]:
-                for size in (0, 1, 2):
-                    with SettingsOverride({**CONFIG, "RAG_QUERY_TAIL_MESSAGES": size}):
-                        block = model.process_rag(cid, "", question["text"]) or ""
-                        built = prompt.build(PromptBuildRequest(
-                            character=char, event_type="chat", user_input=question["text"], rag_context=block,
-                            policy=RequestPolicy(use_history_in_prompt=False),
-                        ))
-                    delivered = "\n".join(
-                        str(item.get("content") or "") for item in built.messages
-                        if block and isinstance(item, dict) and item.get("role") == "system"
-                        and item.get("content") == block
-                    ).casefold()
-                    report.append({
-                        "variant": question["label"], "tail": size, "rag_present": bool(delivered),
-                        "expected": {mark: any(word.casefold() in delivered for word in terms)
-                                     for mark, terms in question.get("expected", {}).items()},
-                        "forbidden": {mark: any(word.casefold() in delivered for word in terms)
-                                      for mark, terms in question.get("forbidden", {}).items()},
-                    })
+                for name, options in profiles.items():
+                    report.extend(check_question(model, prompt, char, question, name, options))
         return {"scene": scenario["label"], "tail_rows": len(tail), "runs": report}
+
+
+def check_question(model, prompt, char, question, profile, options):
+    result = []
+    for size in (0, 1, 2):
+        with SettingsOverride({**CONFIG, **options, "RAG_QUERY_TAIL_MESSAGES": size}):
+            block = model.process_rag(char.char_id, "", question["text"]) or ""
+            built = prompt.build(PromptBuildRequest(
+                character=char, event_type="chat", user_input=question["text"], rag_context=block,
+                policy=RequestPolicy(use_history_in_prompt=False),
+            ))
+        delivered = "\n".join(
+            str(item.get("content") or "") for item in built.messages
+            if block and isinstance(item, dict) and item.get("role") == "system"
+            and item.get("content") == block
+        ).casefold()
+        result.append({
+            "variant": question["label"], "tail": size, "profile": profile, "rag_present": bool(delivered),
+            "expected": {mark: any(word.casefold() in delivered for word in terms)
+                         for mark, terms in question.get("expected", {}).items()},
+            "forbidden": {mark: any(word.casefold() in delivered for word in terms)
+                          for mark, terms in question.get("forbidden", {}).items()},
+        })
+    return result
 
 
 def main():
@@ -121,7 +129,12 @@ def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    profiles = {name: profile for name, profile in {**PROFILES, **TUNING_PROFILES}.items()
+                if not profile["RAG_VECTOR_SEARCH_ENABLED"]}
+    parser.add_argument("--profiles", nargs="+", choices=tuple(profiles), default=["lexical"])
     args = parser.parse_args()
+    if args.output.resolve() in {path.resolve() for path in (args.samples, args.manifest, args.snapshot) if path}:
+        parser.error("The report path must differ from all input files")
     logging.disable(logging.CRITICAL)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
     ids = {item["sample"] for item in manifest}
@@ -134,7 +147,8 @@ def main():
                     samples[row["id"]] = row
     if ids - samples.keys():
         parser.error("One or more requested sample IDs were not found")
-    report = [replay(scene, samples[scene["sample"]], args.snapshot) for scene in manifest]
+    selected = {name: profiles[name] for name in args.profiles}
+    report = [replay(scene, samples[scene["sample"]], args.snapshot, selected) for scene in manifest]
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
