@@ -1005,7 +1005,7 @@ class MemoryManager(CharacterScopedService):
         Если захочешь — можно расширить на забытые, но это уже другой UX.
         """
         cols = self._mem_cols()
-        where = "character_id=? AND eternal_id=? AND is_deleted=0"
+        where = "character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'"
         params = [self.storage_key, number]
         if "is_forgotten" in cols:
             where += " AND is_forgotten=0"
@@ -1055,6 +1055,17 @@ class MemoryManager(CharacterScopedService):
 
         return True
 
+    def has_seed_lore(self, numbers: list[int]) -> bool:
+        if not numbers:
+            return False
+        placeholders = ",".join("?" for _ in numbers)
+        with self.db.connection() as conn:
+            return conn.execute(
+                f"SELECT 1 FROM memories WHERE character_id=? AND type='seed_lore' "
+                f"AND eternal_id IN ({placeholders}) LIMIT 1",
+                (self.storage_key, *numbers),
+            ).fetchone() is not None
+
     def get_memory_content(self, number: int):
         """Return content of an active memory by eternal_id, or None if not found."""
         cols = self._mem_cols()
@@ -1090,7 +1101,7 @@ class MemoryManager(CharacterScopedService):
                 select_cols.append("is_forgotten")
 
             cursor.execute(
-                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                 (self.storage_key, number)
             )
             row = cursor.fetchone()
@@ -1148,7 +1159,7 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch source
                 cur.execute(
-                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                     (self.storage_key, source_id),
                 )
                 src = cur.fetchone()
@@ -1158,7 +1169,7 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch target
                 cur.execute(
-                    "SELECT content, entities, type FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                    "SELECT content, entities, type FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                     (self.storage_key, target_id),
                 )
                 tgt = cur.fetchone()

@@ -2283,8 +2283,8 @@ class ModelController(GenerationService, ModelStateService):
 
                     if mem_lines or hist_lines or graph_lines:
                         mem_header = (
-                            "# score=RAG relevance (0..1); forgotten memories — use N:id with memory ops; "
-                            "seed_lore dates are approximate dates of events, not when facts were added to the database\n"
+                            "# score=RAG relevance (0..1); N:id identifies the entry. seed_lore is read-only; "
+                            "never update, delete or merge it. Its date describes the event, not when it was saved.\n"
                         )
                         memory_block_str = (mem_header + "\n".join(mem_lines)) if mem_lines else ""
                         graph_block_str = "\n".join(graph_lines) if graph_lines else ""
