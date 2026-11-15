@@ -120,6 +120,10 @@ def test_retired_previous_character_memory_seeds_do_not_linger():
 
 
 def test_relative_lore_ages_are_metadata_not_character_dialogue():
+    import sys
+    src = ROOT / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
     from managers.lore_timeline import strip_age_before_start
     for character in ("Kind", "Crazy", "Mila", "Cappie", "Creepy"):
         content = read(f"Common/CharacterSeeds/{character}.script")
