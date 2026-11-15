@@ -165,6 +165,28 @@ def evaluate_history(tester, cases, options):
     }
 
 
+def index_visible_archive(indexer, conversation):
+    rag = indexer.rag
+    with rag.db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id,message_id FROM history WHERE character_id=? AND is_active=0 "
+            "AND is_deleted=0 AND message_id IS NOT NULL AND length(trim(content))>0",
+            (rag.character_id,),
+        ).fetchall()
+    visible = conversation.retrieval_history(rag.character_id, {message_id for _, message_id in rows})
+    identities = [row_id for row_id, message_id in rows if message_id in visible]
+    count = 0
+    for start in range(0, len(identities), 500):
+        pending = indexer.store.sources(
+            "history", rag._current_model_name(), identities=identities[start:start + 500], missing=True,
+        )
+        written = indexer.documents("history", [(row.identity, row.content) for row in pending], priority="bulk")
+        if written != len(pending):
+            raise RuntimeError(f"Incomplete archive index for {rag.character_id}: {written}/{len(pending)}")
+        count += written
+    return {"new_history": count, "visible_archived_history": len(identities)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path)
@@ -174,7 +196,7 @@ def main():
     parser.add_argument("--profiles", nargs="+", choices=tuple(choices), default=list(PROFILES))
     parser.add_argument("--cases", choices=("all", "original", "new"), default="all")
     parser.add_argument("--search-history", action="store_true",
-                        help="Include archived dialogue from an existing timeline in lexical profiles")
+                        help="Include archived dialogue from an existing timeline")
     parser.add_argument("--history-cases", type=Path, help="Local annotated questions for archived dialogue")
     parser.add_argument("--history-only", action="store_true", help="Skip the synthetic canon questions")
     parser.add_argument("--cache-queries", action="store_true",
@@ -197,8 +219,8 @@ def main():
     if args.history_only:
         cases = []
     needs_vectors = any(choices[name]["RAG_VECTOR_SEARCH_ENABLED"] for name in args.profiles)
-    if args.search_history and (not args.snapshot or needs_vectors):
-        parser.error("--search-history requires a timeline snapshot and lexical profiles")
+    if args.search_history and not args.snapshot:
+        parser.error("--search-history requires a timeline snapshot")
     common = {**COMMON, "RAG_SEARCH_HISTORY": args.search_history}
     history_scope = "archived dialogue verified by timeline" if args.search_history else "history disabled"
     report = {"scope": f"all character memories and seeded graph; {history_scope}",
@@ -258,6 +280,8 @@ def main():
                     ).fetchone()[0]
                 indexed[cid] = {"new_memories": count, "total_memories": total,
                                 "new_graph_entities": rag.index_graph_entity_embeddings()}
+                if args.search_history:
+                    indexed[cid].update(index_visible_archive(indexer, conversation))
                 print(json.dumps({"indexed": cid, **indexed[cid]}), flush=True)
             report["indexed"] = indexed
             report["index_seconds"] = time.perf_counter() - started
