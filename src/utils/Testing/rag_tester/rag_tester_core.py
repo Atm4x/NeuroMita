@@ -14,6 +14,16 @@ from managers.memory_manager import MemoryManager
 from managers.settings_manager import SettingsManager
 
 
+LEXICAL_ONLY_OVERRIDES = {
+    "RAG_ENABLED": True,
+    "RAG_VECTOR_SEARCH_ENABLED": False,
+    "RAG_CROSS_ENCODER_ENABLED": False,
+    "RAG_SEARCH_GRAPH": False,
+    "RAG_GRAPH_VECTOR_SEARCH": False,
+    "RAG_COMBINE_MODE": "union",
+}
+
+
 def now_ts() -> str:
     return datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
@@ -457,7 +467,7 @@ class BatchResult:
             f"  rerank:         {self.mean_rerank_ms:.0f} ms",
             f"  other:          {other_ms:.0f} ms  (retrieval + scoring)",
             f"Vector docs:      {self.vector_doc_count}"
-            + (" ⚠ ZERO — embedding model may have failed!" if self.vector_doc_count == 0 else ""),
+            + (" ⚠ ZERO — embedding model may have failed!" if self.vector_doc_count == 0 and self.embed_model_name else ""),
             f"Embed model:      {self.embed_model_name or '(unknown)'}",
         ]
         if self.warnings:
@@ -535,9 +545,11 @@ class RagTesterService:
     - поиск + prod-like overrides + превью инжекта
     - batch testing с метриками
     """
-    def __init__(self):
+    def __init__(self, *, lexical_only: bool = False):
         self.db = DatabaseManager()
-        self._ensure_rag_enabled()
+        self.lexical_only = lexical_only
+        if not lexical_only:
+            self._ensure_rag_enabled()
 
     @staticmethod
     def _ensure_rag_enabled() -> None:
@@ -923,6 +935,8 @@ class RagTesterService:
         counts directly (logged as a cache hit).
         """
         cid = scenario.character_id
+        if self.lexical_only:
+            embed_now = False
 
         if smart_embed and embed_now:
             from handlers.embedding_presets import resolve_model_settings
@@ -1171,6 +1185,9 @@ class RagTesterService:
         overrides: dict[str, Any] | None,
     ) -> tuple[list[dict], dict]:
         """Like search(), but also returns per-component timing dict (embed_ms, rerank_ms)."""
+        if self.lexical_only:
+            overrides = {**(overrides if use_overrides and overrides else {}), **LEXICAL_ONLY_OVERRIDES}
+            use_overrides = True
         if use_overrides and overrides:
             with SettingsOverride(overrides):
                 rag = RAGManager(cid)
@@ -1383,16 +1400,17 @@ class RagTesterService:
 
         total_elapsed = (time.perf_counter() - total_start) * 1000
 
-        # Collect embed model name for diagnostics
-        try:
-            from handlers.embedding_presets import resolve_model_settings
-            embed_model_name = resolve_model_settings().get("hf_name", "")
-        except Exception:
-            embed_model_name = ""
+        embed_model_name = ""
+        if not self.lexical_only:
+            try:
+                from handlers.embedding_presets import resolve_model_settings
+                embed_model_name = resolve_model_settings().get("hf_name", "")
+            except Exception:
+                pass
 
         # Build warnings
         batch_warnings: list[str] = []
-        if total_vector_docs == 0 and results:
+        if not self.lexical_only and total_vector_docs == 0 and results:
             batch_warnings.append(
                 "vector_doc_count=0: no results came from vector search. "
                 "Embedding model likely failed to load — results reflect FTS/keyword only. "

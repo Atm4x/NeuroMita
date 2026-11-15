@@ -49,8 +49,9 @@ class QueryBuilder:
             except Exception:
                 keywords = []
 
-        # embedding can be None
-        qvec = self.rag._build_query_embedding(uq, tail=int(self.cfg.tail_messages or 0))
+        qvec = None
+        if self.cfg.vector_search_enabled or (self.cfg.search_graph and self.cfg.graph_vector_search):
+            qvec = self.rag._build_query_embedding(uq, tail=int(self.cfg.tail_messages or 0))
 
         # ctx entities from last active message (same logic as old)
         ctx_speaker = ""
