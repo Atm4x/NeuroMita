@@ -653,15 +653,19 @@ class DslInterpreter:
                         continue
 
                     if command == "SEED_ISLAND":
-                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content"
+                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content [REPLACES_EXACT previous text]"
                         if not args or "|" not in args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = args.split("|", 1)
                         island_type = parts[0].strip()
-                        content = self._eval_expr(f'f"""{parts[1].strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in parts[1] else parts[1].strip()
+                        text, _, previous = parts[1].partition(" REPLACES_EXACT ")
+                        content = self._eval_expr(f'f"""{text.strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in text else text.strip()
                         mem_sys = getattr(self.character, "memory_system", None)
                         if content and mem_sys and hasattr(mem_sys, "seed_island"):
-                            mem_sys.seed_island(island_type, str(content))
+                            if previous:
+                                mem_sys.seed_island(island_type, str(content), replace_exact=previous.strip())
+                            else:
+                                mem_sys.seed_island(island_type, str(content))
                         continue
 
                     if command == "LINK_ENTITIES":

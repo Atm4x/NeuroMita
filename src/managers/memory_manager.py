@@ -914,8 +914,11 @@ class MemoryManager(CharacterScopedService):
             logging.warning(f"[MemoryManager] upsert_island failed: {format_exception(e)}", exc_info=True)
             return None
 
-    def seed_island(self, island_type: str, content: str, priority: str = "high") -> Optional[int]:
-        """Create a starting island only when no row of this type ever existed."""
+    def seed_island(
+        self, island_type: str, content: str, priority: str = "high", *,
+        replace_exact: str | None = None,
+    ) -> Optional[int]:
+        """Initialize an island, optionally replacing the exact previous factory text."""
         short = island_subtype(island_type)
         if short is None:
             logging.warning(f"[MemoryManager] seed_island: unknown island type {island_type!r}, ignored.")
@@ -931,7 +934,17 @@ class MemoryManager(CharacterScopedService):
                     "SELECT eternal_id FROM memories WHERE character_id=? AND type=? LIMIT 1",
                     (self.storage_key, full_type),
                 )
-                if cur.fetchone():
+                current = cur.fetchone()
+                if current:
+                    if replace_exact:
+                        cur.execute(
+                            "UPDATE memories SET content=? WHERE character_id=? AND type=? "
+                            "AND eternal_id=? AND is_deleted=0 AND content=?",
+                            (str(content).strip(), self.storage_key, full_type, current[0], replace_exact),
+                        )
+                        replaced = cur.rowcount > 0
+                        conn.commit()
+                        return int(current[0]) if replaced else None
                     return None
         except Exception as e:
             logging.warning(f"[MemoryManager] seed_island lookup failed: {format_exception(e)}", exc_info=True)
@@ -1644,7 +1657,10 @@ class MemoryManager(CharacterScopedService):
             'memory_merge: ["3,7,12:merged text"] — merge into first ID; rest deleted; content optional',
             'memory_add: ["island:relationship|summary"] — replace one running island',
             'memory_add: ["island:language|<language>. Reply to the Player in <language>."] — store/update primary language',
-            "Keep memory entries concise.",
+            "Keep memory entries concise. Update an existing entry when the same event develops.",
+            "Preserve the source: personal experience, reported information, or suspicion. "
+            "Never write a proposed scene or a hypothetical as something that already happened. "
+            "Keep private agreements scoped to their known participants and conditions.",
         ]
 
         island_block = None

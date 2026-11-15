@@ -12,6 +12,21 @@ All commands run from `src/utils/Testing/rag_tester/`.
 
 ---
 
+## Offline keyword and FTS runs
+
+Supply a disposable database path: the tester replaces the selected character's
+scenario rows. --lexical-only works with both run and sweep; it skips embedding
+indexing, vector and graph retrieval, and the cross-encoder. Choose the channels
+with RAG_KEYWORD_SEARCH and RAG_USE_FTS in --overrides or the sweep configuration.
+
+For a canonical check, run:
+
+    python canon_benchmark.py --db scratch.db --output metrics.json
+
+To evaluate an existing world, point --db at a disposable SQLite backup and add
+--existing. The benchmark runs all three channel combinations on the same
+questions and writes aggregate results and case numbers, without memory text.
+
 ## Step 1: Export Full Scenario
 
 Export character data from the live database into a portable JSON scenario:

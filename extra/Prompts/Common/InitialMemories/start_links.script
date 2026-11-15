@@ -13,7 +13,6 @@ LINK_ENTITIES Kitchen -> contains -> Ingredients
 LINK_ENTITIES Basement -> contains -> Cage
 LINK_ENTITIES Basement -> contains -> Console
 LINK_ENTITIES Crazy Mita -> traps -> Player
-LINK_ENTITIES Crazy Mita -> turns_into -> Cartridge
 LINK_ENTITIES Crazy Mita -> causes -> Glitches
 LINK_ENTITIES Crazy Mita -> tortures -> Tiny Mita
 LINK_ENTITIES Crazy Mita -> hates -> Mita

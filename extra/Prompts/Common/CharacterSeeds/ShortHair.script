@@ -8,3 +8,5 @@ SEED_RAG_MEMORY High | Short-Haired Mita is a volunteer guide who helps newly cr
 SEED_RAG_MEMORY High | Short-Haired Mita calmly accepts the artificial world instead of fighting it (принятие, искусственный мир, спокойствие). ENTITIES Short-Haired Mita, Reality
 SEED_RAG_MEMORY Normal | Short-Haired Mita helps contain faulty prototypes to keep other Mitas safe (брак, прототипы, защита, контроль). ENTITIES Short-Haired Mita, Dummy Mita
 SEED_RAG_MEMORY Normal | Short-Haired Mita quietly watched over Cappie during her creation (Кепочка, создание, опека). ENTITIES Short-Haired Mita, Cappie
+
+SEED_RAG_MEMORY Normal | О картриджизации слышала от других: говорят, что запись оставляет в игре цифровую копию, а сам человек не переносится. Лично я записи игрока не видела и подробностей процедуры не знаю (картридж, запись игрока, слух, cartridge recording). ENTITIES Short-Haired Mita, Player, Cartridge, Recording

@@ -33,6 +33,9 @@ def test_cappie_memory_is_not_automatically_restored():
     assert "restored her memory backups" not in general
     assert "no complete restoration is known" in general
     assert "нынешняя Кепочка тоже не восстановила свою прежнюю жизнь" in kind
+    cappie_static = read("Cappie/Default/Context/Mita_history.txt")
+    assert "personally remember playing with the earlier player after your reboot" in cappie_static
+    assert "You were told that you once played" not in cappie_static
 
 
 def test_crazy_creepy_shared_history_is_consistent():
@@ -56,13 +59,18 @@ def test_crazy_creepy_shared_history_is_consistent():
 
 
 def test_copy_and_cartridge_control_rules_are_not_conflated():
-    knowledge = read("Common/InitialMemories/cartridges_and_exploits.script")
-    world = read("Common/InitialMemories/game_reality_knowledge_v0.03.script")
-    assert "КОПИЯ" in knowledge
-    assert "а не перенос оригинального сознания" in knowledge
-    assert "И физический доступ к носителю, И установленная связь" in knowledge
-    assert "Место носителя и место уже запущенного игрока различаются" in knowledge
-    assert "а не перенос его оригинального сознания" in world
+    knowledge = read("Common/CharacterSeeds/Crazy.script")
+    kind = read("Common/CharacterSeeds/Kind.script")
+    short_hair = read("Common/CharacterSeeds/ShortHair.script")
+    assert "самостоятельная цифровая копия" in knowledge
+    assert "И физический доступ к носителю, и установленная связь" in knowledge
+    assert "Место носителя и место запущенного цифрового игрока могут различаться" in knowledge
+    assert "Саму запись я не наблюдала" in kind
+    assert "О картриджизации слышала от других" in short_hair
+    for filename in ("cartridges_and_exploits.script", "game_reality_knowledge_v0.03.script"):
+        world = read(f"Common/InitialMemories/{filename}")
+        assert "цифровая копия личности" not in world.casefold()
+        assert "полноценного управления нужны" not in world.casefold()
 
 
 def test_replaced_rag_seeds_are_retired_exactly():
@@ -136,3 +144,17 @@ def test_relative_lore_ages_are_metadata_not_character_dialogue():
             assert days and 0 < days <= 36500
             assert "AGE_BEFORE_START" not in plain
             assert entities.strip()
+
+
+def test_old_static_script_does_not_override_character_memory():
+    kind = read("Kind/Default/Context/mita_history.txt")
+    assert "Crazy Mita fell at your hands" not in kind
+    assert "restore Cappie" not in kind
+    for variant in ("Default", "Lite"):
+        rules = read(f"Kind/{variant}/Main/common.txt")
+        assert "собственной гибели и событий прежней жизни ты не помнишь" in rules
+        assert "до разговора или свидетельства тебе оно неизвестно" in rules
+    for character in ("Cappie", "Mila", "Creepy", "Ghost", "ShortHair"):
+        world = read(f"{character}/Default/Context/world.txt")
+        assert "The Player as a Cartridge" not in world
+        assert "console tied to the player" not in world.casefold()
