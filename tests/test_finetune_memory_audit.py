@@ -55,6 +55,25 @@ def test_audit_matches_duplicate_dialogue_auto_in_two_current_blocks(tmp_path):
     path.write_text(json.dumps(sample), encoding="utf-8")
     assert audit(path)["turns_with_duplicate_current_dialogue"] == 1
 
+
+def test_audit_distinguishes_legacy_summary_requests_without_character_id(tmp_path):
+    path = tmp_path / "samples.jsonl"
+    path.write_text(json.dumps({
+        "character_id": "unknown",
+        "messages": [{"role": "user", "content": (
+            "You are an assistant tasked with summarizing dialogue history of Kind.\n"
+            "<HISTORY>\n[15.11.2025 08:10:00] [Character or System]: PRIVATE\n"
+            "[Player]: PRIVATE\n</HISTORY>"
+        )}],
+        "response": "PRIVATE",
+    }), encoding="utf-8")
+    counts = audit(path)
+    assert counts["summary_requests"] == 1
+    assert counts["summary_requests_with_log_timestamps"] == 1
+    assert counts["summary_generic_author_lines"] == 1
+    assert counts["summary_player_label_lines"] == 1
+    assert "PRIVATE" not in json.dumps(counts)
+
 def test_model_commands_cannot_edit_delete_or_merge_canon(tmp_path, monkeypatch):
     monkeypatch.setattr(DatabaseManager, "_instance", None)
     monkeypatch.setattr(DatabaseManager, "_path_override", str(tmp_path / "world.db"))

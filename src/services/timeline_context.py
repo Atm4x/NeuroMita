@@ -22,7 +22,7 @@ class ContextSummaryRepository(Protocol):
     def save(self, branch_id: str, character_id: str, summary: ContextSummary) -> None: ...
 
 
-_DIGEST_VERSION = "v2:"
+_DIGEST_VERSION = "v3:"
 
 
 def prefix_digest(messages: Sequence[dict]) -> str:

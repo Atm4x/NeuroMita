@@ -1545,6 +1545,8 @@ class MemoryManager(CharacterScopedService):
             'memory_add: ["island:language|<language>. Reply to the Player in <language>."] — store/update primary language',
             "Keep memory entries concise. Update an existing entry when the same event develops.",
             "Preserve the source: personal experience, reported information, or suspicion. "
+            "When updating or merging, keep the speaker or evidence and the known time and conditions. "
+            "If a new report conflicts with the old account, keep the accounts separate with their sources. "
             "Never write a proposed scene or a hypothetical as something that already happened. "
             "Keep private agreements scoped to their known participants and conditions.",
         ]

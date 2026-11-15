@@ -1689,7 +1689,12 @@ class PromptController(PromptBuilderService):
         if history_summary:
             messages.append({
                 "role": "system",
-                "content": f"[HISTORY SUMMARY]\n{history_summary}",
+                "content": (
+                    "[HISTORY SUMMARY]\n"
+                    "Derived notes about earlier turns. Keep reports, guesses, and proposals attributed; "
+                    "they do not become personal memories or establish the current scene.\n"
+                    f"{history_summary}"
+                ),
             })
 
         if working_state_enabled:

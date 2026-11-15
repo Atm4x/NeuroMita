@@ -252,7 +252,10 @@ class PromptSystemStateTests(unittest.TestCase):
             ))
 
         contents = [message.get("content", "") for message in result.messages]
-        self.assertLess(contents.index("[HISTORY SUMMARY]\nOlder dialogue"), contents.index(
+        summary = next(item for item in contents if item.startswith("[HISTORY SUMMARY]\n"))
+        self.assertIn("Keep reports, guesses, and proposals attributed", summary)
+        self.assertIn("Older dialogue", summary)
+        self.assertLess(contents.index(summary), contents.index(
             "[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07"
         ))
         self.assertLess(

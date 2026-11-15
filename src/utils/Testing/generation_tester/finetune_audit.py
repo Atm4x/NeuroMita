@@ -25,6 +25,7 @@ _DELIVERED_DIALOGUE = re.compile(r"(?m)^\s*(\[RUNTIME EVENT\]\s+\[Event\]|\[Dial
 _CURRENT_EVENT = re.compile(r"(?m)^\s*(?:\[RUNTIME EVENT\]\s+)?\[Current UnityEvent\][ \t]*")
 _DECODER = json.JSONDecoder()
 _RAG_BLOCK = re.compile(r"<relevant_memories>.*?</relevant_memories>", re.DOTALL)
+_LEGACY_SUMMARY_LINE = re.compile(r"(?m)^(\[[0-9 .:-]+\] )?\[(Character or System|Player)\]:")
 
 
 def message_text(content):
@@ -54,18 +55,41 @@ def parse_id(value):
     return int(value) if re.fullmatch(r"[0-9]{1,18}", value) else None
 
 
+def audit_summary_request(texts, counts):
+    for text in texts:
+        if text.startswith("You are an assistant tasked with summarizing dialogue history of "):
+            _, start, history = text.partition("\n<HISTORY>\n")
+            history, end, _ = history.rpartition("\n</HISTORY>")
+            if not start or not end:
+                continue
+        elif text.startswith("Summarize the conversation below into a compact factual memory"):
+            _, start, history = text.partition("\nConversation:\n")
+            history, end, _ = history.rpartition("\nSummary:")
+            if not start or not end:
+                continue
+        else:
+            continue
+        counts["summary_requests"] += 1
+        lines = _LEGACY_SUMMARY_LINE.findall(history)
+        counts["summary_generic_author_lines"] += sum(speaker == "Character or System" for _, speaker in lines)
+        counts["summary_player_label_lines"] += sum(speaker == "Player" for _, speaker in lines)
+        counts["summary_requests_with_log_timestamps"] += any(stamp for stamp, _ in lines)
+        break
+
+
 def audit_sample(sample, counts):
     if not isinstance(sample, dict):
         counts["invalid_record"] += 1
         return
     counts["records"] += 1
+    texts = [message_text(m.get("content")) for m in sample.get("messages", [])
+             if isinstance(m, dict) and m.get("role") in {"system", "developer", "user", "event"}]
+    audit_summary_request(texts, counts)
     if not sample.get("character_id") or sample["character_id"] == "unknown":
         counts["unattributed_requests"] += 1
         return
 
     counts["character_requests"] += 1
-    texts = [message_text(m.get("content")) for m in sample.get("messages", [])
-             if isinstance(m, dict) and m.get("role") in {"system", "developer", "user", "event"}]
     delivered = []
     reacts = set()
     current = set()

@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -166,12 +167,46 @@ class HistoryViewTests(unittest.TestCase):
         self.view.add_message(self.message(1))
         timeline = self.runtime.timeline
         head = timeline.branch.head_sequence
-        self.context.summaries.save(timeline.branch_id, "A", ContextSummary(
-            head, "old-unversioned-digest", "Obsolete turn instructions", head,
-        ))
-        summary, messages = self.context.unsummarized("A")
-        self.assertEqual(summary, "")
-        self.assertEqual([m["message_id"] for m in messages], ["m:1"])
+        for digest in ("old-unversioned-digest", "v2:incorrect-speaker-labels"):
+            self.context.summaries.save(timeline.branch_id, "A", ContextSummary(
+                head, digest, "Obsolete summary", head,
+            ))
+            summary, messages = self.context.unsummarized("A")
+            self.assertEqual(summary, "")
+            self.assertEqual([m["message_id"] for m in messages], ["m:1"])
+
+    def test_compression_of_visible_history_keeps_actual_speakers(self):
+        from controllers.history_controller import HistoryController
+
+        self.conversation.record_message(
+            self.message(1, "We agreed to a truce behind the blue door."), ("Crazy", "Player"),
+            actor_id="Crazy",
+        )
+        self.conversation.record_message(
+            self.message(2, "I saw the chase in the logs. {previous_summary}"), ("Kind", "Mila"),
+            actor_id="Mila",
+        )
+        self.conversation.record_message(
+            self.message(3, "What exactly did Mila tell you?"), ("Kind",), actor_id="Player", player=True,
+        )
+        self.runtime.timeline.publish(EventKind.GAME_ENDED, {"description": "The board game ended."},
+                                      observers=("Kind",), key="visible-event")
+        char = SimpleNamespace(char_id="Kind", display_name="Kind Mita")
+        messages = self.conversation.context_messages("Kind")
+        controller = HistoryController()
+        controller._get_setting = lambda key, default=None: "" if key == "HISTORY_COMPRESSION_PROMPT_TEMPLATE" else default
+        with patch.object(controller, "_run_compression_request") as run:
+            controller._compress_history(char, messages, previous_summary="Older note.")
+        prompt = run.call_args.kwargs["full_prompt"]
+        self.assertIn("[Mila]: I saw the chase in the logs. {previous_summary}", prompt)
+        self.assertIn("[Player]: What exactly did Mila tell you?", prompt)
+        self.assertIn("[Event]: [Event: GameEnded] The board game ended.", prompt)
+        self.assertIn("Previous summary:\nOlder note.", prompt)
+        self.assertNotIn("blue door", prompt)
+        self.assertNotIn(messages[0]["time"], prompt)
+        fallback = controller._build_local_compression_fallback(char, messages)
+        self.assertIn("Mila: I saw the chase in the logs.", fallback)
+        self.assertNotIn("blue door", fallback)
 
     def test_stale_summary_cannot_publish_after_its_source_changed(self):
         self.view.add_messages([self.message(1), self.message(2)])
