@@ -17,10 +17,13 @@ SRC = Path(__file__).resolve().parents[3]
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from services.dialogue_roster_context import historical_dialogue_observation
 from utils.structured_response_parser import StructuredResponseParseError, parse_structured_response_with_meta
 
 _LORE_ROW = re.compile(r"(?m)^\s*\[[^\n\]]+\]\s+N:(\d+)\s*\(seed_lore\b")
-_DELIVERED_DIALOGUE = re.compile(r"(?m)^\s*(?:\[RUNTIME EVENT\]\s+\[Event\]|\[DialogueAuto\])\s+(?=\[DIALOGUE\])")
+_DELIVERED_DIALOGUE = re.compile(r"(?m)^\s*(\[RUNTIME EVENT\]\s+\[Event\]|\[DialogueAuto\])\s+(?=\[DIALOGUE\])")
+_CURRENT_EVENT = re.compile(r"(?m)^\s*(?:\[RUNTIME EVENT\]\s+)?\[Current UnityEvent\][ \t]*")
+_DECODER = json.JSONDecoder()
 _RAG_BLOCK = re.compile(r"<relevant_memories>.*?</relevant_memories>", re.DOTALL)
 
 
@@ -62,8 +65,33 @@ def audit_sample(sample, counts):
 
     counts["character_requests"] += 1
     texts = [message_text(m.get("content")) for m in sample.get("messages", [])
-             if isinstance(m, dict) and m.get("role") in {"system", "developer", "user"}]
-    delivered = [event.strip() for text in texts for event in _DELIVERED_DIALOGUE.split(text)[1:]]
+             if isinstance(m, dict) and m.get("role") in {"system", "developer", "user", "event"}]
+    delivered = []
+    reacts = set()
+    current = set()
+    for text in texts:
+        for match in _CURRENT_EVENT.finditer(text):
+            try:
+                event, _ = _DECODER.raw_decode(text, match.end())
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("name") == "DialogueAuto":
+                description = event.get("description")
+                if isinstance(description, str):
+                    current.add(description.strip())
+        pieces = _DELIVERED_DIALOGUE.split(text)
+        for delivery, chunk in zip(pieces[1::2], pieces[2::2]):
+            event = chunk.strip()
+            delivered.append(event)
+            if delivery == "[DialogueAuto]":
+                reacts.add(event)
+                continue
+            historical = historical_dialogue_observation(event)
+            if historical is not None:
+                counts["recognized_historical_dialogue_envelopes"] += 1
+                counts["historical_dialogue_characters_saved"] += len(event) - len(historical)
+    if current & reacts:
+        counts["turns_with_duplicate_current_dialogue"] += 1
     if delivered:
         headers = [event.splitlines()[0] for event in delivered]
         counts["turns_with_dialogue_tags"] += 1

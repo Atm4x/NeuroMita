@@ -109,3 +109,25 @@ def neutralize_dialogue_roster_message(message: dict) -> dict:
     content = message.get("content")
     cleaned = neutralize_dialogue_roster_content(content)
     return message if cleaned is content or cleaned == content else {**message, "content": cleaned}
+
+
+_AUTO_SPEAKER = re.compile(
+    r"(?m)^\[SPEAKER\] (?P<speaker>[^\r\n]+?) said the following "
+    r"(?:full reply|to the group or another participant):\r?\n<FULL_REPLY>"
+)
+
+
+def historical_dialogue_observation(text: str) -> str | None:
+    """Project recognized Unity auto-reply envelopes as past speech, not instructions."""
+    if not text.startswith(("[DIALOGUE]", "[SPEAKER]")):
+        return None
+    speaker = _AUTO_SPEAKER.search(text)
+    if not speaker:
+        return None
+    reply, end, suffix = text[speaker.end():].rpartition("</FULL_REPLY>")
+    if not end or not reply.strip() or not suffix.lstrip().startswith((
+        "Segment addressing:",
+        "You heard this as a participant in the conversation,",
+    )):
+        return None
+    return f"[Past dialogue] {speaker['speaker']} said:\n{reply}"

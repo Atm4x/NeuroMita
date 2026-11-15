@@ -37,6 +37,23 @@ def test_audit_reports_counts_without_private_text(tmp_path):
     assert "PRIVATE" not in json.dumps(result)
 
 
+
+def test_audit_matches_duplicate_dialogue_auto_in_two_current_blocks(tmp_path):
+    reason = "[DIALOGUE] Participants in this conversation (3):\nPlayer\nA\nB"
+    sample = {
+        "character_id": "A",
+        "messages": [
+            {"role": "event", "content": "[Current UnityEvent] " + json.dumps({
+                "name": "DialogueAuto", "description": reason,
+            })},
+            {"role": "event", "content": "React naturally to this game event:\n[DialogueAuto] " + reason},
+        ],
+        "response": json.dumps({"segments": [{"text": "I see."}]}),
+    }
+    path = tmp_path / "samples.jsonl"
+    path.write_text(json.dumps(sample), encoding="utf-8")
+    assert audit(path)["turns_with_duplicate_current_dialogue"] == 1
+
 def test_model_commands_cannot_edit_delete_or_merge_canon(tmp_path, monkeypatch):
     monkeypatch.setattr(DatabaseManager, "_instance", None)
     monkeypatch.setattr(DatabaseManager, "_path_override", str(tmp_path / "world.db"))

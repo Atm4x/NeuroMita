@@ -22,11 +22,14 @@ class ContextSummaryRepository(Protocol):
     def save(self, branch_id: str, character_id: str, summary: ContextSummary) -> None: ...
 
 
+_DIGEST_VERSION = "v2:"
+
+
 def prefix_digest(messages: Sequence[dict]) -> str:
     facts = [{key: message.get(key) for key in (
         "timeline_event_id", "timeline_learned_at", "role", "speaker", "target", "content", "structured_data",
     )} for message in messages]
-    return sha256(JsonDocument({"messages": facts}).canonical.encode("utf-8")).hexdigest()
+    return _DIGEST_VERSION + sha256(JsonDocument({"messages": facts}).canonical.encode("utf-8")).hexdigest()
 
 
 class TimelineContext:
@@ -42,7 +45,7 @@ class TimelineContext:
         summary = self.summaries.load(branch_id, character_id)
         turn = self.conversation.runtime.turn
         head = turn.context_head if turn else timeline.branch.head_sequence
-        if summary is not None and 0 < summary.source_head <= head:
+        if summary is not None and summary.digest.startswith(_DIGEST_VERSION) and 0 < summary.source_head <= head:
             epoch = timeline.repository.presentation_epoch(branch_id, character_id, through=head)
             if epoch <= summary.source_head:
                 return summary.text, list(self.conversation.context_messages(character_id, after=summary.through))

@@ -14,7 +14,7 @@ from infrastructure.timeline.context import SQLiteContextSummaries
 from infrastructure.timeline.sqlite import SQLiteTimelineRepository
 from managers.timeline_history_view import TimelineHistoryView
 from services.conversation_timeline import ConversationTimeline
-from services.timeline_context import TimelineContext
+from services.timeline_context import ContextSummary, TimelineContext
 from services.timeline_runtime import SessionTimelineRuntime
 
 
@@ -161,6 +161,17 @@ class HistoryViewTests(unittest.TestCase):
         self.assertEqual(self.context.unsummarized("A")[0], "")
         self.view.clear_history()
         self.assertEqual(self.context.unsummarized("A"), ("", []))
+
+    def test_previous_dialogue_projection_cannot_reuse_a_summary(self):
+        self.view.add_message(self.message(1))
+        timeline = self.runtime.timeline
+        head = timeline.branch.head_sequence
+        self.context.summaries.save(timeline.branch_id, "A", ContextSummary(
+            head, "old-unversioned-digest", "Obsolete turn instructions", head,
+        ))
+        summary, messages = self.context.unsummarized("A")
+        self.assertEqual(summary, "")
+        self.assertEqual([m["message_id"] for m in messages], ["m:1"])
 
     def test_stale_summary_cannot_publish_after_its_source_changed(self):
         self.view.add_messages([self.message(1), self.message(2)])

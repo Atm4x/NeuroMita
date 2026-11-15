@@ -1253,12 +1253,13 @@ class PromptController(PromptBuilderService):
     def _runtime_event_text(raw_event: Any) -> str:
         """Read one event without ever rendering a Python dict repr.
 
-        Unity may send structured event objects. Only their ``text`` is
-        meaningful for the model; ``actor`` becomes a readable prefix. Objects
+        Structured Unity events carry text or description, plus an optional actor. Objects
         without text are dropped instead of being stringified.
         """
         if isinstance(raw_event, dict):
             text = raw_event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                text = raw_event.get("description")
             if not isinstance(text, str) or not text.strip():
                 return ""
             text = " ".join(text.split())

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from core.events import Events
 from core.services import services, use
-from services.unity_timeline import UnityTimelineIngress
+from services.unity_timeline import UnityTimelineIngress, unity_event_visible_to
 from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
@@ -90,6 +90,12 @@ def _normalise_reaction_events(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return events
 
 
+def _visible_runtime_events(raw: Any, character_id: str) -> Any:
+    if isinstance(raw, (list, tuple)):
+        return [event for event in raw if unity_event_visible_to(event, character_id)]
+    return raw if unity_event_visible_to(raw, character_id) else []
+
+
 def build_game_state_payload(
     context: Dict[str, Any],
     character_id: str,
@@ -142,7 +148,7 @@ def build_game_state_payload(
         "cognitive_effects": context.get("cognitive_effects", []),
         "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
         "cognitive_effect_aftermath": context.get("cognitive_effect_aftermath", []),
-        "runtime_events": context.get("runtime_events", []),
+        "runtime_events": _visible_runtime_events(context.get("runtime_events", []), character_id),
         "tv_observation": context.get("tv_observation", {}),
         "novel": context.get("novel", {}) if character_id == "TwoD" else {},
         # The game owns the skill catalog: it ships the entries together with
@@ -159,9 +165,16 @@ def build_game_state_payload(
 
 
 def _build_react_prompt(
-    data: Dict[str, Any],
+    data: Dict[str, Any], *, character_id: str = "",
 ) -> tuple[List[str], str, float, List[Dict[str, Any]]]:
-    reaction_events = _normalise_reaction_events(data)
+    raw = data.get("reaction_events")
+    if isinstance(raw, (list, tuple)) and raw:
+        visible = _visible_runtime_events(raw, character_id)
+        reaction_events = _normalise_reaction_events({**data, "reaction_events": visible})
+        if not reaction_events and len(visible) != len(raw):
+            return [], "", 0.0, []
+    else:
+        reaction_events = _normalise_reaction_events(data)
     if reaction_events:
         is_batch = len(reaction_events) > 1
         lines = (
@@ -190,6 +203,8 @@ def _build_react_prompt(
         duration = max(item["duration"] for item in reaction_events)
         return lines, reason_text, duration, reaction_events
 
+    if not unity_event_visible_to(data, character_id):
+        return [], "", 0.0, []
     reason_type = str(data.get("reason_type") or "").strip()
     reason_content = str(data.get("reason_content") or "").strip()
     reason_text = reason_content or str(data.get("reason") or "").strip() or "player_react"
@@ -721,8 +736,14 @@ class CreateTaskAction:
                 return
 
             react_lines, reason_text, duration, reaction_events = _build_react_prompt(
-                data,
+                data, character_id=str(character_id),
             )
+            if not react_lines:
+                await server._send_aborted_update(
+                    ctx.client_id, event_type, character_id,
+                    reason="No visible reaction events", req_id=req_id,
+                )
+                return
 
             # Label continuous in-game camera frames when Unity flags them
             effective_image_source = str(context.get("image_source") or "")

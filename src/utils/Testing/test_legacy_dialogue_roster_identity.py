@@ -95,7 +95,7 @@ class LegacyRosterIdentityTests(unittest.TestCase):
         result = service._sanitize_history_for_llm(SimpleNamespace(char_id="Kind"), saved)
         self.assertEqual(len(result), 2)
         self.assertNotIn("(Mita)(you)", repr(result))
-        self.assertIn("(Mita)(you)", repr(saved))
+        self.assertEqual([m["content"] for m in saved], [LEGACY_DIALOGUE, OTHER_TURN])
         self.assertIn("[DIALOGUE_UPDATE]", result[0]["content"])
 
 
