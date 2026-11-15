@@ -81,6 +81,38 @@ class SessionRagTests(unittest.TestCase):
         with closing(self.db.get_connection()) as connection:
             return connection.execute("SELECT source_table, source_id FROM embeddings WHERE character_id='A' ORDER BY source_id").fetchall()
 
+    def test_invisible_history_cannot_take_a_retrieval_slot(self):
+        self.config.update({
+            "RAG_ENABLED": True, "RAG_VECTOR_SEARCH_ENABLED": False, "RAG_USE_FTS": True,
+            "RAG_KEYWORD_SEARCH": True, "RAG_SEARCH_HISTORY": True, "RAG_SEARCH_MEMORY": True,
+            "RAG_SEARCH_GRAPH": False, "RAG_NOISE_MAX": 0, "RAG_DETAILED_LOGS": False,
+            "RAG_QUERY_TAIL_MESSAGES": 0,
+        })
+        cache = self.resources.history_for("A")
+        private = {"role": "assistant", "message_id": "private-orchid",
+                   "content": "orchid orchard private agreement"}
+        self.conversation.record_message(private, ("B",), actor_id="B")
+        cache._insert_history_row(msg=private, is_active=0)
+        visible = {"role": "user", "message_id": "visible-orchid", "content": "An orchid bloomed."}
+        self.conversation.record_message(visible, ("A",), actor_id="Player", player=True)
+        cache._insert_history_row(msg={**visible, "content": "Stale orchid report."}, is_active=0)
+        turn = self.runtime.capture(character_id="A")
+        future = {**private, "message_id": "future-orchid"}
+        self.conversation.record_message(future, ("A",), actor_id="B")
+        cache._insert_history_row(msg=future, is_active=0)
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        try:
+            with self.runtime.turn_scope(turn):
+                results = self.rag.search_relevant("orchid orchard private agreement", limit=1, threshold=0)
+        finally:
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.assertEqual([row.get("message_id") for row in results], ["visible-orchid"])
+        self.assertEqual(results[0]["speaker"], "Player")
+        self.assertEqual(results[0]["content"], "An orchid bloomed.")
+
     def _while_embedding(self, operation, transition, *, sentences=False):
         started, release = Event(), Event()
         errors = []

@@ -132,8 +132,9 @@ class CharacterMessageProjection:
     def contains(self, message_id: str) -> bool:
         return any(record.message_id == message_id for record in self._visible.values())
 
-    def messages(self) -> tuple[dict, ...]:
-        return tuple(record.document.to_dict() for record in self._records())
+    def messages(self, *, message_ids: set[str] | None = None) -> tuple[dict, ...]:
+        return tuple(record.document.to_dict() for record in self._records()
+                     if message_ids is None or record.message_id in message_ids)
 
     def page(self, limit: int, offset: int = 0) -> tuple[dict, ...]:
         records = self._records()

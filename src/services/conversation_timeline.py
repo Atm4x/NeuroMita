@@ -234,10 +234,14 @@ class ConversationTimeline:
                                                    key=f"import-observation:{character_id}:{message_id}")
         return imported
 
-    def messages(self, character_id: str, *, before_turn: bool = True) -> tuple[dict, ...]:
+    def messages(
+        self, character_id: str, *, before_turn: bool = True, message_ids: set[str] | None = None,
+    ) -> tuple[dict, ...]:
         turn = self.runtime.turn
         through = turn.context_head if turn is not None and before_turn else None
-        messages = self.history_queries.messages(self.runtime.timeline.branch_id, character_id, through=through)
+        messages = self.history_queries.messages(
+            self.runtime.timeline.branch_id, character_id, through=through, message_ids=message_ids,
+        )
         if before_turn and turn is not None and turn.trigger_id:
             excluded = {*turn.input_event_ids, turn.trigger_id}
             messages = tuple(message for message in messages if message["timeline_event_id"] not in excluded)
@@ -396,25 +400,19 @@ class ConversationTimeline:
             }
         return tuple(sorted(messages.values(), key=lambda item: item["timeline_learned_at"]))
 
-    def filter_retrieval(self, character_id: str, results: Iterable[dict]) -> list[dict]:
+    def retrieval_history(self, character_id: str, message_ids: set[str]) -> dict[str, dict]:
         """A history index may nominate IDs; only this character's world supplies content."""
         from core.message_content import MessageContentCodec
 
-        messages = {message["message_id"]: message for message in self.messages(character_id)}
-        filtered = []
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            if result.get("source") != "history":
-                filtered.append(result)
-                continue
-            message = messages.get(result.get("message_id"))
-            if message is None:
-                continue
-            filtered.append({**result, "content": MessageContentCodec.to_embedding_text(message["content"]),
-                             "role": message["role"], "speaker": message.get("speaker"),
-                             "target": message.get("target"), "date": message.get("time")})
-        return filtered
+        return {
+            message["message_id"]: {
+                "content": MessageContentCodec.to_embedding_text(message["content"]),
+                "role": message["role"], "speaker": message.get("speaker"),
+                "target": message.get("target"), "date": message.get("time"),
+                "participants": message.get("participants") or [],
+            }
+            for message in self.messages(character_id, message_ids=message_ids)
+        }
 
     def target_context(self, character_id: str) -> dict | None:
         turn = self.runtime.turn

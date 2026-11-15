@@ -653,6 +653,8 @@ class RAGManager:
                 logger.debug(f"[RAG][PIPE] retriever \'{r.name}\' failed (ignored): {format_exception(e)}", exc_info=True)
                 buckets[r.name] = []
 
+        self._project_history_candidates(buckets)
+
         # --- choose combiner ---
         mode = (cfg.combine_mode or "union").strip().lower()
         if cfg.use_rrf:
@@ -764,6 +766,32 @@ class RAGManager:
         for c in cands_out:
             out.append(c.to_public_dict())
         return out
+
+    def _project_history_candidates(self, buckets: dict) -> None:
+        from core.services import services
+        from services.conversation_timeline import ConversationTimeline
+
+        history = [candidate for bucket in buckets.values()
+                   for candidate in bucket if candidate.source == "history"]
+        if not history:
+            return
+        conversation = services().get_optional(ConversationTimeline)
+        if conversation is None:
+            return
+
+        ids = {candidate.meta["message_id"] for candidate in history if candidate.meta.get("message_id")}
+        visible = conversation.retrieval_history(self.character_id, ids) if ids else {}
+        for name, bucket in buckets.items():
+            filtered = []
+            for candidate in bucket:
+                if candidate.source == "history":
+                    projected = visible.get(candidate.meta.get("message_id"))
+                    if projected is None:
+                        continue
+                    candidate.content = projected["content"]
+                    candidate.meta.update({key: value for key, value in projected.items() if key != "content"})
+                filtered.append(candidate)
+            buckets[name] = filtered
 
     def _track_access_async(self, cands: list) -> None:
         """Fire-and-forget: increment access_count / last_accessed for retrieved items."""

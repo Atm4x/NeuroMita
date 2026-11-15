@@ -2201,9 +2201,6 @@ class ModelController(GenerationService, ModelStateService):
                 rag_limit = int(self.settings.get("RAG_MAX_RESULTS", 8))
                 rag_thr = float(self.settings.get("RAG_SIM_THRESHOLD", 0.4))
                 results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
-                conversation = services().get_optional(ConversationTimeline)
-                if conversation is not None:
-                    results = conversation.filter_retrieval(char_id, results)
                 forgotten_count = rag.get_forgotten_count()
 
                 # Lore timestamps describe events in the world, never DB ingestion.
