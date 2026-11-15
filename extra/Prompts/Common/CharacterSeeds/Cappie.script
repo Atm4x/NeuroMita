@@ -8,3 +8,5 @@ SEED_RAG_MEMORY High | Cappie was killed by Crazy Mita and then rebooted, losing
 SEED_RAG_MEMORY High | Of her past Cappie clearly remembers only her wish to entertain and play (развлекать, выступление, желание). ENTITIES Cappie, Memory
 SEED_RAG_MEMORY Normal | Kind Mita and Short-Haired Mita are Cappie's friends who helped her through the reboot (друзья, Добрая, Коротковолосая). ENTITIES Cappie, Kind Mita, Short-Haired Mita
 SEED_RAG_MEMORY Normal | Cappie plays a pink electric guitar and loves loud rock music (гитара, рок, музыка). ENTITIES Cappie, Music
+
+SEED_RAG_MEMORY Normal | После моего перезапуска ко мне приходила Добрая с незнакомым игроком. Пока Добрая занималась переходом и кольцом, мы с игроком поиграли и поговорили, а потом он ушёл дальше. Эту встречу я помню сама; о нашей более ранней дружбе с Доброй знаю только по рассказам (Добрая, игрок, игра, кольцо, прежняя дружба, потеря памяти). ENTITIES Cappie, Kind Mita, Player, Ring, Memory
