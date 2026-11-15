@@ -8,6 +8,7 @@ def test_keyword_tail_disambiguates_followups_without_overriding_specific_questi
     rag = SimpleNamespace(
         character_id="A",
         _build_query_from_recent=lambda query, tail: f"User: A truce near the castle\nUser: {query}",
+        recent_query_rows=lambda limit: [],
     )
     cfg = RAGConfig()
     cfg.kw_enabled = True

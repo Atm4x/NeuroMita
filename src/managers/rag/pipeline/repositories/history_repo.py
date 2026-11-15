@@ -247,54 +247,25 @@ class HistoryRepository:
     # Context helpers used by QueryBuilder
     # ------------------------------------------------------------------
 
-    def last_active_row(self, cursor) -> Optional[dict]:
-        """Return the most recent active history row (for ctx speaker/target)."""
-        possible = ["speaker", "target", "participants", "sender"]
-        cols = [c for c in possible if c in self.schema.history_cols]
-        if not cols:
-            return None
-        where = "character_id=? AND is_active=1"
+    def active_query_rows(
+        self, cursor, *, limit: int, before_id: int | None = None, roles: tuple[str, ...] = (),
+    ) -> list[dict]:
+        cols = ["id", "role", "content"] + [
+            name for name in ("message_id", "speaker", "sender", "target", "participants")
+            if name in self.schema.history_cols
+        ]
+        where = ["character_id=?", "is_active=1"]
+        params: list[Any] = [self.character_id]
         if "is_deleted" in self.schema.history_cols:
-            where += " AND is_deleted=0"
-        try:
-            cursor.execute(
-                f"SELECT {', '.join(cols)} FROM history WHERE {where} ORDER BY id DESC LIMIT 1",
-                (self.character_id,),
-            )
-            row = cursor.fetchone()
-            return dict(zip(cols, row)) if row else None
-        except Exception:
-            return None
-
-    def recent_active_contents(
-        self,
-        cursor,
-        *,
-        tail: int,
-        role_filter: str = "user_only",
-    ) -> list[str]:
-        """Return text content of recent active history messages."""
-        if tail <= 0:
-            return []
-        rf = str(role_filter or "user_only").strip().lower()
-        if rf not in ("user_only", "user_and_assistant", "assistant_only"):
-            rf = "user_only"
-
-        where = "character_id=? AND is_active=1"
-        if "is_deleted" in self.schema.history_cols:
-            where += " AND is_deleted=0"
-
-        role_map = {
-            "user_only": " AND role='user'",
-            "assistant_only": " AND role='assistant'",
-            "user_and_assistant": " AND role IN ('user','assistant')",
-        }
-        where += role_map[rf]
-        try:
-            cursor.execute(
-                f"SELECT role, content FROM history WHERE {where} ORDER BY id DESC LIMIT ?",
-                (self.character_id, int(tail)),
-            )
-            return [str(r[1] or "") for r in (cursor.fetchall() or []) if r[1]]
-        except Exception:
-            return []
+            where.append("is_deleted=0")
+        if before_id is not None:
+            where.append("id<?")
+            params.append(before_id)
+        if roles:
+            where.append(f"role IN ({','.join('?' for _ in roles)})")
+            params.extend(roles)
+        cursor.execute(
+            f"SELECT {', '.join(cols)} FROM history WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        )
+        return self._rows_to_dicts(cursor, cols)

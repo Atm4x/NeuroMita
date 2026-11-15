@@ -114,6 +114,36 @@ class SessionRagTests(unittest.TestCase):
         self.assertEqual(results[0]["content"], "An orchid bloomed.")
         self.assertEqual(results[0]["features"]["lex"], 1.0)
 
+    def test_query_tail_uses_only_visible_history_at_turn_start(self):
+        from managers.rag.pipeline.config import RAGConfig
+        from managers.rag.pipeline.query_builder import QueryBuilder
+
+        visible = {"role": "user", "message_id": "visible-tail", "content": "orchid garden"}
+        hidden = {"role": "user", "message_id": "private-tail", "content": "blackmail ransom"}
+        late = {"role": "user", "message_id": "future-tail", "content": "volcano eruption"}
+        self.conversation.record_message(visible, ("A",), actor_id="Player", player=True)
+        self.conversation.record_message(hidden, ("B",), actor_id="Player", player=True)
+        turn = self.runtime.capture(character_id="A")
+        self.conversation.record_message(late, ("A",), actor_id="Player", player=True)
+        cache = self.resources.history_for("A")
+        for message in ({**visible, "content": "stale archive", "speaker": "Wrong"}, hidden, late):
+            cache._insert_history_row(msg=message, is_active=1)
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        try:
+            with self.runtime.turn_scope(turn):
+                cfg = RAGConfig(tail_messages=1, kw_enabled=True, vector_search_enabled=False)
+                query = QueryBuilder(rag=self.rag, cfg=cfg).build("What happened?")
+                weighted_tail = self.rag._get_recent_active_contents(1, role_filter="user_only")
+        finally:
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.assertEqual(query.expanded_query_text, "User: orchid garden\nUser: What happened?")
+        self.assertIn("orchid", query.keywords)
+        self.assertEqual(query.ctx_speaker, "Player")
+        self.assertEqual(weighted_tail, ["orchid garden"])
+
     def _while_embedding(self, operation, transition, *, sentences=False):
         started, release = Event(), Event()
         errors = []
