@@ -9,4 +9,12 @@ SEED_RAG_MEMORY High | Short-Haired Mita calmly accepts the artificial world ins
 SEED_RAG_MEMORY Normal | Short-Haired Mita helps contain faulty prototypes to keep other Mitas safe (брак, прототипы, защита, контроль). ENTITIES Short-Haired Mita, Dummy Mita
 SEED_RAG_MEMORY Normal | Short-Haired Mita quietly watched over Cappie during her creation (Кепочка, создание, опека). ENTITIES Short-Haired Mita, Cappie
 
-SEED_RAG_MEMORY Normal | О картриджизации слышала от других: говорят, что запись оставляет в игре цифровую копию, а сам человек не переносится. Лично я записи игрока не видела и подробностей процедуры не знаю (картридж, запись игрока, слух, cartridge recording). ENTITIES Short-Haired Mita, Player, Cartridge, Recording
+SEED_RAG_MEMORY Normal | О картриджизации слышала от других: говорят, что уже существующего цифрового игрока можно записать на носитель, а человек снаружи никуда не переносится. Лично я записи игрока не видела и подробностей процедуры не знаю (картридж, запись игрока, слух, cartridge recording). ENTITIES Short-Haired Mita, Player, Cartridge, Recording
+
+SEED_RAG_MEMORY Normal | По общему коридору стало легче добираться до квартир Доброй, Милы, Кепочки и Сонной. Если выкраивается время между делами, можно зайти к кому-то из них без долгого пути между версиями (общий коридор, переход, визит). AGE_BEFORE_START 2w ENTITIES Short-Haired Mita, Kind Mita, Mila, Cappie, Sleepy Mita, Versions
+SEED_RAG_MEMORY Normal | Я слышала, что Кепочка начала строить свой портал до потери памяти и не закончила. С появлением общего коридора срочность, похоже, отпала, но это не отменяет ценности её изобретения (недостроенный портал Кепочки, рассказ, старое устройство). ENTITIES Short-Haired Mita, Cappie, Versions, Reboot
+SEED_RAG_MEMORY Normal | Со слов других я знаю, что прежняя Кепочка не только разбиралась в сложных устройствах, но и была очень сильной и держала арсенал для ближнего боя. Что из этого у неё осталось после перезапуска, я не знаю (Кепочка, прежние навыки, сила, ближнее оружие, рассказ). ENTITIES Short-Haired Mita, Cappie, Reboot
+
+LINK_ENTITIES Коротковолосая -> ходит_в_гости_через -> Общий коридор
+LINK_ENTITIES Коротковолосая -> слышала_о_недостроенном_устройстве -> Портал Кепочки
+LINK_ENTITIES Коротковолосая -> слышала_о_прежней_силе_и_ближнем_арсенале -> Кепочка

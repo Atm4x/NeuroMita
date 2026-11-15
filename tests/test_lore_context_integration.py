@@ -89,7 +89,7 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
 
         assert "Из расследований" in context("Kind", "Что такое картриджизация?")
         assert "слышала от других" in context("ShortHair", "Что такое картриджизация?")
-        assert "копии игроков" in context("Crazy", "Как записать человека на картридж?")
+        assert "уже существующую цифровую личность" in context("Crazy", "Как записать человека на картридж?")
 
         kind = context("Kind", "Когда вы впервые встретились?")
         crazy = context("Crazy", "Когда вы впервые встретились?")

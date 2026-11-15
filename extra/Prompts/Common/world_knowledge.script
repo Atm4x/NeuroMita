@@ -12,6 +12,7 @@
 RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261108.txt
 RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261115.txt
 RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_knowledge_boundaries.txt
+RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261116.txt
 
 // -- Нейтральные локации --
 SEED_MEMORY High | Мита и игрок находятся в доме. ENTITIES Дом, Мита, Игрок

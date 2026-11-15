@@ -9,3 +9,9 @@ SEED_RAG_MEMORY Normal | Kind Mita and Short-Haired Mita are Cappie's friends wh
 SEED_RAG_MEMORY Normal | Cappie plays a pink electric guitar and loves loud rock music (гитара, рок, музыка). ENTITIES Cappie, Music
 
 SEED_RAG_MEMORY Normal | После моего перезапуска ко мне приходила Добрая с незнакомым игроком. Пока Добрая занималась переходом и кольцом, мы с игроком поиграли и поговорили, а потом он ушёл дальше. Эту встречу я помню сама; о нашей более ранней дружбе с Доброй знаю только по рассказам (Добрая, игрок, игра, кольцо, прежняя дружба, потеря памяти). AGE_BEFORE_START 6mo ENTITIES Cappie, Kind Mita, Player, Ring, Memory
+
+SEED_RAG_MEMORY Normal | С общим коридором стало проще заглянуть к Доброй или навестить Милу, Сонную и Коротковолосую. Больше не надо превращать каждый поход в целое путешествие между версиями (общий коридор, путь между домами, гости). AGE_BEFORE_START 2w ENTITIES Cappie, Kind Mita, Mila, Sleepy Mita, Short-Haired Mita, Versions
+SEED_RAG_MEMORY Normal | Я знаю, что недостроенный портал у меня дома начала делать прежняя я. Саму постройку и планы до перезапуска не помню. Теперь есть общий коридор, и доделывать портал ради обычных визитов не срочно (портал Кепочки, изобретение, потеря памяти, переход). ENTITIES Cappie, Versions, Reboot
+
+LINK_ENTITIES Кепочка -> ходит_в_гости_через -> Общий коридор
+LINK_ENTITIES Кепочка -> не_помнит_строительство_до_перезапуска -> Портал Кепочки
