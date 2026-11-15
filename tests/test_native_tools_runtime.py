@@ -1,11 +1,12 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from handlers.llm_providers.base import LLMRequest, LLMResponse, ToolCall as NativeToolCall
 from services.structured_response_capabilities import resolve_structured_response_capabilities
-from services.contracts import RuntimeCapabilities
+from services.contracts import ChatGenerationResult, RuntimeCapabilities
 
 
 def profile(**overrides):
@@ -27,6 +28,13 @@ def request():
     return LLMRequest(model='m', messages=[], tools_on=True, tools_payload=[
         {'name': 'calculator', 'parameters': {'type': 'object'}}],
         capabilities={'structured_response_profile': profile()})
+
+
+def _finished_tool_reply(**kwargs):
+    return ChatGenerationResult(
+        text='done', character_id=kwargs['char_id'],
+        context_snapshot_id=kwargs['context_snapshot_id'], sample_id=kwargs['sample_id'],
+    )
 
 
 def test_bridge_preserves_structured_json_and_native_id():
@@ -128,7 +136,7 @@ def test_native_followup_executes_once_and_preserves_call_and_result(cancel_stag
         model=SimpleNamespace(tool_manager=SimpleNamespace(set_char_context=lambda _: None, run=run), generate=generate),
         _build_usage_snapshot=lambda *_args, **_kwargs: None,
         _split_response_thinking=lambda response: (response.text, ''),
-        _process_structured_output=lambda **kwargs: kwargs)
+        _process_structured_output=Mock(side_effect=_finished_tool_reply))
     kwargs = dict(
         structured=StructuredResponse(segments=[], tool_call=ToolCall(name='calculator', args={'value': 41})),
         visible_raw='{"segments":[]}', think_text='', usage=None, response_model='m', response_provider='common',
@@ -152,9 +160,9 @@ def test_native_followup_executes_once_and_preserves_call_and_result(cancel_stag
     messages = followups[0][0]
     assert messages[-2]['tool_calls'][0]['id'] == 'call_real'
     assert messages[-1] == {'role': 'tool', 'tool_call_id': 'call_real', 'content': '42'}
-    assert result['tool_depth'] == 1
-    assert result['context_snapshot_id'] == 'ctx_followup'
-    assert result['sample_id'] == 'sample_followup'
+    assert harness._process_structured_output.call_args.kwargs['tool_depth'] == 1
+    assert result.context_snapshot_id == 'ctx_followup'
+    assert result.sample_id == 'sample_followup'
     assert followups[0][1]['request_options_override']['cancellation'] is cancellation
 
 
@@ -551,7 +559,7 @@ def test_native_exchange_persists_reloads_and_projects_for_subsequent_turn(monke
             )),
         _build_usage_snapshot=lambda *_args, **_kwargs: None,
         _split_response_thinking=lambda response: (response.text, ''),
-        _process_structured_output=lambda **kwargs: kwargs)
+        _process_structured_output=_finished_tool_reply)
     call = {'name': 'calculator', 'arguments': {'value': 41}, 'id': 'call_real', 'assistant_text': None,
             'responses_output': [{'type': 'reasoning', 'id': 'rs', 'encrypted_content': 'cipher', 'summary': []}]}
     if dialect == 'chat':
@@ -574,8 +582,8 @@ def test_native_exchange_persists_reloads_and_projects_for_subsequent_turn(monke
             assert result.context_snapshot_id == 'ctx_initial'
             assert result.sample_id == 'sample_initial'
         else:
-            assert result['context_snapshot_id'] == 'ctx_followup'
-            assert result['sample_id'] == 'sample_followup'
+            assert result.context_snapshot_id == 'ctx_followup'
+            assert result.sample_id == 'sample_followup'
         reloaded = HistoryManager(storage_name='Crazy', character_id='Crazy').load_history()['messages']
         assistant = next(message for message in reloaded if message['role'] == 'assistant')
         assert assistant['context_snapshot_id'] == 'ctx_initial'
