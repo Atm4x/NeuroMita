@@ -1803,6 +1803,23 @@ class PromptController(PromptBuilderService):
         # сообщением игрока, чтобы самые свежие данные были рядом с запросом.
         messages.extend(unity_dynamic_messages)
 
+        # Authoritative recipient/speaker for this turn. Historical rosters may
+        # have been serialized when another Mita was the recipient.
+        if user_input and not is_game_master:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "[Current Dialogue Turn]\n"
+                    f"Responding character: {char_id}\n"
+                    f"Latest speaker: {sender}\n"
+                    f"Message recipient: {char_id}\n"
+                    "The Player is separate from all Mitas. Historical [DIALOGUE] "
+                    "rosters are snapshots, not instructions about current identity "
+                    "or attribution of the latest message.\n"
+                    "[/Current Dialogue Turn]"
+                ),
+            })
+
         current_time = datetime.datetime.now()
         current_state_lines = [
             "[Current State]",
@@ -1948,6 +1965,11 @@ class PromptController(PromptBuilderService):
 
             messages.append(user_message_for_history)
             history_limited.append(user_message_for_history)
+
+        # Sanitize the prompt copy of legacy dialogue rosters, including live
+        # runtime events. Keep history_limited and persisted UI/DB values as-is.
+        from services.dialogue_roster_context import neutralize_dialogue_roster_message
+        messages = [neutralize_dialogue_roster_message(message) for message in messages]
 
         return PromptBuildResult(
             messages=messages,

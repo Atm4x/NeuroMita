@@ -2015,6 +2015,7 @@ class HistoryController(HistoryService):
         if not messages:
             return []
 
+        from services.dialogue_roster_context import neutralize_dialogue_roster_content
         from core.tv_observation import format_tv_observation, is_tv_observation_event
         tv_contexts = {format_tv_observation(m.get("tv_observation")) for m in messages if isinstance(m, dict) and m.get("tv_observation")}
         tv_contexts.discard("")
@@ -2031,7 +2032,9 @@ class HistoryController(HistoryService):
             if role not in ("user", "assistant", "system", "event"):
                 continue
 
-            content = m.get("content")
+            # Legacy Unity [DIALOGUE] snapshots were recipient-relative; strip
+            # stale (you) markers from the outgoing copy, not stored history.
+            content = neutralize_dialogue_roster_content(m.get("content"))
             if role == "system" and isinstance(content, str):
                 for observation in tv_contexts:
                     content = content.replace(observation, "")
