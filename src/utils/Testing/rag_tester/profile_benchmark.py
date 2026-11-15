@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+from collections import Counter
 from contextlib import closing
 import json
 import logging
@@ -17,6 +18,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -84,6 +86,85 @@ class LocalONNXService(EmbeddingService):
         return [self.cache[prefix, text] for text in texts]
 
 
+def prepare_history_cases(tester, conversation, cases):
+    labels = set()
+    for case in cases:
+        label, character, owner, message_id = (
+            case[key] for key in ("label", "character", "source_character", "message_id")
+        )
+        if label in labels or len(case["questions"]) != 2 or not all(case["questions"]):
+            raise ValueError(f"Expected a unique label and two formulations: {label}")
+        labels.add(label)
+        with tester.db.connection() as conn:
+            archived = conn.execute(
+                "SELECT 1 FROM history WHERE character_id=? AND message_id=? "
+                "AND is_active=0 AND coalesce(is_deleted,0)=0",
+                (owner, message_id),
+            ).fetchone()
+        source = conversation.retrieval_history(owner, {message_id}).get(message_id)
+        if not archived or not source or not source["content"].strip():
+            raise ValueError(f"Target is not archived and visible to source character: {label}")
+        visible = bool(conversation.retrieval_history(character, {message_id}))
+        if visible != case["visible"] or (visible and character != owner):
+            raise ValueError(f"Target does not match annotated visibility or archive owner: {label}")
+        case["expected_content"] = source["content"].strip()[:700]
+    return cases
+
+
+def evaluate_history(tester, cases, options):
+    from controllers.model_controller import ModelController
+    from controllers.prompt_controller import PromptController
+    from managers.settings_manager import SettingsManager
+    from services.contracts import PromptBuildRequest, RequestPolicy
+
+    model = object.__new__(ModelController)
+    model.settings = SettingsManager
+    prompt = PromptController()
+    prompt._build_system_messages = lambda *_a, **_k: ([], [], [])
+    prompt._build_system_state_message = lambda *_a, **_k: {"role": "system", "content": "[test state]"}
+    rows = []
+    for case in cases:
+        cid = case["character"]
+        char = SimpleNamespace(char_id=cid, get_variable=lambda key, default=None: default)
+        def search(question, limit, threshold):
+            return tester._search_timed(cid=cid, query=question, limit=limit, threshold=threshold,
+                                        use_overrides=True, overrides=options)[0]
+
+        def target_rank(results):
+            return next((i for i, result in enumerate(results, 1)
+                         if result["source"] == "history" and result.get("message_id") == case["message_id"]), None)
+
+        for number, question in enumerate(case["questions"], 1):
+            results = search(question, 5, 0.4)
+            rank = target_rank(results)
+            wide_rank = target_rank(search(question, 100, 0)) if rank is None and case["visible"] else None
+            with SettingsOverride({**options, "RAG_MAX_RESULTS": 5, "RAG_SIM_THRESHOLD": 0.4,
+                                   "RAG_CLIP_MAX_CHARS": 700}):
+                block = model.process_rag(cid, "", question) or ""
+                built = prompt.build(PromptBuildRequest(
+                    character=char, event_type="chat", user_input=question, rag_context=block,
+                    policy=RequestPolicy(use_history_in_prompt=False),
+                ))
+            delivered = bool(block and any(
+                item.get("role") == "system" and item.get("content") == block for item in built.messages
+            ) and case["expected_content"] in block)
+            rows.append({"case": case["label"], "variant": number, "visible": case["visible"],
+                         "rank": rank, "wide_rank": wide_rank, "delivered": delivered,
+                         "sources": dict(Counter(result["source"] for result in results))})
+    positives = [row for row in rows if row["visible"]]
+    negatives = [row for row in rows if not row["visible"]]
+    return {
+        "visible_queries": len(positives), "hidden_queries": len(negatives),
+        "hits_at_3": sum(row["rank"] is not None and row["rank"] <= 3 for row in positives),
+        "hits_at_5": sum(row["rank"] is not None for row in positives),
+        "mrr_at_5": round(sum(1 / row["rank"] for row in positives if row["rank"]) / max(1, len(positives)), 4),
+        "hidden_hits": sum(row["rank"] is not None for row in negatives),
+        "visible_delivered": sum(row["delivered"] for row in positives),
+        "hidden_delivered": sum(row["delivered"] for row in negatives),
+        "rows": rows,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path)
@@ -94,11 +175,17 @@ def main():
     parser.add_argument("--cases", choices=("all", "original", "new"), default="all")
     parser.add_argument("--search-history", action="store_true",
                         help="Include archived dialogue from an existing timeline in lexical profiles")
+    parser.add_argument("--history-cases", type=Path, help="Local annotated questions for archived dialogue")
+    parser.add_argument("--history-only", action="store_true", help="Skip the synthetic canon questions")
     parser.add_argument("--cache-queries", action="store_true",
                         help="Reuse query vectors for a quality sweep; reported wall time is not a latency benchmark")
     args = parser.parse_args()
-    if args.snapshot and args.output.resolve() == args.snapshot.resolve():
-        parser.error("The report path must differ from the input snapshot")
+    if args.output.resolve() in {path.resolve() for path in (args.snapshot, args.history_cases) if path}:
+        parser.error("The report path must differ from all input files")
+    if args.history_cases and not args.search_history:
+        parser.error("--history-cases requires --search-history")
+    if args.history_only and not args.history_cases:
+        parser.error("--history-only requires --history-cases")
     logging.disable(logging.CRITICAL)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -107,6 +194,8 @@ def main():
         cases += json.loads((HERE / "canon_cases.json").read_text(encoding="utf-8"))
     if args.cases in ("all", "new"):
         cases += json.loads((HERE / "zero_memory_cases.json").read_text(encoding="utf-8"))
+    if args.history_only:
+        cases = []
     needs_vectors = any(choices[name]["RAG_VECTOR_SEARCH_ENABLED"] for name in args.profiles)
     if args.search_history and (not args.snapshot or needs_vectors):
         parser.error("--search-history requires a timeline snapshot and lexical profiles")
@@ -136,7 +225,11 @@ def main():
             if repository.selection("desktop") is None:
                 parser.error("--search-history requires an existing desktop timeline")
             runtime = SessionTimelineRuntime(repository, repository)
-            services().register(ConversationTimeline, ConversationTimeline(runtime))
+            conversation = ConversationTimeline(runtime)
+            services().register(ConversationTimeline, conversation)
+        history_cases = prepare_history_cases(
+            tester, conversation, json.loads(args.history_cases.read_text(encoding="utf-8-sig")),
+        ) if args.history_cases else []
         with SettingsOverride({**common, "RAG_VECTOR_SEARCH_ENABLED": needs_vectors,
                                "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": needs_vectors}):
             started = time.perf_counter()
@@ -144,7 +237,7 @@ def main():
             if embedder:
                 report["model_load_seconds"] = time.perf_counter() - started
                 services().register(EmbeddingService, embedder)
-            characters = sorted({case[0] for case in cases})
+            characters = sorted({case[0] for case in cases} | {case["character"] for case in history_cases})
             with patch.object(MemoryManager, "_schedule_embed"):
                 for cid in characters:
                     seed_character(cid)
@@ -173,13 +266,15 @@ def main():
                 embedder.cache.clear()
                 embedder.cache_indexing = args.cache_queries
             for name in args.profiles:
-                options = choices[name]
+                options = {**common, "RAG_KEYWORD_SEARCH": True, "RAG_USE_FTS": True, **choices[name]}
                 diagnostics = []
-                report["profiles"][name] = evaluate(
-                    tester, cases, "combined", diagnostics=diagnostics,
-                    profile_options={**common, **options},
-                )
-                report.setdefault("profile_settings", {})[name] = {**common, **options}
+                if cases:
+                    report["profiles"][name] = evaluate(
+                        tester, cases, "combined", diagnostics=diagnostics, profile_options=options,
+                    )
+                if history_cases:
+                    report.setdefault("history", {})[name] = evaluate_history(tester, history_cases, options)
+                report.setdefault("profile_settings", {})[name] = options
                 report["diagnostics"][name] = diagnostics
                 args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
                 print(json.dumps({"profile_done": name}), flush=True)
@@ -188,7 +283,13 @@ def main():
             RAGManager._ACCESS_EXECUTOR.shutdown(wait=True)
             RAGManager._ACCESS_EXECUTOR = None
         gc.collect()
-    print(json.dumps({"profiles": report["profiles"], "index_seconds": report["index_seconds"]}, indent=2))
+    summary = {"profiles": report["profiles"], "index_seconds": report["index_seconds"]}
+    if history_cases:
+        summary["history"] = {
+            name: {key: value for key, value in stats.items() if key != "rows"}
+            for name, stats in report["history"].items()
+        }
+    print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
