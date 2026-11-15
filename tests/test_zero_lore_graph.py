@@ -46,6 +46,12 @@ def test_character_seed_graphs_keep_reported_knowledge_and_are_idempotent(tmp_pa
             ).fetchall()
         if character != "Crazy":
             assert any(days == 14 for _, days in seeds), character
+        with db.connection() as conn:
+            shared_evening = conn.execute(
+                "SELECT lore_age_days FROM memories WHERE character_id=? AND type='seed_lore' "
+                "AND is_deleted=0 AND content LIKE '%встреча пяти Мит%'", (character,),
+            ).fetchall()
+        assert shared_evening == ([] if character == "Crazy" else [(7,)]), character
     cfg = SimpleNamespace(graph_vector_search=False)
     query = QueryState("ShortHair", "Кепочка", "", None, ["кепочка"], None)
     found = GraphRetriever(graph_store=graphs["ShortHair"], cfg=cfg).retrieve(query)
@@ -59,6 +65,11 @@ def test_character_seed_graphs_keep_reported_knowledge_and_are_idempotent(tmp_pa
         QueryState("Crazy", "Исследователь", "", None, ["исследователь"], None),
     )
     assert any("носитель_недоступен" in row.content for row in found)
+    for cid, graph in graphs.items():
+        found = GraphRetriever(graph_store=graph, cfg=cfg).retrieve(
+            QueryState(cid, "Вечер у Доброй", "", None, ["вечер"], None),
+        )
+        assert any("была_на" in row.content for row in found) == (cid != "Crazy")
     controller = object.__new__(ModelController)
     controller.settings = SettingsManager
     builder = PromptController()

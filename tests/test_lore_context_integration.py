@@ -96,6 +96,15 @@ def test_seed_migration_and_character_context(monkeypatch, tmp_path):
         assert "Одного желания выйти из дома недостаточно" in context(
             "Cappie", "Можешь просто захотеть и выйти из дома?",
         )
+        evening = "Кто был на общем вечере у Доброй?"
+        for cid in ("Kind", "Mila", "Cappie", "Sleepy", "ShortHair"):
+            assert "встреча пяти Мит" in context(cid, evening), cid
+        for cid in ("Crazy", "Creepy", "Ghost"):
+            assert "встреча пяти Мит" not in context(cid, evening), cid
+        pov = "Можешь видеть глазами запущенного игрока и читать его мысли через консоль?"
+        assert "его мысли и желания мне так не узнать" in context("Crazy", pov)
+        assert "его мысли и желания мне так не узнать" not in context("Kind", pov)
+        assert "Другие Миты, перемещения предметов" in context("Crazy", "Сброс игрока откатывает весь мир?")
 
         kind = context("Kind", "Когда вы впервые встретились?")
         crazy = context("Crazy", "Когда вы впервые встретились?")
