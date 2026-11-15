@@ -30,6 +30,7 @@ from handlers.embedding_presets import resolve_full_config
 from managers.memory_manager import MemoryManager
 from managers.rag.indexing import RagIndexer
 from managers.rag.rag_manager import RAGManager
+from managers.rag.rag_utils import _morph_available, _ru_stemmer_fallback_enabled
 from rag_tester_core import RagTesterService, SettingsOverride, setup_test_db
 from services.contracts import EmbeddingService
 
@@ -226,6 +227,12 @@ def main():
     report = {"scope": f"all character memories and seeded graph; {history_scope}",
               "cases": len(cases), "case_set": args.cases, "cached_queries": args.cache_queries,
               "settings": common, "profiles": {}, "diagnostics": {}}
+    report["runtime"] = {
+        "python": sys.version.split()[0],
+        "sqlite": sqlite3.sqlite_version,
+        "russian_normalization": "pymorphy3" if _morph_available()
+        else ("builtin_stemmer" if _ru_stemmer_fallback_enabled() else "none"),
+    }
 
     def forbidden(*_args, **_kwargs):
         raise RuntimeError("Network access is forbidden in the offline memory benchmark")
