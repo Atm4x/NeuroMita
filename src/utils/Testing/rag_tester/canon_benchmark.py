@@ -44,7 +44,7 @@ def memory_hits(results, targets):
     return [result.get("source") == "memory" and str(result.get("id")) in targets for result in results]
 
 
-def evaluate(service, cases, mode, *, diagnostics=None):
+def evaluate(service, cases, mode, *, diagnostics=None, profile_options=None):
     kw, fts = MODES[mode]
     stats = defaultdict(list)
     failures = []
@@ -58,7 +58,7 @@ def evaluate(service, cases, mode, *, diagnostics=None):
         needles = pattern.casefold().split("|") if pattern else []
         targets = {str(eid) for eid, content in rows if any(s in content.casefold() for s in needles)}
         for wording, question in enumerate((query, variant), 1):
-            overrides = {**OPTIONS, "RAG_KEYWORD_SEARCH": kw, "RAG_USE_FTS": fts}
+            overrides = {**OPTIONS, "RAG_KEYWORD_SEARCH": kw, "RAG_USE_FTS": fts, **(profile_options or {})}
             started = time.perf_counter()
             results, _ = service._search_timed(
                 cid=cid, query=question, limit=5, threshold=0.4, use_overrides=True, overrides=overrides,
