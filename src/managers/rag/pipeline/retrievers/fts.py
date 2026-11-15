@@ -10,6 +10,7 @@ from managers.rag.rag_utils import (
     normalize_bm25_to_01,
     blob_to_array,
     json_loads_list,
+    entity_alias_phrases,
 )
 from handlers.embedding_presets import resolve_full_config
 from ..types import Candidate, QueryState
@@ -53,11 +54,17 @@ class FTSRetriever:
             match_q = fts_build_match_query(str(qs.user_query or ""), **_fts_kwargs)
             if not match_q:
                 match_q = fts_build_match_query(str(qs.expanded_query_text or ""), **_fts_kwargs)
-            if not match_q:
+            # Expand only named entities; the history query stays unchanged.
+            memory_match_q = match_q
+            aliases = entity_alias_phrases(qs.user_query)
+            if aliases:
+                alias_match = " OR ".join(f'"{alias}"' for alias in aliases)
+                memory_match_q = f"{match_q} OR {alias_match}" if match_q else alias_match
+            if not match_q and not memory_match_q:
                 return out
 
             if self.cfg.search_memory:
-                out.extend(self._memories(cur, qs, match_q))
+                out.extend(self._memories(cur, qs, memory_match_q))
             if self.cfg.search_history:
                 out.extend(self._histories(cur, qs, match_q))
 
@@ -98,7 +105,10 @@ class FTSRetriever:
             kw = 0.0
             if self.cfg.kw_enabled and qs.keywords:
                 try:
-                    kw, _ = keyword_score(qs.keywords, content_clean)
+                    kw, _ = keyword_score(
+                        qs.keywords,
+                        content_clean + " " + " ".join(json_loads_list(rd.get("entities"))),
+                    )
                 except Exception:
                     kw = 0.0
 

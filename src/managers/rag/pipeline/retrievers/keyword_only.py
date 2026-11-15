@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from managers.rag.rag_utils import rag_clean_text, keyword_score, json_loads_list
+from managers.rag.rag_utils import rag_clean_text, keyword_score, json_loads_list, entity_alias_phrases
 from ..types import Candidate, QueryState
 from ..config import RAGConfig
 from ..repositories import HistoryRepository, MemoryRepository
@@ -46,9 +46,10 @@ class KeywordOnlyRetriever:
     def _memories(self, cur, qs: QueryState) -> list[Candidate]:
         out: list[Candidate] = []
 
+        search_keywords = list(qs.keywords) + entity_alias_phrases(qs.user_query)
         rows = self.memory_repo.keyword_rows(
             cur,
-            keywords=qs.keywords,
+            keywords=search_keywords,
             limit=int(self.cfg.kw_sql_limit),
             memory_mode=self.cfg.memory_mode,
         )
@@ -61,7 +62,10 @@ class KeywordOnlyRetriever:
             content_clean = rag_clean_text(str(content_raw or ""))
 
             try:
-                kw, _ = keyword_score(qs.keywords, content_clean)
+                kw, _ = keyword_score(
+                    search_keywords,
+                    content_clean + " " + " ".join(json_loads_list(rd.get("entities"))),
+                )
             except Exception:
                 kw = 0.0
 
