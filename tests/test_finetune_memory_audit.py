@@ -1,5 +1,6 @@
 """Replay saved-format data through the real parser and memory writer, offline."""
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -97,3 +98,47 @@ def test_model_commands_cannot_edit_delete_or_merge_canon(tmp_path, monkeypatch)
     assert row(fact)[1:3] == ("We moved the meeting to evening.", 0)
     assert memory.retire_seed_memories(["I learned about the chase from the logs."]) == 1
     assert row(canon)[2] == 1
+
+
+def test_saved_memory_replay_uses_a_copy_and_preserves_distinct_claims(tmp_path, monkeypatch):
+    snapshot = tmp_path / "world.db"
+    monkeypatch.setattr(DatabaseManager, "_instance", None)
+    monkeypatch.setattr(DatabaseManager, "_path_override", str(snapshot))
+    memory = MemoryManager("Kind")
+    memory.rag = None
+    original = "I learned about the chase from the logs."
+    memory_id = memory.add_memory(original, date="15.11.2025 08:10:00")
+    records = [
+        {
+            "timestamp": "2025-11-15T08:10:00",
+            "character_id": "Kind",
+            "response": json.dumps({
+                "segments": [{"text": "Understood."}],
+                "memory_add": [original, "I did not learn about the chase from the logs."],
+                "memory_delete": [str(memory_id)],
+            }),
+        },
+        {
+            "timestamp": "2025-11-16T08:10:00",
+            "character_id": "Kind",
+            "response": json.dumps({"segments": [{"text": "Understood."}], "memory_add": [original]}),
+        },
+    ]
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text("\n".join(map(json.dumps, records)), encoding="utf-8")
+    script = Path(__file__).resolve().parents[1] / "src/utils/Testing/generation_tester/finetune_memory_replay.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(samples), "--snapshot", str(snapshot)],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    report = json.loads(result.stdout)
+    assert report["ordinary_additions_applied"] == 3
+    assert report["active_new_rows_after_maintenance"] == 2
+    assert report["existing_content_changes_after_adds"] == 0
+    assert report["existing_date_changes_after_adds"] == 0
+    assert report["preexisting_soft_deletes_from_maintenance"] == 0
+    assert original not in result.stdout
+    with memory.db.connection() as conn:
+        assert conn.execute("SELECT eternal_id, content, is_deleted FROM memories").fetchall() == [
+            (memory_id, original, 0),
+        ]
