@@ -142,10 +142,7 @@ class FTSRetriever:
             top_k=max(1, int(self.cfg.fts_top_k_hist)),
             model_name=self._model_name,
         )
-        ranks = [float(r.get("rank") or 0.0) for r in rows]
-        lex_scores = normalize_bm25_to_01(ranks)
-
-        for rd, lex in zip(rows, lex_scores):
+        for rd in rows:
             hid = int(rd.get("id") or 0)
             if hid <= 0:
                 continue
@@ -186,8 +183,15 @@ class FTSRetriever:
                     "entities": rd.get("entities"),
                     "_bm25": float(rd.get("rank") or 0.0),
                 },
-                features={"sim": sim, "kw": float(kw), "lex": float(lex), "time": 0.0, "entity": 0.0, "prio": 0.0},
-                debug={"bm25": float(rd.get("rank") or 0.0), "lex": float(lex)},
+                features={"sim": sim, "kw": float(kw), "time": 0.0, "entity": 0.0, "prio": 0.0},
+                debug={"bm25": float(rd.get("rank") or 0.0)},
             ))
 
         return out
+
+    @staticmethod
+    def normalize_history_scores(candidates: list[Candidate]) -> None:
+        history = [candidate for candidate in candidates if candidate.source == "history"]
+        scores = normalize_bm25_to_01([candidate.meta["_bm25"] for candidate in history])
+        for candidate, score in zip(history, scores):
+            candidate.features["lex"] = candidate.debug["lex"] = score

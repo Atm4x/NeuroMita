@@ -654,6 +654,8 @@ class RAGManager:
                 buckets[r.name] = []
 
         self._project_history_candidates(buckets)
+        if FTSRetriever.name in buckets:
+            FTSRetriever.normalize_history_scores(buckets[FTSRetriever.name])
 
         # --- choose combiner ---
         mode = (cfg.combine_mode or "union").strip().lower()

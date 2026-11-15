@@ -112,6 +112,7 @@ class SessionRagTests(unittest.TestCase):
         self.assertEqual([row.get("message_id") for row in results], ["visible-orchid"])
         self.assertEqual(results[0]["speaker"], "Player")
         self.assertEqual(results[0]["content"], "An orchid bloomed.")
+        self.assertEqual(results[0]["features"]["lex"], 1.0)
 
     def _while_embedding(self, operation, transition, *, sentences=False):
         started, release = Event(), Event()
