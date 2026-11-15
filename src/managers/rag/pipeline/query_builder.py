@@ -27,7 +27,9 @@ class QueryBuilder:
                     min_len=self.cfg.kw_min_len,
                     lemmatize=self.cfg.lemmatization,
                 )
-                kw_ctx = extract_keywords(
+                # A specific new question should not be diluted by unrelated tail keywords.
+                # Short follow-ups still need the preceding turns for lexical recall.
+                kw_ctx = [] if len(kw_primary) >= 3 else extract_keywords(
                     "\n".join(
                         line.split(": ", 1)[1] if line.startswith(("User: ", "Assistant: ", "Other: ")) else line
                         for line in expanded.splitlines()
