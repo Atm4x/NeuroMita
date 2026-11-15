@@ -11,6 +11,7 @@ import logging
 import math
 import statistics
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from DSL.dsl_engine import DslInterpreter
 from DSL.path_resolver import LocalPathResolver
 from managers.memory_manager import MemoryManager
-from rag_tester_core import RagTesterService, SettingsOverride, TestSuite, setup_test_db
+from rag_tester_core import RagTesterService, SettingsOverride, setup_test_db
 
 PROMPTS = ROOT / "extra" / "Prompts"
 MODES = {"keyword": (True, False), "fts": (False, True), "combined": (True, True)}
@@ -38,7 +39,12 @@ def seed_character(cid):
     dsl.process_file(f"Common/CharacterSeeds/{cid}.script")
 
 
-def evaluate(service, cases, mode):
+def memory_hits(results, targets):
+    """History IDs inhabit a different namespace from character memory IDs."""
+    return [result.get("source") == "memory" and str(result.get("id")) in targets for result in results]
+
+
+def evaluate(service, cases, mode, *, diagnostics=None):
     kw, fts = MODES[mode]
     stats = defaultdict(list)
     failures = []
@@ -52,27 +58,39 @@ def evaluate(service, cases, mode):
         needles = pattern.casefold().split("|") if pattern else []
         targets = {str(eid) for eid, content in rows if any(s in content.casefold() for s in needles)}
         for wording, question in enumerate((query, variant), 1):
-            batch = service.run_batch(
-                TestSuite.from_json(json.dumps({
-                    "character_id": cid, "cases": [{"query": question, "expected_ids": sorted(targets)}],
-                })), limit=5, threshold=0.4, use_overrides=True,
-                overrides={**OPTIONS, "RAG_KEYWORD_SEARCH": kw, "RAG_USE_FTS": fts},
+            overrides = {**OPTIONS, "RAG_KEYWORD_SEARCH": kw, "RAG_USE_FTS": fts}
+            started = time.perf_counter()
+            results, _ = service._search_timed(
+                cid=cid, query=question, limit=5, threshold=0.4, use_overrides=True, overrides=overrides,
             )
-            result = batch.results[0]
-            ids = result.retrieved_ids
+            elapsed = (time.perf_counter() - started) * 1000
+            hits = memory_hits(results, targets)
             case_id = f"{number}.{wording}"
-            stats["latency"].append(result.elapsed_ms)
-            stats["empty"].append(not ids)
+            stats["latency"].append(elapsed)
+            stats["empty"].append(not results)
+            if diagnostics is not None:
+                wide, _ = service._search_timed(
+                    cid=cid, query=question, limit=100, threshold=0, use_overrides=True, overrides=overrides,
+                ) if targets and not any(hits) else ([], {})
+                diagnostics.append({
+                    "mode": mode, "case": case_id, "target_count": len(targets),
+                    "retrieved": [{
+                        "source": result.get("source"), "score": result.get("score"), "expected": hit,
+                    } for result, hit in zip(results, hits)],
+                    "wide_target_ranks": [rank for rank, hit in enumerate(memory_hits(wide, targets), 1) if hit],
+                })
             if not pattern:
-                if ids:
+                if results:
                     negative_nonempty.append(case_id)
                 continue
-            if not targets or not set(ids) & targets:
+            if not any(hits):
                 failures.append(case_id)
-            gains = [1 / math.log2(i + 2) for i, eid in enumerate(ids) if eid in targets]
-            stats["recall3"].append(len(set(ids[:3]) & targets) / max(len(targets), 1))
-            stats["recall5"].append(len(set(ids) & targets) / max(len(targets), 1))
-            stats["mrr5"].append(result.reciprocal_rank)
+            gains = [1 / math.log2(i + 2) for i, hit in enumerate(hits) if hit]
+            found = {str(result.get("id")) for result, hit in zip(results, hits) if hit}
+            found3 = {str(result.get("id")) for result, hit in zip(results[:3], hits[:3]) if hit}
+            stats["recall3"].append(len(found3) / max(len(targets), 1))
+            stats["recall5"].append(len(found) / max(len(targets), 1))
+            stats["mrr5"].append(next((1 / (i + 1) for i, hit in enumerate(hits) if hit), 0))
             stats["ndcg5"].append(sum(gains) / (sum(1 / math.log2(i + 2)
                                     for i in range(min(len(targets), 5))) or 1))
             stats["precision5"].append(len(gains) / 5)
@@ -88,6 +106,7 @@ def main():
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--existing", action="store_true", help="Apply seeds to a disposable old-world backup")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--diagnostics", type=Path, help="Aggregate ranks and sources per case, without result text or IDs")
     args = parser.parse_args()
     if args.db.exists() != args.existing:
         parser.error("pass a new SQLite path, or --existing with a disposable backup")
@@ -98,8 +117,11 @@ def main():
     with SettingsOverride({"RAG_ENABLED": False}):
         for cid in sorted({case[0] for case in cases}):
             seed_character(cid)
-    report = {mode: evaluate(service, cases, mode) for mode in MODES}
+    diagnostics = [] if args.diagnostics else None
+    report = {mode: evaluate(service, cases, mode, diagnostics=diagnostics) for mode in MODES}
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if args.diagnostics:
+        args.diagnostics.write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
