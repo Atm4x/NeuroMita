@@ -92,6 +92,8 @@ def main():
     choices = {**PROFILES, **TUNING_PROFILES}
     parser.add_argument("--profiles", nargs="+", choices=tuple(choices), default=list(PROFILES))
     parser.add_argument("--cases", choices=("all", "original", "new"), default="all")
+    parser.add_argument("--search-history", action="store_true",
+                        help="Include archived dialogue from an existing timeline in lexical profiles")
     parser.add_argument("--cache-queries", action="store_true",
                         help="Reuse query vectors for a quality sweep; reported wall time is not a latency benchmark")
     args = parser.parse_args()
@@ -106,9 +108,13 @@ def main():
     if args.cases in ("all", "new"):
         cases += json.loads((HERE / "zero_memory_cases.json").read_text(encoding="utf-8"))
     needs_vectors = any(choices[name]["RAG_VECTOR_SEARCH_ENABLED"] for name in args.profiles)
-    report = {"scope": "all character memories and seeded graph; history retrieval disabled",
+    if args.search_history and (not args.snapshot or needs_vectors):
+        parser.error("--search-history requires a timeline snapshot and lexical profiles")
+    common = {**COMMON, "RAG_SEARCH_HISTORY": args.search_history}
+    history_scope = "archived dialogue verified by timeline" if args.search_history else "history disabled"
+    report = {"scope": f"all character memories and seeded graph; {history_scope}",
               "cases": len(cases), "case_set": args.cases, "cached_queries": args.cache_queries,
-              "settings": COMMON, "profiles": {}, "diagnostics": {}}
+              "settings": common, "profiles": {}, "diagnostics": {}}
 
     def forbidden(*_args, **_kwargs):
         raise RuntimeError("Network access is forbidden in the offline memory benchmark")
@@ -121,7 +127,17 @@ def main():
                     original.backup(copy)
         setup_test_db(str(path))
         tester = RagTesterService(bootstrap_engine=False)
-        with SettingsOverride({**COMMON, "RAG_VECTOR_SEARCH_ENABLED": needs_vectors,
+        if args.search_history:
+            from infrastructure.timeline.sqlite import SQLiteTimelineRepository
+            from services.conversation_timeline import ConversationTimeline
+            from services.timeline_runtime import SessionTimelineRuntime
+
+            repository = SQLiteTimelineRepository(connection_factory=tester.db.get_connection)
+            if repository.selection("desktop") is None:
+                parser.error("--search-history requires an existing desktop timeline")
+            runtime = SessionTimelineRuntime(repository, repository)
+            services().register(ConversationTimeline, ConversationTimeline(runtime))
+        with SettingsOverride({**common, "RAG_VECTOR_SEARCH_ENABLED": needs_vectors,
                                "RAG_SEARCH_GRAPH": True, "RAG_GRAPH_VECTOR_SEARCH": needs_vectors}):
             started = time.perf_counter()
             embedder = LocalONNXService(args.device) if needs_vectors else None
@@ -161,9 +177,9 @@ def main():
                 diagnostics = []
                 report["profiles"][name] = evaluate(
                     tester, cases, "combined", diagnostics=diagnostics,
-                    profile_options={**COMMON, **options},
+                    profile_options={**common, **options},
                 )
-                report.setdefault("profile_settings", {})[name] = {**COMMON, **options}
+                report.setdefault("profile_settings", {})[name] = {**common, **options}
                 report["diagnostics"][name] = diagnostics
                 args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
                 print(json.dumps({"profile_done": name}), flush=True)
