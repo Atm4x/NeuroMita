@@ -1361,6 +1361,18 @@ def _run_memory_dedup(gui, dry_run: bool = True) -> None:
 
 def _build_query_tail_config(self) -> list:
     return [
+        {'label': _('Удерживать найденные воспоминания', 'Retain recently retrieved memories'),
+         'key': 'RAG_CONTINUITY_ENABLED', 'type': 'checkbutton', 'default_checkbutton': True,
+         'depends_on': 'RAG_ENABLED'},
+        {'label': _('Дополнительных удержанных записей', 'Additional retained records'),
+         'key': 'RAG_CONTINUITY_MAX_RECORDS', 'type': 'entry', 'default': 4,
+         'validation': self.validate_positive_integer, 'depends_on': 'RAG_CONTINUITY_ENABLED'},
+        {'label': _('Ходов без повторного нахождения', 'Turns without retrieval confirmation'),
+         'key': 'RAG_CONTINUITY_TURNS', 'type': 'entry', 'default': 4,
+         'validation': self.validate_positive_integer, 'depends_on': 'RAG_CONTINUITY_ENABLED'},
+        {'label': _('Коэффициент угасания', 'Retention decay factor'),
+         'key': 'RAG_CONTINUITY_DECAY', 'type': 'entry', 'default': 0.7,
+         'validation': self.validate_float_0_to_1, 'depends_on': 'RAG_CONTINUITY_ENABLED'},
         {'label': _('Хвост сообщений', 'Query tail'), 'type': 'subsection'},
 
         {'label': _('Хвост сообщений для query (1-3)', 'Query tail messages (1-3)'),

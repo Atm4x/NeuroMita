@@ -2200,7 +2200,16 @@ class ModelController(GenerationService, ModelStateService):
                 rag = RAGManager.for_character(char_id)
                 rag_limit = int(self.settings.get("RAG_MAX_RESULTS", 8))
                 rag_thr = float(self.settings.get("RAG_SIM_THRESHOLD", 0.4))
-                results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
+                if user_input:
+                    from services.rag_continuity import RagContinuity
+
+                    if not hasattr(self, "_rag_continuity"):
+                        self._rag_continuity = RagContinuity()
+                    results = self._rag_continuity.search(
+                        rag, str(final_input), limit=rag_limit, threshold=rag_thr, settings=self.settings,
+                    )
+                else:
+                    results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
                 forgotten_count = rag.get_forgotten_count()
 
                 # Lore timestamps describe events in the world, never DB ingestion.
@@ -2237,6 +2246,16 @@ class ModelController(GenerationService, ModelStateService):
                         if not isinstance(r, dict):
                             continue
                         src = r.get("source")
+                        if r.get("retained"):
+                            logger.debug(
+                                "[RAG][retained] character=%s source=%s id=%s age=%s remaining=%s score=%.3f",
+                                char_id, src, r.get("id"), r["retained_age"],
+                                r["retained_turns_left"], float(r.get("score", 0)),
+                            )
+                            r = {**r, "content": (
+                                f"[Retrieved earlier; retained for topic continuity; "
+                                f"{r['retained_turns_left']} turns remaining] {r.get('content', '')}"
+                            )}
                         if src == "memory":
                             try:
                                 mem_lines.append(mem_tpl.format(

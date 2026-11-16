@@ -144,6 +144,136 @@ class SessionRagTests(unittest.TestCase):
         self.assertEqual(query.ctx_speaker, "Player")
         self.assertEqual(weighted_tail, ["orchid garden"])
 
+    def test_rag_continuity_rehydrates_and_expires_without_duplicates(self):
+        from services.rag_continuity import RagContinuity
+
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        def restore():
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.addCleanup(restore)
+        self.config.update({"RAG_ENABLED": True, "RAG_CONTINUITY_ENABLED": True, "RAG_CONTINUITY_TURNS": 4,
+                            "RAG_CONTINUITY_MAX_RECORDS": 4, "RAG_MEMORY_MODE": "all"})
+        memory = self.resources.memory_for("A")
+        identity = memory.add_memory("Mila visited the orchid garden.")
+        fresh = {"source": "memory", "id": identity, "content": "Mila visited the orchid garden.",
+                 "score": 0.9, "features": {"kw": 0.7}}
+        cache = RagContinuity()
+        with patch.object(self.rag, "search_relevant", return_value=[fresh]):
+            self.assertEqual(len(cache.search(self.rag, "Mila?", limit=5, threshold=0.3,
+                                             settings=SettingsManager)), 1)
+        with self.db.connection() as conn:
+            conn.execute("UPDATE memories SET content='Updated Mila account.' WHERE character_id='A' AND eternal_id=?",
+                         (identity,))
+            conn.commit()
+        with patch.object(self.rag, "search_relevant", return_value=[]):
+            retained = cache.search(self.rag, "Tell me more", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertEqual(retained[0]["content"], "Updated Mila account.")
+            self.assertEqual(retained[0]["retained_age"], 1)
+            repeated = cache.search(self.rag, "Tell me more", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertEqual(repeated[0]["retained_age"], 1)
+            cache.search(self.rag, "What happened next?", limit=5, threshold=0.3, settings=SettingsManager)
+            cache.search(self.rag, "Go on", limit=5, threshold=0.3, settings=SettingsManager)
+            expired = cache.search(self.rag, "Why did she?", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertEqual(expired, [])
+        with patch.object(self.rag, "search_relevant", return_value=[fresh]):
+            confirmed = cache.search(self.rag, "Mila again", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertEqual(len(confirmed), 1)
+        with self.db.connection() as conn:
+            conn.execute("UPDATE memories SET is_deleted=1 WHERE character_id='A' AND eternal_id=?", (identity,))
+            conn.commit()
+        with patch.object(self.rag, "search_relevant", return_value=[]):
+            self.assertEqual(cache.search(self.rag, "Tell me more", limit=5, threshold=0.3,
+                                          settings=SettingsManager), [])
+
+    def test_rag_continuity_scopes_history_and_expands_followup_for_search(self):
+        from services.rag_continuity import RagContinuity
+
+        self.config["RAG_ENABLED"] = True
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        def restore():
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.addCleanup(restore)
+        message = {"message_id": "mila-story", "role": "user", "content": "What happened to Mila?"}
+        self.conversation.record_message(message, ("A",), actor_id="Player", player=True)
+        identity = self.resources.history_for("A")._insert_history_row(msg=message, is_active=0)
+        fresh = {"source": "history", "id": identity, "message_id": "mila-story", "content": message["content"],
+                 "score": 0.9, "features": {"kw": 0.8}}
+        cache = RagContinuity()
+        with patch.object(self.rag, "search_relevant", return_value=[fresh]):
+            cache.search(self.rag, "Mila", limit=5, threshold=0.3, settings=SettingsManager)
+        with patch.object(self.rag, "search_relevant", return_value=[]) as search:
+            with patch.object(self.rag, "recent_query_rows", return_value=[{
+                "role": "assistant", "speaker": "A", "content": "С Милой? Та история...",
+            }]):
+                retained = cache.search(self.rag, "Расскажи подробности этой истории", limit=5,
+                                        threshold=0.3, settings=SettingsManager)
+            self.assertIn("Милой", search.call_args.args[0])
+            self.assertEqual(retained[0]["speaker"], "Player")
+            self.runtime.start_session(inherit_current=True)
+            self.assertEqual(cache.search(self.rag, "А потом?", limit=5, threshold=0.3,
+                                          settings=SettingsManager), [])
+
+    def test_rag_continuity_shrinks_on_topic_change_and_can_be_disabled(self):
+        from services.rag_continuity import RagContinuity
+
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        def restore():
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.addCleanup(restore)
+        self.config.update({"RAG_ENABLED": True, "RAG_CONTINUITY_TURNS": 5, "RAG_CONTINUITY_DECAY": 0.7,
+                            "RAG_CONTINUITY_MAX_RECORDS": 4, "RAG_MEMORY_MODE": "all"})
+        fresh = []
+        for number in range(4):
+            identity = self.resources.memory_for("A").add_memory(f"Mila visited garden {number}.")
+            fresh.append({"source": "memory", "id": identity, "content": f"garden {number}",
+                          "score": 1 - number * 0.1, "features": {"kw": 0.8}})
+        cache = RagContinuity()
+        with patch.object(self.rag, "search_relevant", return_value=fresh):
+            cache.search(self.rag, "Mila garden", limit=5, threshold=0.3, settings=SettingsManager)
+        with patch.object(self.rag, "search_relevant", return_value=[]):
+            rows = cache.search(self.rag, "Tell me more", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertEqual(len(rows), 3)
+            rows = cache.search(self.rag, "Play rock music", limit=5, threshold=0.3, settings=SettingsManager)
+            self.assertLess(len(rows), 3)
+            self.config["RAG_CONTINUITY_ENABLED"] = False
+            self.assertEqual(cache.search(self.rag, "Go on", limit=5, threshold=0.3, settings=SettingsManager), [])
+            self.config["RAG_CONTINUITY_ENABLED"] = True
+            self.assertEqual(cache.search(self.rag, "Go on", limit=5, threshold=0.3, settings=SettingsManager), [])
+
+    def test_retained_evidence_is_delivered_in_production_rag_block(self):
+        from controllers.model_controller import ModelController
+
+        self.config.update({"RAG_ENABLED": True, "RAG_MEMORY_MODE": "all"})
+        previous = services().get_optional(ConversationTimeline)
+        services().register(ConversationTimeline, self.conversation, replace=True)
+        def restore():
+            services().unregister(ConversationTimeline)
+            if previous is not None:
+                services().register(ConversationTimeline, previous)
+        self.addCleanup(restore)
+        identity = self.resources.memory_for("A").add_memory("Mila visited the orchid garden.")
+        record = {"source": "memory", "id": identity, "content": "Mila visited the orchid garden.",
+                  "type": "fact", "priority": "Normal", "score": 0.9, "features": {"kw": 0.8}}
+        controller = object.__new__(ModelController)
+        controller.settings = SettingsManager
+        with patch.object(RAGManager, "for_character", return_value=self.rag), \
+                patch.object(self.rag, "search_relevant", side_effect=[[record], []]):
+            initial = controller.process_rag("A", "", "Mila garden")
+            continuation = controller.process_rag("A", "", "Tell me more")
+        self.assertIn("Mila visited", initial)
+        self.assertIn("Mila visited", continuation)
+        self.assertIn("retained for topic continuity", continuation)
+        self.assertEqual(continuation.count("Mila visited"), 1)
+
     def _while_embedding(self, operation, transition, *, sentences=False):
         started, release = Event(), Event()
         errors = []
