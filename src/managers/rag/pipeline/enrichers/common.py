@@ -21,7 +21,9 @@ class TimeEnricher:
         for c in cands:
             # Static imported knowledge is not a newly lived event.
             # Preserve the database date for audit, but never score it.
-            if c.source == "memory" and str(c.meta.get("type") or "").strip().lower() == "seed_lore":
+            if (
+                c.source == "memory" and str(c.meta.get("type") or "").strip().lower() == "seed_lore"
+            ) or (c.source == "graph" and c.meta.get("is_protected")):
                 c.features["time"] = 0.0
                 continue
 

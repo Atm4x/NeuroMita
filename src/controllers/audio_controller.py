@@ -61,6 +61,15 @@ class AudioController(AudioStateService):
 
         self._subscribe_to_events()
 
+    def _emit_interim_ready(self, interim_tool: dict | None, audio_path: str = "") -> None:
+        """Send a tool opener to Unity without modifying the parent task status."""
+        if not isinstance(interim_tool, dict):
+            return
+        self.event_bus.emit(Events.Server.SEND_DIALOGUE_INTERIM, {
+            **interim_tool, "phase": "ready",
+            "voiceover_path": str(audio_path or ""),
+        })
+
     def _subscribe_to_events(self):
         eb = self.event_bus
         eb.subscribe(
@@ -191,6 +200,7 @@ class AudioController(AudioStateService):
         message_id = data.get("message_id")
         trace_id = str(data.get("trace_id") or "").strip() or None
         task_result = data.get("task_result")
+        interim_tool = data.get("interim_tool") if isinstance(data.get("interim_tool"), dict) else None
         perf_mark(trace_id, "tts.controller_received")
 
         character_id = data.get("character_id")
@@ -226,6 +236,7 @@ class AudioController(AudioStateService):
                     task_uid, VoiceFailure(VoiceFailureCode.RUNTIME_UNAVAILABLE),
                     task_result=task_result,
                 )
+            self._emit_interim_ready(interim_tool)
             self.waiting_answer = False
             (
                 performance_traces().finish(trace_id, "error", error_stage="tts")
@@ -254,6 +265,7 @@ class AudioController(AudioStateService):
                         trace_id=trace_id,
                         task_result=task_result,
                         state_lease=lease, cancellation=cancellation,
+                        interim_tool=interim_tool,
                     ), character_id, cancellation,
                 ))
 
@@ -270,6 +282,7 @@ class AudioController(AudioStateService):
                         task_result=task_result,
                         method=self.voiceover_method,
                         state_lease=lease, cancellation=cancellation,
+                        interim_tool=interim_tool,
                     ), character_id, cancellation,
                 ))
 
@@ -280,6 +293,7 @@ class AudioController(AudioStateService):
                         task_uid, VoiceFailure(VoiceFailureCode.CONFIGURATION),
                         task_result=task_result,
                     )
+                self._emit_interim_ready(interim_tool)
                 self.waiting_answer = False
                 (
                     performance_traces().finish(
@@ -311,6 +325,7 @@ class AudioController(AudioStateService):
             )
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
+            self._emit_interim_ready(interim_tool)
             self.waiting_answer = False
 
     async def run_send_and_receive(
@@ -324,6 +339,7 @@ class AudioController(AudioStateService):
         task_result=None,
         state_lease=None,
         cancellation=None,
+        interim_tool=None,
     ):
         state_lease = state_lease or StateLease.capture()
         logger.info("Попытка получить фразу (Telegram)")
@@ -347,7 +363,10 @@ class AudioController(AudioStateService):
             logger.notify(voiceover_path)
 
             # Синтез завершён, файл получен — только теперь показываем «Озвучивает…».
-            self._emit_show_voicing(None, speaker_command, message_id)
+            if interim_tool is None:
+                self._emit_show_voicing(None, speaker_command, message_id)
+            else:
+                self._emit_interim_ready(interim_tool, voiceover_path)
 
             if task_uid:
                 self.event_bus.emit(
@@ -372,6 +391,7 @@ class AudioController(AudioStateService):
             )
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
+            self._emit_interim_ready(interim_tool)
         finally:
             if self._voice_scope_current(state_lease, cancellation):
                 self.waiting_answer = False
@@ -400,6 +420,7 @@ class AudioController(AudioStateService):
         task_result: Optional[dict] = None,
         state_lease=None,
         cancellation=None,
+        interim_tool=None,
     ):
         state_lease = state_lease or StateLease.capture()
         trace_status = "ok"
@@ -436,17 +457,22 @@ class AudioController(AudioStateService):
                     },
                 )
 
+            self._emit_interim_ready(interim_tool, result_path)
+
             # Звук уезжает в игру вместе с task_update — но только если задача
             # вообще есть. Ответ, начатый из десктоп-чата при подключённой игре,
             # задачи не имеет, и раньше его озвучка терялась: локальное
             # воспроизведение пропускалось, а SET_PATCH_TO_SOUND_FILE никто не
             # слушает. Решает наличие task_uid, а не сам факт связи.
-            delivered_to_game = bool(task_uid) and (self._desktop_task(task_uid) or use(GameLinkService).is_connected())
+            delivered_to_game = (
+                (bool(task_uid) and (self._desktop_task(task_uid) or use(GameLinkService).is_connected()))
+                or interim_tool is not None
+            )
 
             if delivered_to_game:
-                # Начало и конец воспроизведения сообщит сам мод (speech_state);
-                # гадать по длительности файла больше не нужно.
-                self._emit_show_voicing(voice_profile, character_id, message_id)
+                # Unity reports actual playback; TTS readiness is not speech.
+                if interim_tool is None:
+                    self._emit_show_voicing(voice_profile, character_id, message_id)
             elif self.settings.get("VOICEOVER_LOCAL_CHAT"):
                 # Воспроизведение идёт в нашем процессе — точно знаем начало и
                 # конец, поэтому держим окно «Мита говорит» открытым на всю
@@ -496,6 +522,7 @@ class AudioController(AudioStateService):
             logger.error("Ошибка озвучки (%s): %s", method, error_description)
             if task_uid:
                 self._update_task_failed_voiceover(task_uid, e, task_result=task_result)
+            self._emit_interim_ready(interim_tool)
         finally:
             if method == "API" and result_path and not delivered_to_game:
                 try:

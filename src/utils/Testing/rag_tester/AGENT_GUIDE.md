@@ -12,6 +12,43 @@ All commands run from `src/utils/Testing/rag_tester/`.
 
 ---
 
+## Offline keyword and FTS runs
+
+Supply a disposable database path: the tester replaces the selected character's
+scenario rows. --lexical-only works with both run and sweep; it skips embedding
+indexing, vector and graph retrieval, and the cross-encoder. Choose the channels
+with RAG_KEYWORD_SEARCH and RAG_USE_FTS in --overrides or the sweep configuration.
+
+For a canonical check, run:
+
+    python canon_benchmark.py --db scratch.db --output metrics.json
+
+To evaluate an existing world, point --db at a disposable SQLite backup and add
+--existing. The benchmark runs all three channel combinations on the same
+questions and writes aggregate results and case numbers, without memory text.
+
+## Compare canon and live archive
+
+`profile_benchmark.py` copies the supplied snapshot and leaves the input
+untouched. For a local world with a desktop timeline:
+
+    python profile_benchmark.py --snapshot snapshot.db --output profile.json --profiles lexical_graph lexical_fts --search-history --history-cases archive-cases.json
+
+Keep the archive manifest local. Each case has a unique label, `character`,
+`source_character`, an archived `message_id`, boolean `visible`, and two
+question formulations. Use the same event with a non-witness as a negative
+control. The tester checks the label against the journal and records exact
+rank and whether the target was delivered in the assembled prompt. Including
+`vector` or `hybrid_graph` in the profiles uses the locally installed Qwen
+embedding model without contacting a generation provider. Compare profiles in
+the same reported Python and Russian morphology mode.
+
+Use a separate set of episodes to validate selected weights. Track recall of
+canon and delivery of witnessed dialogue separately; exclude snapshots,
+original questions, replies, and message IDs from Git. See the
+[review report](../../../../docs/rag-lexical-lore-review-2026-11-15.md) for
+command details and known limits.
+
 ## Step 1: Export Full Scenario
 
 Export character data from the live database into a portable JSON scenario:

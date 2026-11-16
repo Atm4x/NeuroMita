@@ -35,6 +35,7 @@ from services.contracts import (
     parse_player_message_source,
     DialogueRuntimeSource,
 )
+from services.interim_tool_speech import supports_interim_tool_speech
 from services.llm_stream import LLMStreamEvent, LLMStreamEventType
 from services.dialogue_runtime_state import get_dialogue_runtime_state_service
 from services.stream_presentation import TextDeltaCoalescer
@@ -931,7 +932,7 @@ class ChatController(ChatService, GenerationActivityService):
 
             task_response_text = " " if structured_game_master_result and not response_text else response_text
             task_structured_data = structured_data
-            if task_uid and getattr(result, "tool_preludes", ()):
+            if task_uid and not supports_interim_tool_speech(task_uid) and getattr(result, "tool_preludes", ()):
                 task_response_text, task_structured_data = self._compose_unity_tool_reply(
                     task_response_text,
                     structured_data,

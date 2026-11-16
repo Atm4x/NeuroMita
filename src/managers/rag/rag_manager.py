@@ -219,62 +219,45 @@ class RAGManager:
         except Exception:
             return v
 
+    def recent_query_rows(self, tail: int, *, roles: tuple[str, ...] = ()) -> list[dict]:
+        if tail <= 0:
+            return []
+        conversation = self._conversation()
+        page_size = max(tail, 32) if conversation is not None else tail
+        accepted = []
+        before_id = None
+        with self.db.connection() as conn:
+            while len(accepted) < tail:
+                rows = self.history_repo.active_query_rows(
+                    conn.cursor(), limit=page_size, before_id=before_id,
+                    roles=roles if conversation is None else (),
+                )
+                if conversation is None or not rows:
+                    return rows if conversation is None else accepted
+                ids = {row["message_id"] for row in rows if row.get("message_id")}
+                visible = conversation.retrieval_history(self.character_id, ids) if ids else {}
+                for row in rows:
+                    source = visible.get(row.get("message_id"))
+                    if source is not None and (not roles or source["role"] in roles):
+                        accepted.append(source)
+                        if len(accepted) == tail:
+                            return accepted
+                if len(rows) < page_size:
+                    break
+                before_id = rows[-1]["id"]
+        return accepted
+
     def _get_recent_active_contents(self, tail: int, role_filter: str = "user_only") -> list[str]:
-        """
-        Возвращает список контекстных текстов из активной history (самые последние -> более старые).
-        role_filter:
-          - "user_only"
-          - "user_and_assistant"
-          - "assistant_only"
-        """
-        out: list[str] = []
-        tail_n = int(tail or 0)
-        if tail_n <= 0:
-            return out
-
-        rf = str(role_filter or "user_only").strip().lower()
-        if rf not in ("user_only", "user_and_assistant", "assistant_only"):
-            rf = "user_only"
-
-        conn = self.db.get_connection()
-        try:
-            cur = conn.cursor()
-            where = "character_id=? AND is_active=1"
-            params: list[Any] = [self.character_id]
-            if "is_deleted" in self._history_cols:
-                where += " AND is_deleted=0"
-            if rf == "user_only":
-                where += " AND role='user'"
-            elif rf == "assistant_only":
-                where += " AND role='assistant'"
-            else:
-                where += " AND role IN ('user', 'assistant')"
-
-            cur.execute(
-                f"""
-                SELECT role, content
-                FROM history
-                WHERE {where}
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                tuple(params + [tail_n]),
-            )
-            rows = cur.fetchall() or []
-
-            max_chars = int(SettingsManager.get("RAG_QUERY_TAIL_MAX_CHARS", DEFAULT_RECENT_TAIL_MAX_CHARS) or DEFAULT_RECENT_TAIL_MAX_CHARS)
-            for _role, content in rows:
-                c = rag_clean_text(self._clip_text(content, max_chars))
-                if c:
-                    out.append(c)
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return out
+        roles = {
+            "user_and_assistant": ("user", "assistant"),
+            "assistant_only": ("assistant",),
+        }.get(str(role_filter).strip().lower(), ("user",))
+        max_chars = int(SettingsManager.get("RAG_QUERY_TAIL_MAX_CHARS", DEFAULT_RECENT_TAIL_MAX_CHARS)
+                        or DEFAULT_RECENT_TAIL_MAX_CHARS)
+        return [
+            text for row in self.recent_query_rows(tail, roles=roles)
+            if (text := rag_clean_text(self._clip_text(row["content"], max_chars)))
+        ]
 
     def _build_query_embedding(self, user_query: str, tail: int) -> Optional[np.ndarray]:
         """
@@ -362,41 +345,11 @@ class RAGManager:
         parts: list[str] = []
         uq = str(user_query or "").strip()
 
-        conn = self.db.get_connection()
-        try:
-            cur = conn.cursor()
-            where = "character_id=? AND is_active=1"
-            params: list[Any] = [self.character_id]
-            if "is_deleted" in self._history_cols:
-                where += " AND is_deleted=0"
-
-            cur.execute(
-                f"""
-                SELECT role, content
-                FROM history
-                WHERE {where}
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                tuple(params + [int(tail)]),
-            )
-            rows = cur.fetchall() or []
-            # rows сейчас от новых к старым -> развернём в хронологию
-            rows = list(reversed(rows))
-            for role, content in rows:
-                r = str(role or "").strip().lower()
-                c = str(content or "").strip()
-                if not c:
-                    continue
-                tag = "User" if r == "user" else ("Assistant" if r == "assistant" else "Other")
-                parts.append(f"{tag}: {c}")
-        except Exception:
-            pass
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        for row in reversed(self.recent_query_rows(tail)):
+            content = str(row["content"] or "").strip()
+            if content:
+                tag = {"user": "User", "assistant": "Assistant"}.get(row["role"], "Other")
+                parts.append(f"{tag}: {content}")
 
         if uq:
             parts.append(f"User: {uq}")
@@ -653,6 +606,10 @@ class RAGManager:
                 logger.debug(f"[RAG][PIPE] retriever \'{r.name}\' failed (ignored): {format_exception(e)}", exc_info=True)
                 buckets[r.name] = []
 
+        self._project_history_candidates(buckets)
+        if FTSRetriever.name in buckets:
+            FTSRetriever.normalize_history_scores(buckets[FTSRetriever.name])
+
         # --- choose combiner ---
         mode = (cfg.combine_mode or "union").strip().lower()
         if cfg.use_rrf:
@@ -764,6 +721,36 @@ class RAGManager:
         for c in cands_out:
             out.append(c.to_public_dict())
         return out
+
+    @staticmethod
+    def _conversation():
+        from core.services import services
+        from services.conversation_timeline import ConversationTimeline
+
+        return services().get_optional(ConversationTimeline)
+
+    def _project_history_candidates(self, buckets: dict) -> None:
+        history = [candidate for bucket in buckets.values()
+                   for candidate in bucket if candidate.source == "history"]
+        if not history:
+            return
+        conversation = self._conversation()
+        if conversation is None:
+            return
+
+        ids = {candidate.meta["message_id"] for candidate in history if candidate.meta.get("message_id")}
+        visible = conversation.retrieval_history(self.character_id, ids) if ids else {}
+        for name, bucket in buckets.items():
+            filtered = []
+            for candidate in bucket:
+                if candidate.source == "history":
+                    projected = visible.get(candidate.meta.get("message_id"))
+                    if projected is None:
+                        continue
+                    candidate.content = projected["content"]
+                    candidate.meta.update({key: value for key, value in projected.items() if key != "content"})
+                filtered.append(candidate)
+            buckets[name] = filtered
 
     def _track_access_async(self, cands: list) -> None:
         """Fire-and-forget: increment access_count / last_accessed for retrieved items."""

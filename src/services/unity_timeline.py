@@ -8,6 +8,14 @@ from services.contracts import parse_dialogue_turn_context
 from .timeline_runtime import SessionTimelineRuntime
 
 
+def unity_event_visible_to(raw: object, character_id: str) -> bool:
+    """Legacy events without an audience are already scoped by their delivery."""
+    if not isinstance(raw, dict) or "observers" not in raw:
+        return True
+    observers = raw["observers"]
+    return isinstance(observers, (list, tuple)) and character_id in observers
+
+
 @dataclass(frozen=True)
 class UnityIngestResult:
     """What one Unity request contributed to the timeline.
@@ -53,6 +61,7 @@ class UnityTimelineIngress:
             "reaction_events": data.get("reaction_events", []),
             "reason": data.get("reason_content") or data.get("reason") or "",
             "reason_type": data.get("reason_type", "UnityEvent"),
+            **({"reason_observers": data["observers"]} if "observers" in data else {}),
         })
         with self.runtime.writing() as timeline:
             key = f"unity-ingress:{request_id}"
@@ -96,16 +105,20 @@ class UnityTimelineIngress:
             elif kind == "react":
                 reason = data.get("reason_content") or data.get("reason")
                 if reason:
-                    raw_events = [*raw_events, {"name": data.get("reason_type", "UnityEvent"), "description": reason}]
+                    raw_events = [*raw_events, {
+                        "name": data.get("reason_type", "UnityEvent"), "description": reason,
+                        **({"observers": data["observers"]} if "observers" in data else {}),
+                    }]
             for index, raw in enumerate(raw_events):
                 if isinstance(raw, dict):
                     name = str(raw.get("name") or raw.get("type") or raw.get("reason_type") or "UnityEvent")
-                    description = str(raw.get("description") or raw.get("reason_content") or raw.get("reason") or "")
+                    text = raw.get("text")
+                    description = (text if isinstance(text, str) and text.strip()
+                                   else str(raw.get("description") or raw.get("reason_content") or raw.get("reason") or ""))
                     payload = {"name": name, "description": description}
                     if isinstance(raw.get("data"), dict):
                         payload["data"] = raw["data"]
-                    observers = raw.get("observers")
-                    audience = witnesses.intersection(observers) if isinstance(observers, list) else witnesses
+                    audience = {cid for cid in witnesses if unity_event_visible_to(raw, cid)}
                 else:
                     payload = {"name": "UnityEvent", "description": str(raw)}
                     audience = witnesses

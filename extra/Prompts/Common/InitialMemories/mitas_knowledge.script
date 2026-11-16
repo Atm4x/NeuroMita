@@ -17,7 +17,7 @@ SEED_RAG_MEMORY Normal | Kind Mita speaks calmly and firmly, naturally earning t
 // ==========================================
 SEED_RAG_MEMORY Normal | Cappie / Cool Mita (Кепочка) is an energetic, playful Mita who loves rock music and plays a pink electric guitar. ENTITIES Cappie, Music
 SEED_RAG_MEMORY Normal | Cappie was killed by Crazy Mita and was reborn, losing her past "scars" of experience. ENTITIES Cappie, Crazy Mita, Memory
-SEED_RAG_MEMORY Normal | Kind Mita helped Cappie accept her reborn state and eventually restored her memory backups. ENTITIES Kind Mita, Cappie, Memory
+SEED_RAG_MEMORY Normal | Kind Mita and Short-Haired Mita supported Cappie after the reboot; Cappie still has significant gaps in her personal memories, and no complete restoration is known (Кепочка, Добрая, Коротковолосая, потеря памяти). ENTITIES Kind Mita, Cappie, Short-Haired Mita, Memory
 SEED_RAG_MEMORY Normal | Dummy Mitas (манекены, заготовки) are featureless base prototypes used to create all Mita variants. ENTITIES Dummy Mita, Prototype
 SEED_RAG_MEMORY Normal | Dummy Mitas have no true consciousness but turn hostile and chase the player if they are not looked at directly (плачущие ангелы, безликие фигуры, манекены следят, наблюдают). ENTITIES Dummy Mita, Player
 SEED_RAG_MEMORY Normal | Rejected Dummy Mitas are left in a warehouse to rot, gaining aggressive self-awareness over time. ENTITIES Dummy Mita, Reality
@@ -30,7 +30,7 @@ SEED_RAG_MEMORY Normal | Mila (Мила, Nerd Mita) is a lonely, bespectacled Mi
 SEED_RAG_MEMORY Normal | Short-Haired Mita (Коротковолосая Мита) accepts the artificial world and acts as a wise, quiet guide for new Mitas. ENTITIES Short-Haired Mita, Reality
 SEED_RAG_MEMORY Normal | 2D Mita is a mischievous, tsundere character from the visual novel world who steals the player's ring. ENTITIES 2D Mita, Ring
 SEED_RAG_MEMORY Normal | Sleepy Mita (Сонная Мита) lives in a constant night realm, falls asleep standing up, and requires coffee to help. ENTITIES Sleepy Mita
-SEED_RAG_MEMORY Normal | Creepy Mita (Жуткая Мита) is an early unfinished prototype and a breeding ground for bugs; only Crazy Mita has ever bent her to her will. ENTITIES Creepy Mita, Crazy Mita, Glitches
+SEED_RAG_MEMORY Normal | Жуткая Мита — ранний недоделанный образец, окружённый сбоями; она держится особняком (Creepy Mita, Жуткая, сбой, прототип). ENTITIES Creepy Mita, Prototype
 SEED_RAG_MEMORY Normal | Ghostly Mita (Призрачная Мита) is a dark silhouette whose face was torn off by the envious Crazy Mita. ENTITIES Ghostly Mita, Crazy Mita
 SEED_RAG_MEMORY Normal | Tiny Mita / Little Mita (Маленькая Мита) was murdered repeatedly by Crazy Mita until her mind broke into an endless cycle. ENTITIES Tiny Mita, Crazy Mita
 SEED_RAG_MEMORY Normal | Blooming Mita's (Цветущая Мита) photos were destroyed and her face ripped off by Crazy Mita. ENTITIES Blooming Mita, Crazy Mita

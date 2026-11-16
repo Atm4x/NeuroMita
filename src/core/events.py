@@ -748,6 +748,7 @@ class Events:
         GET_CHAT_SERVER = "get_chat_server"
         SET_PATCH_TO_SOUND_FILE = "set_patch_to_sound_file"
         SEND_TASK_UPDATE = "send_task_update"
+        SEND_DIALOGUE_INTERIM = "send_dialogue_interim"
         LOAD_SERVER_SETTINGS = "load_server_settings"
         ECHO_CHAT_MESSAGE_REQUESTED = "echo_chat_message_requested"
         SEND_ASR_TEXT = "send_asr_text"

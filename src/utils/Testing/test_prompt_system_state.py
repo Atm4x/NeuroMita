@@ -205,7 +205,12 @@ class PromptSystemStateTests(unittest.TestCase):
         protocol_index = enabled_contents.index(next(c for c in enabled_contents if "[WORKING STATE PROTOCOL]" in c))
         state_index = enabled_contents.index(next(c for c in enabled_contents if c.startswith("[WORKING STATE]")))
         self.assertLess(protocol_index, state_index)
-        self.assertIn("active effect wins", enabled_contents[protocol_index])
+        protocol = enabled_contents[protocol_index]
+        self.assertIn("active effect wins", protocol)
+        self.assertIn("ongoing scene", protocol)
+        self.assertIn("Omit working_state to retain", protocol)
+        self.assertIn("emit explicit null", protocol)
+        self.assertIn("not proof that Unity applied it", protocol)
         self.assertLess(state_index, len(enabled_contents) - 1)
         self.assertEqual(enabled.messages[state_index]["role"], "assistant")
 
@@ -247,7 +252,10 @@ class PromptSystemStateTests(unittest.TestCase):
             ))
 
         contents = [message.get("content", "") for message in result.messages]
-        self.assertLess(contents.index("[HISTORY SUMMARY]\nOlder dialogue"), contents.index(
+        summary = next(item for item in contents if item.startswith("[HISTORY SUMMARY]\n"))
+        self.assertIn("Keep reports, guesses, and proposals attributed", summary)
+        self.assertIn("Older dialogue", summary)
+        self.assertLess(contents.index(summary), contents.index(
             "[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07"
         ))
         self.assertLess(

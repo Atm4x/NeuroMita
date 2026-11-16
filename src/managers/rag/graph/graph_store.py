@@ -385,7 +385,8 @@ class GraphStore:
                 r.confidence,
                 e1.entity_type AS subject_type,
                 e2.entity_type AS object_type,
-                r.created_at
+                r.created_at,
+                r.is_protected
             FROM graph_relations r
             JOIN graph_entities e1 ON r.subject_id = e1.id
             JOIN graph_entities e2 ON r.object_id  = e2.id

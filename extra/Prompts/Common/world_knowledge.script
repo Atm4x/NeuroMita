@@ -10,6 +10,9 @@
 
 // Удаляем только точные устаревшие сиды из существующей БД ДО загрузки обновлённой версии.
 RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261108.txt
+RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261115.txt
+RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_knowledge_boundaries.txt
+RETIRE_SEED_MEMORIES ./InitialMemories/obsolete_lore_20261116.txt
 
 // -- Нейтральные локации --
 SEED_MEMORY High | Мита и игрок находятся в доме. ENTITIES Дом, Мита, Игрок
@@ -67,7 +70,7 @@ SEED_RAG_MEMORY Normal | Other character prompts were written by additional cont
 // Всё параметризуемо флагами (по умолчанию всё ВКЛючено — флаги не заданы => грузим).
 // Отключить набор целиком:  SET SEED_INITIAL_MEMORIES = False  (в init.script персонажа
 // ДО RUN world_knowledge). Точечно:  SEED_WORLD_LORE / SEED_ROOMS_LORE / SEED_MITAS_LORE
-// / SEED_ENTITY_LINKS = False. Дополнительная эрудиция о картриджах входит в SEED_WORLD_LORE.
+// / SEED_ENTITY_LINKS = False. Личные знания о записи игроков загружаются отдельно из CharacterSeeds.
 //
 // Каждая загрузка — один плоский IF «мастер И под-флаг не выключены явно»
 // (незаданный флаг != False => грузим). Пути с ./ резолвятся от папки этого файла.

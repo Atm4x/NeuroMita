@@ -17,6 +17,15 @@ Important:
   - `.generation_tester_sandboxes/`
   - `.generation_tester_runs/`
 
+## Offline audit of saved requests
+
+Run finetune_audit.py with one or more samples_YYYYMM.jsonl paths and optionally
+--output audit.json. It streams the archive, parses recorded replies with the
+current structured response parser and reports aggregate counters. No requests
+are regenerated and no recorded IDs are applied to a different world. Repeated
+headers and identical event payloads are counted separately; identical text is
+evidence for inspection, not a substitute for stable event identity.
+
 ## Quick start
 
 Print scenario template:

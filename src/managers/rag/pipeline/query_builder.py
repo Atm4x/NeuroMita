@@ -27,8 +27,13 @@ class QueryBuilder:
                     min_len=self.cfg.kw_min_len,
                     lemmatize=self.cfg.lemmatization,
                 )
-                kw_ctx = extract_keywords(
-                    expanded,
+                # A specific new question should not be diluted by unrelated tail keywords.
+                # Short follow-ups still need the preceding turns for lexical recall.
+                kw_ctx = [] if len(kw_primary) >= 3 else extract_keywords(
+                    "\n".join(
+                        line.split(": ", 1)[1] if line.startswith(("User: ", "Assistant: ", "Other: ")) else line
+                        for line in expanded.splitlines()
+                    ),
                     max_terms=self.cfg.kw_max_terms,
                     min_len=self.cfg.kw_min_len,
                     from_end=True,
@@ -49,25 +54,12 @@ class QueryBuilder:
             except Exception:
                 keywords = []
 
-        # embedding can be None
-        qvec = self.rag._build_query_embedding(uq, tail=int(self.cfg.tail_messages or 0))
+        qvec = None
+        if self.cfg.vector_search_enabled or (self.cfg.search_graph and self.cfg.graph_vector_search):
+            qvec = self.rag._build_query_embedding(uq, tail=int(self.cfg.tail_messages or 0))
 
-        # ctx entities from last active message (same logic as old)
-        ctx_speaker = ""
-        ctx_target = ""
-        ctx_participants: list[str] = []
-        try:
-            with self.rag.db.connection() as conn:
-                cur = conn.cursor()
-
-                rd = self.rag.history_repo.last_active_row(cur)
-                if rd:
-                    ctx_speaker = str(rd.get("speaker") or rd.get("sender") or "").strip()
-                    ctx_target = str(rd.get("target") or "").strip()
-                    ctx_participants = json_loads_list(rd.get("participants"))
-        except Exception:
-            pass
-
+        rows = self.rag.recent_query_rows(1)
+        row = rows[0] if rows else {}
         return QueryState(
             character_id=self.rag.character_id,
             user_query=uq,
@@ -75,7 +67,7 @@ class QueryBuilder:
             query_vec=qvec,
             keywords=keywords,
             now_ts=datetime.datetime.now(),
-            ctx_speaker=ctx_speaker,
-            ctx_target=ctx_target,
-            ctx_participants=ctx_participants,
+            ctx_speaker=str(row.get("speaker") or row.get("sender") or "").strip(),
+            ctx_target=str(row.get("target") or "").strip(),
+            ctx_participants=json_loads_list(row.get("participants")),
         )

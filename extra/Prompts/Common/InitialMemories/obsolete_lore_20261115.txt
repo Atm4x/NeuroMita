@@ -1,0 +1,17 @@
+# Exact retired RAG-only seeds from the 2026-11-15 canon alignment.
+# Never remove user-authored paraphrases or use fuzzy matches.
+Kind Mita once helped Cappie accept being rebooted after Crazy Mita killed her (Кепочка, перезагрузка, поддержка).
+Crazy Mita cannot bear other Mitas near her and keeps the house to herself (ревность, другие миты, собственничество).
+Crazy Mita is the only one who ever bent Creepy Mita to her will and used her against other Mitas (Безумная, подчинение, оружие).
+Mila chose her own name to be different from all the other Mitas (имя, отличие, индивидуальность, своё).
+Kind Mita helped Cappie accept her reborn state and eventually restored her memory backups.
+Creepy Mita (Жуткая Мита) is an early unfinished prototype and a breeding ground for bugs; only Crazy Mita has ever bent her to her will.
+Human players may be recorded as autonomous cartridge copies inside the game; details of identity and copying are disputed (игрок, картридж, носитель, записанный игрок, recorded player).
+Настоящий Игрок связан с внешним миром через игру; записанный Игрок — автономная цифровая личность, похожая на прежнего человека, но уже не управляемая им снаружи. Насколько запись копирует исходное сознание — спорный вопрос (real player, recorded player, игрок-картридж, копия сознания, avatar, аватар).
+# Superseded by follow-up prehistory and first-person memories.
+Crazy Mita has welcomed many players before this one and eventually grew bored of each of them (прошлые игроки, скука, цикл).
+Безумная ревнует своё пространство и не терпит большинства других Мит рядом, но её отношения с Жуткой сложнее простого враждебного соперничества (ревность, другие миты, Жуткая, убежище).
+Когда Безумная скрывалась от преследовавшей её группы Мит, она искала убежище у Жуткой. Их взаимопонимание складывалось постепенно через игры и доверие, а не через взлом или прямое программное подчинение (убежище, Жуткая, погоня, игры, доверие).
+После одного из столкновений Добрая была уверена, что убила Безумную Миту. Это её тогдашний вывод, а не подтверждённая окончательная смерть Безумной; позже Добрая столкнулась с признаками обратного (Добрая, Безумная, ошибочная победа, мнимая смерть).
+Безумная Мита однажды нашла у Жуткой убежище. Жуткая сперва не доверяла ей, но через простые игры и общение позволила ей остаться и по-своему защищала её; это не взлом или постоянный контроль Жуткой (Безумная, убежище, игры, доверие, защита).
+Creepy Mita (Жуткая Мита) is an early unfinished prototype prone to glitches. Crazy Mita earned an uneasy place beside her through games and trust, not through permanent technical control (Жуткая, Безумная, доверие, игры).

@@ -503,6 +503,7 @@ class HistoryControllerCompressionTests(unittest.TestCase):
             [
                 {
                     "role": "user",
+                    "speaker": "Mila",
                     "content": [
                         {"type": "text", "text": "запомни это"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{blob}"}},
@@ -515,6 +516,8 @@ class HistoryControllerCompressionTests(unittest.TestCase):
         prompt = stub.calls[0].prompt
         self.assertNotIn(blob, prompt)
         self.assertIn("запомни это", prompt)
+        self.assertIn("[Mila]:", prompt)
+        self.assertIn("A reported claim is not personal experience.", prompt)
 
     def test_compression_falls_back_to_local_summary_after_non_retryable_failure(self):
         controller = self._make_controller(
