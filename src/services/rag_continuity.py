@@ -15,7 +15,7 @@ def is_followup(query: str) -> bool:
     text = query.casefold().strip()
     return bool(re.search(
         r"\b(подробнее|подробности|продолжи|продолжай|дальше|потом|"
-        r"этой истории|эту историю|об этом|про это|почему (?:она|он|ты|это)|"
+        r"этой истории|эту историю|об этом|про это|по этой ситуации|о н[её]м|о ней|что ещ[её].*помнишь|почему (?:она|он|ты|это)|"
         r"что (?:она|он) (?:сделала?|сказала?)|tell me more|go on|what happened next|"
         r"that story|about that|why did (?:she|he|you))\b", text,
     ))
@@ -43,6 +43,7 @@ class Window:
     age: int = 0
     entries: dict = field(default_factory=dict)
     query: str = ""
+    topic: str = ""
 
 
 class RagContinuity:
@@ -84,6 +85,8 @@ class RagContinuity:
                         window.age += 1
                 window.turn = token
             window.head = head
+            if not followup:
+                window.topic = query[:1200]
             window.query = query[:4000]
             effective = query
             if followup:
@@ -91,12 +94,17 @@ class RagContinuity:
                 if rows:
                     context = "\n".join(f"{r.get('speaker') or r['role']}: {str(r['content'])[:600]}"
                                         for r in reversed(rows))
-                    effective = f"{context}\n{query}"
+                    effective += f"\nPrevious exchange:\n{context}"
+                if window.topic:
+                    effective += f"\nTopic question: {window.topic}"
             fresh = rag.search_relevant(effective, limit=limit, threshold=threshold)
             fresh_keys = {(r["source"], r["id"]) for r in fresh}
             eligible = [ref for ref in window.entries.values()
                         if 0 < window.age - ref.confirmed < steps and ref.key not in fresh_keys]
-            eligible.sort(key=lambda ref: ref.score * decay ** (window.age - ref.confirmed), reverse=True)
+            def retention_priority(ref):
+                return ref.score * decay ** (window.age - ref.confirmed)
+
+            eligible.sort(key=retention_priority, reverse=True)
             retained = []
             for ref in eligible:
                 # Shrink the old portion as its evidence ages, even on follow-ups.
@@ -129,7 +137,7 @@ class RagContinuity:
                 window.entries[ref.key] = ref
             window.entries = dict(sorted(
                 ((key, ref) for key, ref in window.entries.items() if window.age - ref.confirmed < steps),
-                key=lambda pair: pair[1].score * decay ** (window.age - pair[1].confirmed), reverse=True,
+                key=lambda pair: retention_priority(pair[1]), reverse=True,
             )[:capacity])
             runtime.assert_current()
             return fresh + retained

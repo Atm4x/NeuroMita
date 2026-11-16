@@ -6,6 +6,7 @@ from services.rag_continuity import is_followup
 @pytest.mark.parametrize("query", [
     "Я хочу, чтобы ты рассказал мне подробности этой истории.",
     "А потом?", "Почему она так сделала?", "Tell me more", "What happened next?",
+    "Это должно быть воспоминание о нем. Что еще ты помнишь?",
 ])
 def test_followups_need_the_previous_subject(query):
     assert is_followup(query)

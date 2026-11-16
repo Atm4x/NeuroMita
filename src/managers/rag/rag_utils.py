@@ -298,6 +298,7 @@ def fts_build_match_query(
     min_len: int,
     morph_expand: bool = False,
     prefix_match: bool = False,
+    from_end: bool = False,
 ) -> str:
     """Build an FTS5 MATCH query string.
 
@@ -320,6 +321,8 @@ def fts_build_match_query(
     if not cleaned:
         return ""
     tokens = re.findall(r"[0-9A-Za-zА-Яа-яЁё_]+", cleaned.lower())
+    if from_end:
+        tokens.reverse()
 
     all_terms: List[str] = []   # final FTS terms joined by OR
     base_count = 0

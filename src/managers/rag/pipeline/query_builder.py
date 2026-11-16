@@ -26,6 +26,7 @@ class QueryBuilder:
                     max_terms=self.cfg.kw_max_terms,
                     min_len=self.cfg.kw_min_len,
                     lemmatize=self.cfg.lemmatization,
+                    from_end=True,
                 )
                 # A specific new question should not be diluted by unrelated tail keywords.
                 # Short follow-ups still need the preceding turns for lexical recall.

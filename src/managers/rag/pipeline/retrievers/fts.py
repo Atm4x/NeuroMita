@@ -52,6 +52,7 @@ class FTSRetriever:
                 min_len=int(self.cfg.fts_min_len),
                 morph_expand=bool(self.cfg.fts_morph_expand),
                 prefix_match=bool(self.cfg.fts_prefix_match),
+                from_end=True,
             )
             match_q = fts_build_match_query(str(qs.user_query or ""), **_fts_kwargs)
             if not match_q:
