@@ -156,8 +156,9 @@ class RagContinuity:
                 ).fetchone()
             row = conversation.retrieval_history(rag.character_id, {ref.message_id}).get(ref.message_id) if exists else None
             return dict(row, source="history", id=ref.identity, message_id=ref.message_id) if row else None
-        from managers.settings_manager import SettingsManager
-        mode = str(SettingsManager.get("RAG_MEMORY_MODE", "active"))
+        from managers.rag.pipeline.config import RAGConfig
+
+        mode = RAGConfig.from_settings(limit=1, threshold=0).memory_mode
         where, params = rag.memory_repo._base_where(mode)
         with rag.db.connection() as conn:
             row = conn.execute(

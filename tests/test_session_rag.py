@@ -274,6 +274,15 @@ class SessionRagTests(unittest.TestCase):
         self.assertIn("retained for topic continuity", continuation)
         self.assertEqual(continuation.count("Mila visited"), 1)
 
+    def test_retention_uses_the_same_default_memory_mode_as_search(self):
+        from services.rag_continuity import RagContinuity, Reference
+
+        self.config.pop("RAG_MEMORY_MODE", None)
+        identity = self.resources.memory_for("A").seed_rag_memory("The shared corridor connects the houses.")
+        row = RagContinuity._resolve(self.rag, self.conversation, Reference("memory", identity, 0.9, 1))
+        self.assertIsNotNone(row)
+        self.assertIn("shared corridor", row["content"])
+
     def _while_embedding(self, operation, transition, *, sentences=False):
         started, release = Event(), Event()
         errors = []
