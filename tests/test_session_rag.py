@@ -214,6 +214,7 @@ class SessionRagTests(unittest.TestCase):
                 retained = cache.search(self.rag, "Расскажи подробности этой истории", limit=5,
                                         threshold=0.3, settings=SettingsManager)
             self.assertIn("Милой", search.call_args.args[0])
+            self.assertTrue(search.call_args.args[0].endswith("Topic question: Mila"))
             self.assertEqual(retained[0]["speaker"], "Player")
             self.runtime.start_session(inherit_current=True)
             self.assertEqual(cache.search(self.rag, "А потом?", limit=5, threshold=0.3,
@@ -263,16 +264,43 @@ class SessionRagTests(unittest.TestCase):
         identity = self.resources.memory_for("A").add_memory("Mila visited the orchid garden.")
         record = {"source": "memory", "id": identity, "content": "Mila visited the orchid garden.",
                   "type": "fact", "priority": "Normal", "score": 0.9, "features": {"kw": 0.8}}
+        fresh_id = self.resources.memory_for("A").add_memory("The orchid was blue.")
+        new_record = {**record, "id": fresh_id, "content": "The orchid was blue."}
         controller = object.__new__(ModelController)
         controller.settings = SettingsManager
         with patch.object(RAGManager, "for_character", return_value=self.rag), \
-                patch.object(self.rag, "search_relevant", side_effect=[[record], []]):
+                patch.object(self.rag, "search_relevant", side_effect=[[record], [new_record]]) as search:
             initial = controller.process_rag("A", "", "Mila garden")
-            continuation = controller.process_rag("A", "", "Tell me more")
+            with patch.object(self.rag, "recent_query_rows", return_value=[]):
+                continuation = controller.process_rag("A", "", "Tell me more")
+            self.assertEqual(search.call_count, 2)
+            self.assertIn("Topic question: Mila garden", search.call_args.args[0])
         self.assertIn("Mila visited", initial)
         self.assertIn("Mila visited", continuation)
-        self.assertIn("retained for topic continuity", continuation)
+        self.assertIn("Earlier retrieval retained for this conversation", continuation)
         self.assertEqual(continuation.count("Mila visited"), 1)
+        self.assertIn("The orchid was blue.", continuation)
+        self.assertLess(continuation.index("The orchid was blue."), continuation.index("Mila visited"))
+
+    def test_legacy_layout_can_be_restored_independently_of_date_and_score_settings(self):
+        from controllers.model_controller import ModelController
+
+        self.config.update({"RAG_ENABLED": True, "RAG_CONTEXT_LAYOUT": "legacy",
+                            "RAG_CONTEXT_DATE_MODE": "absolute", "RAG_CONTEXT_SHOW_SCORES": False})
+        record = {"source": "memory", "id": 12, "content": "An orchid bloomed. Log value [1.25].",
+                  "type": "fact", "priority": "Normal", "score": 0.9,
+                  "date_created": "2026-01-02T10:20:59+00:00"}
+        controller = object.__new__(ModelController)
+        controller.settings = SettingsManager
+        with patch.object(RAGManager, "for_character", return_value=self.rag), \
+                patch.object(self.rag, "search_relevant", return_value=[record]):
+            text = controller.process_rag("A", "", "orchid")
+        self.assertIn("<past_context>", text)
+        self.assertNotIn("[Retrieved evidence]", text)
+        self.assertIn("N:12", text)
+        self.assertIn("2026-01-02", text)
+        self.assertNotIn("[0.900]", text)
+        self.assertIn("[1.25]", text)
 
     def test_retention_uses_the_same_default_memory_mode_as_search(self):
         from services.rag_continuity import RagContinuity, Reference

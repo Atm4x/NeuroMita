@@ -2222,6 +2222,20 @@ class ModelController(GenerationService, ModelStateService):
                     logger.debug("[%s] Lore-date display unavailable: %s", char_id, format_exception(exc))
 
                 if results:
+                    from services.rag_presentation import render_evidence, result_dates
+
+                    display_dates = result_dates(rag.db, char_id, results, self.settings, lore_dates)
+                    if self.settings.get("RAG_CONTEXT_LAYOUT", "structured") != "legacy":
+                        for row in results:
+                            if row.get("retained"):
+                                logger.debug(
+                                    "[RAG][retained] character=%s source=%s id=%s age=%s remaining=%s score=%.3f",
+                                    char_id, row["source"], row["id"], row["retained_age"],
+                                    row["retained_turns_left"], float(row.get("score", 0)),
+                                )
+                        logger.info("[%s] RAG evidence built (records=%s, retained=%s).", char_id,
+                                    len(results), sum(bool(row.get("retained")) for row in results))
+                        return render_evidence(results, display_dates, self.settings)
                     mem_tpl = load_optional_template(
                         prompt_set_path, "Structural/rag_memory_item.txt", self._DEFAULT_RAG_MEM_ITEM
                     )
@@ -2231,6 +2245,14 @@ class ModelController(GenerationService, ModelStateService):
                     wrapper_tpl = load_optional_template(
                         prompt_set_path, "Structural/rag_wrapper.txt", self._DEFAULT_RAG_WRAPPER
                     )
+                    show_scores = bool(self.settings.get("RAG_CONTEXT_SHOW_SCORES", True))
+                    if not show_scores:
+                        import re
+                        mem_tpl = re.sub(r"\[?\{score(?::[^{}]*)?\}\]?\s*", "", mem_tpl)
+                        hist_tpl = re.sub(r"\[?\{score(?::[^{}]*)?\}\]?\s*", "", hist_tpl)
+
+                    def _score_prefix(row):
+                        return f"[{float(row.get('score', 0)):.3f}] " if show_scores else ""
 
                     clip_max = int(self.settings.get("RAG_CLIP_MAX_CHARS", 700))
 
@@ -2263,17 +2285,13 @@ class ModelController(GenerationService, ModelStateService):
                                     id=r.get("id", "?"),
                                     type=r.get("type", ""),
                                     priority=r.get("priority", ""),
-                                    date=(
-                                        lore_dates.get(int(r.get("id") or 0), "время события неизвестно")
-                                        if str(r.get("type") or "").strip().lower() == "seed_lore"
-                                        else r.get("date_created", "")
-                                    ),
+                                    date=display_dates.get((src, r.get("id")), "time unknown"),
                                     content=_clip(r.get("content")),
                                 ))
                             except (KeyError, IndexError, ValueError):
-                                mem_lines.append(f"[{r.get('score', 0):.3f}] N:{r.get('id', '?')} {_clip(r.get('content'))}")
+                                mem_lines.append(f"{_score_prefix(r)}N:{r.get('id', '?')} {_clip(r.get('content'))}")
                         elif src == "graph":
-                            graph_lines.append(f"- [{r.get('score', 0):.2f}] {_clip(r.get('content'))}")
+                            graph_lines.append(f"- {_score_prefix(r)}{_clip(r.get('content'))}")
                         elif src == "history":
                             sp = r.get("speaker") or ""
                             tg = r.get("target") or ""
@@ -2287,7 +2305,7 @@ class ModelController(GenerationService, ModelStateService):
                             try:
                                 hist_lines.append(hist_tpl.format(
                                     score=float(r.get("score", 0)),
-                                    date=r.get("date", ""),
+                                    date=display_dates.get((src, r.get("id")), "time unknown"),
                                     meta=meta,
                                     content=_clip(r.get("content")),
                                     speaker=sp,
@@ -2295,11 +2313,12 @@ class ModelController(GenerationService, ModelStateService):
                                     role=r.get("role", ""),
                                 ))
                             except (KeyError, IndexError, ValueError):
-                                hist_lines.append(f"- [{r.get('score', 0):.3f}] {_clip(r.get('content'))}")
+                                hist_lines.append(f"- {_score_prefix(r)}{_clip(r.get('content'))}")
 
                     if mem_lines or hist_lines or graph_lines:
                         mem_header = (
-                            "# score=RAG relevance (0..1); N:id identifies the entry. seed_lore is read-only; "
+                            ("# score=RAG relevance; " if show_scores else "# ") +
+                            "N:id identifies the entry. seed_lore is read-only; "
                             "never update, delete or merge it. Its date describes the event, not when it was saved.\n"
                         )
                         memory_block_str = (mem_header + "\n".join(mem_lines)) if mem_lines else ""

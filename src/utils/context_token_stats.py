@@ -38,6 +38,8 @@ _SECTION_MARKERS = (
     ("<relevant_memories>", "memories"),
     ("# score=RAG", "memories"),
     ("<past_context>", "memories"),
+    ("<retrieved_dialogue>", "memories"),
+    ("[Retrieved evidence]", "memories"),
     ("<entity_knowledge>", "memories"),
 )
 
