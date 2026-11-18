@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -16,7 +17,7 @@ from handlers.llm_providers.http_transport import LLMHttpClient
 from handlers.llm_providers.responses_provider import ResponsesProvider
 from managers.api_preset_resolver import ApiPresetResolver
 from schemas.structured_response import StructuredResponse
-from services.contracts import RuntimeCapabilities
+from services.contracts import ChatGenerationResult, RuntimeCapabilities
 from services.structured_response_capabilities import resolve_structured_response_capabilities
 
 
@@ -120,7 +121,7 @@ def test_native_tool_roundtrip_through_chat_model_runner_manager_and_executor(mo
     model.tool_manager.run = execute
     harness = SimpleNamespace(settings=settings, model=model, event_bus=SimpleNamespace(emit=lambda *args, **kw: None),
         _build_usage_snapshot=lambda *args, **kw: None, _split_response_thinking=lambda r: (r.text, r.reasoning or ""),
-        _process_structured_output=lambda **kw: kw)
+        _process_structured_output=Mock(return_value=ChatGenerationResult(text="Two", character_id="Crazy")))
     try:
         response = model.generate(messages, capabilities_override=caps,
                                   stream_event_callback=deltas.append if stream else None)
@@ -135,8 +136,11 @@ def test_native_tool_roundtrip_through_chat_model_runner_manager_and_executor(mo
             tool_depth=0, native_tool_call=response.raw["native_tool_call"])
         assert executions == [("calculator", {"expression": "1+1"})]
         assert len(wire_requests) == (3 if fallback else 2)
-        assert result["visible_raw"] == final_text
-        assert result["usage"].total_tokens == 18
+        harness._process_structured_output.assert_called_once()
+        processed = harness._process_structured_output.call_args.kwargs
+        assert processed["visible_raw"] == final_text
+        assert processed["usage"].total_tokens == 18
+        assert result.text == "Two"
         first, followup = wire_requests[0], wire_requests[-1]
         assert first["tools"][0]["type"] == "function"
         assert (first["tools"][0] if responses else first["tools"][0]["function"])["name"] == "calculator"

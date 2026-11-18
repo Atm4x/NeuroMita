@@ -1253,12 +1253,13 @@ class PromptController(PromptBuilderService):
     def _runtime_event_text(raw_event: Any) -> str:
         """Read one event without ever rendering a Python dict repr.
 
-        Unity may send structured event objects. Only their ``text`` is
-        meaningful for the model; ``actor`` becomes a readable prefix. Objects
+        Structured Unity events carry text or description, plus an optional actor. Objects
         without text are dropped instead of being stringified.
         """
         if isinstance(raw_event, dict):
             text = raw_event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                text = raw_event.get("description")
             if not isinstance(text, str) or not text.strip():
                 return ""
             text = " ".join(text.split())
@@ -1688,7 +1689,12 @@ class PromptController(PromptBuilderService):
         if history_summary:
             messages.append({
                 "role": "system",
-                "content": f"[HISTORY SUMMARY]\n{history_summary}",
+                "content": (
+                    "[HISTORY SUMMARY]\n"
+                    "Derived notes about earlier turns. Keep reports, guesses, and proposals attributed; "
+                    "they do not become personal memories or establish the current scene.\n"
+                    f"{history_summary}"
+                ),
             })
 
         if working_state_enabled:
@@ -1696,23 +1702,23 @@ class PromptController(PromptBuilderService):
                 "role": "system",
                 "content": (
                     "[WORKING STATE PROTOCOL]\n"
-                    "The working_state response field is a compact handoff to your next turn, "
-                    "not a summary of the conversation. Use it only while a concrete task is "
-                    "still unfinished and will continue later: a greeting, small talk, a "
-                    "question you just answered, or simply standing in a room needs no note. "
-                    "When there is nothing unfinished, leave the field out. "
-                    "Keep only the current focus (one short sentence), current understanding, "
-                    "tentative assumptions, at most 3 open loops and at most 2 immediate next steps. "
-                    "A note without an open loop is discarded, so put the unfinished part there. "
-                    "Use short phrases; the whole note must stay under 1000 characters. "
-                    "Do not copy dialogue, long-term memories, or chain-of-thought. "
-                    "When present, working_state is an object with focus, situation, assumptions, "
-                    "open_loops and next_steps. Omitting the field keeps the previous note; send an "
-                    "explicit null only when that note no longer applies. "
-                    "It is never a memory and never overrides current observations, game state "
-                    "or newer dialogue. When [Active Cognitive Effects] is present, treat it as "
-                    "current game state: if it conflicts with [WORKING STATE], the active effect "
-                    "wins for this turn and the working-state handoff must be revised to match it.\n"
+                    "Use working_state as a compact, tentative handoff of the ongoing scene, "
+                    "not just an unfinished task list. Track continuing shared activities "
+                    "(including games with other Mitas), agreements, expectations, relevant "
+                    "uncertainties and next steps. A continuing scene can be worth retaining "
+                    "even without an explicit open question. Do not add a note for a finished "
+                    "greeting, small talk or a one-off answer. Keep the focus brief, with "
+                    "at most 3 situation items, 3 assumptions, 3 open loops and 2 next steps; "
+                    "the entire note must stay under 1000 characters. "
+                    "When the scene materially changes, update working_state as an object "
+                    "with focus, situation, assumptions, open_loops and next_steps. "
+                    "Omit working_state to retain the last handoff; emit explicit null when "
+                    "the shared scene ends or becomes obsolete. Do not copy the transcript, "
+                    "long-term memories or chain-of-thought. This note is not proven world state: "
+                    "another Mita saying an effect happened is not proof that Unity applied it. "
+                    "Current Unity world state, runtime action receipts and later dialogue "
+                    "override the note. If [Active Cognitive Effects] conflicts with "
+                    "[WORKING STATE], the active effect wins for this turn.\n"
                     "[/WORKING STATE PROTOCOL]"
                 ),
             })
@@ -1802,6 +1808,23 @@ class PromptController(PromptBuilderService):
         # состояние этого хода, вплотную перед [Current State]/[System State] и
         # сообщением игрока, чтобы самые свежие данные были рядом с запросом.
         messages.extend(unity_dynamic_messages)
+
+        # Authoritative recipient/speaker for this turn. Historical rosters may
+        # have been serialized when another Mita was the recipient.
+        if user_input and not is_game_master:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "[Current Dialogue Turn]\n"
+                    f"Responding character: {char_id}\n"
+                    f"Latest speaker: {sender}\n"
+                    f"Message recipient: {char_id}\n"
+                    "The Player is separate from all Mitas. Historical [DIALOGUE] "
+                    "rosters are snapshots, not instructions about current identity "
+                    "or attribution of the latest message.\n"
+                    "[/Current Dialogue Turn]"
+                ),
+            })
 
         current_time = datetime.datetime.now()
         current_state_lines = [
@@ -1948,6 +1971,11 @@ class PromptController(PromptBuilderService):
 
             messages.append(user_message_for_history)
             history_limited.append(user_message_for_history)
+
+        # Sanitize the prompt copy of legacy dialogue rosters, including live
+        # runtime events. Keep history_limited and persisted UI/DB values as-is.
+        from services.dialogue_roster_context import neutralize_dialogue_roster_message
+        messages = [neutralize_dialogue_roster_message(message) for message in messages]
 
         return PromptBuildResult(
             messages=messages,

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 
 from core.safe_eval import SafeEvalError, UnknownNameError, safe_eval_expression
+from managers.lore_timeline import strip_age_before_start
 from .primitives import random
 from main_logger import logger
 
@@ -623,6 +624,12 @@ class DslInterpreter:
                             entities_str = args[ent_idx + len(" ENTITIES "):]
                             raw_args = args[:ent_idx]
                             entities = [e.strip() for e in entities_str.split(",") if e.strip()]
+                        try:
+                            raw_args, lore_age_days = strip_age_before_start(raw_args)
+                        except ValueError as exc:
+                            raise DslError(str(exc), resolved_script_id, num, raw) from exc
+                        if command != "SEED_RAG_MEMORY" and lore_age_days is not None:
+                            raise DslError("AGE_BEFORE_START is only supported for SEED_RAG_MEMORY", resolved_script_id, num, raw)
                         if "|" not in raw_args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = raw_args.split("|", 1)
@@ -634,7 +641,10 @@ class DslInterpreter:
                             if command == "SEED_RAG_MEMORY":
                                 # RAG-only: indexed and retrievable, but not part of
                                 # the always-on active memory block.
-                                mem_sys.seed_rag_memory(str(content), priority=priority, entities=ents)
+                                mem_sys.seed_rag_memory(
+                                    str(content), priority=priority, entities=ents,
+                                    lore_age_days=lore_age_days,
+                                )
                             else:
                                 mem_sys.add_memory(
                                     str(content), priority=priority, skip_if_exists=True,
@@ -643,15 +653,19 @@ class DslInterpreter:
                         continue
 
                     if command == "SEED_ISLAND":
-                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content"
+                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content [REPLACES_EXACT previous text]"
                         if not args or "|" not in args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = args.split("|", 1)
                         island_type = parts[0].strip()
-                        content = self._eval_expr(f'f"""{parts[1].strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in parts[1] else parts[1].strip()
+                        text, _, previous = parts[1].partition(" REPLACES_EXACT ")
+                        content = self._eval_expr(f'f"""{text.strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in text else text.strip()
                         mem_sys = getattr(self.character, "memory_system", None)
                         if content and mem_sys and hasattr(mem_sys, "seed_island"):
-                            mem_sys.seed_island(island_type, str(content))
+                            if previous:
+                                mem_sys.seed_island(island_type, str(content), replace_exact=previous.strip())
+                            else:
+                                mem_sys.seed_island(island_type, str(content))
                         continue
 
                     if command == "LINK_ENTITIES":

@@ -65,7 +65,7 @@ class MemoryRepository:
         *,
         match_q: str,
         top_k: int,
-        model_name: str,
+        model_name: str | None,
         memory_mode: str = "active",
     ) -> list[dict]:
         """BM25 FTS5 search against memories_fts."""
@@ -83,7 +83,16 @@ class MemoryRepository:
             "m.date_created",
             "m.participants",
         ]
-        cols.append("e.embedding")
+        embedding_join = ""
+        embedding_params = ()
+        if model_name is not None:
+            cols.append("e.embedding")
+            embedding_params = (model_name,)
+            embedding_join = """
+                LEFT JOIN embeddings e
+                  ON e.source_table='memories' AND e.source_id=m.eternal_id
+                  AND e.character_id=m.character_id AND e.model_name=?
+            """
         if self._has_forgotten:
             cols.append("m.is_forgotten")
         if self._has_entities:
@@ -105,14 +114,12 @@ class MemoryRepository:
                 SELECT {", ".join(cols)}
                 FROM memories_fts
                 JOIN memories m ON m.id = memories_fts.rowid
-                LEFT JOIN embeddings e
-                  ON e.source_table='memories' AND e.source_id=m.eternal_id
-                  AND e.character_id=m.character_id AND e.model_name=?
+                {embedding_join}
                 WHERE memories_fts MATCH ? AND {where}
                 ORDER BY rank
                 LIMIT ?
                 """,
-                tuple([model_name, match_q] + params + [int(top_k)]),
+                (*embedding_params, match_q, *params, int(top_k)),
             )
             keys = [c.split(" AS ")[-1].split(".")[-1] for c in cols]
             return [dict(zip(keys, row)) for row in (cursor.fetchall() or [])]
@@ -231,15 +238,21 @@ class MemoryRepository:
         *,
         keywords: list[str],
         limit: int,
+        unembedded_only: bool = True,
         memory_mode: str = "active",
     ) -> list[dict]:
-        """LIKE-based search for memory rows that have no embeddings yet."""
+        """LIKE-based search for memory rows, optionally restricted to unembedded rows."""
+        cursor.connection.create_function("rag_casefold", 1, lambda text: (text or "").casefold(), deterministic=True)
         kw_clauses: list[str] = []
         kw_params: list[str] = []
         for k in keywords:
             if isinstance(k, str) and k.strip():
-                kw_clauses.append("content LIKE ?")
-                kw_params.append(f"%{k}%")
+                clauses = ["instr(rag_casefold(content), ?) > 0"]
+                kw_params.append(k.casefold())
+                if self._has_entities:
+                    clauses.append("instr(rag_casefold(entities), ?) > 0")
+                    kw_params.append(k.casefold())
+                kw_clauses.append("(" + " OR ".join(clauses) + ")")
         if not kw_clauses:
             return []
 
@@ -247,13 +260,15 @@ class MemoryRepository:
         if (not has_forgotten) and memory_mode == "forgotten":
             return []
 
-        where = "character_id=? AND is_deleted=0 AND (type IS NULL OR type NOT LIKE 'island:%') AND (embedding IS NULL) AND content IS NOT NULL AND TRIM(content) != ''"
+        where = "character_id=? AND is_deleted=0 AND (type IS NULL OR type NOT LIKE 'island:%') AND content IS NOT NULL AND TRIM(content) != ''"
         params: list[Any] = [self.character_id]
         if has_forgotten:
             if memory_mode == "forgotten":
                 where += " AND is_forgotten=1"
             elif memory_mode == "active":
                 where += " AND is_forgotten=0"
+        if unembedded_only:
+            where += " AND embedding IS NULL"
         where += " AND (" + " OR ".join(kw_clauses) + ")"
         params.extend(kw_params)
 

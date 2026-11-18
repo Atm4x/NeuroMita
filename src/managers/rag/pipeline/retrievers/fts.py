@@ -10,8 +10,8 @@ from managers.rag.rag_utils import (
     normalize_bm25_to_01,
     blob_to_array,
     json_loads_list,
+    entity_alias_phrases,
 )
-from handlers.embedding_presets import resolve_full_config
 from ..types import Candidate, QueryState
 from ..config import RAGConfig
 from ..repositories import HistoryRepository, MemoryRepository
@@ -32,10 +32,13 @@ class FTSRetriever:
         self.memory_repo = memory_repo
         self.rag = rag
         self.cfg = cfg
-        cfg_full = resolve_full_config()
-        self._model_name = str(
-            cfg_full.get("db_model_key") or cfg_full.get("hf_name") or cfg_full.get("model") or ""
-        )
+        self._model_name = None
+        if cfg.vector_search_enabled or (cfg.search_graph and cfg.graph_vector_search):
+            from handlers.embedding_presets import resolve_full_config
+            cfg_full = resolve_full_config()
+            self._model_name = str(
+                cfg_full.get("db_model_key") or cfg_full.get("hf_name") or cfg_full.get("model") or ""
+            )
 
     def retrieve(self, qs: QueryState) -> List[Candidate]:
         out: list[Candidate] = []
@@ -49,15 +52,22 @@ class FTSRetriever:
                 min_len=int(self.cfg.fts_min_len),
                 morph_expand=bool(self.cfg.fts_morph_expand),
                 prefix_match=bool(self.cfg.fts_prefix_match),
+                from_end=True,
             )
             match_q = fts_build_match_query(str(qs.user_query or ""), **_fts_kwargs)
             if not match_q:
                 match_q = fts_build_match_query(str(qs.expanded_query_text or ""), **_fts_kwargs)
-            if not match_q:
+            # Expand only named entities; the history query stays unchanged.
+            memory_match_q = match_q
+            aliases = entity_alias_phrases(qs.user_query)
+            if aliases:
+                alias_match = " OR ".join(f'"{alias}"' for alias in aliases)
+                memory_match_q = f"{match_q} OR {alias_match}" if match_q else alias_match
+            if not match_q and not memory_match_q:
                 return out
 
             if self.cfg.search_memory:
-                out.extend(self._memories(cur, qs, match_q))
+                out.extend(self._memories(cur, qs, memory_match_q))
             if self.cfg.search_history:
                 out.extend(self._histories(cur, qs, match_q))
 
@@ -98,7 +108,10 @@ class FTSRetriever:
             kw = 0.0
             if self.cfg.kw_enabled and qs.keywords:
                 try:
-                    kw, _ = keyword_score(qs.keywords, content_clean)
+                    kw, _ = keyword_score(
+                        qs.keywords,
+                        content_clean + " " + " ".join(json_loads_list(rd.get("entities"))),
+                    )
                 except Exception:
                     kw = 0.0
 
@@ -130,10 +143,7 @@ class FTSRetriever:
             top_k=max(1, int(self.cfg.fts_top_k_hist)),
             model_name=self._model_name,
         )
-        ranks = [float(r.get("rank") or 0.0) for r in rows]
-        lex_scores = normalize_bm25_to_01(ranks)
-
-        for rd, lex in zip(rows, lex_scores):
+        for rd in rows:
             hid = int(rd.get("id") or 0)
             if hid <= 0:
                 continue
@@ -174,8 +184,15 @@ class FTSRetriever:
                     "entities": rd.get("entities"),
                     "_bm25": float(rd.get("rank") or 0.0),
                 },
-                features={"sim": sim, "kw": float(kw), "lex": float(lex), "time": 0.0, "entity": 0.0, "prio": 0.0},
-                debug={"bm25": float(rd.get("rank") or 0.0), "lex": float(lex)},
+                features={"sim": sim, "kw": float(kw), "time": 0.0, "entity": 0.0, "prio": 0.0},
+                debug={"bm25": float(rd.get("rank") or 0.0)},
             ))
 
         return out
+
+    @staticmethod
+    def normalize_history_scores(candidates: list[Candidate]) -> None:
+        history = [candidate for candidate in candidates if candidate.source == "history"]
+        scores = normalize_bm25_to_01([candidate.meta["_bm25"] for candidate in history])
+        for candidate, score in zip(history, scores):
+            candidate.features["lex"] = candidate.debug["lex"] = score

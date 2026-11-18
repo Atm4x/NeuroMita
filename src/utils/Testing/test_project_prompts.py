@@ -91,6 +91,17 @@ class WorldKnowledgeTests(unittest.TestCase):
                 self.assertTrue(s.startswith("SEED_RAG_MEMORY"),
                                 f"credit line must be RAG-only: {s}")
 
+    def test_initial_lore_does_not_claim_high_priority(self):
+        directory = PROMPTS / "Common" / "InitialMemories"
+        for filename in (
+            "game_reality_knowledge_v0.03.script",
+            "rooms_knowledge.script",
+            "mitas_knowledge.script",
+        ):
+            text = (directory / filename).read_text(encoding="utf-8")
+            self.assertIn("SEED_RAG_MEMORY Normal |", text)
+            self.assertNotIn("SEED_RAG_MEMORY High |", text)
+
     def test_hard_canon_gated_behind_flag(self):
         self.assertIn("IF CANONICAL_MISIDE_STORY == True THEN", self.wk)
         start = self.wk.index("IF CANONICAL_MISIDE_STORY == True THEN")

@@ -122,15 +122,16 @@ def working_state_transition(structured: Any) -> tuple[bool, Any]:
 
 
 def has_open_obligation(state: Mapping[str, Any] | None) -> bool:
-    """Whether a note names unfinished business rather than restating the scene.
+    """Whether a note contains an open obligation or a continuing shared scene.
 
-    A greeting, a single answered question and small talk need no handoff. The
-    model still writes those paraphrases when the field is available, so a note
-    is only created when at least one loop is left open.
+    An open loop is sufficient, but a shared activity may continue without
+    an unanswered question (for example, playing a game together). Require
+    both focus and situated context for that case, so a bare greeting or
+    one-off reply is not turned into a standing agenda.
     """
     if not isinstance(state, Mapping):
         return False
-    return bool(state.get("open_loops"))
+    return bool(state.get("open_loops") or (state.get("focus") and state.get("situation")))
 
 
 def content_length(state: Mapping[str, Any]) -> int:

@@ -716,8 +716,8 @@ class Character:
             else:
                 priority, content = None, "|".join(parts[1:])
             try:
-                self.memory_system.update_memory(number=number, priority=priority, content=content)
-                logger.info(f"[{self.char_id}] Structured: updated memory #{number}")
+                if self.memory_system.update_memory(number=number, priority=priority, content=content):
+                    logger.info(f"[{self.char_id}] Structured: updated memory #{number}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error updating memory #{number}: {format_exception(e)}")
 
@@ -743,7 +743,7 @@ class Character:
                             self.memory_system.delete_memory(n, save_as_missed)
                 elif delete_str.isdigit():
                     self.memory_system.delete_memory(int(delete_str), save_as_missed)
-                logger.info(f"[{self.char_id}] Structured: deleted memory(ies): {delete_str}")
+                logger.info(f"[{self.char_id}] Structured: processed memory_delete: {delete_str}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error deleting memory '{delete_str}': {format_exception(e)}")
 
@@ -756,8 +756,13 @@ class Character:
                 logger.warning(f"[{self.char_id}] Structured: memory_merge bad format: {merge_str!r}")
                 continue
             tgt_id = int(id_strs[0])
-            src_ids = [int(s) for s in id_strs[1:]]
+            src_ids = list(dict.fromkeys(int(s) for s in id_strs[1:] if int(s) != tgt_id))
+            if not src_ids:
+                continue
             try:
+                if self.memory_system.has_seed_lore([tgt_id, *src_ids]):
+                    logger.info(f"[{self.char_id}] Structured: merge rejected for read-only lore")
+                    continue
                 if not merged_content.strip():
                     parts = [self.memory_system.get_memory_content(tgt_id) or ""]
                     for sid in src_ids:

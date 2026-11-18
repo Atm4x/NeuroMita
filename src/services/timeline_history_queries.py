@@ -88,8 +88,12 @@ class TimelineHistoryQueries:
         self._trim()
         return result
 
-    def messages(self, branch_id: str, character_id: str, *, through: int | None = None) -> tuple[dict, ...]:
-        return self._query(branch_id, character_id, through, lambda projection: projection.messages())
+    def messages(
+        self, branch_id: str, character_id: str, *, through: int | None = None,
+        message_ids: set[str] | None = None,
+    ) -> tuple[dict, ...]:
+        return self._query(branch_id, character_id, through,
+                           lambda projection: projection.messages(message_ids=message_ids))
 
     def page(self, branch_id: str, character_id: str, *, limit: int, offset: int = 0) -> tuple[dict, ...]:
         if type(limit) is not int or type(offset) is not int or limit <= 0 or offset < 0:

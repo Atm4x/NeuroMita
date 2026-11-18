@@ -242,6 +242,7 @@ class CrossEncoderReranker:
         if not isinstance(updates, list):
             updates = []
 
+        scored = set()
         for update in updates:
             try:
                 idx = int(update.get("index", -1))
@@ -260,8 +261,13 @@ class CrossEncoderReranker:
                 if getattr(candidate, "debug", None) is None:
                     candidate.debug = {}
                 candidate.debug["cross_encoder"] = ce_score
+                candidate.features["cross_encoder"] = ce_score
+                scored.add(idx)
             except Exception:
                 pass
+
+        if scored:
+            cands[:] = [candidate for idx, candidate in enumerate(cands) if idx in scored]
 
         if bool(result.get("loaded", False)):
             self._set_state(ModelState.READY, epoch=epoch)

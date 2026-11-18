@@ -58,6 +58,7 @@ from services.structured_response_capabilities import (
     resolve_structured_response_capabilities,
 )
 from services.tool_prompt import render_tools_for_prompt
+from services.interim_tool_speech import supports_interim_tool_speech
 from domain.world_character_relations import get_world_context_text
 from domain.conversation_message_ids import ConversationMessageIds
 from domain.working_state import working_state_transition
@@ -165,41 +166,50 @@ def _emit_tool_turn_voiceover(
     message_id: str,
     trace_id: str | None,
     policy,
+    interim_tool: dict | None = None,
 ) -> None:
     """Voice the spoken opener of a tool turn.
 
-    For standalone Python chat, speak the tool opener immediately so "let me
-    look" is audible before the tool runs. Unity tasks deliberately skip this
-    path: the caller buffers openers and ships them with the final response.
+    Standalone chat speaks the opener immediately. Opted-in Unity clients
+    receive a separate pending/ready message; legacy clients still receive
+    buffered openers with the final task response.
 
     Never attach intermediate audio to the parent task UID: early TTS
     completion could mark it SUCCESS before the tool follow-up is ready.
     """
     opener = str(text or "").strip()
-    if not opener or not settings.get("USE_VOICEOVER"):
+    if not opener:
         return
-    if not bool(getattr(policy, "allow_voiceover", True)):
-        return
+    voice_allowed = bool(settings.get("USE_VOICEOVER")) and bool(
+        getattr(policy, "allow_voiceover", True)
+    )
     if isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False:
-        return
+        voice_allowed = False
     if isinstance(voice_profile, dict) and voice_profile.get("character_id") == "GameMaster":
-        if not bool(settings.get("GM_VOICE", False)):
-            return
+        voice_allowed = voice_allowed and bool(settings.get("GM_VOICE", False))
+    if not voice_allowed:
+        if interim_tool:
+            event_bus.emit(Events.Server.SEND_DIALOGUE_INTERIM, {
+                **interim_tool, "phase": "ready", "text": opener, "voiceover_path": "",
+            })
+        return
 
     speaker = voice_profile.get("silero_command", "") if isinstance(voice_profile, dict) else ""
     if isinstance(voice_profile, dict) and settings.get("AUDIO_BOT") == "@CrazyMitaAIbot":
         speaker = voice_profile.get("miku_tts_name", "Player")
-    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
+    payload = {
         "text": opener,
         "speaker": speaker,
-        # The opener is deliberately detached from the generation task.
-        # AudioController must not emit SUCCESS for an intermediate tool turn.
+        # Audio completion must never finish the parent generation task.
         "task_uid": None,
         "character_id": char_id,
         "voice_profile": voice_profile,
         "message_id": message_id,
         "trace_id": trace_id,
-    })
+    }
+    if interim_tool:
+        payload["interim_tool"] = {**interim_tool, "text": opener}
+    event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, payload)
 
 
 def _tool_badge_text(tool_name: str, tool_args, tool_result: str) -> str:
@@ -2190,13 +2200,42 @@ class ModelController(GenerationService, ModelStateService):
                 rag = RAGManager.for_character(char_id)
                 rag_limit = int(self.settings.get("RAG_MAX_RESULTS", 8))
                 rag_thr = float(self.settings.get("RAG_SIM_THRESHOLD", 0.4))
-                results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
-                conversation = services().get_optional(ConversationTimeline)
-                if conversation is not None:
-                    results = conversation.filter_retrieval(char_id, results)
+                if user_input:
+                    from services.rag_continuity import RagContinuity
+
+                    if not hasattr(self, "_rag_continuity"):
+                        self._rag_continuity = RagContinuity()
+                    results = self._rag_continuity.search(
+                        rag, str(final_input), limit=rag_limit, threshold=rag_thr, settings=self.settings,
+                    )
+                else:
+                    results = rag.search_relevant(str(final_input), limit=rag_limit, threshold=rag_thr)
                 forgotten_count = rag.get_forgotten_count()
 
+                # Lore timestamps describe events in the world, never DB ingestion.
+                # Resolve once for the whole result batch (shared world anchor).
+                lore_dates = {}
+                try:
+                    from managers.lore_timeline import lore_dates_for_results
+                    lore_dates = lore_dates_for_results(rag.db, rag.character_id, results)
+                except Exception as exc:
+                    logger.debug("[%s] Lore-date display unavailable: %s", char_id, format_exception(exc))
+
                 if results:
+                    from services.rag_presentation import render_evidence, result_dates
+
+                    display_dates = result_dates(rag.db, char_id, results, self.settings, lore_dates)
+                    if self.settings.get("RAG_CONTEXT_LAYOUT", "structured") != "legacy":
+                        for row in results:
+                            if row.get("retained"):
+                                logger.debug(
+                                    "[RAG][retained] character=%s source=%s id=%s age=%s remaining=%s score=%.3f",
+                                    char_id, row["source"], row["id"], row["retained_age"],
+                                    row["retained_turns_left"], float(row.get("score", 0)),
+                                )
+                        logger.info("[%s] RAG evidence built (records=%s, retained=%s).", char_id,
+                                    len(results), sum(bool(row.get("retained")) for row in results))
+                        return render_evidence(results, display_dates, self.settings)
                     mem_tpl = load_optional_template(
                         prompt_set_path, "Structural/rag_memory_item.txt", self._DEFAULT_RAG_MEM_ITEM
                     )
@@ -2206,6 +2245,14 @@ class ModelController(GenerationService, ModelStateService):
                     wrapper_tpl = load_optional_template(
                         prompt_set_path, "Structural/rag_wrapper.txt", self._DEFAULT_RAG_WRAPPER
                     )
+                    show_scores = bool(self.settings.get("RAG_CONTEXT_SHOW_SCORES", True))
+                    if not show_scores:
+                        import re
+                        mem_tpl = re.sub(r"\[?\{score(?::[^{}]*)?\}\]?\s*", "", mem_tpl)
+                        hist_tpl = re.sub(r"\[?\{score(?::[^{}]*)?\}\]?\s*", "", hist_tpl)
+
+                    def _score_prefix(row):
+                        return f"[{float(row.get('score', 0)):.3f}] " if show_scores else ""
 
                     clip_max = int(self.settings.get("RAG_CLIP_MAX_CHARS", 700))
 
@@ -2221,6 +2268,16 @@ class ModelController(GenerationService, ModelStateService):
                         if not isinstance(r, dict):
                             continue
                         src = r.get("source")
+                        if r.get("retained"):
+                            logger.debug(
+                                "[RAG][retained] character=%s source=%s id=%s age=%s remaining=%s score=%.3f",
+                                char_id, src, r.get("id"), r["retained_age"],
+                                r["retained_turns_left"], float(r.get("score", 0)),
+                            )
+                            r = {**r, "content": (
+                                f"[Retrieved earlier; retained for topic continuity; "
+                                f"{r['retained_turns_left']} turns remaining] {r.get('content', '')}"
+                            )}
                         if src == "memory":
                             try:
                                 mem_lines.append(mem_tpl.format(
@@ -2228,13 +2285,13 @@ class ModelController(GenerationService, ModelStateService):
                                     id=r.get("id", "?"),
                                     type=r.get("type", ""),
                                     priority=r.get("priority", ""),
-                                    date=r.get("date_created", ""),
+                                    date=display_dates.get((src, r.get("id")), "time unknown"),
                                     content=_clip(r.get("content")),
                                 ))
                             except (KeyError, IndexError, ValueError):
-                                mem_lines.append(f"[{r.get('score', 0):.3f}] N:{r.get('id', '?')} {_clip(r.get('content'))}")
+                                mem_lines.append(f"{_score_prefix(r)}N:{r.get('id', '?')} {_clip(r.get('content'))}")
                         elif src == "graph":
-                            graph_lines.append(f"- [{r.get('score', 0):.2f}] {_clip(r.get('content'))}")
+                            graph_lines.append(f"- {_score_prefix(r)}{_clip(r.get('content'))}")
                         elif src == "history":
                             sp = r.get("speaker") or ""
                             tg = r.get("target") or ""
@@ -2248,7 +2305,7 @@ class ModelController(GenerationService, ModelStateService):
                             try:
                                 hist_lines.append(hist_tpl.format(
                                     score=float(r.get("score", 0)),
-                                    date=r.get("date", ""),
+                                    date=display_dates.get((src, r.get("id")), "time unknown"),
                                     meta=meta,
                                     content=_clip(r.get("content")),
                                     speaker=sp,
@@ -2256,10 +2313,14 @@ class ModelController(GenerationService, ModelStateService):
                                     role=r.get("role", ""),
                                 ))
                             except (KeyError, IndexError, ValueError):
-                                hist_lines.append(f"- [{r.get('score', 0):.3f}] {_clip(r.get('content'))}")
+                                hist_lines.append(f"- {_score_prefix(r)}{_clip(r.get('content'))}")
 
                     if mem_lines or hist_lines or graph_lines:
-                        mem_header = "# score=RAG relevance (0..1); forgotten memories — use N:id with memory ops\n"
+                        mem_header = (
+                            ("# score=RAG relevance; " if show_scores else "# ") +
+                            "N:id identifies the entry. seed_lore is read-only; "
+                            "never update, delete or merge it. Its date describes the event, not when it was saved.\n"
+                        )
                         memory_block_str = (mem_header + "\n".join(mem_lines)) if mem_lines else ""
                         graph_block_str = "\n".join(graph_lines) if graph_lines else ""
                         try:
@@ -2836,11 +2897,16 @@ class ModelController(GenerationService, ModelStateService):
             "context_snapshot_id": context_snapshot_id or "",
         }, delivery=EventDelivery.ORDERED)
 
-        if task_uid:
-            # Unity presents speech only when the task completes. Keep this
-            # opener for the final delivery, not an undeliverable standalone WAV.
-            logger.debug("[ModelController] Buffering tool opener for Unity: %s", tool_name)
-        else:
+        interim_tool = None
+        opener = str(first_text or "").strip()
+        if task_uid and opener and supports_interim_tool_speech(task_uid):
+            # Announce before executing the tool. Unity will keep this opener
+            # ahead of the final answer, even if synthesis finishes later.
+            interim_tool = {"uid": task_uid, "opener_id": f"{task_uid}:{tool_depth}"}
+            self.event_bus.emit(Events.Server.SEND_DIALOGUE_INTERIM, {
+                **interim_tool, "phase": "pending", "text": opener,
+            })
+        if not task_uid or interim_tool is not None:
             _emit_tool_turn_voiceover(
                 event_bus=self.event_bus,
                 settings=self.settings,
@@ -2850,7 +2916,10 @@ class ModelController(GenerationService, ModelStateService):
                 message_id=first_assistant_message_id,
                 trace_id=trace_id,
                 policy=policy,
+                interim_tool=interim_tool,
             )
+        else:
+            logger.debug("[ModelController] Buffering tool opener for legacy Unity: %s", tool_name)
 
         # Emit tool executing indicator for UI
         self.event_bus.emit(Events.Model.ON_TOOL_EXECUTING, {

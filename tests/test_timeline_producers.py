@@ -42,30 +42,34 @@ class ProducerTests(unittest.TestCase):
                 {"actor_id": "b", "character_id": "B", "can_hear_speaker": False},
             ]}, "runtime_events": [{"name": "ItemPickedUp", "data": {"item_id": "key"}}],
         }}
-        event_id = self.unity.ingest(request, "A", ["A", "B"])
+        result = self.unity.ingest(request, "A", ["A", "B"])
+        event_id = result.trigger_id
+        self.assertIn(event_id, result.event_ids)
         event = self.runtime.timeline.event(event_id)
         self.assertEqual(event.kind, EventKind.UNITY_EVENT)
         self.assertTrue(self.runtime.timeline.knows("A", event_id))
         self.assertFalse(self.runtime.timeline.knows("B", event_id))
         self.runtime.timeline.leave("A", key="later-left")
         head = self.runtime.timeline.branch.head_sequence
-        self.assertEqual(self.unity.ingest(request, "A", ["A", "B"]), event_id)
+        self.assertEqual(self.unity.ingest(request, "A", ["A", "B"]), result)
         self.assertEqual(self.runtime.timeline.branch.head_sequence, head)
         self.assertNotIn("A", self.runtime.timeline.present())
 
     def test_changed_unity_request_identity_fails_and_timer_kinds_differ(self):
         request = {"req_id": "1", "type": "idle_timeout", "context": {}}
-        event_id = self.unity.ingest(request, "A", ["A"])
+        event_id = self.unity.ingest(request, "A", ["A"]).trigger_id
         self.assertEqual(self.runtime.timeline.event(event_id).kind, EventKind.PLAYER_INACTIVE)
         with self.assertRaises(TimelineConflict):
             self.unity.ingest(dict(request, type="periodic"), "A", ["A"])
-        opportunity = self.unity.ingest({"req_id": "2", "type": "periodic"}, "A", ["A"])
+        opportunity = self.unity.ingest({"req_id": "2", "type": "periodic"}, "A", ["A"]).trigger_id
         self.assertEqual(self.runtime.timeline.event(opportunity).kind, EventKind.PROACTIVE_OPPORTUNITY)
 
     def test_empty_ingress_keeps_only_a_receipt_without_technical_timeline_events(self):
         request = {"req_id": "empty", "type": "answer"}
-        self.assertIsNone(self.unity.ingest(request, "A", ["A"]))
-        self.assertIsNone(self.unity.ingest(request, "A", ["A"]))
+        result = self.unity.ingest(request, "A", ["A"])
+        self.assertIsNone(result.trigger_id)
+        self.assertEqual(result.event_ids, ())
+        self.assertEqual(self.unity.ingest(request, "A", ["A"]), result)
         self.assertEqual(tuple(self.runtime.timeline.events()), ())
 
     def test_ingress_reaction_target_is_witnessed_by_the_requested_character(self):
@@ -75,13 +79,17 @@ class ProducerTests(unittest.TestCase):
         ]}}
         target = self.unity.ingest(request, "A", ["A", "B"])
         events = tuple(self.runtime.timeline.events())
-        self.assertEqual(target, events[0].event_id)
+        self.assertEqual(target.trigger_id, events[0].event_id)
+        self.assertEqual(target.event_ids, tuple(event.event_id for event in events))
         self.assertFalse(self.runtime.timeline.knows("A", events[1].event_id))
         self.assertEqual(self.unity.ingest(request, "A", ["A", "B"]), target)
         private = {"req_id": "only-private", "type": "react", "context": {"runtime_events": [
             {"name": "Private", "observers": ["B"]},
         ]}}
-        self.assertIsNone(self.unity.ingest(private, "A", ["A", "B"]))
+        result = self.unity.ingest(private, "A", ["A", "B"])
+        self.assertIsNone(result.trigger_id)
+        self.assertEqual(len(result.event_ids), 1)
+        self.assertFalse(self.runtime.timeline.knows("A", result.event_ids[0]))
 
     def test_retry_cannot_change_the_fallback_reason_kind(self):
         request = {"req_id": "reason", "type": "react", "data": {"reason": "noise", "reason_type": "Door"}}

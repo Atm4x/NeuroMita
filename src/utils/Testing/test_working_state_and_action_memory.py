@@ -15,6 +15,7 @@ from managers.action_memory import (
     requested_actions_from_structured,
     render_requested_actions,
 )
+from domain.working_state import working_state_transition
 from managers.working_state_manager import WorkingStateManager
 from schemas.structured_response import StructuredResponse, WorkingState
 
@@ -47,6 +48,60 @@ class WorkingStateAndActionMemoryTests(unittest.TestCase):
         self.assertNotIn("chain-of-thought", prompt)
         manager.clear()
         self.assertEqual(manager.format_for_prompt(), "")
+
+    def test_omitted_state_preserves_shared_scene(self):
+        manager = WorkingStateManager().bind("Crazy", "Crazy")
+        self.assertTrue(manager.update(WorkingState(
+            focus="Continue the game with the player",
+            situation=["Mita and Player are still playing"],
+        )))
+        response = StructuredResponse.model_validate({
+            "segments": [{"text": "Your turn."}],
+        })
+        self.assertEqual(working_state_transition(response), (False, None))
+        self.assertIn("Continue the game", manager.format_for_prompt())
+
+    def test_explicit_null_clears_state_only_when_requested(self):
+        manager = WorkingStateManager().bind("Kind", "Kind")
+        self.assertTrue(manager.update(WorkingState(
+            focus="Continue a shared activity",
+            situation=["Players are waiting for the next move"],
+        )))
+        response = StructuredResponse.model_validate({
+            "segments": [{"text": "Finished."}],
+            "working_state": None,
+        })
+        commit, value = working_state_transition(response)
+        self.assertTrue(commit)
+        self.assertIsNone(value)
+        if commit and value is None:
+            manager.clear()
+        self.assertEqual(manager.format_for_prompt(), "")
+
+    def test_empty_object_retains_state_and_one_off_note_is_ignored(self):
+        manager = WorkingStateManager().bind("Cappie", "Cappie")
+        self.assertFalse(manager.update(WorkingState(focus="Hello!")))
+        self.assertTrue(manager.update(WorkingState(
+            focus="Play cards with the player",
+            situation=["The match is in progress"],
+        )))
+        response = StructuredResponse.model_validate({
+            "segments": [{"text": "Your move."}],
+            "working_state": {},
+        })
+        commit, value = working_state_transition(response)
+        self.assertTrue(commit)
+        self.assertFalse(manager.update(value))
+        self.assertIn("Play cards", manager.format_for_prompt())
+
+    def test_scene_handoff_keeps_runtime_facts_as_higher_priority(self):
+        from domain.working_state import has_open_obligation, normalize_working_state_update
+        shared = normalize_working_state_update({
+            "focus": "Await next move",
+            "situation": ["A player and Mita are in a dance contest"],
+        })
+        self.assertTrue(has_open_obligation(shared))
+        self.assertFalse(has_open_obligation({"focus": "Finished greeting"}))
 
     def test_action_projection_uses_requested_structured_actions_only(self):
         records = requested_actions_from_structured({

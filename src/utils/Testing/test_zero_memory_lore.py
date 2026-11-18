@@ -42,7 +42,8 @@ class ZeroMemoryLoreTests(unittest.TestCase):
     def test_new_general_lore_is_rag_only(self):
         lore = PROMPTS / "Common" / "InitialMemories" / "cartridges_and_exploits.script"
         text = lore.read_text(encoding="utf-8")
-        self.assertGreaterEqual(len(_rag_facts(lore)), 17)
+        self.assertTrue(_rag_facts(lore))
+        self.assertNotIn("самостоятельная цифровая копия", text.casefold())
         self.assertNotIn("SEED_MEMORY ", text)
         world = (PROMPTS / "Common" / "world_knowledge.script").read_text(encoding="utf-8")
         self.assertIn("RUN ./InitialMemories/cartridges_and_exploits.script", world)

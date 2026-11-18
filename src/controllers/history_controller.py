@@ -7,6 +7,7 @@ from pathlib import Path
 import datetime
 import base64
 import json
+import re
 import time
 import threading
 from io import BytesIO
@@ -53,7 +54,11 @@ class HistoryController(HistoryService):
         "{current_character_name}. Preserve important events, decisions, "
         "relationships, names, promises, and unresolved topics. Do not invent "
         "facts. If a previous summary exists, merge it without duplicating "
-        "information. Treat temporary cognitive effects as past subjective "
+        "information. [Speaker] labels identify who spoke, not who witnessed the events in their speech. "
+        "Preserve who experienced, reported, or suspected each event. Treat prior summaries as derived notes. "
+        "Do not turn a proposed scene or hypothetical into a past event. Keep private "
+        "agreements attributed to their participants, with their known conditions. "
+        "Treat temporary cognitive effects as past subjective "
         "experience rather than permanent facts, and do not keep a second "
         "consciousness or altered identity present after it ended.\n\n"
         "Previous summary:\n{previous_summary}\n\n"
@@ -738,6 +743,9 @@ class HistoryController(HistoryService):
         "From the dialogue chunk below, extract 0 to {max_n} durable long-term memory "
         "facts worth remembering for {char_name} (promises, preferences, important events, "
         "relationship changes, revealed secrets). Skip small talk and anything trivial. "
+        "Keep the source in the fact itself: who observed it, who reported it, or who suspected it. "
+        "A reported claim is not personal experience. Skip unsupported claims, jokes, and proposed scenes. "
+        "Keep the known participants and conditions of an agreement. Treat prior summaries as derived notes. "
         "Write each fact in the language of the dialogue, short and concrete.\n"
         "Answer ONLY with a JSON array, each item {{\"priority\": \"low|normal|high\", "
         "\"content\": \"...\"}}. Empty array [] if nothing is worth it.\n\n"
@@ -768,15 +776,8 @@ class HistoryController(HistoryService):
             max_n = 3
         max_n = max(1, min(5, max_n))
 
-        chunk_lines = []
-        for m in messages_to_compress:
-            if not isinstance(m, dict):
-                continue
-            text = self._content_to_plain_text(m.get("content"))
-            if not text:
-                continue
-            chunk_lines.append(f"[{'Player' if m.get('role') == 'user' else 'Character'}]: {text}")
-        chunk = "\n".join(chunk_lines)
+        chunk = "\n".join(f"[{speaker}]: {text}" for speaker, text in
+                          self._compression_transcript(character, messages_to_compress))
         if not chunk.strip():
             return
 
@@ -1118,18 +1119,8 @@ class HistoryController(HistoryService):
             prompt_template = self._DEFAULT_COMPRESSION_PROMPT
 
         try:
-            formatted_lines: List[str] = []
-            for msg in messages_to_compress:
-                # Мультимодальный content — список частей: без разбора картинка
-                # уезжает в промпт целиком в base64 (сжатие раздувалось до
-                # ~180k токенов вместо ~1k).
-                text = self._content_to_plain_text(msg.get("content"))
-                if not text:
-                    continue
-                speaker = "Player" if msg.get("role") == "user" else "Character or System"
-                stamp = f"[{msg.get('time')}] " if msg.get("time") else ""
-                formatted_lines.append(f"{stamp}[{speaker}]: {text}")
-            formatted_messages = "\n".join(formatted_lines)
+            formatted_messages = "\n".join(f"[{speaker}]: {text}" for speaker, text in
+                                           self._compression_transcript(character, messages_to_compress))
             previous_summary_limit = int(self._get_setting("HISTORY_COMPRESSION_PREVIOUS_SUMMARY_MAX_CHARS", 6000))
             previous_summary_trimmed = self._truncate_text_for_prompt(previous_summary, previous_summary_limit)
             if previous_summary and len(str(previous_summary)) > previous_summary_limit:
@@ -1139,10 +1130,13 @@ class HistoryController(HistoryService):
                     "(увеличьте HISTORY_COMPRESSION_PREVIOUS_SUMMARY_MAX_CHARS или включите layered)."
                 )
 
-            full_prompt = prompt_template.replace("{history_messages}", formatted_messages)
-            full_prompt = full_prompt.replace("{your character}", getattr(character, "display_name", "Character"))
-            full_prompt = full_prompt.replace("{current_character_name}", getattr(character, "display_name", "Character"))
-            full_prompt = full_prompt.replace("{previous_summary}", previous_summary_trimmed)
+            replacements = {
+                "history_messages": formatted_messages,
+                "previous_summary": previous_summary_trimmed,
+                "your character": getattr(character, "display_name", "Character"),
+                "current_character_name": getattr(character, "display_name", "Character"),
+            }
+            full_prompt = re.sub(r"\{([^{}]+)\}", lambda m: replacements.get(m[1], m[0]), prompt_template)
             max_attempts = max(1, int(self._get_setting("HISTORY_COMPRESSION_MAX_ATTEMPTS", 3)))
             base_retry_delay = max(0.0, float(self._get_setting("HISTORY_COMPRESSION_RETRY_BASE_DELAY_SEC", 2.0)))
             max_retry_delay = max(base_retry_delay, float(self._get_setting("HISTORY_COMPRESSION_RETRY_MAX_DELAY_SEC", 20.0)))
@@ -1563,7 +1557,7 @@ class HistoryController(HistoryService):
 
         merged_text = self._compress_history_singleflight(
             character,
-            [{"role": "system", "content": str(s.get("text") or "")} for s in oldest],
+            [{"role": "summary", "content": str(s.get("text") or "")} for s in oldest],
             previous_summary="",
         )
         if not merged_text or not str(merged_text).strip():
@@ -1633,6 +1627,26 @@ class HistoryController(HistoryService):
         """Текст для промпта сжатия. Разбор частей — общий (MessageContentCodec)."""
         return MessageContentCodec.to_prompt_text(content)
 
+    def _compression_transcript(self, character, messages):
+        owner = str(getattr(character, "char_id", "") or "")
+        owner_name = str(getattr(character, "display_name", "") or owner or "Character")
+        fallback_labels = {
+            "user": "Player", "assistant": owner_name, "system": "System note", "summary": "Previous summary",
+        }
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            text = self._content_to_plain_text(message.get("content"))
+            if not text:
+                continue
+            role = message.get("role")
+            author = str(message.get("speaker") or message.get("sender") or "").strip()
+            if role in {"user", "assistant"} and author:
+                label = owner_name if author == owner else "World observation" if author == "World" else author
+            else:
+                label = fallback_labels.get(role, "Event")
+            yield label, text
+
     def _build_local_compression_fallback(
         self,
         character,
@@ -1658,25 +1672,7 @@ class HistoryController(HistoryService):
                 )
             )
 
-        assistant_name = str(getattr(character, "display_name", "") or "Character")
-        for msg in messages_to_compress:
-            if not isinstance(msg, dict):
-                continue
-
-            text = self._content_to_plain_text(msg.get("content"))
-            if not text:
-                continue
-
-            role = str(msg.get("role") or "")
-            if role == "user":
-                speaker = "Player"
-            elif role == "assistant":
-                speaker = assistant_name
-            elif role == "system":
-                speaker = "System"
-            else:
-                speaker = role.title() or "Event"
-
+        for speaker, text in self._compression_transcript(character, messages_to_compress):
             lines.append(f"{speaker}: {self._truncate_text_for_prompt(text, per_message_limit)}")
             if len(lines) >= max_messages + (1 if previous_summary else 0):
                 break
@@ -2015,6 +2011,7 @@ class HistoryController(HistoryService):
         if not messages:
             return []
 
+        from services.dialogue_roster_context import neutralize_dialogue_roster_content
         from core.tv_observation import format_tv_observation, is_tv_observation_event
         tv_contexts = {format_tv_observation(m.get("tv_observation")) for m in messages if isinstance(m, dict) and m.get("tv_observation")}
         tv_contexts.discard("")
@@ -2031,7 +2028,9 @@ class HistoryController(HistoryService):
             if role not in ("user", "assistant", "system", "event"):
                 continue
 
-            content = m.get("content")
+            # Legacy Unity [DIALOGUE] snapshots were recipient-relative; strip
+            # stale (you) markers from the outgoing copy, not stored history.
+            content = neutralize_dialogue_roster_content(m.get("content"))
             if role == "system" and isinstance(content, str):
                 for observation in tv_contexts:
                     content = content.replace(observation, "")

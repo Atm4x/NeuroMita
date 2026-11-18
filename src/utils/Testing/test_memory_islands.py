@@ -128,12 +128,13 @@ class MemoryIslandUpsertTests(unittest.TestCase):
         # Not in the active block: stored as forgotten.
         with mm.db.connection() as conn:
             row = conn.execute(
-                "SELECT is_forgotten, is_deleted FROM memories "
+                "SELECT is_forgotten, is_deleted, type FROM memories "
                 "WHERE character_id=? AND eternal_id=?",
                 (mm.storage_key, eid),
             ).fetchone()
         self.assertEqual(int(row[0]), 1)  # forgotten -> out of active block
         self.assertEqual(int(row[1]), 0)  # but not deleted -> RAG-findable
+        self.assertEqual(row[2], "seed_lore")
 
         # Re-seeding the same fact updates in place without a duplicate and
         # keeps it RAG-only.
@@ -149,6 +150,82 @@ class MemoryIslandUpsertTests(unittest.TestCase):
         # It was scheduled for embedding (RAG index).
         mm._get_embed_executor().submit(lambda: None).result(timeout=5)
         self.assertTrue(any(e == eid for e, _ in fake.embedded))
+
+    def test_seed_rag_memory_migrates_legacy_fact_without_resetting_date(self):
+        mm = self._fresh_mm("LegacySeed")
+        old_date = "01.01.2024 12:00:00"
+        eid = mm.add_memory(
+            content="A lore fact already seeded before migration",
+            date=old_date, priority="high",
+        )
+        personal_id = mm.add_memory(content="Player likes tea", priority="normal")
+        with mm.db.connection() as conn:
+            conn.execute(
+                "UPDATE memories SET is_forgotten=1 WHERE character_id=? AND eternal_id=?",
+                (mm.storage_key, eid),
+            )
+            conn.commit()
+        self.assertEqual(
+            mm.seed_rag_memory("A lore fact already seeded before migration", priority="normal"),
+            eid,
+        )
+        with mm.db.connection() as conn:
+            row = conn.execute(
+                "SELECT type, priority, date_created, is_forgotten FROM memories "
+                "WHERE character_id=? AND eternal_id=?",
+                (mm.storage_key, eid),
+            ).fetchone()
+            personal = conn.execute(
+                "SELECT type, is_forgotten FROM memories "
+                "WHERE character_id=? AND eternal_id=?",
+                (mm.storage_key, personal_id),
+            ).fetchone()
+            count = conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE character_id=? AND content=?",
+                (mm.storage_key, "A lore fact already seeded before migration"),
+            ).fetchone()[0]
+        self.assertEqual(tuple(row), ("seed_lore", "normal", old_date, 1))
+        self.assertEqual(tuple(personal), ("fact", 0))
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            mm.seed_rag_memory("A lore fact already seeded before migration", priority="normal"),
+            eid,
+        )
+
+    def test_seed_does_not_overwrite_identical_active_personal_memory(self):
+        mm = self._fresh_mm("SeedCollision")
+        personal = mm.add_memory(content="An identical phrase", priority="high")
+        seed = mm.seed_rag_memory("An identical phrase", priority="normal")
+        self.assertNotEqual(personal, seed)
+        with mm.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT eternal_id, type, is_forgotten FROM memories WHERE character_id=? "
+                "AND content=? ORDER BY eternal_id",
+                (mm.storage_key, "An identical phrase"),
+            ).fetchall()
+        self.assertEqual(
+            [tuple(row) for row in rows],
+            [(personal, "fact", 0), (seed, "seed_lore", 1)],
+        )
+
+    def test_retire_seed_lore_does_not_delete_active_personal_memory(self):
+        mm = self._fresh_mm("RetireCollision")
+        personal = mm.add_memory(content="Retired lore with identical personal fact")
+        seed = mm.seed_rag_memory("Retired lore with identical personal fact")
+        self.assertNotEqual(personal, seed)
+        self.assertEqual(
+            mm.retire_seed_memories(["Retired lore with identical personal fact"]), 1
+        )
+        with mm.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT eternal_id, type, is_deleted FROM memories WHERE character_id=? "
+                "AND content=? ORDER BY eternal_id",
+                (mm.storage_key, "Retired lore with identical personal fact"),
+            ).fetchall()
+        self.assertEqual(
+            [tuple(row) for row in rows],
+            [(personal, "fact", 0), (seed, "seed_lore", 1)],
+        )
 
     def test_seed_rag_memory_absent_from_active_block(self):
         mm = self._fresh_mm("CreditsActive")

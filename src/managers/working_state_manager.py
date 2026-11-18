@@ -46,11 +46,10 @@ class WorkingStateManager(CharacterScopedService):
         epoch: int | None = None,
         max_chars: int = DEFAULT_MAX_CHARS,
     ) -> bool:
-        """Replace the state with a bounded model-produced snapshot.
+        """Replace a bounded handoff for a continuing scene or obligation.
 
-        An empty or malformed update is ignored: the last valid note stays in
-        place instead of being destroyed by a bad turn. A snapshot produced
-        before the last history reset is stale and is dropped as well.
+        Empty or malformed updates retain the last valid note. Snapshots
+        from before a history reset are rejected by the epoch guard.
         """
         key = self.storage_key
         with self._lock:
@@ -65,11 +64,10 @@ class WorkingStateManager(CharacterScopedService):
             if cleaned is None:
                 return False
             if self._states.get(key) is None and not has_open_obligation(cleaned):
-                # A note that only paraphrases this exchange would be read back
-                # next turn as an agenda nobody agreed on. Keep the previous
-                # note (or none) and leave the decision visible in the log.
+                # Avoid making a one-off greeting or answer into a persistent
+                # scene. Both open obligations and situated activities qualify.
                 logger.debug(
-                    "Working state without an open loop was dropped: %s", cleaned
+                    "Working state without a continuing scene was dropped: %s", cleaned
                 )
                 return False
             self._states[key] = cleaned

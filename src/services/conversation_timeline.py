@@ -11,6 +11,7 @@ from domain.timeline.models import TimelineTurn, TurnKind, observer_ids
 from domain.timeline.projections import character_messages
 from domain.timeline.projections import KnownEvent, message_projection
 from domain.timeline.time import display_timestamp, message_timestamp
+from .dialogue_roster_context import historical_dialogue_observation
 from .timeline_runtime import SessionTimelineRuntime
 from .timeline_history_queries import TimelineHistoryQueries
 from .timeline_assets import TimelineContent
@@ -114,6 +115,8 @@ class ConversationTimeline:
             incoming = self.content.freeze_message(incoming)
         if observation_message is not None:
             observation_message = self.content.freeze_message(observation_message)
+        outer_turn = self.runtime.turn
+        consumed_event_ids = outer_turn.consumed_event_ids if outer_turn else ()
         with self.runtime.writing() as timeline:
             trigger = None
             reply = False
@@ -155,13 +158,17 @@ class ConversationTimeline:
                     kind, {"name": event_type, "description": instruction},
                     observers=recipients, key=f"trigger:{operation_id}",
                 )
+                if instruction:
+                    input_event_ids.append(trigger.event_id)
             turn_kind = (TurnKind.REPLY if reply else
                          TurnKind.INITIATE if initiate or trigger is None or trigger.kind is EventKind.PROACTIVE_OPPORTUNITY
                          else TurnKind.REACT)
             return self.runtime.capture(trigger_id=trigger.event_id if trigger else None, kind=turn_kind,
                                         character_id=character_id,
-                                        include_target=trigger is not None and trigger.event_id not in input_event_ids,
-                                        input_event_ids=tuple(input_event_ids))
+                                        include_target=trigger is not None and
+                                        trigger.event_id not in {*input_event_ids, *consumed_event_ids},
+                                        input_event_ids=tuple(input_event_ids),
+                                        consumed_event_ids=consumed_event_ids)
 
     def complete_turn(
         self, user_event: dict | None, assistant_event: dict, recipients: Iterable[str], *,
@@ -227,10 +234,14 @@ class ConversationTimeline:
                                                    key=f"import-observation:{character_id}:{message_id}")
         return imported
 
-    def messages(self, character_id: str, *, before_turn: bool = True) -> tuple[dict, ...]:
+    def messages(
+        self, character_id: str, *, before_turn: bool = True, message_ids: set[str] | None = None,
+    ) -> tuple[dict, ...]:
         turn = self.runtime.turn
         through = turn.context_head if turn is not None and before_turn else None
-        messages = self.history_queries.messages(self.runtime.timeline.branch_id, character_id, through=through)
+        messages = self.history_queries.messages(
+            self.runtime.timeline.branch_id, character_id, through=through, message_ids=message_ids,
+        )
         if before_turn and turn is not None and turn.trigger_id:
             excluded = {*turn.input_event_ids, turn.trigger_id}
             messages = tuple(message for message in messages if message["timeline_event_id"] not in excluded)
@@ -369,6 +380,8 @@ class ConversationTimeline:
                 continue
             payload = event.payload.to_dict()
             description = payload.get("description") or payload.get("name") or event.kind.value
+            if event.kind is EventKind.UNITY_EVENT and isinstance(description, str):
+                description = historical_dialogue_observation(description) or description
             details = {key: value for key, value in payload.items() if key not in {"description", "name"}}
             from domain.timeline import JsonDocument
             # Compact marker: the row role already says "event", so the long
@@ -387,25 +400,19 @@ class ConversationTimeline:
             }
         return tuple(sorted(messages.values(), key=lambda item: item["timeline_learned_at"]))
 
-    def filter_retrieval(self, character_id: str, results: Iterable[dict]) -> list[dict]:
+    def retrieval_history(self, character_id: str, message_ids: set[str]) -> dict[str, dict]:
         """A history index may nominate IDs; only this character's world supplies content."""
         from core.message_content import MessageContentCodec
 
-        messages = {message["message_id"]: message for message in self.messages(character_id)}
-        filtered = []
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            if result.get("source") != "history":
-                filtered.append(result)
-                continue
-            message = messages.get(result.get("message_id"))
-            if message is None:
-                continue
-            filtered.append({**result, "content": MessageContentCodec.to_embedding_text(message["content"]),
-                             "role": message["role"], "speaker": message.get("speaker"),
-                             "target": message.get("target"), "date": message.get("time")})
-        return filtered
+        return {
+            message["message_id"]: {
+                "content": MessageContentCodec.to_embedding_text(message["content"]),
+                "role": message["role"], "speaker": message.get("speaker"),
+                "target": message.get("target"), "date": message.get("time"),
+                "participants": message.get("participants") or [],
+            }
+            for message in self.messages(character_id, message_ids=message_ids)
+        }
 
     def target_context(self, character_id: str) -> dict | None:
         turn = self.runtime.turn
