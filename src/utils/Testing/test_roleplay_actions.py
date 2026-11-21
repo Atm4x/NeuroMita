@@ -121,11 +121,11 @@ END_RULE
 """
 
     def _interpreter(self, script: str, enabled: bool | None):
-        variables = {}
+        character = _Character()
+        interpreter = PostDslInterpreter(character, _PostResolver(script))
         if enabled is not None:
-            variables["ROLEPLAY_ACTIONS_ENABLED"] = enabled
-        character = _Character(variables)
-        return PostDslInterpreter(character, _PostResolver(script)), character
+            interpreter.set_runtime_variable("ROLEPLAY_ACTIONS_ENABLED", enabled)
+        return interpreter, character
 
     def test_asterisks_are_removed_when_roleplay_is_disabled(self):
         interpreter, _character = self._interpreter(self.ASTERISK_SCRIPT, False)
@@ -151,6 +151,7 @@ END_RULE
 
         self.assertNotIn("score", disabled_character.variables)
         self.assertEqual(enabled_character.variables["score"], 3)
+        self.assertNotIn("ROLEPLAY_ACTIONS_ENABLED", enabled_character.variables)
 
 
 class RoleplaySettingsTests(unittest.TestCase):

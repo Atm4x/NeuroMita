@@ -56,8 +56,13 @@ class PostDslInterpreter:
         self.rules: List[PostDslRule] = []
         self.debug_display_config: Dict[str, str] = {}  # { "LabelInUI": "variable_name" }
         self._local_vars: Dict[str, Any] = {} # New: for local variables within post-rules execution
+        self._runtime_vars: Dict[str, Any] = {}
         self._declared_local_vars: set[str] = set()
         self._load_rules_and_configs()  # Переименуем или вызовем новый метод
+
+    def set_runtime_variable(self, name: str, value: Any) -> None:
+        """Set a request-scoped value without persisting it as a character variable."""
+        self._runtime_vars[str(name)] = value
 
     def _parse_dsl_script_text_to_rules_and_config(self, script_text: str) -> Tuple[List[PostDslRule], Dict[str, str]]:
         """
@@ -197,10 +202,19 @@ class PostDslInterpreter:
         def _default(var_name, def_val):
             return context_vars.get(
                 var_name,
-                self._local_vars.get(var_name, self.character.variables.get(var_name, def_val))
+                self._local_vars.get(
+                    var_name,
+                    self._runtime_vars.get(var_name, self.character.variables.get(var_name, def_val)),
+                ),
             )
 
-        eval_scope = {**self.character.variables, **self._local_vars, **context_vars, **self.character.app_vars}
+        eval_scope = {
+            **self.character.variables,
+            **self._runtime_vars,
+            **self._local_vars,
+            **context_vars,
+            **self.character.app_vars,
+        }
         allowed_calls = {
             "str": str,
             "int": int,
