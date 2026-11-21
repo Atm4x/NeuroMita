@@ -9,6 +9,7 @@ import json
 import datetime
 
 from core.services import services, use
+from core.settings_values import as_bool
 from main_logger import logger
 from services.contracts import (
     AppVarsService,
@@ -432,7 +433,7 @@ class PromptController(PromptBuilderService):
         event_type: str,
         gm_instruction_override: str | None = None,
         runtime: RuntimeCapabilities | None = None,
-    ):
+    ) -> bool:
         now_str = datetime.datetime.now().strftime("%Y %B %d (%A) %H:%M")
         character.set_variable("SYSTEM_DATETIME", now_str)
         character.update_app_vars(use(AppVarsService).snapshot())
@@ -446,6 +447,14 @@ class PromptController(PromptBuilderService):
             "UNITY_EFFECTS_AVAILABLE",
             None if caps.connected is None else not caps.structured_segment_exclude_fields,
         )
+        roleplay_actions_enabled = (
+            getattr(character, "char_id", "") != "GameMaster"
+            and as_bool(self._get_setting("ROLEPLAY_ACTIONS_ENABLED", False), default=False)
+        )
+        post_dsl = getattr(character, "post_dsl_interpreter", None)
+        set_runtime_variable = getattr(post_dsl, "set_runtime_variable", None)
+        if callable(set_runtime_variable):
+            set_runtime_variable("ROLEPLAY_ACTIONS_ENABLED", roleplay_actions_enabled)
 
         if getattr(character, "char_id", "") == "GameMaster":
             normalized_event_type = str(event_type or "").strip().lower()
@@ -453,6 +462,8 @@ class PromptController(PromptBuilderService):
             if instruction is None and normalized_event_type != "game_master_observe":
                 instruction = self._get_setting("GM_SMALL_PROMPT", "")
             character.set_variable("GM_INSTRUCTION", instruction or "")
+
+        return roleplay_actions_enabled
 
     def _build_system_messages(
         self,
@@ -464,7 +475,7 @@ class PromptController(PromptBuilderService):
         gm_instruction_override: str | None = None,
         runtime: RuntimeCapabilities | None = None,
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
-        self._setup_character_for_prompt(
+        roleplay_actions_enabled = self._setup_character_for_prompt(
             character,
             event_type,
             gm_instruction_override=gm_instruction_override,
@@ -524,6 +535,7 @@ class PromptController(PromptBuilderService):
 
         try:
             feature_overrides = dict(caps.get("structured_prompt_features") or {})
+            feature_overrides["roleplay_actions"] = roleplay_actions_enabled
             profile = caps.get("structured_response_profile") if caps.get("structured_output") else None
             if isinstance(profile, StructuredResponseCapabilities) and not profile.sparse_enabled:
                 profile = None

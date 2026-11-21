@@ -5,6 +5,7 @@
 // CUSTOM_PARAMS_SCHEMA remains the dynamic custom-field shape.
 // Prompt metadata declared by the selected top-level template:
 //   support_intents           (bool) — expose Unity structured intents
+//   roleplay_actions           (bool) — allow text-only RP fallback actions
 //
 // Per-character response_structure.txt should include this script via:
 //   [<../../Structural/response_format_json.script>]
@@ -145,6 +146,16 @@ IF response_has_tools == True THEN
     SET p_wire_rules = p_wire_rules + '\n- tool_call may name only a tool listed in [Available Tools]; tool names never belong in intents or commands.\n'
 ENDIF
 
+IF roleplay_actions == True THEN
+    SET LOCAL p_text_policy = """
+- "text" contains spoken words and may additionally contain concise non-verbal RP action beats wrapped in single asterisks, following [RP Action Fallback]. NEVER put XML tags in text.
+"""
+ELSE
+    SET LOCAL p_text_policy = """
+- "text" must contain ONLY spoken words. NEVER put XML tags in text.
+"""
+ENDIF
+
 SET LOCAL p_schema_fields = """  "segments": [
     {
       "text": "Your text here (REQUIRED)",
@@ -180,10 +191,9 @@ SET LOCAL p_graph_schema_fields = """  "segments": [
   "relations": ["subject|predicate|object", ...],
 [{CUSTOM_PARAMS_SCHEMA}]}"""
 
-SET LOCAL p_rules = """
+SET LOCAL p_rules = p_text_policy + """
 
 Field descriptions:
-- "text" must contain ONLY spoken words. NEVER put XML tags in text.
 - Use only action fields shown in the current request schema. "animations" play once and "idle_animations" loop when those fields are available.
 - Use dedicated fields and typed intents listed in [Unity Intent Contract] for supported actions. Use "commands" only for commands explicitly exposed by the current runtime (for example camera_snapshot or commands described in [Unity Runtime Rules]). Never invent command names.
 """ + p_intents_rules + p_wire_rules + """
@@ -216,10 +226,9 @@ Rules:
 - Use the typed intent `dialogue.continue` when the response should continue immediately.
 - Do NOT repeat commands from previous messages."""
 
-SET LOCAL p_graph_rules = """
+SET LOCAL p_graph_rules = p_text_policy + """
 
 Field descriptions:
-- "text" must contain ONLY spoken words. NEVER put XML tags in text.
 - Use only action fields shown in the current request schema.
 - Use dedicated fields and typed intents listed in [Unity Intent Contract] for supported actions. Use "commands" only for commands explicitly exposed by the current runtime (for example camera_snapshot or commands described in [Unity Runtime Rules]). Never invent command names.
 """ + p_intents_rules + p_wire_rules + """
@@ -313,9 +322,17 @@ ELSE
     SET LOCAL p_tool_footer = ""
 ENDIF
 
-SET LOCAL p_footer = p_tool_footer + """
-
+IF roleplay_actions == True THEN
+    SET LOCAL p_event_policy = """
+When a physical event reaches you (for example in [Unity Runtime Events]), react first through the real action fields available in this request. Use a short *...* text action only if no matching real action is listed in the current [Unity Runtime Capabilities], [Unity Runtime Rules] or [Unity Intent Contract]. Never narrate an action already represented by a field or intent, and do not narrate the incoming event itself.
+"""
+ELSE
+    SET LOCAL p_event_policy = """
 When a physical event reaches you (for example in [Unity Runtime Events]), react to it first with your body or gaze — an emotion, a look, a small animation — and only then with words. Do not narrate the event; respond to it.
+"""
+ENDIF
+
+SET LOCAL p_footer = p_tool_footer + p_event_policy + """
 
 Tag [SYSTEM INFO] means system information, not player speech.
 Tag [SPEAKER] means you are in a multi-speaker dialogue."""
