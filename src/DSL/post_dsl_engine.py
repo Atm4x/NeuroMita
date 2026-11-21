@@ -18,13 +18,22 @@ class PostDslError(Exception):
 
 
 class PostDslRule:
-    def __init__(self, name: str, match_type: str, pattern_str: str, capture_names: List[str], action_lines: List[str]):
+    def __init__(
+        self,
+        name: str,
+        match_type: str,
+        pattern_str: str,
+        capture_names: List[str],
+        action_lines: List[str],
+        condition_expr: str | None = None,
+    ):
         self.name = name
         self.match_type = match_type  # "TEXT" or "REGEX"
         self.pattern_str = pattern_str
         self.compiled_pattern = re.compile(pattern_str) if match_type == "REGEX" else None
         self.capture_names = capture_names
         self.action_lines = action_lines
+        self.condition_expr = (condition_expr or "").strip() or None
         self.remove_match_flag = False
         self.replace_with_expr: str | None = None
 
@@ -63,6 +72,7 @@ class PostDslInterpreter:
         current_pattern_str = None
         current_capture_names = []
         current_action_lines = []
+        current_condition_expr = None
         in_actions_block = False
         in_debug_display_block = False
 
@@ -82,13 +92,16 @@ class PostDslInterpreter:
                 if current_rule_name:  # Starting a new rule, finalize previous one
                     rules.append(
                         PostDslRule(current_rule_name, current_match_type, current_pattern_str, current_capture_names,
-                                    current_action_lines))
+                                    current_action_lines, current_condition_expr))
                 current_rule_name = line.split(maxsplit=1)[1]
                 current_match_type = None
                 current_pattern_str = None
                 current_capture_names = []
                 current_action_lines = []
+                current_condition_expr = None
                 in_actions_block = False
+            elif current_rule_name and not in_actions_block and line.upper().startswith("WHEN "):
+                current_condition_expr = line.split(maxsplit=1)[1].strip()
             elif current_rule_name and line.upper().startswith("MATCH "):
                 match_parts = line.split(maxsplit=2)  # MATCH TYPE "PATTERN"
                 current_match_type = match_parts[1].upper()
@@ -113,7 +126,7 @@ class PostDslInterpreter:
                 if current_rule_name and current_match_type and current_pattern_str:
                     rules.append(
                         PostDslRule(current_rule_name, current_match_type, current_pattern_str, current_capture_names,
-                                    current_action_lines))
+                                    current_action_lines, current_condition_expr))
                 current_rule_name = None  # Reset for next rule
                 in_actions_block = False
             elif in_actions_block:
@@ -128,7 +141,7 @@ class PostDslInterpreter:
                 if current_rule_name and current_match_type and current_pattern_str:
                     rules.append(
                         PostDslRule(current_rule_name, current_match_type, current_pattern_str, current_capture_names,
-                                    current_action_lines))
+                                    current_action_lines, current_condition_expr))
                     current_rule_name = None  # Сброс, чтобы не мешать DEBUG_DISPLAY
                 continue  # Переходим к следующей строке
 
@@ -149,7 +162,7 @@ class PostDslInterpreter:
             # Не забыть добавить последнее правило, если оно не было закрыто END_RULE перед DEBUG_DISPLAY
         if current_rule_name and current_match_type and current_pattern_str:
             rules.append(PostDslRule(current_rule_name, current_match_type, current_pattern_str, current_capture_names,
-                                     current_action_lines))
+                                     current_action_lines, current_condition_expr))
 
         logger.info(
             f"[{self.character.char_id}] Parsed {len(rules)} post-rules and {len(debug_config)} debug display entries.")
@@ -207,6 +220,19 @@ class PostDslInterpreter:
             logger.error(f"[{self.character.char_id}] Post-DSL: Error evaluating expression '{expr}': {format_exception(e)}",
                          exc_info=True)
             raise PostDslError(f"Error evaluating expression '{expr}': {e}") from e
+
+    def _is_rule_enabled(self, rule: PostDslRule) -> bool:
+        """Evaluate an optional WHEN expression; a failed condition disables the rule."""
+        if not rule.condition_expr:
+            return True
+        try:
+            return bool(self._eval_dsl_expression(rule.condition_expr, {}))
+        except Exception as exc:
+            logger.warning(
+                f"[{self.character.char_id}] Post-DSL Rule '{rule.name}': "
+                f"condition failed; skipping rule: {format_exception(exc)}"
+            )
+            return False
 
     def _execute_actions(self, rule: PostDslRule, match_object: re.Match | None, current_response_segment: str,
                          extra_context: Dict[str, Any] | None = None) -> Tuple[str, bool]:
@@ -311,6 +337,8 @@ class PostDslInterpreter:
         self._declared_local_vars.clear()
 
         for rule in self.rules:
+            if not self._is_rule_enabled(rule):
+                continue
             if rule.match_type != "FIELD":
                 continue
             field_name = rule.pattern_str
@@ -327,6 +355,8 @@ class PostDslInterpreter:
         modified_response = response_text
 
         for rule in self.rules:
+            if not self._is_rule_enabled(rule):
+                continue
             if rule.match_type == "FIELD":
                 continue  # FIELD rules are handled by process_structured_fields()
 

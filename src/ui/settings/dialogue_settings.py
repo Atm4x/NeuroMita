@@ -12,8 +12,23 @@ def add_dialogue_settings_section(self, parent) -> None:
         {
             "type": "text",
             "label": _(
-                "Автоматические разговоры персонажей и продолжения.",
-                "Automatic character conversations and continuations.",
+                "Настройки диалогов, RP-отыгрыша и автоматических продолжений.",
+                "Dialogue, role-play narration and automatic continuation settings.",
+            ),
+        },
+        {
+            "type": "subsection",
+            "label": _("РП-отыгрыш", "Role-play actions"),
+        },
+        {
+            "label": _("Текстовые RP-действия", "Text RP actions"),
+            "key": "ROLEPLAY_ACTIONS_ENABLED",
+            "type": "checkbutton",
+            "default_checkbutton": False,
+            "widget_name": "ROLEPLAY_ACTIONS_ENABLED",
+            "tooltip": _(
+                "Разрешать Мите описывать короткие жесты и действия в *звёздочках*, только если в текущих возможностях Unity нет соответствующего реального действия. Если реальное действие доступно, оно имеет приоритет и не дублируется текстом.",
+                "Allow Mita to describe brief gestures and actions in *asterisks* only when current Unity capabilities have no matching real action. If a real action is available, it takes priority and is not duplicated in text.",
             ),
         },
         {

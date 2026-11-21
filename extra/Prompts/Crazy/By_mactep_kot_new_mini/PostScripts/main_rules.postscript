@@ -1,5 +1,6 @@
 // ===== СБОР ЗВЁЗДОЧЕК =====
 RULE Remove Asterisks
+    WHEN default("ROLEPLAY_ACTIONS_ENABLED", False) == False
     MATCH REGEX "(\*{1,3})" 
     ACTIONS
         REMOVE_MATCH

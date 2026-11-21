@@ -9,6 +9,7 @@ import json
 import datetime
 
 from core.services import services, use
+from core.settings_values import as_bool
 from main_logger import logger
 from services.contracts import (
     AppVarsService,
@@ -446,6 +447,11 @@ class PromptController(PromptBuilderService):
             "UNITY_EFFECTS_AVAILABLE",
             None if caps.connected is None else not caps.structured_segment_exclude_fields,
         )
+        roleplay_actions_enabled = (
+            getattr(character, "char_id", "") != "GameMaster"
+            and as_bool(self._get_setting("ROLEPLAY_ACTIONS_ENABLED", False), default=False)
+        )
+        character.set_variable("ROLEPLAY_ACTIONS_ENABLED", roleplay_actions_enabled)
 
         if getattr(character, "char_id", "") == "GameMaster":
             normalized_event_type = str(event_type or "").strip().lower()
@@ -524,6 +530,9 @@ class PromptController(PromptBuilderService):
 
         try:
             feature_overrides = dict(caps.get("structured_prompt_features") or {})
+            feature_overrides["roleplay_actions"] = as_bool(
+                character.get_variable("ROLEPLAY_ACTIONS_ENABLED", False), default=False
+            )
             profile = caps.get("structured_response_profile") if caps.get("structured_output") else None
             if isinstance(profile, StructuredResponseCapabilities) and not profile.sparse_enabled:
                 profile = None
