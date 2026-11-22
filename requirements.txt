@@ -39,8 +39,7 @@ pyasn1==0.6.1
 pyaudio==0.2.14
 pycparser==2.22
 pycryptodome==3.21.0
-pydantic==2.10.6
-pydantic-core==2.27.2
+pydantic>=2.12,<3
 pygame==2.6.1
 python-dateutil==2.9.0.post0
 regex>=2025.10.22
@@ -55,7 +54,7 @@ speechrecognition==3.14.1
 telethon==1.38.1
 tiktoken==0.8.0
 tqdm==4.67.1
-typing-extensions==4.12.2
+typing-extensions>=4.13,<5
 typing-inspect==0.9.0
 urllib3==2.3.0
 yarl==1.18.3
