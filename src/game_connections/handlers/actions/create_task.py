@@ -1,20 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from core.events import Events
-from core.services import use
-from services.contracts import CharacterRegistry, PlayerMessageSource, SettingsService, TaskService
+from core.services import services, use
+from services.unity_timeline import UnityTimelineIngress, unity_event_visible_to
+from services.contracts import CharacterRegistry, GameLinkService, PlayerMessageSource, SettingsService, TaskService
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
 from core.request_policy import resolve_policy
 from managers.task_manager import TaskStatus
+from managers.unity_retry_store import UnityRetryStore
 from game_connections.handlers.registry import RequestContext
 from game_connections.shared_image_transfer import collect_context_images
 
 logger = logging.getLogger(__name__)
+
+
+def should_update_unity_dialogue_target(event_type: str, speaker) -> bool:
+    return (
+        str(event_type or "").strip().lower() == "answer"
+        and getattr(speaker, "kind", None) is DialogueActorKind.PLAYER
+    )
 
 
 def _collect_context_images(context: dict) -> List:
@@ -33,6 +44,8 @@ def _should_label_as_mita_camera(event_type: str, context: dict) -> bool:
     images therefore come from Mita's POV unless a dedicated image event is used.
     """
     if not _has_context_images(context):
+        return False
+    if str(context.get("image_source") or "").strip().lower() == "tv_observer":
         return False
     if str(context.get("image_source") or "").strip().lower() == "mita_camera":
         return True
@@ -77,10 +90,91 @@ def _normalise_reaction_events(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return events
 
 
+def _visible_runtime_events(raw: Any, character_id: str) -> Any:
+    if isinstance(raw, (list, tuple)):
+        return [event for event in raw if unity_event_visible_to(event, character_id)]
+    return raw if unity_event_visible_to(raw, character_id) else []
+
+
+def build_game_state_payload(
+    context: Dict[str, Any],
+    character_id: str,
+    dialogue: Any = None,
+) -> Dict[str, Any]:
+    """Project the Unity snapshot onto the fields the prompt knows about.
+
+    The snapshot is a union of everything Unity sends; this projection is what
+    stops stray keys from reaching the prompt. Every field Unity starts sending
+    for the prompt must be listed here or it silently disappears.
+    """
+    dialogue_world_id = (
+        str(dialogue.get("world_id") or "").strip()
+        if isinstance(dialogue, dict)
+        else ""
+    )
+    # New Unity clients send explicit worldPlayer/worldMita fields. The
+    # world_id fallbacks keep Python compatible while Unity is migrated.
+    world_player = str(
+        context.get("worldPlayer")
+        or context.get("world_id")
+        or dialogue_world_id
+        or ""
+    ).strip()
+    world_mita = str(
+        context.get("worldMita")
+        or context.get("world_id")
+        or dialogue_world_id
+        or world_player
+        or ""
+    ).strip()
+
+    try:
+        contract_version = int(context.get("prompt_contract_version") or 0)
+    except (TypeError, ValueError):
+        contract_version = 0
+
+    return {
+        "distance": float(str(context.get("distance", "0")).replace(",", ".")),
+        "roomPlayer": int(context.get("roomPlayer", 0)),
+        "roomMita": int(context.get("roomMita", 0)),
+        "nearObjects": context.get("hierarchy", ""),
+        "world_state": context.get("world_state", ""),
+        "worldPlayer": world_player,
+        "worldMita": world_mita,
+        "runtime_rules": context.get("runtime_rules", ""),
+        "runtime_static_catalog": context.get("runtime_static_catalog", ""),
+        "runtime_capabilities": context.get("runtime_capabilities", ""),
+        "intent_rules": context.get("intent_rules", ""),
+        "cognitive_effects": context.get("cognitive_effects", []),
+        "cognitive_effect_changes": context.get("cognitive_effect_changes", []),
+        "cognitive_effect_aftermath": context.get("cognitive_effect_aftermath", []),
+        "runtime_events": _visible_runtime_events(context.get("runtime_events", []), character_id),
+        "tv_observation": context.get("tv_observation", {}),
+        "novel": context.get("novel", {}) if character_id == "TwoD" else {},
+        # The game owns the skill catalog: it ships the entries together with
+        # the snapshot, so the prompt can render the catalog without keeping
+        # its own copy of the authored text.
+        "skills_catalog": context.get("skills_catalog", []),
+        "skills_catalog_revision": context.get("skills_catalog_revision", ""),
+        "skills_scope": context.get("skills_scope", ""),
+        # A runtime that defers mechanic instructions into skills says so here;
+        # without the marker the payload is the old, self-contained contract.
+        "prompt_contract_version": contract_version,
+        "scene_mechanics": context.get("scene_mechanics", []),
+    }
+
+
 def _build_react_prompt(
-    data: Dict[str, Any],
+    data: Dict[str, Any], *, character_id: str = "",
 ) -> tuple[List[str], str, float, List[Dict[str, Any]]]:
-    reaction_events = _normalise_reaction_events(data)
+    raw = data.get("reaction_events")
+    if isinstance(raw, (list, tuple)) and raw:
+        visible = _visible_runtime_events(raw, character_id)
+        reaction_events = _normalise_reaction_events({**data, "reaction_events": visible})
+        if not reaction_events and len(visible) != len(raw):
+            return [], "", 0.0, []
+    else:
+        reaction_events = _normalise_reaction_events(data)
     if reaction_events:
         is_batch = len(reaction_events) > 1
         lines = (
@@ -109,6 +203,8 @@ def _build_react_prompt(
         duration = max(item["duration"] for item in reaction_events)
         return lines, reason_text, duration, reaction_events
 
+    if not unity_event_visible_to(data, character_id):
+        return [], "", 0.0, []
     reason_type = str(data.get("reason_type") or "").strip()
     reason_content = str(data.get("reason_content") or "").strip()
     reason_text = reason_content or str(data.get("reason") or "").strip() or "player_react"
@@ -124,6 +220,26 @@ def _build_react_prompt(
     # Do not expose duration until Unity defines it consistently: the current
     # payload may disagree with the event's own description.
     return lines, reason_text, duration, []
+
+
+_TRANSIENT_GAME_STATE_KEYS = (
+    "runtime_events",
+    "tv_observation",
+    "cognitive_effects",
+    "cognitive_effect_changes",
+    "cognitive_effect_aftermath",
+)
+
+
+def _build_persistent_game_state(
+    game_state_payload: Dict[str, Any],
+    character_id: str,
+) -> Dict[str, Any]:
+    persistent_game_state = dict(game_state_payload)
+    for key in _TRANSIENT_GAME_STATE_KEYS:
+        persistent_game_state.pop(key, None)
+    persistent_game_state["character_id"] = str(character_id or "")
+    return persistent_game_state
 
 
 async def _dispatch_task(
@@ -151,18 +267,26 @@ async def _dispatch_task(
     gm_instruction_override: str | None = None,
     extra_task_data: Optional[dict] = None,
     abort_reason: str = "Failed to create task",
+    interim_tool_speech: bool = False,
 ) -> Any:
     """
     Emit CREATE_TASK then SEND_MESSAGE — the shared boilerplate for most event types.
     Returns the created task, or None if creation failed (abort update already sent).
     """
+    from core.tv_observation import format_tv_observation
+    tv_context = format_tv_observation((game_state or {}).get("tv_observation"))
+    if tv_context:
+        system_input = "\n".join(part for part in (system_input, tv_context) if part)
+
     task_data: dict = {
         "character": character_id,
         "character_stats": character_stats,
         "user_input": user_input,
         "system_input": system_input,
         "client_id": ctx.client_id,
+        "client_role": ctx.client_role,
         "event_type": event_type,
+        "interim_tool_speech": bool(interim_tool_speech),
         "req_id": req_id,
         "sender": sender,
         "participants": participants,
@@ -170,6 +294,8 @@ async def _dispatch_task(
         "policy": policy_dict,
         "dialogue": dict(dialogue or {}),
     }
+    if character_id.startswith("Cartridge_") or character_id in ("Cart_portal", "Cart_divan"):
+        task_data["policy"].update(allow_voiceover=False, allow_streaming=False)
     if player_message_source:
         task_data["player_message_source"] = str(player_message_source)
     if extra_task_data:
@@ -177,11 +303,20 @@ async def _dispatch_task(
     if gm_instruction_override is not None:
         task_data["gm_instruction_override"] = gm_instruction_override
 
+    unity_retry_message_id = ""
+    if (
+        str(model_event_type or "").strip().lower() == "chat"
+        and str(player_message_source or "").strip().lower() == PlayerMessageSource.GAME.value
+        and str(user_input or "").strip()
+        and req_id
+    ):
+        unity_retry_message_id = ConversationMessageIds.incoming(req_id)
+        task_data["unity_retry_message_id"] = unity_retry_message_id
+
     task = use(TaskService).create_task(task_type, task_data)
 
     if task:
         server.client_tasks[ctx.client_id].add(task.uid)
-        await server.send_task_update(ctx.client_id, task)
         chat_event = {
             "user_input": user_input,
             "system_input": system_input,
@@ -202,6 +337,49 @@ async def _dispatch_task(
             chat_event["player_message_source"] = str(player_message_source)
         if gm_instruction_override is not None:
             chat_event["gm_instruction_override"] = gm_instruction_override
+        if unity_retry_message_id:
+            retry_record = {
+                "message_id": unity_retry_message_id,
+                "character_id": str(character_id or ""),
+                "created_at": time.time(),
+                "text": str(user_input or ""),
+                "task_type": str(task_type or "chat"),
+                "task_data": {**task_data, "client_id": ""},
+                "active_task_uid": str(task.uid),
+                "request": {
+                    "user_input": user_input,
+                    "system_input": system_input,
+                    "image_data": list(images or []),
+                    "images_shown": False,
+                    "image_source": image_source,
+                    "event_type": model_event_type,
+                    "character_id": character_id,
+                    "sender": sender,
+                    "participants": list(participants or []),
+                    "req_id": req_id,
+                    "origin_message_id": origin_message_id,
+                    "policy": dict(policy_dict or {}),
+                    "game_state": dict(game_state or {}),
+                    "dialogue": dict(dialogue or {}),
+                    "player_message_source": str(player_message_source or ""),
+                    "gm_instruction_override": gm_instruction_override,
+                    "unity_retry_message_id": unity_retry_message_id,
+                },
+            }
+            retry_record["task_data"].pop("unity_retry_message_id", None)
+            try:
+                retry_store_ok = await asyncio.to_thread(
+                    UnityRetryStore.add, character_id, retry_record
+                )
+            except Exception:
+                logger.exception("Failed to persist Unity retry request %s", unity_retry_message_id)
+                retry_store_ok = False
+            if not retry_store_ok:
+                logger.warning(
+                    "Unity request %s will run without a persistent retry record",
+                    unity_retry_message_id,
+                )
+        await server.send_task_update(ctx.client_id, task)
         event_bus.emit(Events.Chat.SEND_MESSAGE, chat_event)
     else:
         await server._send_aborted_update(
@@ -221,7 +399,33 @@ class CreateTaskAction:
         data = request.get("data", {}) or {}
         context = request.get("context", {}) or {}
         req_id = request.get("req_id", None)
+        desktop_turn = ctx.client_role == "desktop"
+        if desktop_turn and (event_type != "answer" or character_id != "Kind"):
+            await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                reason="Desktop supports only Kind dialogue", req_id=req_id)
+            return
         dialogue_payload = context.get("dialogue") if isinstance(context.get("dialogue"), dict) else {}
+
+        if character_id == "TwoD":
+            from domain.novel import validate_novel
+            try:
+                context["novel"] = validate_novel(context.get("novel"))
+            except ValueError as error:
+                await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                    reason=str(error), req_id=req_id)
+                return
+
+        is_cartridge = character_id in ("Cart_portal", "Cart_divan") or str(character_id).startswith("Cartridge_")
+        if is_cartridge:
+            from domain.cartridge_catalog import validate_session
+            try:
+                definitions = validate_session(context.get("cartridge"), character_id)
+                registry = use(CharacterRegistry)
+                registry.register_cartridges(definitions)
+            except (ValueError, NotImplementedError) as error:
+                await server._send_aborted_update(ctx.client_id, event_type, character_id,
+                    reason=str(error), req_id=req_id)
+                return
 
         identity_resolver = DialogueIdentityResolver(use(CharacterRegistry).get)
         resolved_speaker = identity_resolver.resolve(
@@ -272,46 +476,29 @@ class CreateTaskAction:
 
         character_stats = _get_character_stats(character_id)
 
-        dialogue_world_id = (
-            str(dialogue_payload.get("world_id") or "").strip()
-            if isinstance(dialogue_payload, dict)
-            else ""
-        )
-        # New Unity clients send explicit worldPlayer/worldMita fields. The
-        # world_id fallbacks keep Python compatible while Unity is migrated.
-        world_player = str(
-            context.get("worldPlayer")
-            or context.get("world_id")
-            or dialogue_world_id
-            or ""
-        ).strip()
-        world_mita = str(
-            context.get("worldMita")
-            or context.get("world_id")
-            or dialogue_world_id
-            or world_player
-            or ""
-        ).strip()
+        game_state_payload = build_game_state_payload(context, character_id, dialogue_payload)
+        if not desktop_turn:
+            # Runtime events are consumable by this exact turn and must never leak
+            # into the persistent fallback state used by non-Unity requests.
+            persistent_game_state = _build_persistent_game_state(game_state_payload, character_id)
+            if not is_cartridge and character_id != "TwoD" and should_update_unity_dialogue_target(event_type, resolved_speaker):
+                target_changed = use(GameLinkService).set_unity_target_character_id(character_id)
+                if target_changed:
+                    event_bus.emit(
+                        Events.Server.GAME_DIALOGUE_TARGET_CHANGED,
+                        {"character_id": str(character_id or "")},
+                    )
+            event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
 
-        game_state_payload = {
-            "distance": float(str(context.get("distance", "0")).replace(",", ".")),
-            "roomPlayer": int(context.get("roomPlayer", 0)),
-            "roomMita": int(context.get("roomMita", 0)),
-            "nearObjects": context.get("hierarchy", ""),
-            "world_state": context.get("world_state", ""),
-            "worldPlayer": world_player,
-            "worldMita": world_mita,
-            "runtime_rules": context.get("runtime_rules", ""),
-            "runtime_static_catalog": context.get("runtime_static_catalog", ""),
-            "runtime_capabilities": context.get("runtime_capabilities", ""),
-            "intent_rules": context.get("intent_rules", ""),
-            "runtime_events": context.get("runtime_events", []),
-        }
-        # Runtime events are consumable by this exact turn and must never leak
-        # into the persistent fallback state used by non-Unity requests.
-        persistent_game_state = dict(game_state_payload)
-        persistent_game_state.pop("runtime_events", None)
-        event_bus.emit(Events.Server.SET_GAME_DATA, persistent_game_state)
+            timeline_ingress = services().get_optional(UnityTimelineIngress)
+            if timeline_ingress is not None:
+                ingest = await asyncio.to_thread(
+                    timeline_ingress.ingest, request, str(character_id), list(participants or []),
+                )
+                if ingest.trigger_id:
+                    game_state_payload["_timeline_event_id"] = ingest.trigger_id
+                if ingest.event_ids:
+                    game_state_payload["_timeline_event_ids"] = list(ingest.event_ids)
 
         if server._should_block_event(event_type):
             await server._send_aborted_update(ctx.client_id, event_type, character_id, req_id=req_id)
@@ -329,6 +516,7 @@ class CreateTaskAction:
             req_id=req_id,
             origin_message_id=origin_message_id,
             event_type=event_type,
+            interim_tool_speech=request.get("interim_tool_speech") is True,
             dialogue=dialogue_payload,
             game_state=game_state_payload,
         )
@@ -375,6 +563,7 @@ class CreateTaskAction:
                     "presentation_message_id": ConversationMessageIds.incoming(req_id),
                     "origin_message_id": origin_message_id,
                     "character_id": character_id,
+                    "participants": list(participants or []),
                 })
 
             system_input = ""
@@ -396,7 +585,7 @@ class CreateTaskAction:
                 images=collect_context_images(context, client_id=ctx.client_id),
                 image_source=effective_image_source,
                 player_message_source=(
-                    PlayerMessageSource.GAME.value
+                    (PlayerMessageSource.APPLICATION if desktop_turn else PlayerMessageSource.GAME).value
                     if user_input and resolved_speaker.kind is DialogueActorKind.PLAYER
                     else ""
                 ),
@@ -547,8 +736,14 @@ class CreateTaskAction:
                 return
 
             react_lines, reason_text, duration, reaction_events = _build_react_prompt(
-                data,
+                data, character_id=str(character_id),
             )
+            if not react_lines:
+                await server._send_aborted_update(
+                    ctx.client_id, event_type, character_id,
+                    reason="No visible reaction events", req_id=req_id,
+                )
+                return
 
             # Label continuous in-game camera frames when Unity flags them
             effective_image_source = str(context.get("image_source") or "")

@@ -1,5 +1,6 @@
 # board_logic.py
 import chess
+from localization import translate as _
 
 PIECE_SYMBOLS = {
     'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
@@ -8,8 +9,9 @@ PIECE_SYMBOLS = {
 
 
 class PureBoardLogic:
-    def __init__(self):
+    def __init__(self, on_move=None):
         self.board = chess.Board()
+        self.on_move = on_move
 
     def reset_board(self, fen=None):
         if fen:
@@ -24,6 +26,22 @@ class PureBoardLogic:
     def get_fen(self):
         return self.board.fen()
 
+    def snapshot(self):
+        return {"root_fen": self.board.root().fen(en_passant="fen", promoted=True),
+                "moves": [move.uci() for move in self.board.move_stack],
+                "fen": self.board.fen(en_passant="fen", promoted=True)}
+
+    def restore_snapshot(self, state):
+        if (not isinstance(state, dict) or set(state) != {"root_fen", "moves", "fen"}
+                or not isinstance(state["moves"], list) or not all(isinstance(move, str) for move in state["moves"])):
+            raise ValueError("Invalid chess position snapshot")
+        board = chess.Board(state["root_fen"])
+        for move in state["moves"]:
+            board.push(chess.Move.from_uci(move))
+        if board.fen(en_passant="fen", promoted=True) != state["fen"]:
+            raise ValueError("Chess move history does not match the saved position")
+        self.board = board
+
     def get_turn(self):
         return self.board.turn
 
@@ -33,12 +51,73 @@ class PureBoardLogic:
     def get_legal_moves_uci_short(self, limit: int = 10):
         return [move.uci() for move in list(self.board.legal_moves)[:limit]]
 
+    def get_recent_move_history(self, max_moves_per_side: int = 8):
+        """Describe recent played moves and notable events for the game prompt."""
+        if max_moves_per_side <= 0 or not self.board.move_stack:
+            return []
+
+        root = self.board.root()
+        side_counts = {chess.WHITE: 0, chess.BLACK: 0}
+        moves = list(self.board.move_stack)
+        first_index = len(moves)
+        for index in range(len(moves) - 1, -1, -1):
+            mover = root.turn if index % 2 == 0 else not root.turn
+            if side_counts[mover] >= max_moves_per_side:
+                break
+            side_counts[mover] += 1
+            first_index = index
+
+        board = root.copy()
+        for index, move in enumerate(moves[:first_index]):
+            board.push(move)
+
+        history = []
+        for move in moves[first_index:]:
+            mover = board.turn
+            side = "White" if mover == chess.WHITE else "Black"
+            move_number = board.fullmove_number
+            try:
+                san = board.san(move)
+            except (AssertionError, ValueError):
+                san = move.uci()
+            events = []
+
+            captured_square = move.to_square
+            if board.is_en_passant(move):
+                captured_square = move.to_square - 8 if mover == chess.WHITE else move.to_square + 8
+            captured_piece = board.piece_at(captured_square)
+            if captured_piece:
+                color = "white" if captured_piece.color == chess.WHITE else "black"
+                piece_name = chess.piece_name(captured_piece.piece_type)
+                events.append(f"captures {color} {piece_name} on {chess.square_name(captured_square)}")
+
+            if board.is_castling(move):
+                flank = "kingside" if board.is_kingside_castling(move) else "queenside"
+                events.append(f"castles {flank}")
+            if move.promotion:
+                events.append(f"pawn promotes to {chess.piece_name(move.promotion)}")
+
+            board.push(move)
+            if board.is_checkmate():
+                events.append("checkmate")
+            elif board.is_check():
+                events.append("check")
+
+            detail = "; ".join(events) if events else "no special event"
+            prefix = f"{move_number}." if mover == chess.WHITE else f"{move_number}..."
+            history.append(f"{prefix} {side}: {san} ({detail})")
+
+        return history
+
     def make_move(self, uci_move_str):
         try:
             move = chess.Move.from_uci(uci_move_str)
             if move in self.board.legal_moves:
                 san_move_str = self.board.san(move)
+                mover = self.board.turn
                 self.board.push(move)
+                if self.on_move is not None:
+                    self.on_move(uci_move_str, san_move_str, mover)
                 return True, f"Ход {san_move_str} (UCI: {uci_move_str}) сделан.", san_move_str
             else:
                 promotion_move_options = [
@@ -59,8 +138,11 @@ class PureBoardLogic:
         """Cheat: делает ход без проверки легальности."""
         try:
             move = chess.Move.from_uci(uci_move_str)
+            mover = self.board.turn
+            san = self.board.san(move) if move in self.board.legal_moves else uci_move_str
             self.board.push(move)
-            san = self.board.san(move)
+            if self.on_move is not None:
+                self.on_move(uci_move_str, san, mover)
             return True, f"Чит-ход {san} (UCI: {uci_move_str}).", san
         except (ValueError, AssertionError):
             return False, f"Невозможный чит-ход: {uci_move_str}", None
@@ -93,19 +175,23 @@ class PureBoardLogic:
 
     def is_game_over(self):
         if self.board.is_checkmate():
-            winner = "Черные" if self.board.turn == chess.WHITE else "Белые"
-            return True, f"Мат! Победили {winner}."
+            if self.board.turn == chess.WHITE:
+                return True, _("Мат! Победили Черные.", "Checkmate! Black wins.")
+            return True, _("Мат! Победили Белые.", "Checkmate! White wins.")
         if self.board.is_stalemate():
-            return True, "Ничья (пат)."
+            return True, _("Ничья (пат).", "Draw (stalemate).")
         if self.board.is_insufficient_material():
-            return True, "Ничья (недостаточно материала)."
+            return True, _("Ничья (недостаточно материала).", "Draw (insufficient material).")
         if self.board.is_seventyfive_moves():
-            return True, "Ничья (правило 75 ходов)."
+            return True, _("Ничья (правило 75 ходов).", "Draw (75-move rule).")
         if self.board.is_fivefold_repetition():
-            return True, "Ничья (пятикратное повторение позиции)."
+            return True, _("Ничья (пятикратное повторение позиции).", "Draw (fivefold repetition).")
         if self.board.can_claim_draw():
-             return True, "Ничья (можно заявить по правилу 50 ходов или трехкратного повторения)."
-        return False, "Игра продолжается."
+            return True, _(
+                "Ничья (можно заявить по правилу 50 ходов или трехкратного повторения).",
+                "Draw (claim available under the 50-move rule or threefold repetition).",
+            )
+        return False, _("Игра продолжается.", "Game in progress.")
 
     def get_piece_at(self, square_name):
         try:

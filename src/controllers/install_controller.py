@@ -2,8 +2,9 @@
 from __future__ import annotations
 from core.error_utils import format_exception
 
-from typing import Callable, Optional, Any, Iterable, Sequence
+from typing import Callable, Optional, Any, Iterable
 import importlib
+from contextlib import nullcontext
 import inspect
 import json
 import os
@@ -29,7 +30,7 @@ from core.services import services
 from core.install_requirements import missing_pip_specs
 from core.task_supervisor import task_supervisor
 from utils import getTranslationVariant as _
-from services.contracts import AIEngineService, InstallService
+from services.contracts import AIEngineAdministrationService, AIEngineService, InstallService
 
 
 from packaging.utils import canonicalize_name
@@ -784,32 +785,48 @@ class InstallController(InstallService):
         }
         return mapping.get(str(category or "").strip().lower())
 
-    def _quiesce_environment_worker(
-        self,
-        *,
-        category: str,
-        item_id: str,
-        timeout: float,
+    def _uninstall_plan(
+        self, plan, *, environment_manager, active_environment, managed,
+        pip_installer, callbacks, ctx, timeout,
     ) -> bool:
-        service_name = self._environment_service_name(category)
-        if service_name is None:
-            return True
-        engine_service = services().get_optional(AIEngineService)
-        if engine_service is None:
-            return True
-        engine = engine_service.get_engine()
-        deactivate = getattr(engine, "deactivate_environment", None)
-        if not callable(deactivate):
-            raise RuntimeError("AI engine does not support managed environment deactivation")
-        return bool(
-            deactivate(
-                service_name,
-                item_id,
-                category=category,
-                timeout=timeout,
-                persist=False,
+        _, category, item_id = environment_manager.logical_id_from_meta(ctx["meta"])
+        session = nullcontext()
+        if category == "backend" or self._environment_service_name(category) is not None:
+            administration = services().get_optional(AIEngineAdministrationService)
+            if administration is None:
+                engine_service = services().get_optional(AIEngineService)
+                if engine_service is not None and engine_service.get_engine() is not None:
+                    raise RuntimeError("AI engine administration service is unavailable")
+            else:
+                callbacks.status("Остановка AI-процессов перед удалением модели")
+                session = administration.maintenance_session(timeout=min(15.0, timeout))
+
+        with session:
+            callbacks.status("Удаление модели")
+            cleanup = self._artifact_cleanup_plan(plan) if managed and active_environment else plan
+            ok = self._execute_plan(
+                cleanup, pip_installer=pip_installer, callbacks=callbacks, ctx=ctx,
             )
-        )
+            if not ok or not managed or active_environment is None:
+                return ok
+            main_environment = self._is_main_environment_category(active_environment.category)
+            if main_environment:
+                self._deactivate_main_environment(active_environment)
+            callbacks.status("Удаление AI-окружения модели")
+            try:
+                if not environment_manager.remove_installed(active_environment.logical_id, delete=True):
+                    raise RuntimeError(f"Failed to remove environment '{active_environment.logical_id}'")
+            except Exception:
+                if main_environment:
+                    self._activate_main_environment(active_environment)
+                raise
+            if not main_environment:
+                self._forget_environment_runtime(category=category, item_id=item_id)
+            environment_manager.cleanup_unreferenced_core_layers()
+            callbacks.log(f"Removed environment '{active_environment.logical_id}'.")
+            callbacks.status("Перезапуск AI-процессов")
+        callbacks.status(plan.ok_status or "Done")
+        return True
 
     @staticmethod
     def _forget_environment_runtime(
@@ -827,26 +844,6 @@ class InstallController(InstallService):
         forget = getattr(engine, "forget_environment", None)
         if callable(forget):
             forget(service_name, item_id, category=category)
-
-    @staticmethod
-    def _refresh_ai_runtime(
-        *,
-        timeout: float,
-        preferred_core_layer_ids: Sequence[str] = (),
-    ) -> bool:
-        engine_service = services().get_optional(AIEngineService)
-        if engine_service is None:
-            return True
-        engine = engine_service.get_engine()
-        refresh = getattr(engine, "refresh_runtime", None)
-        if not callable(refresh):
-            raise RuntimeError("AI engine does not support managed runtime refresh")
-        return bool(
-            refresh(
-                timeout=timeout,
-                preferred_core_layer_ids=tuple(preferred_core_layer_ids),
-            )
-        )
 
     @staticmethod
     def _artifact_cleanup_plan(plan: InstallPlan) -> InstallPlan:
@@ -927,7 +924,7 @@ class InstallController(InstallService):
                         )
                     )
 
-        if plan.already_installed and not backend_actions:
+        if plan.already_installed and not backend_actions and not clean:
             cb.status(plan.already_installed_status or "Already installed")
             cb.progress(100)
             return True
@@ -987,9 +984,15 @@ class InstallController(InstallService):
 
                 cb.log(f"Installing: {', '.join(to_install)}")
                 extra_args = list(act.extra_args or [])
-                if clean and "--reinstall" not in extra_args and "--force-reinstall" not in extra_args:
-                    # PipInstaller translates --reinstall -> --force-reinstall for pip.
-                    extra_args.append("--reinstall")
+                if clean:
+                    # pip --target does not replace existing files unless --upgrade
+                    # is passed, so a stale dependency tree survives a plain
+                    # --force-reinstall. Both pip and uv accept --upgrade.
+                    # PipInstaller translates --reinstall -> --force-reinstall.
+                    if "--reinstall" not in extra_args:
+                        extra_args.append("--reinstall")
+                    if "--upgrade" not in extra_args:
+                        extra_args.append("--upgrade")
                 
                 # --- ДИНАМИЧЕСКИЙ СБОР СУЩЕСТВУЮЩИХ ПАКЕТОВ ---
                 target_dir = str(ctx.get("target_dir") or os.environ.get("NEUROMITA_LIB_DIR", self.libs_path))
@@ -1238,7 +1241,10 @@ class InstallController(InstallService):
 
         if active_environment is not None:
             initial_target = str(active_environment.site_packages)
-            initial_paths = environment_manager.runtime_paths(active_environment)
+            initial_paths = tuple(environment_manager.component_context(
+                category=active_environment.category, item_id=active_environment.item_id,
+                require_runtime=False,
+            )["python_paths"])
         elif environment_candidate:
             empty_target = environment_manager.staging_root / "probe-empty" / logical_id
             empty_target.mkdir(parents=True, exist_ok=True)
@@ -1274,6 +1280,7 @@ class InstallController(InstallService):
             "python_executable": pip_installer.script_path,
             "cancel_event": cancellation,
         }
+        clean_requested = bool(meta.get("clean"))
 
         def watch_cancellation() -> None:
             while not task_finished.is_set():
@@ -1295,7 +1302,6 @@ class InstallController(InstallService):
         )
 
         transaction: EnvironmentTransaction | None = None
-        quiesced_environment = False
         try:
             self._raise_if_cancelled(ctx)
             result = self._invoke_runner(
@@ -1318,17 +1324,39 @@ class InstallController(InstallService):
                     backend_context=dict(result.get("backend_context") or {}),
                     environment_id=result.get("environment_id"),
                     environment_managed=bool(result.get("environment_managed", True)),
+                    unsupported_reason=str(result.get("unsupported_reason") or ""),
                 )
 
             if isinstance(result, InstallPlan):
+                if result.unsupported_reason:
+                    cb.status(_("Операция не поддерживается", "Operation not supported"))
+                    cb.log(result.unsupported_reason)
+                    self._emit(
+                        Events.Install.TASK_FAILED,
+                        base_payload({"ok": False, "error": result.unsupported_reason, "error_code": "unsupported_operation"}),
+                    )
+                    return False
                 op = str(meta.get("op") or "install").strip().lower()
                 managed = bool(environment_candidate and result.environment_managed)
 
-                if managed and result.already_installed and active_environment is not None and op != "uninstall":
+                if (
+                    managed
+                    and result.already_installed
+                    and active_environment is not None
+                    and op != "uninstall"
+                    and not clean_requested
+                ):
                     cb.status(result.already_installed_status or "Already installed")
                     cb.progress(100)
                     ok = True
                 elif managed and op == "install":
+                    if clean_requested and _category != "backend" and (
+                        result.already_installed or not result.actions
+                    ):
+                        raise RuntimeError(
+                            "Clean reinstall requires a complete installation plan; "
+                            "the existing environment was preserved"
+                        )
                     requested_specs = self._collect_pip_specs(result)
                     candidate_transaction = environment_manager.begin(
                         meta={**meta, **({"environment_id": result.environment_id} if result.environment_id else {})},
@@ -1412,69 +1440,13 @@ class InstallController(InstallService):
                             )
                     else:
                         candidate_transaction.abort()
-                elif managed and op == "uninstall" and active_environment is not None:
-                    main_environment = self._is_main_environment_category(
-                        active_environment.category
+                elif op == "uninstall":
+                    ok = self._uninstall_plan(
+                        result, environment_manager=environment_manager,
+                        active_environment=active_environment, managed=managed,
+                        pip_installer=pip_installer, callbacks=cb, ctx=ctx,
+                        timeout=max(1.0, float(timeout_sec)),
                     )
-                    if not main_environment:
-                        if not self._quiesce_environment_worker(
-                            category=active_environment.category,
-                            item_id=active_environment.item_id,
-                            timeout=min(30.0, max(1.0, float(timeout_sec))),
-                        ):
-                            raise RuntimeError(
-                                f"Failed to stop active worker for environment "
-                                f"'{active_environment.logical_id}'"
-                            )
-                        quiesced_environment = True
-
-                    pip_installer = create_installer(str(active_environment.site_packages))
-                    self._apply_environment_ctx(
-                        ctx,
-                        target_dir=str(active_environment.site_packages),
-                        python_paths=environment_manager.runtime_paths(active_environment),
-                    )
-                    cleanup_plan = self._artifact_cleanup_plan(result)
-                    ok = self._execute_plan(
-                        cleanup_plan,
-                        pip_installer=pip_installer,
-                        callbacks=cb,
-                        ctx=ctx,
-                    )
-                    if ok:
-                        if main_environment:
-                            self._deactivate_main_environment(active_environment)
-                        if not environment_manager.remove_installed(
-                            active_environment.logical_id,
-                            delete=True,
-                        ):
-                            if main_environment:
-                                self._activate_main_environment(active_environment)
-                            raise RuntimeError(
-                                f"Failed to deactivate environment "
-                                f"'{active_environment.logical_id}'"
-                            )
-                        if not main_environment:
-                            self._forget_environment_runtime(
-                                category=active_environment.category,
-                                item_id=active_environment.item_id,
-                            )
-                        quiesced_environment = False
-                        environment_manager.cleanup_unreferenced_core_layers()
-                        cb.log(
-                            f"Removed environment '{active_environment.logical_id}'."
-                        )
-                    elif main_environment:
-                        self._activate_main_environment(active_environment)
-                    elif not self._refresh_ai_runtime(
-                        timeout=min(30.0, max(3.0, float(timeout_sec))),
-                    ):
-                        raise RuntimeError(
-                            "Environment artifact cleanup failed and the previous shared AI "
-                            "runtime could not be restored"
-                        )
-                    else:
-                        quiesced_environment = False
                 else:
                     ok = self._execute_plan(
                         result,
@@ -1515,23 +1487,6 @@ class InstallController(InstallService):
         except Exception as exc:
             if transaction is not None:
                 transaction.abort()
-            if quiesced_environment:
-                try:
-                    restored = self._refresh_ai_runtime(
-                        timeout=min(30.0, max(3.0, float(timeout_sec))),
-                    )
-                    if restored:
-                        quiesced_environment = False
-                    else:
-                        cb.log(
-                            "Failed to restore the previous shared AI runtime after an "
-                            "uninstall error"
-                        )
-                except Exception as restore_exc:
-                    cb.log(
-                        "Failed to restore the previous shared AI runtime after an "
-                        f"uninstall error: {format_exception(restore_exc)}"
-                    )
             error = format_exception(exc) or repr(exc)
             cb.status("Failed")
             cb.log(error)

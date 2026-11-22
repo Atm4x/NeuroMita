@@ -52,6 +52,34 @@ class UnityRuntimeSectionTests(unittest.TestCase):
         ws = {"role": "user", "content": "[RUNTIME EVENT] [NeuroMita World State]\nkitchen"}
         self.assertEqual(_classify_message_section(ws, is_last_user=False), "NeuroMita World State")
 
+    def test_active_cognitive_effects_keep_their_runtime_section(self):
+        effects = {
+            "role": "system",
+            "content": "[Active Cognitive Effects]\nEffect: literalism",
+        }
+        prefixed = {
+            "role": "user",
+            "content": "[RUNTIME EVENT] [Active Cognitive Effects]\nEffect: literalism",
+        }
+        self.assertEqual(
+            _classify_message_section(effects, is_last_user=False, seen_dialogue=True),
+            "Active Cognitive Effects",
+        )
+        self.assertEqual(
+            _classify_message_section(prefixed, is_last_user=False, seen_dialogue=True),
+            "Active Cognitive Effects",
+        )
+
+    def test_cognitive_effect_history_event_keeps_its_section(self):
+        changes = {
+            "role": "event",
+            "content": "[Cognitive Effect]\n- Literalism ended.",
+        }
+        self.assertEqual(
+            _classify_message_section(changes, is_last_user=False, seen_dialogue=True),
+            "Cognitive Effect",
+        )
+
     def test_real_dialogue_still_history_and_input(self):
         self.assertEqual(_classify_message_section({"role": "user", "content": "hi"}, is_last_user=False), "history")
         self.assertEqual(_classify_message_section({"role": "user", "content": "hi"}, is_last_user=True), "user input")
@@ -76,6 +104,9 @@ class UnityRuntimeSectionTests(unittest.TestCase):
             ("[NeuroMita World State]\nkitchen", "NeuroMita World State"),
             ("[Character World Context]\nyour home", "Character World Context"),
             ("[Character Environment]\nready", "Character Environment"),
+            ("[WORKING STATE]\nFocus: test", "working state"),
+            ("[RECENT ACTIONS BEFORE SUMMARY BOUNDARY]\n- animation: Dance_07", "retained actions"),
+            ("[REQUESTED ACTIONS THIS TURN]\n- animation: Dance_07", "requested actions"),
         ]:
             self.assertEqual(
                 _classify_message_section({"role": "system", "content": content}, is_last_user=False, seen_dialogue=True),

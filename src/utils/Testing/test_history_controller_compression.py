@@ -56,7 +56,7 @@ class _StubHistoryManager:
 class _StubCharacter:
     def __init__(self, messages, *, char_id="TestChar", memory_system=None):
         self.char_id = char_id
-        self.name = char_id
+        self.display_name = char_id
         self.history_manager = _StubHistoryManager(messages)
         self.memory_system = memory_system
         self.vars = {}
@@ -72,6 +72,15 @@ class _StubCharacter:
 
 
 class HistoryControllerCompressionTests(unittest.TestCase):
+    def test_compression_prompt_keeps_effects_as_past_subjective_experience(self):
+        root = Path(__file__).resolve().parents[3]
+        template = (root / "extra" / "Prompts" / "System" / "compression_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("[Active Cognitive Effects]", template)
+        self.assertIn("[Cognitive Effect]", template)
+        self.assertIn("temporary subjective states", template)
+        self.assertIn("experienced in the past", template)
+        self.assertIn("second consciousness", template)
+
     def _make_controller(self, settings: dict | None = None) -> HistoryController:
         controller = HistoryController.__new__(HistoryController)
         controller.event_bus = SimpleNamespace()
@@ -378,7 +387,7 @@ class HistoryControllerCompressionTests(unittest.TestCase):
                 self.args = args or ()
                 self.kwargs = kwargs or {}
                 self.daemon = False
-                self.name = ""
+                self.display_name = ""
                 self.cancelled = False
                 created.append(self)
 
@@ -494,6 +503,7 @@ class HistoryControllerCompressionTests(unittest.TestCase):
             [
                 {
                     "role": "user",
+                    "speaker": "Mila",
                     "content": [
                         {"type": "text", "text": "запомни это"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{blob}"}},
@@ -506,6 +516,8 @@ class HistoryControllerCompressionTests(unittest.TestCase):
         prompt = stub.calls[0].prompt
         self.assertNotIn(blob, prompt)
         self.assertIn("запомни это", prompt)
+        self.assertIn("[Mila]:", prompt)
+        self.assertIn("A reported claim is not personal experience.", prompt)
 
     def test_compression_falls_back_to_local_summary_after_non_retryable_failure(self):
         controller = self._make_controller(

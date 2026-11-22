@@ -45,6 +45,96 @@ class _ConnectionProxy:
 
 
 class HistoryManagerAtomicityTests(unittest.TestCase):
+    def test_presentation_metadata_is_scoped_and_cannot_replace_timeline_content(self) -> None:
+        self.hm.rag = None
+        self.hm.add_messages([
+            {"message_id": "out:1", "role": "assistant", "content": "answer", "thinking": "thought"},
+            {"message_id": "out:2", "role": "assistant", "content": "old answer", "thinking": "old thought"},
+        ])
+        originals = [
+            {"message_id": "out:1", "role": "assistant", "content": "answer"},
+            {"message_id": "out:2", "role": "assistant", "content": "edited answer"},
+            {"message_id": "out:3", "role": "assistant", "content": "timeline only"},
+        ]
+        enriched = self.hm.with_presentation_metadata(originals)
+        self.assertEqual(enriched[0]["thinking"], "thought")
+        self.assertNotIn("thinking", enriched[1])
+        self.assertNotIn("thinking", originals[0])
+        self.assertEqual([m["content"] for m in enriched], [m["content"] for m in originals])
+        self.assertNotIn("thinking", self.hm.bind("other").with_presentation_metadata(originals)[0])
+
+    def test_timeline_cache_rebuild_preserves_reasoning_across_reopen(self) -> None:
+        self.hm.rag = None
+        message = {"message_id": "out:1", "role": "assistant", "content": "answer"}
+        self.hm.add_message(dict(message, thinking="thought"))
+        self.hm.replace_timeline_cache([message])
+        reopened = HistoryManager(storage_name="Test", character_id="char:test")
+        self.assertEqual(reopened.with_presentation_metadata([message])[0]["thinking"], "thought")
+
+    def test_presentation_metadata_restores_request_provenance(self) -> None:
+        self.hm.rag = None
+        snapshot_id = "ctx_0123456789abcdef0123456789abcdef"
+        self.hm.add_messages([
+            {
+                "message_id": "out:1",
+                "role": "assistant",
+                "content": "answer",
+                "sample_id": "sample-1",
+                "context_snapshot_id": snapshot_id,
+            },
+        ])
+        timeline_only = [{"message_id": "out:1", "role": "assistant", "content": "answer"}]
+        enriched = self.hm.with_presentation_metadata(timeline_only)
+        self.assertEqual(enriched[0]["sample_id"], "sample-1")
+        self.assertEqual(enriched[0]["context_snapshot_id"], snapshot_id)
+
+        edited = self.hm.with_presentation_metadata([
+            {"message_id": "out:1", "role": "assistant", "content": "edited answer"},
+        ])
+        self.assertNotIn("context_snapshot_id", edited[0])
+
+    def test_block_content_preserves_provenance_across_cache_rebuild(self) -> None:
+        self.hm.rag = None
+        message = {
+            "message_id": "out:blocks",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+        }
+        metadata = {
+            "thinking": "thought",
+            "sample_id": "sample-blocks",
+            "context_snapshot_id": "ctx_0123456789abcdef0123456789abcdef",
+        }
+        self.hm.add_message(dict(message, **metadata))
+        enriched = self.hm.with_presentation_metadata([message])[0]
+        for key, value in metadata.items():
+            self.assertEqual(enriched[key], value)
+            self.assertNotIn(key, message)
+
+        edited = dict(message, content=[{"type": "text", "text": "edited"}])
+        for key in metadata:
+            self.assertNotIn(key, self.hm.with_presentation_metadata([edited])[0])
+        self.hm.replace_timeline_cache([message])
+        reopened = HistoryManager(storage_name="Test", character_id="char:test")
+        restored = reopened.with_presentation_metadata([message])[0]
+        for key, value in metadata.items():
+            self.assertEqual(restored[key], value)
+
+    def test_timeline_export_retains_archived_facts_and_excludes_deleted_rows(self) -> None:
+        self.hm.rag = None
+        rows = self.hm.add_messages([
+            {"message_id": "archived", "role": "user", "content": "old fact", "time": "2026-09-30 10:00:00"},
+            {"message_id": "active", "role": "assistant", "content": "recent fact", "time": "2026-10-01 10:00:00"},
+            {"message_id": "deleted", "role": "user", "content": "removed fact"},
+        ])
+        self._sqlite.execute("UPDATE history SET is_active=0 WHERE id=?", (rows[0],))
+        self._sqlite.execute("UPDATE history SET is_deleted=1 WHERE id=?", (rows[2],))
+        self._sqlite.commit()
+        self.assertEqual([message["message_id"] for message in self.hm.load_history()["messages"]], ["active"])
+        exported = self.hm.export_timeline_history()
+        self.assertEqual([message["message_id"] for message in exported], ["archived", "active"])
+        self.assertEqual(exported[0]["content"], "old fact")
+
     def setUp(self) -> None:
         self.tmpdir = None
         self._sqlite = sqlite3.connect(":memory:", check_same_thread=False)
@@ -53,7 +143,12 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         self._conn_patcher.start()
         DatabaseManager._instance = None
         DatabaseManager._path_override = None
-        self.hm = HistoryManager(character_name="Test", character_id="char:test")
+        self._executor_patcher = patch.object(
+            HistoryManager, "_get_embed_executor", return_value=_FakeExecutor()
+        )
+        self._executor_patcher.start()
+        self.addCleanup(self._executor_patcher.stop)
+        self.hm = HistoryManager(storage_name="Test", character_id="char:test")
 
     def tearDown(self) -> None:
         self._conn_patcher.stop()
@@ -88,7 +183,8 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         }
 
         with patch.object(self.hm, "_insert_history_row_tx", side_effect=failing_insert):
-            self.hm.save_history(replacement)
+            with self.assertRaises(HistoryBatchWriteError):
+                self.hm.save_history(replacement)
 
         loaded = self.hm.load_history()
         self.assertEqual([m["content"] for m in loaded["messages"]], ["old"])
@@ -333,6 +429,30 @@ class HistoryManagerAtomicityTests(unittest.TestCase):
         loaded = self.hm.load_history()["messages"]
         self.assertEqual([item["content"] for item in loaded], ["question", "answer"])
         self.assertEqual({item.get("turn_id") for item in loaded}, {turn_id})
+
+    def test_add_messages_persists_rejected_output_as_deleted_without_embedding(self) -> None:
+        executor = _FakeExecutor()
+        with patch.object(HistoryManager, "_get_embed_executor", return_value=executor):
+            row_ids = self.hm.add_messages(
+                [
+                    {
+                        "message_id": "out:rejected-json",
+                        "role": "assistant",
+                        "content": '{"invalid": true}',
+                        "_history_is_deleted": True,
+                    }
+                ]
+            )
+
+        self.assertEqual(len(row_ids), 1)
+        self.assertEqual(executor.jobs, [])
+        cursor = self._sqlite.cursor()
+        cursor.execute(
+            "SELECT is_active, is_deleted FROM history WHERE id = ?",
+            (row_ids[0],),
+        )
+        self.assertEqual(cursor.fetchone(), (0, 1))
+        self.assertEqual(self.hm.load_history()["messages"], [])
 
     def test_add_messages_rolls_back_entire_turn_on_insert_failure(self) -> None:
         self.hm.add_message(

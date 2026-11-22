@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PROJECT_SRC = __import__("pathlib").Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
@@ -26,11 +27,9 @@ class MemoryDedupTests(unittest.TestCase):
         DatabaseManager._instance = None
         DatabaseManager._path_override = None
 
-    def _fresh_mm(self, name, threshold=0.8):
+    def _fresh_mm(self, name):
         mm = self._MM(name)
         mm.rag = None
-        # Фиксируем порог/включённость независимо от машинных настроек.
-        mm._dedup_threshold = lambda: threshold
         mm._dedup_enabled = lambda: True
         mm._maintenance_enabled = lambda: True
         return mm
@@ -39,47 +38,57 @@ class MemoryDedupTests(unittest.TestCase):
         with mm.db.connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT eternal_id, priority, content FROM memories "
-                "WHERE character_id=? AND is_deleted=0 AND is_forgotten=0",
+                "SELECT eternal_id, priority, content, date_created, entities FROM memories "
+                "WHERE character_id=? AND is_deleted=0 AND is_forgotten=0 ORDER BY eternal_id",
                 (mm.storage_key,),
             )
             return cur.fetchall()
 
-    def test_dedup_on_insert_merges_near_identical(self):
+    def test_exact_replay_keeps_date_and_does_not_reindex(self):
         mm = self._fresh_mm("DedupInsert")
-        eid1 = mm.add_memory("The player likes to play chess", priority="normal")
-        eid2 = mm.add_memory("Player likes to play chess", priority="high")
-        # Near-identical → merged into the existing one, priority raised.
+        date = "15.11.2025 08:10:00"
+        content = "Добрая узнала о погоне из логов."
+        eid1 = mm.add_memory(content, date=date, priority="normal", entities=["Kind"])
+        with patch.object(mm, "_schedule_embed") as embed:
+            eid2 = mm.add_memory(content, date=date, priority="high", entities=["Kind"])
+            embed.assert_not_called()
         self.assertEqual(eid2, eid1)
-        rows = self._active(mm)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0][1].lower(), "high")
+        self.assertEqual(self._active(mm), [(eid1, "high", content, date, '["Kind"]')])
 
     def test_dedup_keeps_distinct_memories(self):
         mm = self._fresh_mm("DedupDistinct")
-        mm.add_memory("Player likes chess", priority="normal")
-        mm.add_memory("Player hates loud noises", priority="normal")
-        self.assertEqual(len(self._active(mm)), 2)
+        date = "15.11.2025 08:10:00"
+        claims = [
+            "Игрок принёс ключ в комнату в 5 часов.",
+            "Игрок не принёс ключ в комнату в 5 часов.",
+            "Игрок принёс ключ в комнату в 6 часов.",
+            "Ключ принёс игроку в комнату в 5 часов.",
+        ]
+        for claim in claims:
+            mm.add_memory(claim, date=date)
+        mm.add_memory(claims[0], date="18.11.2025 08:10:00")
+        mm.add_memory(claims[0], date=date, entities=["PreviousPlayer"])
+        self.assertEqual([row[2] for row in self._active(mm)], claims + [claims[0], claims[0]])
 
     def test_maintenance_collapses_accumulated_duplicates(self):
         mm = self._fresh_mm("DedupSweep")
-        # skip_if_exists=True обходит дедуп на вставке — имитируем накопившиеся дубли.
-        mm.add_memory("Player promised to bring flowers tomorrow", priority="normal", skip_if_exists=True)
-        mm.add_memory("The player promised to bring flowers tomorrow", priority="high", skip_if_exists=True)
-        mm.add_memory("Player promised to bring flowers tomorrow morning", priority="normal", skip_if_exists=True)
-        mm.add_memory("Weather is nice today", priority="low", skip_if_exists=True)
+        mm._dedup_enabled = lambda: False
+        date = "15.11.2025 08:10:00"
+        content = "Player promised to bring flowers tomorrow"
+        eid = mm.add_memory(content, priority="normal", date=date)
+        mm.add_memory(content, priority="high", date=date)
+        later = mm.add_memory(content, date="17.11.2025 08:10:00")
+        detail = mm.add_memory(content + " morning", date=date)
         self.assertEqual(len(self._active(mm)), 4)
 
         res = mm.run_maintenance()
-        self.assertEqual(res["merged"], 2)
+        self.assertEqual(res["merged"], 1)
         self.assertEqual(res["clusters"], 1)
 
         rows = self._active(mm)
-        self.assertEqual(len(rows), 2)
-        # Keeper — самый приоритетный из группы.
-        kept_flowers = [r for r in rows if "flowers" in r[2].lower()]
-        self.assertEqual(len(kept_flowers), 1)
-        self.assertEqual(kept_flowers[0][1].lower(), "high")
+        self.assertEqual([row[0] for row in rows], [eid, later, detail])
+        self.assertEqual(rows[0][1:4], ("high", content, date))
+        self.assertEqual(mm.run_maintenance(), {"merged": 0, "clusters": 0})
 
     def test_islands_are_not_deduped(self):
         mm = self._fresh_mm("DedupIslands")
@@ -89,6 +98,21 @@ class MemoryDedupTests(unittest.TestCase):
         self.assertIsNotNone(a)
         self.assertIsNotNone(b)
         self.assertNotEqual(a, b)
+
+    def test_seed_fact_does_not_restore_retired_canon_with_same_text(self):
+        mm = self._fresh_mm("DedupLore")
+        text = "Reports mention a blue key."
+        lore = mm.seed_rag_memory(text)
+        self.assertEqual(mm.retire_seed_memories([text]), 1)
+        fact = mm.add_memory(text, skip_if_exists=True)
+        self.assertNotEqual(lore, fact)
+        self.assertEqual(mm.add_memory(text, skip_if_exists=True), fact)
+        with mm.db.connection() as conn:
+            states = conn.execute(
+                "SELECT type, is_deleted, is_forgotten FROM memories "
+                "WHERE character_id=? ORDER BY eternal_id", (mm.storage_key,),
+            ).fetchall()
+        self.assertEqual(states, [("seed_lore", 1, 1), ("fact", 0, 0)])
 
 
 if __name__ == "__main__":

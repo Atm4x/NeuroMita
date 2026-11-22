@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 from utils import getTranslationVariant as _t
 
 from .helpers import qpixmap
+from .status_widgets import StatusIcon
 
 
 class Chip(QLabel):
@@ -98,6 +99,10 @@ class CategoryButton(QFrame):
         self._count_lbl.setObjectName("AIHubCategoryCount")
         self._count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._count_lbl, 0)
+        self._count_spinner = StatusIcon(20)
+        self._count_spinner.set_status("fa5s.circle-notch", spinning=True)
+        self._count_spinner.hide()
+        lay.addWidget(self._count_spinner, 0)
 
     def setLabel(self, label: str) -> None:
         self._label_lbl.setText(str(label or ""))
@@ -109,6 +114,14 @@ class CategoryButton(QFrame):
         tip = _t("Доступно компонентов: {n}", "Components available: {n}").format(n=count)
         self._count_lbl.setToolTip(tip)
         self.setToolTip(tip)
+
+    def setLoading(self, loading: bool) -> None:
+        self._count_lbl.setVisible(not loading)
+        self._count_spinner.setVisible(loading)
+        if loading:
+            tip = _t("Загрузка компонентов…", "Loading components…")
+            self.setToolTip(tip)
+            self._count_spinner.setToolTip(tip)
 
     def setSelected(self, selected: bool) -> None:
         if self._selected == selected:
@@ -229,7 +242,8 @@ class ModelCard(QFrame):
         meta = meta_from_row(self._row)
         status = status_from_row(self._row)
         status_code = str(status.get("code") or "unknown")
-        installed = bool(status.get("ready")) or status_code == "ready"
+        needs_reinstall = status_code == "needs_reinstall"
+        installed = (bool(status.get("ready")) or status_code == "ready") and not needs_reinstall
         details = status.get("details") if isinstance(status.get("details"), dict) else {}
         update_available = installed and bool(details.get("update_available"))
         compatibility = self._row.get("compatibility")
@@ -245,7 +259,9 @@ class ModelCard(QFrame):
         # mark whole card visually as incompatible (drives QSS via property)
         self.setProperty("incompatible", "true" if (not compatible and not installed) else "false")
         # also expose 'state' for any future styling
-        if installed:
+        if needs_reinstall:
+            self.setProperty("state", "needs_reinstall")
+        elif installed:
             self.setProperty("state", "installed")
         elif not compatible:
             self.setProperty("state", "incompatible")
@@ -360,7 +376,13 @@ class ModelCard(QFrame):
         # ---- right: status indicator (dot + label for installed)
         from .helpers import qicon
 
-        if installed:
+        if needs_reinstall:
+            warn_lbl = QLabel(_t("Требуется переустановка", "Reinstall needed"))
+            warn_lbl.setObjectName("AIHubStatusUpdate")
+            warn_lbl.setToolTip(str(status.get("message") or ""))
+            warn_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+            root.addWidget(warn_lbl, 0)
+        elif installed:
             if update_available:
                 ok_lbl = QLabel(_t("Обновление", "Update"))
                 ok_lbl.setObjectName("AIHubStatusUpdate")
@@ -387,7 +409,24 @@ class ModelCard(QFrame):
         # ---- right: action button or ⋮ menu
         from PyQt6.QtWidgets import QPushButton
 
-        if installed:
+        if needs_reinstall:
+            fix = QPushButton(_t("Переустановить", "Reinstall"))
+            fix.setObjectName("AIHubCardPrimary")
+            fix_icon = qicon("fa5s.sync", "white")
+            if fix_icon is not None:
+                fix.setIcon(fix_icon)
+            fix.setCursor(Qt.CursorShape.PointingHandCursor)
+            fix.clicked.connect(self._handle_reinstall_click)
+            self._install_btn = fix
+            self._install_btn_text = fix.text()
+            root.addWidget(fix, 0)
+            btn = QPushButton("⋮")
+            btn.setObjectName("AIHubCardMenuBtn")
+            btn.setFixedSize(34, 34)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(self._show_menu)
+            self._menu_btn = btn
+        elif installed:
             if update_available:
                 # Голос установлен, но в релизе версия новее — кнопка «Обновить»
                 # запускает обычную установку; build_install_plan сам увидит апдейт
@@ -529,6 +568,16 @@ class ModelCard(QFrame):
             # (running/queued) выставит _apply_busy_state по событию очереди.
             self.set_state("queued")
             self._on_install(cid)
+
+    def _handle_reinstall_click(self) -> None:
+        cid = self._component_id()
+        if not cid:
+            return
+        if self._on_reinstall is not None:
+            self._confirm_and_reinstall(cid)
+            return
+        self.set_state("queued")
+        self._on_install(cid)
 
     def _show_menu(self) -> None:
         from PyQt6.QtWidgets import QMenu

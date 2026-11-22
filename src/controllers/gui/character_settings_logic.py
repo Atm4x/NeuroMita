@@ -3,6 +3,7 @@ from core.error_utils import format_exception
 
 import os
 import weakref
+from collections.abc import Mapping
 
 from PyQt6.QtWidgets import QMessageBox, QDialog
 from PyQt6.QtCore import QUrl, Qt, QTimer
@@ -13,7 +14,7 @@ from core.gui_task_supervisor import gui_task_supervisor
 from utils import getTranslationVariant as _
 from main_logger import logger
 from core.events import get_event_bus, Events
-from core.services import use
+from core.services import services, use
 from services.contracts import ApiPresetService, CharacterRegistry
 from managers.prompt_catalogue_manager import list_prompt_sets, read_info_json
 from utils.history_migration import migrate_character_history
@@ -30,7 +31,11 @@ from controllers.gui.settings_data_prefetch import (
 )
 
 
-_CURRENT_PROVIDER_ITEM = ("Текущий", "Current", "Текущий")
+from ui.character_names import character_display_name
+from presets.character_provider import CURRENT_PRESET_ID, character_provider_choices, provider_preset_id
+
+_CHARACTER_PROVIDER_OPTIONS = "character_provider_options"
+_CURRENT_PROVIDER_ITEM = ("Текущий", "Current", CURRENT_PRESET_ID)
 
 
 def _emit_index_changed() -> None:
@@ -267,28 +272,30 @@ def _clear_prompt_info_fields(gui):
             pass
 
 
-def _current_character_id() -> str:
-    """Текущий (активный) персонаж — единственный источник правды теперь в
-    CharacterController. Выбирается ТОЛЬКО в песочнице."""
-    return use(CharacterRegistry).current_id()
-
-
 def _configured_character_id(gui) -> str:
     """Персонаж, чей КОНФИГ сейчас редактируется в настройках (раскрытая секция
     аккордеона). Раньше эту роль играл скрытый character_combobox. К активному
     персонажу отношения не имеет — настройка одного не переключает того, с кем
     идёт чат."""
-    cid = str(getattr(gui, "_configured_char_id", "") or "").strip()
-    active = str(getattr(gui, "_active_character_id", "") or "").strip()
-    return cid or active or _current_character_id()
+    return _selected_character_id(gui)
 
 
 def _selected_character_id(gui) -> str:
-    for attr in ("_configured_char_id", "_active_character_id", "current_character_id", "_current_char_id"):
-        value = str(getattr(gui, attr, "") or "").strip()
-        if value:
-            return value
-    return ""
+    model = getattr(gui, "character_settings_view_model", None)
+    if model is not None:
+        selected = model.state.selected_character_id
+        if selected is not None:
+            return selected
+        return model.state.active_character_id
+    getter = getattr(gui, "current_character_id", None)
+    return str(getter() or "").strip() if callable(getter) else ""
+
+
+def _request_character_reload(character_id: str | None) -> None:
+    if character_id is None:
+        get_event_bus().emit(Events.Character.RELOAD_ALL_DATA)
+    elif str(character_id).strip():
+        get_event_bus().emit(Events.Character.RELOAD_DATA, {"character_id": str(character_id).strip()})
 
 
 def update_prompt_set_info(gui, character_id: str | None = None, set_name: str | None = None):
@@ -338,11 +345,15 @@ def _fallback_character_list(gui) -> list[str]:
 
 
 def _fallback_current_character_id(gui, character_list: list[str] | None = None) -> str:
-    for attr in ("_configured_char_id", "_active_character_id"):
-        value = str(getattr(gui, attr, "") or "").strip()
-        if value:
-            return value
-
+    registry = services().get_optional(CharacterRegistry)
+    current = registry.current_id() if registry is not None else ""
+    if current:
+        return str(current)
+    model = getattr(gui, "character_settings_view_model", None)
+    if model is not None:
+        for value in (model.state.active_character_id, model.state.selected_character_id):
+            if value:
+                return value
     combo = getattr(gui, "chat_character_combobox", None)
     if combo is not None:
         try:
@@ -360,31 +371,31 @@ def _default_provider_items() -> list:
     return [_CURRENT_PROVIDER_ITEM]
 
 
-def _provider_items_from_presets_result(presets_meta) -> list:
-    items = _default_provider_items()
-    meta = presets_meta[0] if presets_meta else None
-    if not isinstance(meta, dict):
-        return items
-
-    seen = {"Текущий", "Current"}
-    for preset in meta.get("custom", []) or []:
-        name = str(getattr(preset, "name", "") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        items.append(name)
-    return items
+def _provider_items_from_presets_result(presets_meta):
+    return character_provider_choices(presets_meta[0] if presets_meta else {})
 
 
-def _set_character_provider_items(gui, provider_items: list) -> None:
-    combo = getattr(gui, "char_provider_combobox", None)
-    if combo is None:
-        return
+def _set_character_provider_items(gui, provider_items):
+    from ui.provider_icons import provider_icon, template_provider
+    combo = gui.char_provider_combobox
+    choices = [dict(item) for item in provider_items if isinstance(item, Mapping)]
+    gui.character_settings_view_model.set_provider_choices(choices)
+    cid = _configured_character_id(gui)
+    stored = gui.settings.get(f"CHAR_PROVIDER_{cid}", CURRENT_PRESET_ID) if cid else CURRENT_PRESET_ID
+    selected = provider_preset_id(stored)
+    blocked = combo.blockSignals(True)
     try:
-        current = combo.current_value() if hasattr(combo, "current_value") else None
-        combo.set_items(provider_items or _default_provider_items(), current=current)
-    except Exception:
-        logger.warning("[character_settings] Failed to update provider combo", exc_info=True)
+        combo.clear()
+        combo.add_tr_item("Текущий", "Current", value=CURRENT_PRESET_ID)
+        combo.setItemIcon(0, provider_icon(""))
+        for item in choices:
+            model = str(item.get("model") or "").strip() or "None"
+            label = f'{item["name"]} ({model})'
+            combo.add_data_item(label, value=item["id"])
+            combo.setItemIcon(combo.count() - 1, provider_icon(template_provider(item.get("template", ""), item.get("protocol", "")) or item["provider"]))
+        combo.setCurrentIndex(max(0, combo.findData(selected if selected is not None else CURRENT_PRESET_ID)))
+    finally:
+        combo.blockSignals(blocked)
 
 
 def _populate_chat_character_combobox(gui, character_list: list[str], current_char_id: str) -> None:
@@ -409,7 +420,8 @@ def _populate_chat_character_combobox(gui, character_list: list[str], current_ch
 
 
 def _load_character_settings_snapshot_async(gui, settings_data) -> None:
-    if bool(getattr(gui, "_character_settings_snapshot_loading", False)):
+    model = gui.character_settings_view_model
+    if model.is_closed or model.state.snapshot_loading:
         return
 
     cached = settings_data.get(CHARACTER_SETTINGS_SNAPSHOT, None)
@@ -417,7 +429,7 @@ def _load_character_settings_snapshot_async(gui, settings_data) -> None:
         _apply_character_settings_snapshot(gui, cached)
         return
 
-    gui._character_settings_snapshot_loading = True
+    model.update_state(snapshot_loading=True)
 
     def _worker():
         registry = use(CharacterRegistry)
@@ -427,14 +439,19 @@ def _load_character_settings_snapshot_async(gui, settings_data) -> None:
         return {
             "character_list": [str(c or "").strip() for c in (character_list or []) if str(c or "").strip()],
             "current_char_id": current_char_id,
+            "character_names": {cid: registry.display_name_of(cid) for cid in character_list},
         }
 
     def _apply(snapshot: dict) -> None:
-        gui._character_settings_snapshot_loading = False
+        if model.is_closed:
+            return
+        model.update_state(snapshot_loading=False)
         _apply_character_settings_snapshot(gui, snapshot)
 
     def _error(_exc: Exception) -> None:
-        gui._character_settings_snapshot_loading = False
+        if model.is_closed:
+            return
+        model.update_state(snapshot_loading=False)
         logger.warning(f"[character_settings] Failed to load character settings snapshot: {_exc}")
         _apply_character_settings_snapshot(gui, {
             "character_list": _fallback_character_list(gui),
@@ -452,35 +469,35 @@ def _load_character_settings_snapshot_async(gui, settings_data) -> None:
     )
 
 
-def _load_character_provider_items_async(gui, settings_data) -> None:
-    cached = settings_data.get(API_PROVIDER_NAMES, None)
-    if cached is not None:
-        _set_character_provider_items(gui, [*_default_provider_items(), *cached])
+def _load_character_provider_items_async(gui, settings_data):
+    model = gui.character_settings_view_model
+    if model.is_closed:
         return
-
-    def _worker():
-        return api_provider_names_from_result([use(ApiPresetService).list_meta()])
-
-    def _apply(provider_names: list[str]) -> None:
-        _set_character_provider_items(gui, [*_default_provider_items(), *(provider_names or [])])
-
+    cached = settings_data.get(_CHARACTER_PROVIDER_OPTIONS, None)
+    if cached is not None:
+        _set_character_provider_items(gui, cached)
+        return
     settings_data.request(
-        gui,
-        API_PROVIDER_NAMES,
-        _worker,
-        _apply,
+        gui, _CHARACTER_PROVIDER_OPTIONS,
+        lambda: character_provider_choices(use(ApiPresetService).list_meta()),
+        lambda choices: _set_character_provider_items(gui, choices) if not model.is_closed else None,
         name="character-provider-options",
     )
 
 
 def _apply_character_settings_snapshot(gui, snapshot: dict) -> None:
     character_list = list(snapshot.get("character_list") or []) or _fallback_character_list(gui)
-    current_char_id = str(snapshot.get("current_char_id") or "").strip()
+    registry = services().get_optional(CharacterRegistry)
+    current_char_id = str(
+        (registry.current_id() if registry is not None else "")
+        or gui.character_settings_view_model.state.active_character_id
+        or snapshot.get("current_char_id") or ""
+    ).strip()
     if not current_char_id:
         current_char_id = _fallback_current_character_id(gui, character_list)
 
-    gui._active_character_id = current_char_id
-    gui._configured_char_id = current_char_id
+    gui.character_settings_view_model.set_active_character(current_char_id)
+    gui.character_settings_view_model.set_character_names(snapshot.get("character_names") or {})
 
     _populate_chat_character_combobox(gui, character_list, current_char_id)
     provider_items = snapshot.get("provider_items")
@@ -490,21 +507,36 @@ def _apply_character_settings_snapshot(gui, snapshot: dict) -> None:
             provider_items = [*_default_provider_items(), *(provider_names or [])]
     if provider_items is not None:
         _set_character_provider_items(gui, list(provider_items or _default_provider_items()))
-    expand_initial = (
-        getattr(gui, "current_main_page", None) == "settings"
-        and getattr(getattr(gui, "settings_page", None), "current_settings_category", None) == "characters"
-    )
-    _build_character_accordion(gui, character_list, current_char_id, expand_initial=expand_initial)
+    _build_character_library(gui, character_list, current_char_id)
     update_prompt_set_info(gui)
 
 
 
 def wire_character_settings_logic(self, *, settings_data):
 
+    owner = weakref.ref(self)
+    model = self.character_settings_view_model
+    bus = get_event_bus()
+    catalog_events = (Events.ApiPresets.PRESET_SAVED, Events.ApiPresets.PRESET_DELETED,
+                      Events.ApiPresets.PRESET_IMPORTED)
+    def refresh_provider_catalog(_event):
+        gui = owner()
+        if gui is not None and not model.is_closed:
+            def refresh():
+                if model.is_closed:
+                    return
+                settings_data.clear(_CHARACTER_PROVIDER_OPTIONS)
+                _load_character_provider_items_async(gui, settings_data)
+            dispatch_to_gui(gui, refresh)
+    for event in catalog_events:
+        model.track_subscription(bus.subscribe(event, refresh_provider_catalog, weak=False))
+
+    self.character_library.currentItemChanged.connect(lambda item, _previous: _select_character_settings(self, item))
+    self.character_search.textChanged.connect(lambda text: _filter_character_library(self, text))
     initial_characters = _fallback_character_list(self)
     initial_char_id = _fallback_current_character_id(self, initial_characters)
-    self._configured_char_id = initial_char_id
-    self._active_character_id = initial_char_id
+    self.character_settings_view_model.select_character(initial_char_id)
+    self.character_settings_view_model.set_active_character(initial_char_id)
     _set_character_provider_items(self, _default_provider_items())
 
     if hasattr(self, 'prompt_pack_combobox'):
@@ -520,16 +552,18 @@ def wire_character_settings_logic(self, *, settings_data):
                 return
 
             def _apply():
-                self._active_character_id = character_id
+                if model.is_closed:
+                    return
+                model.set_active_character(character_id)
                 _refresh_active_character_indicator(self, character_id)
 
             dispatch_to_gui(self, _apply)
 
-        get_event_bus().subscribe(
+        model.track_subscription(bus.subscribe(
             Events.Character.CURRENT_CHANGED,
             _on_active_character_changed,
             weak=False,
-        )
+        ))
     except Exception:
         pass
     if hasattr(self, 'char_provider_combobox'):
@@ -542,40 +576,36 @@ def wire_character_settings_logic(self, *, settings_data):
     if hasattr(self, 'btn_open_history_folder'):
         self.btn_open_history_folder.clicked.connect(lambda: open_character_history_folder(self))
 
-    # --- Единый набор действий: маршрутизируем по выбранной области ---
-    def _scope():
-        return getattr(self, "_char_history_scope", "current")
-
     if hasattr(self, 'btn_history_view'):
         self.btn_history_view.clicked.connect(
-            lambda: open_db_viewer(self) if _scope() == "current" else open_db_viewer_global(self))
+            lambda: open_db_viewer(self))
     if hasattr(self, 'btn_history_export'):
         self.btn_history_export.clicked.connect(
-            lambda: export_db_for_character(self) if _scope() == "current" else export_db_for_all(self))
+            lambda: export_db_for_character(self))
     if hasattr(self, 'btn_history_import'):
         self.btn_history_import.clicked.connect(
-            lambda: import_db_for_character(self) if _scope() == "current" else import_db_for_all(self))
+            lambda: import_db_for_character(self))
     if hasattr(self, 'btn_history_reset'):
         self.btn_history_reset.clicked.connect(
-            lambda: clear_history(self) if _scope() == "current" else clear_history_all(self))
+            lambda: clear_history(self))
 
     if hasattr(self, 'btn_maint_files_db'):
         self.btn_maint_files_db.clicked.connect(
-            lambda: migrate_to_db(self) if _scope() == "current" else migrate_to_db_all(self))
+            lambda: migrate_to_db(self))
     if hasattr(self, 'btn_maint_legacy_recovery'):
         self.btn_maint_legacy_recovery.clicked.connect(lambda: restore_legacy_memory(self))
     if hasattr(self, 'btn_maint_tags'):
         self.btn_maint_tags.clicked.connect(
-            lambda: migrate_db_to_structured(self, "current" if _scope() == "current" else None))
+            lambda: migrate_db_to_structured(self, "current"))
     if hasattr(self, 'btn_maint_index_new'):
         self.btn_maint_index_new.clicked.connect(
-            lambda: run_reindexing(self) if _scope() == "current" else run_reindexing_all(self))
+            lambda: run_reindexing(self))
     if hasattr(self, 'btn_maint_reindex'):
         self.btn_maint_reindex.clicked.connect(
-            lambda: run_full_reindexing(self) if _scope() == "current" else run_full_reindexing_all(self))
+            lambda: run_full_reindexing(self))
     if hasattr(self, 'btn_maint_dedupe'):
         self.btn_maint_dedupe.clicked.connect(
-            lambda: run_history_dedup(self) if _scope() == "current" else run_history_dedup_all(self))
+            lambda: run_history_dedup(self))
 
     # «Обновить формат» — всегда для выбранного персонажа.
     if hasattr(self, 'btn_maint_update_format'):
@@ -608,144 +638,92 @@ def wire_character_settings_logic(self, *, settings_data):
     update_prompt_set_info(self)
 
 
-def _build_character_accordion(self, character_list, current_char_id, *, expand_initial: bool = True):
-    """Построить аккордеон персонажей (#17): по секции на каждую Миту.
+def _build_character_library(gui, character_list, current_char_id):
+    from PyQt6.QtCore import QSize
+    from PyQt6.QtGui import QIcon
+    from PyQt6.QtWidgets import QListWidgetItem
+    from ui.chat.message_widget import resolve_character_avatar
 
-    Раскрытие секции: сворачивает соседние, переносит в неё общую панель
-    настроек (`_char_config_panel`) и загружает КОНФИГ этого персонажа для
-    редактирования. Активного персонажа (с кем идёт чат) секция НЕ переключает —
-    это делается только в песочнице. На активном персонаже — визуальный
-    индикатор (#4, по решению Винера).
-    """
-    from ui.widgets.settings_sections import InnerCollapsibleSection
-
-    layout = getattr(self, "_char_accordion_layout", None)
-    if layout is None:
+    library = getattr(gui, "character_library", None)
+    if library is None:
         return
-
-    _park_character_config_panel(self)
-    while layout.count():
-        item = layout.takeAt(0)
-        widget = item.widget()
-        if widget is not None:
-            widget.setParent(None)
-            widget.deleteLater()
-
-    self._char_sections = {}
-    for cid in (character_list or []):
-        cid = str(cid or "").strip()
-        if not cid:
-            continue
-        section = InnerCollapsibleSection(cid, parent=self)
-        # Иконка-аватар персонажа слева от заголовка секции (#6).
-        # resolve_character_avatar понимает id-формат ("KindMita"), а не только
-        # display-имя ("Kind Mita") — иначе у части персонажей была плашка.
-        try:
-            from ui.chat.message_widget import resolve_character_avatar
-            section.set_header_pixmap(resolve_character_avatar(cid, 22))
-        except Exception:
-            pass
-        self._char_sections[cid] = section
-
-        def _make_handler(_cid, _section):
-            orig_toggle = _section.toggle
-
-            def _wrapped(event=None):
-                orig_toggle()
-                if not _section.is_collapsed:
-                    _on_character_section_expanded(self, _cid, _section)
-            return _wrapped
-
-        handler = _make_handler(cid, section)
-        section.toggle = handler
-        section.header.mousePressEvent = handler
-        layout.addWidget(section)
-
-    # Индикатор активного (выбранного в песочнице) персонажа.
-    _refresh_active_character_indicator(self)
-
-    # Раскрываем секцию редактируемого персонажа (переносит панель + грузит конфиг).
-    target = current_char_id if current_char_id in self._char_sections else None
-    if target is None and self._char_sections:
-        target = next(iter(self._char_sections))
-    if expand_initial and target is not None:
-        self._char_sections[target].toggle()
+    previous = gui.character_settings_view_model.state.selected_character_id
+    ids = list(dict.fromkeys(str(cid).strip() for cid in character_list if str(cid).strip()))
+    ids.sort(key=lambda cid: ("gamemaster" in cid.lower(), "creepy" in cid.lower()))
+    ordinary = [cid for cid in ids if "creepy" not in cid.lower() and "gamemaster" not in cid.lower()]
+    ids = ordinary + [cid for cid in ids if "creepy" in cid.lower()] + [cid for cid in ids if "gamemaster" in cid.lower()]
+    library.blockSignals(True)
+    library.clear()
+    library.setIconSize(QSize(32, 32))
+    target = previous if previous in ids else current_char_id
+    selected = None
+    for cid in ids:
+        item = QListWidgetItem(QIcon(resolve_character_avatar(cid, 32)), character_display_name(cid, gui.character_settings_view_model.state.character_names.get(cid, cid)))
+        item.setData(Qt.ItemDataRole.UserRole, cid)
+        item.setData(Qt.ItemDataRole.UserRole + 2, gui.character_settings_view_model.state.character_names.get(cid, cid))
+        item.setSizeHint(QSize(0, 48))
+        library.addItem(item)
+        if cid == target:
+            selected = item
+    if selected is None and library.count():
+        selected = library.item(0)
+    library.setCurrentItem(selected)
+    library.blockSignals(False)
+    gui.character_count.setText(str(len(ids)))
+    _select_character_settings(gui, selected)
+    _filter_character_library(gui, gui.character_search.text())
 
 
-def _park_character_config_panel(self) -> None:
-    panel = getattr(self, "_char_config_panel", None)
-    holder = getattr(self, "_char_config_holder", None)
-    if panel is None or holder is None:
+def _filter_character_library(gui, text):
+    library = gui.character_library
+    for index in range(library.count()):
+        item = library.item(index)
+        item.setHidden(text.casefold() not in (item.text() + " " + item.data(Qt.ItemDataRole.UserRole)).casefold())
+
+
+def _select_character_settings(gui, item):
+    if item is None:
+        gui.character_settings_view_model.select_character("")
+        gui.character_config_panel.setEnabled(False)
+        gui.character_name.clear()
+        gui.character_name.setProperty("characterId", "")
+        gui.character_name.setProperty("fallbackName", "")
+        gui.character_avatar.clear()
+        gui.character_id_label.clear()
         return
-    layout = holder.layout()
-    if layout is None:
-        return
-    try:
-        panel.setVisible(False)
-        if panel.parent() is not holder:
-            panel.setParent(holder)
-        if layout.indexOf(panel) < 0:
-            layout.addWidget(panel)
-    except Exception:
-        pass
+    from ui.chat.message_widget import resolve_character_avatar
+    cid = item.data(Qt.ItemDataRole.UserRole)
+    gui.character_settings_view_model.select_character(cid)
+    gui.character_name.setProperty("characterId", cid)
+    gui.character_name.setProperty("fallbackName", gui.character_settings_view_model.state.character_names.get(cid, cid))
+    gui.character_name.setText(character_display_name(cid, gui.character_settings_view_model.state.character_names.get(cid, cid)))
+    gui.character_id_label.setText("id: " + cid)
+    gui.character_avatar.setPixmap(resolve_character_avatar(cid, 56))
+    gui.character_config_panel.setEnabled(True)
+    _refresh_active_character_indicator(gui)
+    change_character_actions(gui, cid)
 
 
-def _refresh_active_character_indicator(self, active_character_id: str | None = None):
-    """Пометить в аккордеоне секцию активного персонажа (того, с кем сейчас
-    идёт чат — из CharacterController). Остальные — без пометки."""
-    sections = getattr(self, "_char_sections", None)
-    if not sections:
-        return
-    active = str(active_character_id or getattr(self, "_active_character_id", "") or "").strip()
-    if not active:
-        return
-    for cid, sec in sections.items():
-        title = getattr(sec, "title_label", None)
-        if title is None:
-            continue
-        is_active = (cid == active)
-        try:
-            title.setStyleSheet(
-                "color:#77d188; font-weight:600;" if is_active else ""
-            )
-            tip = _("Сейчас выбран в песочнице", "Currently selected in sandbox")
-            title.setToolTip(tip if is_active else "")
-        except Exception:
-            pass
-
-
-def _on_character_section_expanded(self, character_id, section):
-    # Свернуть остальные секции — открыт только один персонаж за раз.
-    for cid, sec in getattr(self, "_char_sections", {}).items():
-        if sec is not section and not sec.is_collapsed:
-            try:
-                sec.collapse()
-            except Exception:
-                pass
-
-    # Перенести общую панель настроек в раскрытую секцию.
-    panel = getattr(self, "_char_config_panel", None)
-    if panel is not None:
-        section.content_layout.addWidget(panel)
-        panel.setVisible(True)
-
-    # Загрузить КОНФИГ этого персонажа в панель для редактирования. Активного
-    # персонажа НЕ трогаем (SET_CURRENT тут больше нет) — переключение только
-    # из песочницы.
-    self._configured_char_id = character_id
-    change_character_actions(self, character_id)
+def _refresh_active_character_indicator(gui, active_character_id=None):
+    active = str(active_character_id or gui.character_settings_view_model.state.active_character_id)
+    badge = getattr(gui, "character_active_badge", None)
+    if badge is not None:
+        badge.setVisible(active == gui.character_settings_view_model.state.selected_character_id)
+    library = getattr(gui, "character_library", None)
+    if library is not None:
+        for index in range(library.count()):
+            item = library.item(index)
+            cid = item.data(Qt.ItemDataRole.UserRole)
+            item.setToolTip(_("Текущий персонаж", "Current character") if cid == active else cid)
 
 
 def reload_character_data(gui):
-
-    if not hasattr(gui, "prompt_pack_combobox"):
-        get_event_bus().emit(Events.Character.RELOAD_DATA)
-        return
-
-    character_id = _configured_character_id(gui)
+    character_id = _selected_character_id(gui)
     if not character_id:
-        get_event_bus().emit(Events.Character.RELOAD_DATA)
         _clear_prompt_info_fields(gui)
+        return
+    if not hasattr(gui, "prompt_pack_combobox"):
+        _request_character_reload(character_id)
         return
 
     options = list_prompt_sets("Prompts", character_id) or []
@@ -774,7 +752,7 @@ def reload_character_data(gui):
 
     update_prompt_set_info(gui, character_id=character_id, set_name=chosen)
 
-    get_event_bus().emit(Events.Character.RELOAD_DATA)
+    _request_character_reload(character_id)
 
     if hasattr(gui, "update_debug_info"):
         try:
@@ -797,7 +775,7 @@ def on_prompt_set_changed(gui):
 
     gui.settings.set(_prompt_set_key(character_id), set_name)
 
-    get_event_bus().emit(Events.Character.RELOAD_DATA)
+    _request_character_reload(character_id)
 
 
 def change_character_actions(gui, character_id=None):
@@ -808,8 +786,7 @@ def change_character_actions(gui, character_id=None):
 
     if hasattr(gui, 'char_provider_combobox'):
         provider_key = f"CHAR_PROVIDER_{selected_character}"
-        current_provider = gui.settings.get(provider_key, "Текущий")
-        gui.char_provider_combobox.set_current_value(current_provider)
+        _set_character_provider_items(gui, gui.character_settings_view_model.state.provider_choices)
 
     if not selected_character:
         QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран.", "No character selected."))
@@ -837,8 +814,6 @@ def change_character_actions(gui, character_id=None):
 
     update_prompt_set_info(gui, character_id=selected_character, set_name=chosen)
 
-    get_event_bus().emit(Events.Character.RELOAD_DATA)
-
 
 def apply_prompt_set(gui, force_apply=True):
     if not hasattr(gui, 'prompt_pack_combobox'):
@@ -861,7 +836,7 @@ def apply_prompt_set(gui, force_apply=True):
 
     gui.settings.set(_prompt_set_key(character_id), set_name)
 
-    get_event_bus().emit(Events.Character.RELOAD_DATA)
+    _request_character_reload(character_id)
 
     if force_apply:
         QMessageBox.information(gui, _("Успех", "Success"),
@@ -997,21 +972,20 @@ def purge_deleted_data(gui):
 
 def clear_history(gui):
     char_id = _selected_character_id(gui)
-    char_name_for_text = char_id or _("(не выбран)", "(not selected)")
+    if not char_id:
+        QMessageBox.information(gui, _("Информация", "Information"),
+                                _("Персонаж не выбран.", "No character selected."))
+        return
 
     title = _("Подтверждение удаления", "Confirm deletion")
     text = _("Очистить историю для персонажа '{name}'? Это действие нельзя отменить.",
-             "Clear history for character '{name}'? This action cannot be undone.").format(name=char_name_for_text)
+             "Clear history for character '{name}'? This action cannot be undone.").format(name=char_id)
     reply = QMessageBox.question(gui, title, text,
                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
     if reply != QMessageBox.StandardButton.Yes:
         return
 
-    get_event_bus().emit(Events.Character.CLEAR_HISTORY)
-    if hasattr(gui, 'clear_chat_display'):
-        gui.clear_chat_display()
-    if hasattr(gui, 'update_debug_info'):
-        gui.update_debug_info()
+    get_event_bus().emit(Events.Character.CLEAR_HISTORY, {"character_id": char_id})
 
 
 def clear_history_all(gui):
@@ -1024,10 +998,6 @@ def clear_history_all(gui):
         return
 
     get_event_bus().emit(Events.Character.CLEAR_ALL_HISTORIES)
-    if hasattr(gui, 'clear_chat_display'):
-        gui.clear_chat_display()
-    if hasattr(gui, 'update_debug_info'):
-        gui.update_debug_info()
 
 
 def migrate_history(gui):
@@ -1055,6 +1025,8 @@ def migrate_history(gui):
                                "Migration failed. Check the log."))
         return
 
+    _request_character_reload(char_id)
+
     if count == 0:
         QMessageBox.information(gui, title,
                                 _("Нечего мигрировать — история уже в новом формате.",
@@ -1071,7 +1043,7 @@ def save_character_provider(gui, provider: str):
         QMessageBox.warning(gui, _("Внимание", "Warning"), _("Персонаж не выбран.", "No character selected."))
         return
     provider_key = f"CHAR_PROVIDER_{selected_character}"
-    gui.settings.set(provider_key, provider)
+    gui.settings.set(provider_key, int(provider))
     logger.info(f"Saved provider '{provider}' for character '{selected_character}'")
 
 def migrate_to_db(gui):
@@ -1293,7 +1265,7 @@ def _start_legacy_memory_recovery_worker(gui, preview, character_id: str, *, all
             message += "\n\n" + _("Резервная копия БД: {path}", "Database backup: {path}").format(path=backup_path)
         QMessageBox.information(gui, _("Восстановление завершено", "Restore complete"), message)
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(character_id)
             get_event_bus().emit(Events.RAG.INDEX_CHANGED)
         except Exception:
             pass
@@ -1394,7 +1366,7 @@ def _start_migration_worker(gui, character_id: str | None):
 
         # reload data
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(character_id)
         except Exception:
             pass
 
@@ -1514,6 +1486,7 @@ def migrate_db_to_structured(gui, character_id: str | None = "current"):
             "Done!\nRows updated: {u}\nSkipped: {s}\nErrors: {e}"
         ).format(u=updated, s=skipped, e=errors)
         QMessageBox.information(gui, title, msg)
+        _request_character_reload(character_id)
 
     def on_error(err):
         progress.close()
@@ -1596,7 +1569,7 @@ def run_history_dedup(gui):
         )
         # по желанию можно обновить UI/данные
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(character_id)
         except Exception:
             pass
         if hasattr(gui, 'update_debug_info'):
@@ -1666,7 +1639,7 @@ def run_history_dedup_all(gui):
             _("Удалено дублей: {n}", "Duplicates removed: {n}").format(n=int(result or 0))
         )
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(None)
         except Exception:
             pass
         if hasattr(gui, 'update_debug_info'):
@@ -1896,7 +1869,7 @@ def run_reindexing_all(gui):
         )
         _cleanup()
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(None)
         except Exception:
             pass
         if hasattr(gui, 'update_debug_info'):
@@ -2024,7 +1997,7 @@ def run_full_reindexing(gui):
             _("Переиндексировано записей: {n}", "Records re-indexed: {n}").format(n=count)
         )
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(character_id)
         except Exception:
             pass
         if hasattr(gui, 'update_debug_info'):
@@ -2124,7 +2097,7 @@ def run_full_reindexing_all(gui):
             _("Переиндексировано записей: {n}", "Records re-indexed: {n}").format(n=int(count or 0))
         )
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(None)
         except Exception:
             pass
         if hasattr(gui, 'update_debug_info'):
@@ -2308,7 +2281,7 @@ def _start_import_worker(gui, path: str, override_character_id: str | None):
         QMessageBox.information(gui, _("Успех", "Success"),
                                 _("Загрузка завершена.\n\n{msg}", "Import completed.\n\n{msg}").format(msg=str(result or "")))
         try:
-            get_event_bus().emit(Events.Character.RELOAD_DATA)
+            _request_character_reload(override_character_id)
         except Exception:
             pass
 

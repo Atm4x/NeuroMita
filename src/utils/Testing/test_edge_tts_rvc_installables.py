@@ -15,12 +15,142 @@ from handlers.voice_models.edge_tts_rvc_model import (
     SILERO_RVC_ONNX_ID,
     EdgeTTSRVCCudaModel,
     EdgeTTSRVCOnnxModel,
+    _coerce_edge_tts_rate,
 )
 from handlers.voice_models.fish_speech_model import FishSpeechInstallSpec
+from core.installables.helpers import status_from_installed
+from core.installables.types import ComponentStatusCode
+from handlers.voice_models.base_model import _requirements_need_reinstall
 from installables.registry_builder import build_installable_registry
 
 
 class EdgeTTSRVCInstallablesTests(unittest.TestCase):
+    def test_requirements_pin_compatible_hydra_and_omegaconf(self):
+        specs = [req.spec for req in EdgeTTSRVCCudaModel.requirements(EDGE_TTS_RVC_CUDA_ID, {})]
+
+        self.assertIn("hydra-core>=1.3.2,<1.4", specs)
+        self.assertIn("omegaconf>=2.2,<2.4", specs)
+
+    def test_clean_reinstall_builds_actions_for_installed_component(self):
+        with patch.object(EdgeTTSRVCCudaModel, "is_model_installed", return_value=True):
+            normal = EdgeTTSRVCCudaModel.build_install_plan_for_model(EDGE_TTS_RVC_CUDA_ID, {})
+            clean = EdgeTTSRVCCudaModel.build_install_plan_for_model(
+                EDGE_TTS_RVC_CUDA_ID, {"clean": True}
+            )
+
+        self.assertTrue(normal.already_installed)
+        self.assertFalse(clean.already_installed)
+        pip_action = next(action for action in clean.actions if action.type == "pip")
+        self.assertIn("hydra-core>=1.3.2,<1.4", pip_action.packages)
+
+    def test_partial_install_is_reported_as_needs_reinstall(self):
+        self.assertTrue(_requirements_need_reinstall({
+            "details": [
+                {"required": True, "ok": True},
+                {"required": True, "ok": False},
+                {"required": False, "ok": False},
+            ]
+        }))
+        self.assertFalse(_requirements_need_reinstall({
+            "details": [{"required": True, "ok": True}]
+        }))
+        self.assertFalse(_requirements_need_reinstall({
+            "details": [{"required": True, "ok": False}]
+        }))
+
+    def test_needs_reinstall_status_keeps_component_visible(self):
+        status = status_from_installed(
+            component_id="tts:test",
+            installed=False,
+            backend=BackendKind.NONE,
+            ctx={},
+            needs_reinstall=True,
+        )
+
+        self.assertEqual(status.code, ComponentStatusCode.NEEDS_REINSTALL)
+        self.assertTrue(status.installed)
+        self.assertFalse(status.ready)
+
+    def test_missing_rvc_file_reports_its_path(self):
+        parent = SimpleNamespace(current_model_id=EDGE_TTS_RVC_ONNX_ID)
+        model = EdgeTTSRVCOnnxModel(parent, EDGE_TTS_RVC_ONNX_ID)
+        model.tts_rvc_module = object()
+        model._load_settings_for = lambda _id: {}
+        missing_path = "X:/missing/Mila.onnx"
+        with patch.object(model, "_default_model_path", return_value=missing_path), patch.object(model, "_describe_hubert_state", return_value="ready"), patch("handlers.voice_models.edge_tts_rvc_model.os.path.exists", return_value=False):
+            with self.assertRaisesRegex(FileNotFoundError, "X:/missing/Mila.onnx"):
+                model.initialize()
+        self.assertFalse(model.initialized)
+        self.assertIsNone(model.initialized_for)
+
+    def test_initialization_propagates_original_runtime_error(self):
+        parent = SimpleNamespace(current_model_id=EDGE_TTS_RVC_ONNX_ID)
+        model = EdgeTTSRVCOnnxModel(parent, EDGE_TTS_RVC_ONNX_ID)
+        failure = RuntimeError("HuBERT model is missing")
+        with patch.object(model, "_load_rvc_class", side_effect=failure), patch.object(model, "_describe_hubert_state", return_value="missing"):
+            with self.assertRaisesRegex(RuntimeError, "HuBERT model is missing"):
+                model.initialize()
+        self.assertFalse(model.initialized)
+        self.assertIsNone(model.initialized_for)
+
+    def test_native_indexed_directml_does_not_require_legacy_methods(self):
+        from handlers.voice_models.onnx_device_adapter import enable_indexed_directml
+
+        class ExecutionDevice:
+            def __init__(self, backend, index):
+                self.providers = (("DmlExecutionProvider", {"device_id": str(index)}),)
+
+        module = SimpleNamespace(
+            OnnxExecutionDevice=ExecutionDevice,
+            resolve_execution_device=lambda device: device,
+            create_session=lambda *args: None,
+        )
+        self.assertTrue(enable_indexed_directml(module))
+        self.assertFalse(hasattr(module, "_neuromita_indexed_dml_patch"))
+
+        class BrokenExecutionDevice:
+            def __init__(self, backend, index):
+                self.providers = (("DmlExecutionProvider", {"device_id": "0"}),)
+
+        module.OnnxExecutionDevice = BrokenExecutionDevice
+        self.assertFalse(enable_indexed_directml(module))
+
+    def test_onnx_sampling_policy_preserves_readonly_runtime_property(self):
+        class Runtime:
+            def __init__(self):
+                self.sr = 44100
+                self.calls = []
+
+            @property
+            def sampling_rate(self):
+                return self.sr
+
+            def set_sampling_params(self, sr, hop):
+                self.calls.append((sr, hop))
+                self.sr = sr
+
+        parent = SimpleNamespace(current_character_name="ShorthairMita")
+        model = EdgeTTSRVCOnnxModel(parent, EDGE_TTS_RVC_ONNX_ID)
+        model.current_tts_rvc = Runtime()
+        model._apply_backend_sampling_policy()
+        self.assertEqual(model.current_tts_rvc.sampling_rate, 48000)
+        parent.current_character_name = "Mila"
+        model._apply_backend_sampling_policy()
+        self.assertEqual(model.current_tts_rvc.sampling_rate, 40000)
+        self.assertEqual(model.current_tts_rvc.calls, [(48000, 512), (40000, 512)])
+
+    def test_onnx_sampling_policy_updates_older_runtime_attribute(self):
+        model = EdgeTTSRVCOnnxModel(
+            SimpleNamespace(current_character_name="ShorthairMita"), EDGE_TTS_RVC_ONNX_ID
+        )
+        calls = []
+        model.current_tts_rvc = SimpleNamespace(
+            sampling_rate=40000, set_sampling_params=lambda sr, hop: calls.append((sr, hop))
+        )
+        model._apply_backend_sampling_policy()
+        self.assertEqual(model.current_tts_rvc.sampling_rate, 48000)
+        self.assertEqual(calls, [(48000, 512)])
+
     def test_registry_exposes_edge_and_silero_backend_variants(self):
         registry = build_installable_registry()
 
@@ -127,6 +257,27 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
         )
         self.assertEqual(f0_setting["options"]["default"], "rmvpe")
 
+    def test_edge_tts_rate_uses_number_stepper_with_zero_default(self):
+        for model_class, model_id in (
+            (EdgeTTSRVCCudaModel, EDGE_TTS_RVC_CUDA_ID),
+            (EdgeTTSRVCOnnxModel, EDGE_TTS_RVC_ONNX_ID),
+        ):
+            config = model_class._find_model_config(model_id)
+            rate_setting = next(item for item in config["settings"] if item["key"] == "tts_rate")
+
+            self.assertEqual(rate_setting["type"], "number_stepper")
+            self.assertEqual(
+                rate_setting["options"],
+                {"default": 0, "min": -50, "max": 100, "step": 1, "suffix": " %"},
+            )
+
+    def test_edge_tts_rate_coercion_migrates_old_decimal_without_crashing(self):
+        self.assertEqual(_coerce_edge_tts_rate("0.8"), 0)
+        self.assertEqual(_coerce_edge_tts_rate("25"), 25)
+        self.assertEqual(_coerce_edge_tts_rate("invalid"), 0)
+        self.assertEqual(_coerce_edge_tts_rate(-500), -50)
+        self.assertEqual(_coerce_edge_tts_rate(500), 100)
+
     def test_edge_runtime_uses_schema_pitch_default_when_no_values_are_saved(self):
         class _Parent:
             current_model_id = EDGE_TTS_RVC_CUDA_ID
@@ -222,8 +373,68 @@ class EdgeTTSRVCInstallablesTests(unittest.TestCase):
             ],
         )
 
-        with patch.dict(sys.modules, {"onnxruntime": fake_ort}):
+        with patch.dict(sys.modules, {"onnxruntime": fake_ort}), patch.object(
+            EdgeTTSRVCOnnxModel, "INDEXED_DML_READY", True
+        ), patch(
+            "handlers.voice_models.edge_tts_rvc_model.get_hardware_snapshot",
+            return_value={"adapters": [{"index": 0, "name": "AMD Radeon"}]},
+        ):
             self.assertEqual(model._resolve_runtime_device("dml"), "dml")
+            self.assertEqual(model._resolve_runtime_device("dml:0"), "dml:0")
+
+    def test_selected_directml_adapter_switches_loaded_runtime(self):
+        class _Parent:
+            current_model_id = EDGE_TTS_RVC_ONNX_ID
+
+        model = EdgeTTSRVCOnnxModel(_Parent(), EDGE_TTS_RVC_ONNX_ID)
+        switched = []
+        model.current_tts_rvc = SimpleNamespace(
+            device="dml",
+            set_device=lambda device: switched.append(device),
+        )
+        fake_ort = SimpleNamespace(get_available_providers=lambda: ["DmlExecutionProvider"])
+
+        with patch.dict(sys.modules, {"onnxruntime": fake_ort}), patch.object(
+            EdgeTTSRVCOnnxModel, "INDEXED_DML_READY", True
+        ), patch(
+            "handlers.voice_models.edge_tts_rvc_model.get_hardware_snapshot",
+            return_value={"adapters": [{"index": 0, "name": "AMD Radeon"}]},
+        ):
+            model._ensure_runtime_device("dml:0")
+
+        self.assertEqual(switched, ["dml:0"])
+
+    def test_indexed_directml_uses_selected_adapter_for_all_onnx_sessions(self):
+        class FakeSession:
+            def _get_onnx_providers(self, _device):
+                return ["CPUExecutionProvider"]
+
+        class FakePredictor(FakeSession):
+            def _get_torch_device(self, _device):
+                return "unknown"
+
+        inference_module = SimpleNamespace(
+            OnnxRVC=type("OnnxRVC", (FakeSession,), {}),
+            ContentVec=type("ContentVec", (FakeSession,), {}),
+            RMVPEONNXPredictor=FakePredictor,
+            get_f0_predictor=lambda *args, **kwargs: object(),
+        )
+        with patch(
+            "handlers.voice_models.edge_tts_rvc_model.importlib.import_module",
+            return_value=inference_module,
+        ):
+            EdgeTTSRVCOnnxModel._configure_imported_rvc_module(
+                "tts_with_rvc", SimpleNamespace()
+            )
+
+        expected = [
+            ("DmlExecutionProvider", {"device_id": 0}),
+            "CPUExecutionProvider",
+        ]
+        for class_name in ("OnnxRVC", "ContentVec", "RMVPEONNXPredictor"):
+            instance = getattr(inference_module, class_name)()
+            self.assertEqual(instance._get_onnx_providers("dml:0"), expected)
+        self.assertEqual(inference_module.RMVPEONNXPredictor()._get_torch_device("dml:0"), "cpu")
 
     def test_onnx_runtime_import_accepts_published_wheel_package_layout(self):
         fallback_module = SimpleNamespace(TTS_RVC=object())

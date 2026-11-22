@@ -43,7 +43,7 @@ class HistoryRepository:
         *,
         match_q: str,
         top_k: int,
-        model_name: str,
+        model_name: str | None,
     ) -> list[dict]:
         """BM25 FTS5 search against history_fts."""
         if not match_q:
@@ -52,7 +52,16 @@ class HistoryRepository:
             return []
 
         cols = ["h.id", "bm25(history_fts) AS rank", "h.role", "h.content", "h.timestamp"]
-        cols.append("e.embedding")
+        embedding_join = ""
+        embedding_params = ()
+        if model_name is not None:
+            cols.append("e.embedding")
+            embedding_params = (model_name,)
+            embedding_join = """
+                LEFT JOIN embeddings e
+                  ON e.source_table='history' AND e.source_id=h.id
+                  AND e.character_id=h.character_id AND e.model_name=?
+            """
         cols += self._opt_cols(("message_id", "speaker", "target", "participants", "entities"))
 
         where = f"h.character_id=? AND h.is_active=0{self._where_not_deleted()}"
@@ -62,14 +71,12 @@ class HistoryRepository:
                 SELECT {", ".join(cols)}
                 FROM history_fts
                 JOIN history h ON h.id = history_fts.rowid
-                LEFT JOIN embeddings e
-                  ON e.source_table='history' AND e.source_id=h.id
-                  AND e.character_id=h.character_id AND e.model_name=?
+                {embedding_join}
                 WHERE history_fts MATCH ? AND {where}
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (model_name, match_q, self.character_id, int(top_k)),
+                (*embedding_params, match_q, self.character_id, int(top_k)),
             )
             return self._rows_to_dicts(cursor, cols)
         except Exception:
@@ -200,23 +207,26 @@ class HistoryRepository:
     # Keyword search (embedding IS NULL rows)
     # ------------------------------------------------------------------
 
-    def keyword_rows(self, cursor, *, keywords: list[str], limit: int) -> list[dict]:
-        """LIKE-based search for rows that have no embeddings yet."""
+    def keyword_rows(self, cursor, *, keywords: list[str], limit: int, unembedded_only: bool = True) -> list[dict]:
+        """LIKE-based search for history rows, optionally restricted to unembedded rows."""
+        cursor.connection.create_function("rag_casefold", 1, lambda text: (text or "").casefold(), deterministic=True)
         kw_clauses: list[str] = []
         kw_params: list[str] = []
         for k in keywords:
             if isinstance(k, str) and k.strip():
-                kw_clauses.append("content LIKE ?")
-                kw_params.append(f"%{k}%")
+                kw_clauses.append("instr(rag_casefold(content), ?) > 0")
+                kw_params.append(k.casefold())
         if not kw_clauses:
             return []
 
         where = (
-            "character_id=? AND is_active=0 AND (embedding IS NULL) "
+            "character_id=? AND is_active=0 "
             "AND content IS NOT NULL AND TRIM(content) != ''"
         )
         if "is_deleted" in self.schema.history_cols:
             where += " AND is_deleted=0"
+        if unembedded_only:
+            where += " AND embedding IS NULL"
         where += " AND (" + " OR ".join(kw_clauses) + ")"
 
         cols = ["id", "role", "content", "timestamp"]
@@ -237,54 +247,25 @@ class HistoryRepository:
     # Context helpers used by QueryBuilder
     # ------------------------------------------------------------------
 
-    def last_active_row(self, cursor) -> Optional[dict]:
-        """Return the most recent active history row (for ctx speaker/target)."""
-        possible = ["speaker", "target", "participants", "sender"]
-        cols = [c for c in possible if c in self.schema.history_cols]
-        if not cols:
-            return None
-        where = "character_id=? AND is_active=1"
+    def active_query_rows(
+        self, cursor, *, limit: int, before_id: int | None = None, roles: tuple[str, ...] = (),
+    ) -> list[dict]:
+        cols = ["id", "role", "content"] + [
+            name for name in ("message_id", "speaker", "sender", "target", "participants")
+            if name in self.schema.history_cols
+        ]
+        where = ["character_id=?", "is_active=1"]
+        params: list[Any] = [self.character_id]
         if "is_deleted" in self.schema.history_cols:
-            where += " AND is_deleted=0"
-        try:
-            cursor.execute(
-                f"SELECT {', '.join(cols)} FROM history WHERE {where} ORDER BY id DESC LIMIT 1",
-                (self.character_id,),
-            )
-            row = cursor.fetchone()
-            return dict(zip(cols, row)) if row else None
-        except Exception:
-            return None
-
-    def recent_active_contents(
-        self,
-        cursor,
-        *,
-        tail: int,
-        role_filter: str = "user_only",
-    ) -> list[str]:
-        """Return text content of recent active history messages."""
-        if tail <= 0:
-            return []
-        rf = str(role_filter or "user_only").strip().lower()
-        if rf not in ("user_only", "user_and_assistant", "assistant_only"):
-            rf = "user_only"
-
-        where = "character_id=? AND is_active=1"
-        if "is_deleted" in self.schema.history_cols:
-            where += " AND is_deleted=0"
-
-        role_map = {
-            "user_only": " AND role='user'",
-            "assistant_only": " AND role='assistant'",
-            "user_and_assistant": " AND role IN ('user','assistant')",
-        }
-        where += role_map[rf]
-        try:
-            cursor.execute(
-                f"SELECT role, content FROM history WHERE {where} ORDER BY id DESC LIMIT ?",
-                (self.character_id, int(tail)),
-            )
-            return [str(r[1] or "") for r in (cursor.fetchall() or []) if r[1]]
-        except Exception:
-            return []
+            where.append("is_deleted=0")
+        if before_id is not None:
+            where.append("id<?")
+            params.append(before_id)
+        if roles:
+            where.append(f"role IN ({','.join('?' for _ in roles)})")
+            params.extend(roles)
+        cursor.execute(
+            f"SELECT {', '.join(cols)} FROM history WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        )
+        return self._rows_to_dicts(cursor, cols)

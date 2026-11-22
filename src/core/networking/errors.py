@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import socket
+import ssl
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -21,6 +23,50 @@ _SECRET_QUERY_KEYS = frozenset(
         "token",
     }
 )
+
+
+def valid_http_url(value: str) -> bool:
+    value = str(value or "").strip()
+    if not value or any(char.isspace() or ord(char) < 32 for char in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        return (
+            parts.scheme.lower() in {"http", "https"}
+            and bool(parts.hostname)
+            and (parts.port is None or 1 <= parts.port <= 65535)
+        )
+    except ValueError:
+        return False
+
+
+_HTTP_STATUS_MESSAGES = {
+    400: "Сервер отклонил запрос. Проверьте адрес проверки и выбранный формат API.",
+    401: "Сервер не принял авторизацию. Проверьте API-ключ и его срок действия.",
+    403: "Сервер запретил доступ. Проверьте права API-ключа и доступность сервиса для вашей учётной записи.",
+    404: "Адрес проверки не найден. Проверьте URL: для списка моделей обычно используется /v1/models.",
+    405: "Адрес проверки не поддерживает GET-запрос. Укажите endpoint списка моделей вместо endpoint генерации.",
+    408: "Сервер прекратил ожидание запроса. Повторите проверку; если ошибка остаётся, проверьте соединение и нагрузку сервера.",
+    429: "Превышен лимит запросов или квота API. Повторите позже и проверьте лимиты и баланс у провайдера.",
+    500: "На сервере произошла внутренняя ошибка. Повторите позже; для локального сервера проверьте его журнал ошибок.",
+    502: "Шлюз или прокси получил некорректный ответ от сервера. Повторите позже; если используете прокси, проверьте его подключение к API.",
+    503: "Сервис временно недоступен. Он может быть перегружен или на обслуживании. Повторите проверку позже; для локального API проверьте, что сервер запущен и готов принимать запросы.",
+    504: "Шлюз или прокси не дождался ответа сервера. Повторите позже и проверьте доступность API за прокси.",
+}
+
+
+def http_status_message(status_code: int | None, *, translate=None) -> str:
+    translate = translate or (lambda text: text)
+    status = int(status_code or 0)
+    explanation = _HTTP_STATUS_MESSAGES.get(status)
+    if explanation is None:
+        if 400 <= status < 500:
+            explanation = "Сервер отклонил запрос. Проверьте адрес, авторизацию и выбранный формат API."
+        elif status >= 500:
+            explanation = "Сервер не смог обработать запрос. Повторите позже; для локального API проверьте журнал сервера."
+        else:
+            explanation = "Сервер вернул неожиданный ответ. Проверьте адрес проверки и выбранный формат API."
+    return f"HTTP {status_code or '?'}\n\n{translate(explanation)}"
 
 
 def sanitize_url(url: str | httpx.URL | None) -> str | None:
@@ -88,6 +134,10 @@ class NetworkConnectionError(NetworkRequestError):
     pass
 
 
+class NetworkConfigurationError(NetworkRequestError):
+    pass
+
+
 class HttpResponseError(NetworkRequestError):
     pass
 
@@ -102,17 +152,50 @@ def classify_network_error(
     if isinstance(exc, NetworkRequestError):
         return exc
 
-    request = getattr(exc, "request", None)
+    try:
+        request = getattr(exc, "request", None)
+    except RuntimeError:
+        request = None
     response = getattr(exc, "response", None)
     resolved_method = method or getattr(request, "method", None)
     resolved_url = url or getattr(request, "url", None) or getattr(response, "url", None)
     detail = _compact_detail(exc)
 
+    if isinstance(exc, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
+        return NetworkConfigurationError(
+            service_id=service_id,
+            message="Укажите корректный HTTP или HTTPS URL с адресом сервера.",
+            code="network.url.invalid",
+            phase="configuration",
+            method=resolved_method,
+            url=str(resolved_url) if resolved_url else None,
+            retryable=False,
+            detail=detail,
+        )
+
+    tls_error = _find_tls_error(exc)
+    if tls_error is not None:
+        certificate_failure = _is_certificate_verification_error(tls_error)
+        return NetworkConnectionError(
+            service_id=service_id,
+            message=(
+                "Не удалось проверить SSL-сертификат сервера."
+                if certificate_failure
+                else "Не удалось установить защищённое SSL/TLS-соединение."
+            ),
+            code="network.tls.certificate" if certificate_failure else "network.tls.handshake",
+            phase="connect",
+            method=resolved_method,
+            url=str(resolved_url) if resolved_url else None,
+            retryable=False,
+            detail=_tls_error_detail(tls_error),
+        )
+
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = getattr(response, "status_code", None)
         return HttpResponseError(
             service_id=service_id,
-            message=f"Сервер вернул HTTP {status_code or 'error'}.",
+            message=http_status_message(status_code),
             code="http.status",
             phase="response",
             method=resolved_method,
@@ -178,21 +261,72 @@ def classify_network_error(
 
 
 def _contains_dns_error(exc: BaseException) -> bool:
-    current: Optional[BaseException] = exc
-    visited: set[int] = set()
-    while current is not None and id(current) not in visited:
-        visited.add(id(current))
+    for current in _iter_exception_chain(exc):
         if isinstance(current, socket.gaierror):
             return True
         text = str(current).lower()
         if any(marker in text for marker in ("getaddrinfo", "name resolution", "nodename nor servname")):
             return True
-        current = current.__cause__ or current.__context__
     return False
 
 
+def _iter_exception_chain(exc: BaseException):
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+_CERTIFICATE_ERROR_MARKERS = (
+    "certificate_verify_failed",
+    "certificate verify failed",
+    "unable to get local issuer certificate",
+    "self signed certificate",
+    "hostname mismatch",
+    "certificate has expired",
+)
+
+
+def _is_certificate_verification_error(exc: BaseException) -> bool:
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _CERTIFICATE_ERROR_MARKERS)
+
+
+def _find_tls_error(exc: BaseException) -> BaseException | None:
+    for cause in _iter_exception_chain(exc):
+        if isinstance(cause, ssl.SSLError):
+            return cause
+        if any(marker in str(cause).lower() for marker in _CERTIFICATE_ERROR_MARKERS):
+            return cause
+    return None
+
+
+def _tls_error_detail(exc: BaseException) -> str:
+    text = str(exc)
+    lowered = text.lower()
+    for marker in _CERTIFICATE_ERROR_MARKERS:
+        if marker in lowered:
+            return marker
+
+    detail = _compact_detail(exc)
+    return _redact_sensitive_text(detail)[:500]
+
+
+def _redact_sensitive_text(text: str) -> str:
+    secret_keys = "|".join(re.escape(key) for key in _SECRET_QUERY_KEYS)
+    return re.sub(
+        rf"(?i)\b({secret_keys})(=|%3d)([^&\s,]+)",
+        r"\1\2<redacted>",
+        text,
+    )
+
+
 def _compact_detail(exc: BaseException) -> str:
-    return " ".join(str(exc or "").split())[:500]
+    return _redact_sensitive_text(" ".join(str(exc or "").split()))[:500]
 
 
 def _timeout_phase(exc: httpx.TimeoutException) -> str:

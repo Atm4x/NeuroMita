@@ -12,6 +12,7 @@ import zipfile
 from typing import Iterable, Optional
 
 from utils.release_assets import raw_release_has_launcher_assets
+from services.release_revisions import parse_build_version, python_archive_version
 
 
 SUPPORTED_ARCHIVE_EXTS = (".zip", ".7z")
@@ -171,6 +172,10 @@ def classify_asset_name(name: str, tag: str) -> str:
     escaped_tag = re.escape(tag)
     lowered = str(name or "").lower()
     if re.fullmatch(rf"PythonBuild-{escaped_tag}\.(zip|7z)", name, flags=re.IGNORECASE):
+        return PYTHON_FULL_KIND
+    parent = parse_build_version(tag)
+    version = python_archive_version(name)
+    if parent and version and parent.base_tag == version.base_tag and version > parent:
         return PYTHON_FULL_KIND
     if re.fullmatch(rf"PythonBuild-{escaped_tag}-Patch\.(zip|7z)", name, flags=re.IGNORECASE):
         return PYTHON_PATCH_KIND
@@ -444,7 +449,7 @@ def fetch_release(repo: str, tag: str) -> dict:
         return json.loads(resp.read())
 
 
-def fetch_releases(repo: str, per_page: int = 100) -> list[dict]:
+def fetch_releases(repo: str, per_page: int = 100, *, github_token: str | None = None) -> list[dict]:
     url = f"https://api.github.com/repos/{repo}/releases?per_page={int(per_page)}"
     req = urllib.request.Request(
         url,
@@ -453,6 +458,8 @@ def fetch_releases(repo: str, per_page: int = 100) -> list[dict]:
             "Accept": "application/vnd.github+json",
         },
     )
+    if github_token:
+        req.add_header("Authorization", f"Bearer {github_token}")
     with urllib.request.urlopen(req, timeout=15) as resp:
         return list(json.loads(resp.read()) or [])
 

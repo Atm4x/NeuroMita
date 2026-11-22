@@ -1,8 +1,9 @@
 from core.error_utils import format_exception
+from uuid import uuid4
 # seabattle_gui.py
 
 import sys
-import multiprocessing
+import queue
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -172,7 +173,7 @@ class BoardWidget(QWidget):
     def leaveEvent(self, event): self.clear_preview()
 
 class SeaBattleWindow(QWidget):
-    def __init__(self, command_queue, state_queue, reaction_queue=None):
+    def __init__(self, command_queue, state_queue, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
         super().__init__()
         self.command_queue = command_queue
         self.state_queue = state_queue
@@ -184,13 +185,42 @@ class SeaBattleWindow(QWidget):
         self.init_ui()
         self.update_view()
 
+        from modules.session_snapshot import GameSnapshotEndpoint, GameStateQueue
+        self.state_queue = GameStateQueue(state_queue)
+        self.snapshot_endpoint = GameSnapshotEndpoint(snapshot_queue, reaction_queue,
+            self.capture_session_snapshot, self.apply_session_snapshot, lambda paused: self.setEnabled(not paused), self.state_queue)
+        if initial_snapshot is not None:
+            self.state_queue.generation = 1
+            self.apply_session_snapshot(initial_snapshot)
+            self.snapshot_endpoint.paused = True
+            self.setEnabled(False)
+
         self.command_timer = QTimer(self)
         self.command_timer.timeout.connect(self.process_commands)
         self.command_timer.start(100)
 
+    def capture_session_snapshot(self):
+        return {"board": self.game.engine.snapshot(), "react_enabled": self.mita_reaction_checkbox.isChecked()}
+
+    def apply_session_snapshot(self, state):
+        from modules.session_snapshot import validate_game_state
+        validate_game_state("seabattle", state)
+        self.game.engine.restore_snapshot(state["board"])
+        self.game.player_id, self.game.mita_id = self.game.engine.player_id, self.game.engine.mita_id
+        self.game.last_error = None
+        self.ship_to_place = None
+        self.mita_reaction_checkbox.setChecked(state["react_enabled"])
+        self.update_view()
+        self.send_state_update()
+
     def closeEvent(self, event):
         if not self._programmatic_close:
             self._request_game_closed_reaction()
+        try:
+            if self.reaction_queue:
+                self.reaction_queue.put({"event": "game_closed"})
+        except Exception:
+            pass
         try:
             if self.state_queue:
                 self.state_queue.put({
@@ -256,12 +286,21 @@ class SeaBattleWindow(QWidget):
         self.controls_layout.setVerticalSpacing(6)
         controls_panel_layout.addLayout(self.controls_layout)
 
-        self.mita_reaction_checkbox = QCheckBox(_("Мита реагирует на мой выстрел", "Mita reacts to my shot"))
+        self.mita_reaction_checkbox = QCheckBox(_("Автоматически запрашивать ход Миты", "Automatically request Mita's turn"))
         self.mita_reaction_checkbox.setChecked(True)
         self.mita_reaction_checkbox.setToolTip(
-            _("После вашего действительного хода Мита сразу получает повод для реакции в чате.", "After an accepted shot, Mita gets a prompt to react in chat.")
+            _("После вашего действительного хода автоматически запрашивается ответный ход Миты.", "After an accepted shot, Mita is automatically asked for her reply move.")
         )
         controls_panel_layout.addWidget(self.mita_reaction_checkbox)
+        self.btn_request_mita_turn = QPushButton(_("Ходи", "Your move"))
+        self.btn_request_mita_turn.setObjectName("RequestMitaTurnButton")
+        self.btn_request_mita_turn.setToolTip(
+            _("Предложить Мите сделать ход.", "Ask Mita to make her move.")
+        )
+        self.btn_request_mita_turn.clicked.connect(self._request_manual_mita_turn)
+        self.btn_request_mita_turn.setVisible(False)
+        controls_panel_layout.addWidget(self.btn_request_mita_turn)
+        self.mita_reaction_checkbox.toggled.connect(self.update_view)
         controls_panel_layout.addWidget(QLabel(
             _("Можно отключить для этой партии. Общая настройка реакций приложения сохраняет приоритет.", "You can turn this off for this match. The app-wide reaction setting still takes priority."),
             objectName="SeaBattleHint",
@@ -303,10 +342,16 @@ class SeaBattleWindow(QWidget):
             print(f"GUI Error: Could not put state in queue: {format_exception(e)}")
 
     def process_commands(self):
-        while not self.command_queue.empty():
+        while True:
             try:
                 cmd = self.command_queue.get_nowait()
                 action = cmd.get("action")
+                if self.snapshot_endpoint.handle(cmd):
+                    continue
+                if self.snapshot_endpoint.paused and action not in {"get_state", "stop_gui_process"}:
+                    continue
+                game_over_reaction = None
+                mita_hit_reaction = None
 
                 if action == "stop_gui_process":
                     self._programmatic_close = True
@@ -340,14 +385,26 @@ class SeaBattleWindow(QWidget):
                     try:
                         x, y = from_alg(cmd.get("coord"))
                         result, message = self.game.engine.make_move(self.game.mita_id, x, y)
-                        self.game.last_error = None if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"} else f"Ход Миты не принят: {message}"
+                        move_accepted = result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}
+                        self.game.last_error = None if move_accepted else f"Ход Миты не принят: {message}"
+                        if move_accepted:
+                            self._publish_mita_move_fact(x, y, result)
+                            final_state = self.game.get_full_state()
+                            if final_state["phase"] == "game_over":
+                                game_over_reaction = (final_state.get("winner"), final_state.get("player_id"))
+                            elif result in {"hit", "sunk"}:
+                                mita_hit_reaction = (x, y, result, message)
                     except Exception as e:
                         self.game.last_error = f"Ошибка хода Миты: {format_exception(e)}"
 
                 self.update_view()
                 self.send_state_update()
+                if game_over_reaction is not None:
+                    self._request_game_over_reaction(*game_over_reaction)
+                elif mita_hit_reaction is not None:
+                    self._request_mita_hit_reaction(*mita_hit_reaction)
 
-            except multiprocessing.queues.Empty:
+            except queue.Empty:
                 break
             except Exception as e:
                 print(f"GUI Error processing command: {format_exception(e)}")
@@ -377,10 +434,11 @@ class SeaBattleWindow(QWidget):
             success, msg = self.game.engine.place_ship(self.game.player_id, x, y, l, o)
             if success:
                 self.ship_to_place = None
-                if not self.game.get_full_state()['player_ships_to_place']:
-                    self._request_placement_completed_reaction()
+                placement_completed = not self.game.get_full_state()['player_ships_to_place']
                 self.update_view()
                 self.send_state_update()
+                if placement_completed:
+                    self._request_placement_completed_reaction()
             else:
                 self.info_label.setText(f"<font color='#BF616A'>{msg}</font>")
 
@@ -390,13 +448,32 @@ class SeaBattleWindow(QWidget):
         if button != Qt.MouseButton.LeftButton: return
 
         result, message = self.game.engine.make_move(self.game.player_id, x, y)
-        if result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
-            self._request_mita_reaction(x, y, result, message)
         self.update_view()
         self.send_state_update()
+        final_state = self.game.get_full_state()
+        game_over = final_state["phase"] == "game_over"
+        if game_over:
+            self._request_mita_reaction(x, y, result, message, react=False)
+            self._request_game_over_reaction(final_state.get("winner"), final_state.get("player_id"))
+        elif result not in {"invalid_phase", "not_your_turn", "invalid_coord", "already_shot"}:
+            self._request_mita_reaction(x, y, result, message)
 
-    def _request_mita_reaction(self, x, y, result, message):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+    def _request_manual_mita_turn(self):
+        state = self.game.get_full_state()
+        if (
+            state["phase"] != "battle"
+            or state["is_player_turn"]
+            or self.mita_reaction_checkbox.isChecked()
+            or not self.reaction_queue
+        ):
+            return
+        try:
+            self.reaction_queue.put({"event": "manual_mita_turn"})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue manual Mita turn request: {format_exception(exc)}")
+
+    def _request_mita_reaction(self, x, y, result, message, *, react=None):
+        if not self.reaction_queue:
             return
         try:
             self.reaction_queue.put({
@@ -404,23 +481,61 @@ class SeaBattleWindow(QWidget):
                 "coord": to_alg(x, y),
                 "result": str(result or ""),
                 "message": str(message or ""),
+                "react": self.mita_reaction_checkbox.isChecked() if react is None else react,
+                "semantic_id": uuid4().hex,
+                "mover": "Player",
             })
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita reaction: {format_exception(exc)}")
 
-    def _request_placement_completed_reaction(self):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+    def _request_game_over_reaction(self, winner, player_id):
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_placement_completed"})
+            self.reaction_queue.put({"event": "player_game_over", "winner": winner, "player_id": player_id,
+                                     "react": self.mita_reaction_checkbox.isChecked()})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue Mita Sea Battle game-over reaction: {format_exception(exc)}")
+
+    def _request_mita_hit_reaction(self, x, y, result, message):
+        if not self.reaction_queue:
+            return
+        try:
+            event = {
+                "event": "mita_target_hit",
+                "coord": to_alg(x, y),
+                "result": str(result or ""),
+                "message": str(message or ""),
+                "react": self.mita_reaction_checkbox.isChecked(),
+                "mover": "Character",
+            }
+            source = getattr(self, "_last_mita_move_event", None)
+            if source and source.get("coord") == to_alg(x, y):
+                event["semantic_id"] = source["semantic_id"]
+            self.reaction_queue.put(event)
+        except Exception as exc:
+            print(f"GUI Error: Could not queue Mita follow-up reaction: {format_exception(exc)}")
+
+    def _publish_mita_move_fact(self, x, y, result):
+        event = {"event": "mita_shot", "coord": to_alg(x, y), "result": str(result or ""),
+                 "mover": "Character", "semantic_id": uuid4().hex, "react": False}
+        self._last_mita_move_event = event
+        if self.reaction_queue:
+            self.reaction_queue.put(dict(event))
+
+    def _request_placement_completed_reaction(self):
+        if not self.reaction_queue:
+            return
+        try:
+            self.reaction_queue.put({"event": "player_placement_completed", "react": self.mita_reaction_checkbox.isChecked()})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita placement reaction: {format_exception(exc)}")
 
     def _request_game_closed_reaction(self):
-        if not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_closed"})
+            self.reaction_queue.put({"event": "player_game_closed", "react": self.mita_reaction_checkbox.isChecked()})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita Sea Battle close reaction: {format_exception(exc)}")
 
@@ -431,6 +546,7 @@ class SeaBattleWindow(QWidget):
 
         if state['phase'] == 'placement':
             self.controls_panel.setVisible(True)
+            self.btn_request_mita_turn.setVisible(False)
             self.controls_title.setVisible(True)
             self.opponent_board_card.setVisible(False)
             ships_left = state['player_ships_to_place']
@@ -462,28 +578,58 @@ class SeaBattleWindow(QWidget):
                 data['btn'].setVisible(False)
             self.my_board_widget.clear_preview()
             self.opponent_board_card.setVisible(True)
+            self.btn_request_mita_turn.setVisible(
+                not state['is_player_turn'] and not self.mita_reaction_checkbox.isChecked()
+            )
             self.status_label.setText(_("Ваш ход!", "Your turn!") if state['is_player_turn'] else _("Ход Миты", "Mita's turn"))
             self.info_label.setText(_("Стреляйте по полю противника.", "Fire at the opponent's board."))
             if state.get('last_move'):
                 last_move = state['last_move']
-                actor = _("Вы", "You") if last_move['attacker'] == self.game.player_id else "Mita"
-                self.info_label.setText(_("Последний ход: {} на {} - {}", "Last move: {} at {} - {}").format(actor, last_move['coord_alg'], last_move['message']))
+                actor = _("Вы", "You") if last_move['attacker'] == self.game.player_id else _("Мита", "Mita")
+                self.info_label.setText(_("Последний ход: {} на {} - {}", "Last move: {} at {} - {}").format(
+                    actor,
+                    last_move['coord_alg'],
+                    self._localized_move_message(last_move.get('result'), last_move.get('message')),
+                ))
 
         elif state['phase'] == 'game_over':
             self.controls_panel.setVisible(False)
+            self.btn_request_mita_turn.setVisible(False)
             self.my_board_widget.clear_preview()
             winner_text = _("Вы победили!", "You won!") if state['winner'] == self.game.player_id else _("Мита победила.", "Mita won.")
             self.status_label.setText(_("Игра окончена", "Game over"))
             self.info_label.setText(winner_text)
 
-def run_seabattle_gui_process(command_queue, state_queue, reaction_queue=None):
-    set_app_user_model_id()
-    app = QApplication(sys.argv)
-    app.setWindowIcon(application_icon())
-    install_dark_titlebar_sync(app, True)
-    app.setStyleSheet(get_stylesheet() + SEABATTLE_QSS)
-    window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
-    window.show()
-    apply_dark_titlebar(window, True)
-    window.send_state_update()
-    sys.exit(app.exec())
+    @staticmethod
+    def _localized_move_message(result, fallback):
+        messages = {
+            "hit": _("Попал! Стреляйте еще раз.", "Hit! Fire again."),
+            "sunk": _("Потопил! Стреляйте еще раз.", "Sunk! Fire again."),
+            "miss": _("Мимо!", "Miss!"),
+            "win": _("Победа!", "Victory!"),
+        }
+        return messages.get(result, str(fallback or ""))
+
+def run_seabattle_gui_process(command_queue, state_queue, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
+    try:
+        set_app_user_model_id()
+        app = QApplication(sys.argv)
+        app.setWindowIcon(application_icon())
+        install_dark_titlebar_sync(app, True)
+        app.setStyleSheet(get_stylesheet() + SEABATTLE_QSS)
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue, snapshot_queue, initial_snapshot)
+        window.show()
+        apply_dark_titlebar(window, True)
+        window.send_state_update()
+        sys.exit(app.exec())
+    finally:
+        try:
+            if state_queue:
+                state_queue.put({"event": "gui_closed", "reason": "process_exit"})
+        except Exception:
+            pass
+        try:
+            if reaction_queue:
+                reaction_queue.put({"event": "game_closed"})
+        except Exception:
+            pass

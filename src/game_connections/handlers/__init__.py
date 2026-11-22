@@ -4,7 +4,11 @@ from .actions.get_task_status import GetTaskStatusAction
 from .actions.get_settings import GetSettingsAction
 from .actions.get_music_beats import GetMusicBeatsAction
 from .actions.speech_state import SpeechStateAction
+from .actions.asr_ptt_state import AsrPttStateAction
 from .actions.hello import HelloAction
+from .actions.desktop_state import DesktopStateAction
+from .actions.timeline import TimelineAction
+from .actions.action_receipt import ActionReceiptAction
 
 
 def build_action_registry() -> ActionRegistry:
@@ -14,5 +18,9 @@ def build_action_registry() -> ActionRegistry:
     reg.register("get_settings", GetSettingsAction())
     reg.register("get_music_beats", GetMusicBeatsAction())
     reg.register("speech_state", SpeechStateAction())
+    reg.register("asr_ptt_state", AsrPttStateAction())
     reg.register("hello", HelloAction())
+    reg.register("desktop_state", DesktopStateAction())
+    reg.register("timeline", TimelineAction())
+    reg.register("action_receipt", ActionReceiptAction())
     return reg

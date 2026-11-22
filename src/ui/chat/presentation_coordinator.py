@@ -18,6 +18,7 @@ class ChatRenderCommand:
     sample_id: str = ""
     context_snapshot_id: str = ""
     insert_at_start: bool = False
+    delivery_error: str = ""
 
     def clone(self) -> "ChatRenderCommand":
         return ChatRenderCommand(
@@ -30,6 +31,7 @@ class ChatRenderCommand:
             sample_id=self.sample_id,
             context_snapshot_id=self.context_snapshot_id,
             insert_at_start=self.insert_at_start,
+            delivery_error=self.delivery_error,
         )
 
 
@@ -99,6 +101,7 @@ class ChatPresentationCoordinator:
         self._max_stable_messages = max(16, int(max_stable_messages))
         self._stable: OrderedDict[tuple[str, str], _StableLiveMessage] = OrderedDict()
         self._persisted_acks: OrderedDict[tuple[str, str], int] = OrderedDict()
+        self._deleted_messages: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._ephemeral: deque[tuple[int, ChatRenderCommand]] = deque(
             maxlen=max(16, int(max_ephemeral_events))
         )
@@ -116,40 +119,39 @@ class ChatPresentationCoordinator:
         return str(message_id or "").strip()
 
     @staticmethod
-    def _content_components(content: Any) -> tuple[tuple[str, str], ...]:
+    def _content_components(content: Any, role: str) -> tuple[tuple[str, str, str], ...]:
         if isinstance(content, str):
-            return (("text", content.strip()),)
+            return ((role, "text", content.strip()),)
         if isinstance(content, list):
-            visible: list[tuple[str, str]] = []
+            visible: list[tuple[str, str, str]] = []
             for item in content:
                 if not isinstance(item, dict):
-                    visible.append(("value", str(item)))
+                    visible.append((role, "value", str(item)))
                     continue
                 item_type = str(item.get("type") or "")
                 if item_type == "meta":
                     continue
                 if item_type == "text":
-                    visible.append(("text", str(item.get("text") or item.get("content") or "").strip()))
+                    visible.append((role, "text", str(item.get("text") or item.get("content") or "").strip()))
                 elif item_type == "image_url":
                     image_url = item.get("image_url")
                     url = image_url.get("url") if isinstance(image_url, dict) else ""
-                    visible.append(("image_url", str(url or "")))
+                    image_role = str(item.get("display_role") or role).strip().casefold()
+                    visible.append((image_role, "image_url", str(url or "")))
                 else:
-                    visible.append((item_type or "item", repr(sorted(item.items()))))
+                    visible.append((role, item_type or "item", repr(sorted(item.items()))))
             return tuple(visible)
-        return (("value", repr(content)),)
+        return ((role, "value", repr(content)),)
 
     @classmethod
     def _content_signature(cls, role: str, content: Any) -> tuple[Any, ...]:
         role_key = str(role or "").strip().casefold()
-        return (role_key, cls._content_components(content))
+        return (role_key, cls._content_components(content, role_key))
 
     @staticmethod
     def _signature_covers(snapshot_signature: tuple[Any, ...], live_signature: tuple[Any, ...]) -> bool:
         if not snapshot_signature or not live_signature:
             return snapshot_signature == live_signature
-        if snapshot_signature[0] != live_signature[0]:
-            return False
         snapshot_components = Counter(snapshot_signature[1])
         live_components = Counter(live_signature[1])
         return all(snapshot_components[component] >= count for component, count in live_components.items())
@@ -175,7 +177,12 @@ class ChatPresentationCoordinator:
         return bool(self._active_streams)
 
     @classmethod
-    def belongs_to_surface(cls, character_id: str | None, current_character_id: str | None) -> bool:
+    def belongs_to_surface(
+        cls,
+        character_id: str | None,
+        current_character_id: str | None,
+        surface_character_ids: Iterable[str] = (),
+    ) -> bool:
         """Return whether an event belongs to the currently projected chat surface.
 
         Empty ids are intentionally treated as unscoped for compatibility with
@@ -185,6 +192,13 @@ class ChatPresentationCoordinator:
         """
         event_key = cls._character_key(character_id)
         current_key = cls._character_key(current_character_id)
+        surface_keys = {
+            cls._character_key(value)
+            for value in surface_character_ids
+            if cls._character_key(value)
+        }
+        if event_key and surface_keys:
+            return event_key in surface_keys
         return not (event_key and current_key and event_key != current_key)
 
     def record_live(
@@ -192,6 +206,7 @@ class ChatPresentationCoordinator:
         command: ChatRenderCommand,
         *,
         current_character_id: str | None = None,
+        surface_character_ids: Iterable[str] = (),
     ) -> bool:
         """Record a live command and decide whether the active widget should render it.
 
@@ -206,9 +221,15 @@ class ChatPresentationCoordinator:
         message_id = self._message_key(command.message_id)
         if not message_id:
             self._ephemeral.append((revision, command))
-            return self.belongs_to_surface(command.character_id, current_character_id)
+            return self.belongs_to_surface(
+                command.character_id,
+                current_character_id,
+                surface_character_ids,
+            )
 
         key = (self._character_key(command.character_id), message_id)
+        if key in self._deleted_messages:
+            return False
         projected_signatures = self._history_projected.get(key)
         if projected_signatures and self._is_projected(projected_signatures, command):
             return False
@@ -226,7 +247,11 @@ class ChatPresentationCoordinator:
         state.commands.append((revision, command))
         while len(self._stable) > self._max_stable_messages:
             self._stable.popitem(last=False)
-        return self.belongs_to_surface(command.character_id, current_character_id)
+        return self.belongs_to_surface(
+            command.character_id,
+            current_character_id,
+            surface_character_ids,
+        )
 
     def acknowledge_persisted(self, *, message_ids: Iterable[str], character_ids: Iterable[str]) -> None:
         ids = {self._message_key(value) for value in message_ids if self._message_key(value)}
@@ -259,6 +284,64 @@ class ChatPresentationCoordinator:
         while len(self._persisted_acks) > self._max_stable_messages * 2:
             self._persisted_acks.popitem(last=False)
 
+    def mark_failed(
+        self,
+        *,
+        message_id: str,
+        character_id: str,
+        error: str,
+    ) -> bool:
+        """Attach a terminal delivery error to one live user message.
+
+        The state lives beside the replay commands, rather than only on the
+        transient Qt widget, so a history refresh cannot erase the marker.
+        """
+        key = (self._character_key(character_id), self._message_key(message_id))
+        if not key[1]:
+            return False
+        state = self._stable.get(key)
+        if state is None:
+            return False
+        reason = str(error or "").strip()
+        changed = False
+        commands: list[tuple[int, ChatRenderCommand]] = []
+        for revision, command in state.commands:
+            if command.role == "user" and command.delivery_error != reason:
+                command = ChatRenderCommand(
+                    role=command.role,
+                    content=command.content,
+                    character_id=command.character_id,
+                    message_id=command.message_id,
+                    message_time=command.message_time,
+                    structured_data=command.structured_data,
+                    sample_id=command.sample_id,
+                    context_snapshot_id=command.context_snapshot_id,
+                    insert_at_start=command.insert_at_start,
+                    delivery_error=reason,
+                )
+                changed = True
+            commands.append((revision, command))
+        state.commands = commands
+        return changed
+
+    def clear_failed(self, *, message_id: str, character_id: str) -> bool:
+        return self.mark_failed(message_id=message_id, character_id=character_id, error="")
+
+    def is_message_deleted(self, *, message_id: str, character_id: str) -> bool:
+        return (self._character_key(character_id), self._message_key(message_id)) in self._deleted_messages
+
+    def forget_message(self, *, message_id: str, character_id: str) -> None:
+        key = (self._character_key(character_id), self._message_key(message_id))
+        if not key[1]:
+            return
+        self._deleted_messages[key] = None
+        self._deleted_messages.move_to_end(key)
+        while len(self._deleted_messages) > self._max_stable_messages * 2:
+            self._deleted_messages.popitem(last=False)
+        self._stable.pop(key, None)
+        self._persisted_acks.pop(key, None)
+        self._history_projected.pop(key, None)
+
     def begin_history_load(self, character_id: str) -> HistoryLoadTicket:
         ticket = HistoryLoadTicket(
             request_id=uuid.uuid4().hex,
@@ -279,6 +362,7 @@ class ChatPresentationCoordinator:
     def reset(self) -> None:
         self._stable.clear()
         self._persisted_acks.clear()
+        self._deleted_messages.clear()
         self._ephemeral.clear()
         self._history_projected.clear()
         self._active_history_load = None
@@ -399,9 +483,17 @@ class ChatPresentationCoordinator:
         *,
         current_character_id: str | None,
         character_id: str | None = None,
+        surface_character_ids: Iterable[str] = (),
     ) -> bool:
         owner_key = self.stream_character_key(stream_id) or self._character_key(character_id)
         current_key = self._character_key(current_character_id)
+        surface_keys = {
+            self._character_key(value)
+            for value in surface_character_ids
+            if self._character_key(value)
+        }
+        if owner_key and surface_keys:
+            return owner_key in surface_keys
         return not (owner_key and current_key and owner_key != current_key)
 
     def _has_active_stream_for(self, character_key: str) -> bool:

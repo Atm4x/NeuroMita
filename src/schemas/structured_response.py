@@ -37,6 +37,42 @@ except Exception:  # pragma: no cover - schema must import even without logging
 # consumers (Unity, debug dumps) can tell which response contract produced it.
 RESPONSE_PROTOCOL_VERSION = 3
 
+
+def _inline_json_schema_refs(schema: dict) -> dict:
+    """Resolve local JSON Schema definitions into a provider-ready schema."""
+    import copy
+
+    definitions = schema.get("$defs", {})
+
+    def expand(node: Any, active_refs: frozenset[str] = frozenset()) -> Any:
+        if isinstance(node, list):
+            return [expand(item, active_refs) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        result = {}
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref[len("#/$defs/"):]
+            definition = definitions.get(name)
+            if isinstance(definition, dict) and name not in active_refs:
+                result.update(expand(copy.deepcopy(definition), active_refs | {name}))
+            elif isinstance(definition, dict):
+                return {}
+
+        for key, value in node.items():
+            if key in {"$ref", "$defs"}:
+                continue
+            if key.startswith("$"):
+                result[key] = copy.deepcopy(value)
+            elif isinstance(value, (dict, list)):
+                result[key] = expand(value, active_refs)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+
+    return expand(copy.deepcopy(schema))
+
 def _to_gemini_schema(schema: dict) -> dict:
     """
     Convert a Pydantic-generated JSON Schema to a Gemini-compatible responseSchema.
@@ -202,11 +238,20 @@ def _remove_segment_schema_properties(schema: dict, field_names: set[str]) -> No
 class ToolCall(BaseModel):
     """Describes a tool the LLM wants to invoke during its response."""
 
-    name: str = Field(..., description="Exact name of the tool to call, chosen from the available tools list in the prompt")
+    name: str = Field(
+        ...,
+        description=(
+            "Exact name of the Python tool to call, copied from [Available Tools]. "
+            "Tool names are never written into intents or commands."
+        ),
+    )
     # Union allows Gemini to return args as a JSON string (Gemini can't freely use object type)
     args: Union[Dict[str, Any], str] = Field(
         default_factory=dict,
-        description='Tool arguments as key-value pairs, e.g. {"query": "search term"}'
+        description=(
+            'Tool arguments as key-value pairs, e.g. {"id": "wardrobe"}. '
+            "Arguments of a Python tool belong here, never in intents."
+        ),
     )
 
     @model_validator(mode="after")
@@ -224,14 +269,23 @@ class ToolCall(BaseModel):
 class SegmentIntent(BaseModel):
     """A structured intent Unity can consume (inventory, interactions, ...).
 
-    The field is exposed to the model only when the selected DSL main template
-    declares ``support_intents=True`` and a connected Unity runtime can execute
-    it. The parser still accepts and forwards valid intent objects for protocol
-    compatibility.
+    The field is available by default when a connected Unity runtime can execute
+    it. Prompt sets may explicitly disable it; L1 reactions always omit intents.
+    The parser accepts and forwards valid intent objects for protocol compatibility.
+    Python tools are not intents: they belong to tool_call only.
     """
 
-    type: str = Field(..., description="Intent type identifier, e.g. 'inventory.collect'")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Intent payload object")
+    type: str = Field(
+        ...,
+        description=(
+            "Unity intent type identifier, e.g. 'inventory.collect'. Never a Python "
+            "tool name; tools are called through tool_call."
+        ),
+    )
+    payload: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Intent payload object, following [Unity Intent Contract] only",
+    )
 
 
 class ResponseSegment(BaseModel):
@@ -253,6 +307,13 @@ class ResponseSegment(BaseModel):
     # Structured intents forwarded to Unity. Exposed by DSL opt-in and sanitized
     # here so malformed entries are dropped instead of failing the whole reply.
     intents: List[SegmentIntent] = Field(default_factory=list, description="Structured intents (type + payload) forwarded to the game runtime")
+    intents: List[SegmentIntent] = Field(
+        default_factory=list,
+        description=(
+            "Structured Unity intents (type + payload) forwarded to the game runtime. "
+            "Python tools go to tool_call, not here."
+        ),
+    )
 
     start_game: Optional[str] = Field(default=None, description="Game ID to start")
     end_game: Optional[str] = Field(default=None, description="Game ID to end")
@@ -273,7 +334,9 @@ class ResponseSegment(BaseModel):
         """Drop malformed intents before per-item validation.
 
         Rules: ``type`` must be a non-empty string; ``payload`` defaults to an
-        empty dict when missing/invalid. There is no fixed intent-type registry
+        empty dict when missing/invalid. Inventory item operations also accept
+        a string item name, normalized to ``{"object": name}`` for Unity.
+        There is no fixed intent-type registry
         here — any well-formed ``type`` passes through unchanged for the game
         runtime to interpret. Only malformed entries are discarded (with a
         warning) instead of failing the whole response.
@@ -299,10 +362,22 @@ class ResponseSegment(BaseModel):
             if isinstance(payload, str):
                 try:
                     decoded = _json.loads(payload)
-                    payload = decoded if isinstance(decoded, dict) else {}
-                except Exception:
+                except (ValueError, TypeError):
+                    decoded = payload if not payload.lstrip().startswith(("{", "[")) else None
+                if isinstance(decoded, dict):
+                    payload = decoded
+                elif (itype.strip() in {
+                    "inventory.take", "inventory.collect", "inventory.drop",
+                    "inventory.return", "inventory.equip_right", "inventory.equip_left", "inventory.equip_head",
+                } and isinstance(decoded, str) and decoded.strip()):
+                    payload = {"object": decoded.strip()}
+                elif itype.strip() == "load_skill" and isinstance(decoded, str) and decoded.strip():
+                    # Модель просит скил голым id: сохраняем его, чтобы
+                    # инструмент получил аргумент вместо пустого payload.
+                    payload = {"ids": [decoded.strip()]}
+                else:
                     logger.warning(
-                        "[StructuredResponse] Intent '%s' payload is not valid JSON, defaulting to {}",
+                        "[StructuredResponse] Intent '%s' payload is not an object, defaulting to {}",
                         itype,
                     )
                     payload = {}
@@ -318,6 +393,16 @@ class ResponseSegment(BaseModel):
         data = dict(data)
         data["intents"] = cleaned
         return data
+
+
+class WorkingState(BaseModel):
+    """Portable summary of the current interaction, not chain-of-thought."""
+
+    focus: str = Field(default="", description="Current main focus in one short sentence")
+    situation: List[str] = Field(default_factory=list, description="Established current understanding and relevant facts")
+    assumptions: List[str] = Field(default_factory=list, description="Tentative assumptions; do not present them as facts")
+    open_loops: List[str] = Field(default_factory=list, description="Unresolved threads worth returning to")
+    next_steps: List[str] = Field(default_factory=list, description="Immediate likely follow-ups, not a long plan")
 
 
 class StructuredResponse(BaseModel):
@@ -359,30 +444,37 @@ class StructuredResponse(BaseModel):
     boredom_change: float = Field(default=0.0, description="Change in boredom (-6 to 6)")
     stress_change: float = Field(default=0.0, description="Change in stress (-6 to 6)")
 
-    memory_add: Optional[List[str]] = Field(default=None, description="Memories to add. Format: 'priority|content' (priority: low/normal/high/critical). Example: ['high|Player prefers tea', 'normal|Cat name is Barsik']")
-    memory_update: Optional[List[str]] = Field(default=None, description="Memories to update. Format: 'number|priority|content' (priority: low/normal/high/critical). Example: ['4|high|Updated content here']")
-    memory_delete: Optional[List[str]] = Field(default=None, description="Memories to delete. Format: 'number', range 'start-end', or comma-separated 'n1,n2'. Example: ['2', '5-8']")
-    memory_merge: Optional[List[str]] = Field(default=None, description="Merge memories into the first ID. Format: 'id1,id2,...' or 'id1,id2,...:merged content'. All IDs after the first are deleted; first is updated with merged content. Example: ['3,7', '5,9,12:Combined fact text']")
+    memory_add: Optional[List[str]] = Field(default=None, description="Memories to add. Format: 'priority|content' (priority: low/normal/high/critical). Example: [\"high|Player prefers tea\", \"normal|Cat name is Barsik\"]")
+    memory_update: Optional[List[str]] = Field(default=None, description="Memories to update. Format: 'number|priority|content' (priority: low/normal/high/critical). Example: [\"4|high|Updated content here\"]")
+    memory_delete: Optional[List[str]] = Field(default=None, description="Memories to delete. Format: 'number', range 'start-end', or comma-separated 'n1,n2'. Example: [\"2\", \"5-8\"]")
+    memory_merge: Optional[List[str]] = Field(default=None, description="Merge memories into the first ID. Format: 'id1,id2,...' or 'id1,id2,...:merged content'. All IDs after the first are deleted; first is updated with merged content. Example: [\"3,7\", \"5,9,12:Combined fact text\"]")
 
     reminder_add: Optional[List[str]] = Field(
         default=None,
-        description="Reminders to set. Format: 'YYYY-MM-DDTHH:MM:SS|reminder text'. Example: '2026-04-03T15:00:00|Remind player about the meeting'."
+        description="Reminders to set. A JSON array of strings; each item is "
+                    "'YYYY-MM-DDTHH:MM:SS|reminder text'. "
+                    "Example: [\"2026-04-03T15:00:00|Remind player about the meeting\"]."
     )
     reminder_delete: Optional[List[str]] = Field(
         default=None,
-        description="Reminder IDs to delete. Format: 'N' (number). Example: '3'."
+        description="Reminder IDs to delete. A JSON array of strings; each item "
+                    "is a number. Example: [\"3\", \"7\"]."
+    )
+    timer_add: Optional[List[str]] = Field(
+        default=None,
+        description="Autonomous timers. Format: 'delay_seconds|instruction'. After the delay, the instruction starts a new LLM turn. Example: '10|Try generating the answer again'."
     )
 
     entities: Optional[List[str]] = Field(
         default=None,
         description="Notable named entities. Format: 'name:type'. Types: person|place|thing|concept. "
-                    "Example: ['player:person', 'cats:thing']. Fill only when instructed. Omit if not needed."
+                    "Example: [\"player:person\", \"cats:thing\"]. Fill only when instructed. Omit if not needed."
     )
 
     relations: Optional[List[str]] = Field(
         default=None,
         description="Relation triples. Format: 'subject|predicate|object'. "
-                    "Example: ['player|likes|cats', 'mita|is afraid of|darkness']. Fill only when instructed. Omit if not needed."
+                    "Example: [\"player|likes|cats\", \"mita|is afraid of|darkness\"]. Fill only when instructed. Omit if not needed."
     )
 
     tool_call: Optional[ToolCall] = Field(
@@ -401,6 +493,19 @@ class StructuredResponse(BaseModel):
             "Custom character-specific parameters defined by the prompter. "
             "Keys and their meaning are described in the response format instructions."
         )
+    )
+
+    # Keep this after the visible response/actions in the provider schema: it
+    # is a compact handoff for the next turn, not a prerequisite to answering.
+    working_state: Optional[WorkingState] = Field(
+        default=None,
+        description=(
+            "Compact, tentative handoff of the ongoing shared scene, current activity, "
+            "agreements, expectations, assumptions and unfinished threads. "
+            "Do not copy dialogue, long-term memories or chain-of-thought; do not "
+            "treat characters' claims about effects as confirmed Unity world state. "
+            "Omit to retain the previous scene, or send explicit null when it ends. "
+        ),
     )
 
     @model_validator(mode="after")
@@ -449,15 +554,45 @@ class StructuredResponse(BaseModel):
                 }
             }
         """
-        schema = cls.model_json_schema()
+        schema = _inline_json_schema_refs(cls.model_json_schema())
         if custom_params and "properties" in schema and "custom_fields" in schema["properties"]:
-            _type_map = {"float": "number", "double": "number", "int": "integer",
-                         "bool": "boolean", "str": "string", "string": "string"}
-            cf_props = {}
-            for p in custom_params:
-                key = p.get("change_command") or p["name"]
-                cf_props[key] = {"type": _type_map.get(p.get("type", "string"), "string")}
-            schema["properties"]["custom_fields"]["properties"] = cf_props
+            type_map = {"float": "number", "double": "number", "int": "integer",
+                        "bool": "boolean", "str": "string", "string": "string"}
+            custom_schema = schema["properties"]["custom_fields"]
+            custom_object = next(
+                (branch for branch in custom_schema.get("anyOf", [])
+                 if isinstance(branch, dict) and branch.get("type") == "object"),
+                custom_schema,
+            )
+            custom_properties = {}
+            required_custom = []
+            for param in custom_params:
+                if not isinstance(param, dict):
+                    continue
+                key = str(param.get("change_command") or param.get("name") or "").strip()
+                if not key:
+                    continue
+                field_schema = custom_properties.get(key, {})
+                field_schema["type"] = type_map.get(str(param.get("type", "string")).lower(), "string")
+                custom_properties[key] = field_schema
+                if param.get("required", True):
+                    required_custom.append(key)
+            for param in custom_params:
+                if not isinstance(param, dict):
+                    continue
+                key = str(param.get("change_command") or param.get("name") or "").strip()
+                if key not in custom_properties:
+                    continue
+                field_schema = custom_properties[key]
+                if param.get("description"):
+                    field_schema["description"] = str(param["description"])
+                for source, target in (("change_min", "minimum"), ("change_max", "maximum")):
+                    if param.get(source) is not None:
+                        field_schema[target] = param[source]
+            custom_object["properties"] = custom_properties
+            custom_object["additionalProperties"] = False
+            if required_custom:
+                custom_object["required"] = required_custom
         if exclude_fields:
             _remove_schema_properties(schema, exclude_fields)
         if exclude_segment_fields:
@@ -514,7 +649,10 @@ class StructuredResponse(BaseModel):
             tc_props = schema["properties"]["tool_call"]["properties"]
             tc_props["args"] = {
                 "type": "string",
-                "description": 'JSON-encoded tool arguments, e.g. {"query": "search term"}',
+                "description": (
+                    'JSON-encoded tool arguments, e.g. {"id": "wardrobe"}. '
+                    "This field is the only place for Python tool arguments."
+                ),
             }
         except (KeyError, TypeError):
             pass
@@ -529,9 +667,11 @@ class StructuredResponse(BaseModel):
             intent_props["payload"] = {
                 "type": "string",
                 "description": (
-                    "JSON-encoded intent payload object. Its keys and values "
-                    "MUST exactly follow [Unity Intent Contract]. Use {} only "
-                    "when that contract explicitly allows an empty payload."
+                    "JSON-encoded Unity intent payload object. Its keys and "
+                    "values MUST exactly follow [Unity Intent Contract]. "
+                    "Use {} only when that contract explicitly allows an "
+                    "empty payload. Never put a Python tool name or the "
+                    "arguments of a tool here; tools live in tool_call."
                 ),
             }
         except (KeyError, TypeError):

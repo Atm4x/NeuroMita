@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -30,6 +31,17 @@ from core.backends import (
     get_backend_service,
 )
 from core.install_requirements import is_pip_spec_satisfied
+
+
+class MissingBackendLayer(RuntimeError):
+    """An installed overlay has no compatible installed backend family."""
+
+    def __init__(self, family: str, capabilities: Iterable[str]):
+        self.family = family
+        self.capabilities = tuple(sorted(capabilities))
+        super().__init__(
+            f"No installed backend layer satisfies family '{family}': {list(self.capabilities)}"
+        )
 
 
 _LAYOUT_VERSION = 2
@@ -104,6 +116,22 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 def _hash_payload(payload: Any, length: int = 16) -> str:
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:length]
+
+
+def _short_staging_name(kind: str, identity: str, nonce: str) -> str:
+    """Return a compact, collision-resistant staging directory name.
+
+    Staging names are implementation details and do not need to embed the full
+    logical environment/core-layer id.  Keeping them short matters on Windows:
+    large wheels (NumPy/OpenBLAS, Torch, etc.) can otherwise cross the classic
+    Win32 path budget while the final immutable environment would fit.
+    """
+    prefix = "c" if str(kind).lower().startswith("c") else "e"
+    identity_hash = hashlib.sha256(str(identity or "").encode("utf-8")).hexdigest()[:8]
+    nonce_token = re.sub(r"[^a-fA-F0-9]", "", str(nonce or ""))[:8].lower()
+    if len(nonce_token) < 8:
+        nonce_token = hashlib.sha256(str(nonce or "").encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}-{identity_hash}-{nonce_token}"
 
 
 def _python_tag() -> str:
@@ -442,7 +470,7 @@ class EnvironmentTransaction:
     _committed_record: EnvironmentRecord | None = None
 
     def __post_init__(self) -> None:
-        self.staging_root = self.manager.staging_root / f"env-{_safe_environment_id(self.logical_id)}-{self.transaction_id}"
+        self.staging_root = self.manager.staging_root / _short_staging_name("env", self.logical_id, self.transaction_id)
         self.site_packages = self.staging_root / "site-packages"
         self.site_packages.mkdir(parents=True, exist_ok=False)
 
@@ -553,6 +581,8 @@ class EnvironmentTransaction:
             "python": _python_tag(),
             "platform": _platform_tag(),
         }
+        if (meta or {}).get("clean"):
+            revision_payload["rebuild_id"] = self.transaction_id
         revision_id = _hash_payload(revision_payload, length=20)
         final_root = self.manager.overlay_root / _safe_environment_id(self.logical_id) / revision_id
         final_site = final_root / "site-packages"
@@ -838,11 +868,12 @@ class RuntimeEnvironmentManager:
         layers: list[CoreLayerSpec] = []
 
         if required_backend in (BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX):
-            torch_kind = (
-                BackendKind.CUDA
-                if required_backend == BackendKind.CUDA
-                else service.preferred_torch_kind(context)
-            )
+            if required_backend == BackendKind.ONNX:
+                torch_kind = BackendKind.CPU
+            elif required_backend == BackendKind.CUDA:
+                torch_kind = BackendKind.CUDA
+            else:
+                torch_kind = service.preferred_torch_kind(context)
             cpu_capability = f"torch.cpu@{TORCH_VERSION}"
             cuda_capability = f"torch.cuda@{TORCH_VERSION}+cu128"
             if required_backend == BackendKind.CPU:
@@ -976,7 +1007,7 @@ class RuntimeEnvironmentManager:
                 self.register_backend_candidates((existing.layer_id,))
                 return existing
 
-            staging_root = self.staging_root / f"core-{spec.layer_id}-{uuid.uuid4().hex}"
+            staging_root = self.staging_root / _short_staging_name("core", spec.layer_id, uuid.uuid4().hex)
             site_packages = staging_root / "site-packages"
             site_packages.mkdir(parents=True, exist_ok=False)
             installer = installer_factory(str(site_packages))
@@ -1748,10 +1779,7 @@ class RuntimeEnvironmentManager:
                 if self._layer_satisfies(layer, required)
             ]
             if not candidates:
-                raise RuntimeError(
-                    f"No installed backend layer satisfies family '{family}': "
-                    f"{sorted(required)}"
-                )
+                raise MissingBackendLayer(family, required)
             selected_layers.append(self._select_family_layer(family, candidates))
 
         self._warn_distribution_conflicts(selected_records, selected_layers)
@@ -1935,6 +1963,80 @@ class RuntimeEnvironmentManager:
         except OSError:
             pass
 
+    def remove_backend(self, backend: BackendKind | str) -> tuple[str, ...]:
+        kind = get_backend_service().build_requirement(backend).kind
+        if kind not in (BackendKind.CPU, BackendKind.CUDA, BackendKind.ONNX):
+            raise ValueError(f"Unsupported backend removal: {kind}")
+        with self._lock, self.file_lock("core-layer-lifecycle"), self.file_lock("environment-registry"):
+            layers = []
+            for manifest in self.core_root.glob("*/manifest.json"):
+                layer = self.get_core_layer(manifest.parent.name)
+                if layer is None:
+                    continue
+                caps = set(layer.capabilities)
+                matches = (
+                    (kind == BackendKind.ONNX and "onnx.cpu" in caps)
+                    or (kind == BackendKind.CUDA and "torch.cuda" in caps)
+                    or (kind == BackendKind.CPU and "torch.cpu" in caps and "torch.cuda" not in caps)
+                )
+                if matches:
+                    layers.append(layer)
+            removed_ids = {layer.layer_id for layer in layers}
+            records = (*self.active_records(), *self.selected_records())
+            dependents = {
+                record.logical_id for record in records
+                if removed_ids.intersection(record.core_layer_ids)
+            }
+            for layer in layers:
+                if (
+                    layer.root.is_symlink()
+                    or bool(getattr(layer.root.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+                    or layer.root.resolve().parent != self.core_root.resolve()
+                ):
+                    raise RuntimeError(f"Backend path is outside managed bases: {layer.root}")
+            data = self._load_registry()
+            for profile in ("backend_profile", "backend_candidates"):
+                entry = data.get(profile) or {}
+                entry["core_layer_ids"] = [
+                    value for value in entry.get("core_layer_ids", ())
+                    if value not in removed_ids
+                ]
+                data[profile] = entry
+            selection = data.setdefault("runtime_selection", {})
+            for slot, value in tuple(selection.items()):
+                ref = self._selection_ref(value)
+                if ref is not None and ref.logical_id in dependents:
+                    selection.pop(slot, None)
+            moved = []
+            quarantine = self.staging_root / f"removed-backend-{kind.value}-{uuid.uuid4().hex}"
+            try:
+                if layers:
+                    quarantine.mkdir(parents=True)
+                for layer in layers:
+                    destination = quarantine / layer.root.name
+                    layer.root.rename(destination)
+                    moved.append((layer.root, destination))
+                _atomic_json(self.registry_path, data)
+            except Exception:
+                for original, destination in reversed(moved):
+                    destination.rename(original)
+                if quarantine.exists():
+                    quarantine.rmdir()
+                raise
+            if dependents:
+                logger.info("Backend removed; detached AI environments: " + ", ".join(sorted(dependents)))
+            for pending in self.staging_root.glob(f"removed-backend-{kind.value}-*"):
+                if pending.is_symlink() or pending.resolve().parent != self.staging_root.resolve():
+                    raise RuntimeError(f"Backend cleanup path is outside staging: {pending}")
+                try:
+                    shutil.rmtree(pending)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"Бэкенд отключён, но не удалось удалить файлы: {pending}. "
+                        "Закройте использующие его процессы и повторите удаление."
+                    ) from exc
+            return tuple(sorted(removed_ids))
+
     def cleanup_unreferenced_core_layers(self) -> None:
         with self._lock, self.file_lock("core-layer-lifecycle"):
             self._cleanup_unreferenced_core_layers_locked()
@@ -2036,13 +2138,24 @@ class RuntimeEnvironmentManager:
         category: str,
         item_id: str,
         ctx: dict[str, Any] | None = None,
+        require_runtime: bool = True,
     ) -> dict[str, Any]:
         result = dict(ctx or {})
         normalized_category = str(category or "").strip().lower()
         normalized_item = str(item_id or "").strip()
         record = self.active_for(category=normalized_category, item_id=normalized_item)
         if record is not None:
-            paths = self.runtime_paths(record)
+            try:
+                paths = self.runtime_paths(record)
+            except MissingBackendLayer as exc:
+                if require_runtime:
+                    raise
+                paths = (str(record.site_packages),)
+                result["missing_backend"] = {
+                    "family": exc.family,
+                    "capabilities": list(exc.capabilities),
+                    "message": str(exc),
+                }
             result.update(
                 {
                     "target_dir": str(record.site_packages),

@@ -156,7 +156,7 @@ def _pick_full_python_asset(release: dict) -> dict | None:
 def main() -> int:
     _configure_stdio()
     args = _parse_args()
-    releases = fetch_releases(args.repo)
+    releases = fetch_releases(args.repo, github_token=os.environ.get("GH_TOKEN"))
     try:
         releases = _releases_before_tag(releases, args.before_tag)
     except ValueError as exc:

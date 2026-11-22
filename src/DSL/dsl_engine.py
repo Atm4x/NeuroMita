@@ -5,11 +5,13 @@ from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
-import traceback
-from typing import TYPE_CHECKING, List, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 
 from core.safe_eval import SafeEvalError, UnknownNameError, safe_eval_expression
+from managers.lore_timeline import strip_age_before_start
+from .primitives import random
+from main_logger import logger
 
 if TYPE_CHECKING:
     from character import Character
@@ -77,7 +79,7 @@ if not dsl_execution_logger.handlers:
 
     except Exception as e:
         print(f"{RED}CRITICAL: cannot init DSL loggers: {format_exception(e)}{RST}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        logger.exception("Cannot initialize DSL loggers")
 
 class CharacterContextFilter(logging.Filter):
     def __init__(self):
@@ -192,7 +194,10 @@ class DslInterpreter:
         self._context_infos: List[str] = []
 
     def get_prompt_feature(self, name: str, default: Any = None) -> Any:
-        return self._prompt_features.get(str(name or "").strip().lower(), default)
+        normalized_name = str(name or "").strip().lower()
+        if normalized_name == "support_intents" and default is None:
+            default = True
+        return self._prompt_features.get(normalized_name, default)
 
     def get_context_infos(self) -> List[str]:
         """Volatile context blocks collected via ADD_CONTEXT_INFO this build."""
@@ -227,6 +232,7 @@ class DslInterpreter:
             "abs": abs,
             "max": max,
             "min": min,
+            "random": random,
         }
         combined_vars = {
             **self.character.variables,
@@ -589,6 +595,23 @@ class DslInterpreter:
                         returned_value_for_log = returned is not None
                         return (returned or "", sys_msgs)
 
+                    if command == "RETIRE_SEED_MEMORIES":
+                        # A UTF-8, one-fact-per-line migration file in Prompts.
+                        # The resolver enforces the allowed root; the memory manager
+                        # only retires exact matches, never player-written variants.
+                        if not args or not args.strip():
+                            raise DslError("RETIRE_SEED_MEMORIES requires a file path", resolved_script_id, num, raw)
+                        old_file_id = self.resolver.resolve_path(args.strip())
+                        old_text = self.resolver.load_text(old_file_id, "retired lore seeds")
+                        obsolete = [
+                            line.strip() for line in old_text.splitlines()
+                            if line.strip() and not line.lstrip().startswith(("#", "//"))
+                        ]
+                        mem_sys = getattr(self.character, "memory_system", None)
+                        if mem_sys is not None:
+                            mem_sys.retire_seed_memories(obsolete)
+                        continue
+
                     if command in ("SEED_MEMORY", "SEED_RAG_MEMORY"):
                         fmt = f"{command} requires format: {command} priority | content [ENTITIES e1, e2]"
                         if not args or "|" not in args:
@@ -601,6 +624,12 @@ class DslInterpreter:
                             entities_str = args[ent_idx + len(" ENTITIES "):]
                             raw_args = args[:ent_idx]
                             entities = [e.strip() for e in entities_str.split(",") if e.strip()]
+                        try:
+                            raw_args, lore_age_days = strip_age_before_start(raw_args)
+                        except ValueError as exc:
+                            raise DslError(str(exc), resolved_script_id, num, raw) from exc
+                        if command != "SEED_RAG_MEMORY" and lore_age_days is not None:
+                            raise DslError("AGE_BEFORE_START is only supported for SEED_RAG_MEMORY", resolved_script_id, num, raw)
                         if "|" not in raw_args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = raw_args.split("|", 1)
@@ -612,7 +641,10 @@ class DslInterpreter:
                             if command == "SEED_RAG_MEMORY":
                                 # RAG-only: indexed and retrievable, but not part of
                                 # the always-on active memory block.
-                                mem_sys.seed_rag_memory(str(content), priority=priority, entities=ents)
+                                mem_sys.seed_rag_memory(
+                                    str(content), priority=priority, entities=ents,
+                                    lore_age_days=lore_age_days,
+                                )
                             else:
                                 mem_sys.add_memory(
                                     str(content), priority=priority, skip_if_exists=True,
@@ -621,15 +653,19 @@ class DslInterpreter:
                         continue
 
                     if command == "SEED_ISLAND":
-                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content"
+                        fmt = "SEED_ISLAND requires format: SEED_ISLAND type | content [REPLACES_EXACT previous text]"
                         if not args or "|" not in args:
                             raise DslError(fmt, resolved_script_id, num, raw)
                         parts = args.split("|", 1)
                         island_type = parts[0].strip()
-                        content = self._eval_expr(f'f"""{parts[1].strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in parts[1] else parts[1].strip()
+                        text, _, previous = parts[1].partition(" REPLACES_EXACT ")
+                        content = self._eval_expr(f'f"""{text.strip()}"""', resolved_script_id, num, raw, sys_msgs=sys_msgs) if '{' in text else text.strip()
                         mem_sys = getattr(self.character, "memory_system", None)
                         if content and mem_sys and hasattr(mem_sys, "seed_island"):
-                            mem_sys.seed_island(island_type, str(content))
+                            if previous:
+                                mem_sys.seed_island(island_type, str(content), replace_exact=previous.strip())
+                            else:
+                                mem_sys.seed_island(island_type, str(content))
                         continue
 
                     if command == "LINK_ENTITIES":
@@ -639,7 +675,14 @@ class DslInterpreter:
                         entity1, relation, entity2 = parts
                         mem_sys = getattr(self.character, "memory_system", None)
                         rag = getattr(mem_sys, "rag", None) if mem_sys else None
-                        if rag and entity1 and entity2 and relation:
+                        # Граф — часть RAG: без RAG_ENABLED запись сущностей/связей запрещена.
+                        rag_enabled = True
+                        try:
+                            from managers.settings_manager import SettingsManager
+                            rag_enabled = bool(SettingsManager.get("RAG_ENABLED", False))
+                        except Exception:
+                            pass
+                        if rag and rag_enabled and entity1 and entity2 and relation:
                             try:
                                 from managers.rag.graph.graph_store import GraphStore
                                 gs = GraphStore(rag.db, rag.character_id)
@@ -677,11 +720,9 @@ class DslInterpreter:
             print(f"{RED}{format_exception(e)}{RST}", file=sys.stderr)
             return (f"[DSL ERROR IN {os.path.basename(e.script_path or resolved_script_id or rel_script_path)}]", sys_msgs)
         except Exception as e:
-            dsl_execution_logger.error(
+            dsl_execution_logger.exception(
                 f"Unexpected Python error during execution of {rel_script_path} (resolved: {resolved_script_id}): {format_exception(e)}",
-                exc_info=True,
             )
-            print(f"{RED}Unexpected Python error in {rel_script_path}: {format_exception(e)}{RST}\n{traceback.format_exc()}", file=sys.stderr)
             return (f"[PY ERROR IN {os.path.basename(resolved_script_id or rel_script_path)}]", sys_msgs)
         finally:
             dsl_execution_logger.info(
@@ -768,8 +809,7 @@ class DslInterpreter:
                     print(f"{RED}Error processing placeholder {rel_path_placeholder}: {format_exception(de)}{RST}", file=sys.stderr)
                     return f"[DSL ERROR {rel_path_placeholder}]"
                 except Exception as exc:
-                    dsl_execution_logger.error(f"Unexpected Python error processing placeholder {rel_path_placeholder} in {ctx}: {format_exception(exc)}", exc_info=True)
-                    print(f"{RED}Unexpected Python error in placeholder {rel_path_placeholder}: {format_exception(exc)}{RST}\n{traceback.format_exc()}", file=sys.stderr)
+                    dsl_execution_logger.exception(f"Unexpected Python error processing placeholder {rel_path_placeholder} in {ctx}: {format_exception(exc)}")
                     return f"[PY ERROR {rel_path_placeholder}]"
 
             processed_text = self.placeholder_pattern.sub(repl, text)
@@ -844,7 +884,12 @@ class DslInterpreter:
             content = content[1:]
         return content
 
-    def process_main_template(self, rel_path_main_template: str) -> tuple[List[str], List[str]]:
+    def process_main_template(
+        self,
+        rel_path_main_template: str,
+        *,
+        feature_overrides: Optional[Dict[str, Any]] = None,
+    ) -> tuple[List[str], List[str]]:
         blocks: List[str] = []
         sys_msgs: List[str] = []
         resolved_main_template_id: str = ""
@@ -880,6 +925,10 @@ class DslInterpreter:
                 else:
                     self._prompt_features[feature_name.lower()] = low
 
+            self._prompt_features.setdefault("support_intents", True)
+            for feature_name, value in (feature_overrides or {}).items():
+                self._prompt_features[str(feature_name).strip().lower()] = value
+
             # Top-level includes may carry a placement marker: `[<@ path>]` routes
             # the whole file into the volatile active context (next to the request),
             # while a plain `[<path>]` goes into the static, cacheable prompt.
@@ -907,8 +956,7 @@ class DslInterpreter:
             print(f"{RED}{format_exception(e)}{RST}", file=sys.stderr)
             return ([f"[DSL ERROR IN MAIN TEMPLATE {os.path.basename(e.script_path or resolved_main_template_id or rel_path_main_template)}]"], sys_msgs)
         except Exception as e:
-            dsl_execution_logger.error(f"Unexpected Python error processing main template '{rel_path_main_template}' (resolved: {resolved_main_template_id}): {format_exception(e)}", exc_info=True)
-            print(f"{RED}Unexpected Python error in main template {rel_path_main_template}: {format_exception(e)}{RST}\n{traceback.format_exc()}", file=sys.stderr)
+            dsl_execution_logger.exception(f"Unexpected Python error processing main template '{rel_path_main_template}' (resolved: {resolved_main_template_id}): {format_exception(e)}")
             return ([f"[PY ERROR IN MAIN TEMPLATE {os.path.basename(resolved_main_template_id or rel_path_main_template)}]"], sys_msgs)
 
     def process_file(self, rel_file_path: str, sys_msgs: Optional[List[str]] = None) -> tuple[str, List[str]]:
@@ -951,8 +999,7 @@ class DslInterpreter:
             print(f"{RED}{format_exception(e)}{RST}", file=sys.stderr)
             return (f"[DSL ERROR IN FILE {os.path.basename(e.script_path or resolved_file_id or rel_file_path)}]", sys_msgs)
         except Exception as e:
-            dsl_execution_logger.error(f"Unexpected Python error processing individual file '{rel_file_path}' (resolved: {resolved_file_id}): {format_exception(e)}", exc_info=True)
-            print(f"{RED}Unexpected Python error in file {rel_file_path}: {format_exception(e)}{RST}\n{traceback.format_exc()}", file=sys.stderr)
+            dsl_execution_logger.exception(f"Unexpected Python error processing individual file '{rel_file_path}' (resolved: {resolved_file_id}): {format_exception(e)}")
             return (f"[PY ERROR IN FILE {os.path.basename(resolved_file_id or rel_file_path)}]", sys_msgs)
 
     def process_txt(self, rel_txt_path: str, sys_msgs: Optional[List[str]] = None) -> tuple[str, List[str]]:

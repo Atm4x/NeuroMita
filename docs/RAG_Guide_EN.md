@@ -96,6 +96,20 @@ When **Search the knowledge graph during RAG** is enabled:
 | **RAG enabled** | Off | Main switch. When off, the embedding model is not loaded. |
 | **Maximum results** | 8 | Number of best results inserted into the prompt. |
 | **Similarity threshold** | 0.3 | Minimum score for a result to be included. |
+| **RAG embedding timeout, sec.** | 60 | Maximum wait including queue time; 1–3600 seconds. |
+| **RAG reranker timeout, sec. (0 = auto)** | 0 — auto | Automatic calculation based on candidate count, or 1–3600 seconds. |
+
+### Local RAG through ONNX / DirectML
+
+ONNX is an experimental option for local embeddings and reranking. PyTorch is the default; embedding API providers work independently of this choice.
+
+1. In RAG settings, select **Local RAG backend → onnx**.
+2. Select **RAG ONNX device**: `auto` uses DirectML when available, otherwise CPU; `dml` requires DirectML; `cpu` uses the processor.
+3. Use **AI Hub** to install the selected embedding model and the reranker if enabled.
+4. Wait for installation and restart NeuroMita. The first export runs on CPU, needs additional space for an ONNX copy of the weights, and may take several minutes.
+5. For errors, see [RAG troubleshooting](TROUBLESHOOTING_EN.md#rag-memory-or-the-knowledge-graph-does-not-work), including the split mode recommendation.
+
+Compatibility and speed depend on the model and GPU. PyTorch support does not guarantee ONNX support; failures do not automatically switch the model back to PyTorch.
 
 ### Knowledge graph settings
 
@@ -153,14 +167,11 @@ Weights determine which factors matter more when results are ranked. They can be
 
 ## Embedding model
 
-RAG uses **Snowflake Arctic Embed M v2.0** to create vector representations of text. The model:
-
-- runs locally and does not require an API;
-- runs on the CPU and does not require a GPU;
-- downloads automatically on first use;
-- is approximately 110 MB.
+Select the embedding model in RAG settings or a preset. For a local model, install its dependencies and weights through **AI Hub**; available devices depend on the selected backend. For an API provider, configure its access settings in the preset.
 
 Embeddings are created for each history message and memory, then stored in the SQLite database.
+
+For developers: [RAG ONNX backend internals (Russian)](development/rag-onnx.md).
 
 ---
 

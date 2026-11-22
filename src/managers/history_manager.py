@@ -1,16 +1,14 @@
 from core.error_utils import format_exception
 import json
 from concurrent.futures import ThreadPoolExecutor
-import logging
 import os
 import datetime
 import base64
 import re
-import uuid
 import hashlib
 import time
 from threading import Lock
-from typing import Any, Optional, ClassVar
+from typing import Any, Optional, ClassVar, Iterable
 
 from main_logger import logger
 from core.message_content import MessageContentCodec
@@ -75,10 +73,10 @@ class HistoryManager(CharacterScopedService):
         "meta_data",
     )
 
-    def __init__(self, character_name: str = "", history_file_name: str = "", character_id: str | None = None):
+    def __init__(self, storage_name: str = "", history_file_name: str = "", character_id: str | None = None):
         super().__init__(
-            default_character_id=str(character_id or character_name or ""),
-            default_character_name=str(character_name or character_id or ""),
+            default_character_id=str(character_id or storage_name or ""),
+            default_storage_name=str(storage_name or character_id or ""),
         )
         self.db = DatabaseManager()
 
@@ -220,7 +218,8 @@ class HistoryManager(CharacterScopedService):
                 )
 
         try:
-            self._get_embed_executor().submit(_bulk_embed_job)
+            from core.state_barrier import bind_state_job
+            self._get_embed_executor().submit(bind_state_job(_bulk_embed_job))
         except Exception as e:
             logger.warning(
                 f"[HistoryManager] Failed to schedule embeddings batch (ignored): {format_exception(e)}",
@@ -279,7 +278,7 @@ class HistoryManager(CharacterScopedService):
                 ext = "jpg"
 
             histories_dir = os.environ.get("NEUROMITA_HISTORIES_DIR", os.path.join(os.getcwd(), "Histories"))
-            save_dir = os.path.join(histories_dir, self.character_name, "Images")
+            save_dir = os.path.join(histories_dir, self.storage_name, "Images")
             os.makedirs(save_dir, exist_ok=True)
 
             # ВАЖНО: убираем пробелы/переводы строк (иногда встречаются)
@@ -705,11 +704,15 @@ class HistoryManager(CharacterScopedService):
 
         cols: list[str] = []
         vals: list[Any] = []
+        # Diagnostic model output can be retained for inspection while staying
+        # outside the active conversation and RAG from the moment it is saved.
+        is_deleted = bool(msg.get("_history_is_deleted", False))
+        effective_is_active = 0 if is_deleted else int(is_active)
         cols.extend(["character_id", "role", "content", "is_active", "meta_data", "timestamp"])
-        vals.extend([self.storage_key, msg.get("role"), db_content, int(is_active), db_meta, ts])
+        vals.extend([self.storage_key, msg.get("role"), db_content, effective_is_active, db_meta, ts])
         if "is_deleted" in self._history_cols:
             cols.append("is_deleted")
-            vals.append(0)
+            vals.append(int(is_deleted))
 
         for k in self._HISTORY_DESIRED_COLUMNS.keys():
             if k in self._history_cols and k not in cols:
@@ -899,11 +902,16 @@ class HistoryManager(CharacterScopedService):
                 )
                 if existing is not None:
                     existing_id, existing_active = existing
-                    desired_active = int(is_active)
-                    if existing_active != desired_active:
+                    is_deleted = bool(msg.get("_history_is_deleted", False))
+                    desired_active = 0 if is_deleted else int(is_active)
+                    if existing_active != desired_active or is_deleted:
+                        assignments = "is_active = ?"
+                        values: list[Any] = [desired_active]
+                        if is_deleted and "is_deleted" in self._history_cols:
+                            assignments += ", is_deleted = 1"
                         cursor.execute(
-                            "UPDATE history SET is_active = ? WHERE id = ?",
-                            (desired_active, existing_id),
+                            f"UPDATE history SET {assignments} WHERE id = ?",
+                            (*values, existing_id),
                         )
                     return existing_id
             except Exception:
@@ -928,13 +936,24 @@ class HistoryManager(CharacterScopedService):
             msg.get("content"),
             extra_meta,
         )
-        cursor.execute(
-            """
-            INSERT INTO history (character_id, role, content, is_active, meta_data, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (self.storage_key, msg.get("role"), db_content, int(is_active), db_meta, ts),
-        )
+        is_deleted = bool(msg.get("_history_is_deleted", False))
+        effective_is_active = 0 if is_deleted else int(is_active)
+        if "is_deleted" in self._history_cols:
+            cursor.execute(
+                """
+                INSERT INTO history (character_id, role, content, is_active, meta_data, timestamp, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (self.storage_key, msg.get("role"), db_content, effective_is_active, db_meta, ts, int(is_deleted)),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO history (character_id, role, content, is_active, meta_data, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (self.storage_key, msg.get("role"), db_content, effective_is_active, db_meta, ts),
+            )
         row_id = cursor.lastrowid
         return int(row_id) if row_id else None
 
@@ -1039,6 +1058,29 @@ class HistoryManager(CharacterScopedService):
     # ---------------------------------------------------------------------
     # Public API
     # ---------------------------------------------------------------------
+    def load_variables(self, keys: Iterable[str] | None = None) -> dict[str, Any]:
+        """Read persisted variables without loading conversation history."""
+        names = tuple(dict.fromkeys(str(key) for key in keys)) if keys is not None else None
+        if names == ():
+            return {}
+        conn = self.db.get_connection()
+        try:
+            placeholders = ",".join("?" for _ in names) if names is not None else ""
+            selected = f" AND key IN ({placeholders})" if names is not None else ""
+            rows = conn.execute(
+                f"SELECT key, value FROM variables WHERE character_id = ?{selected}",
+                (self.storage_key, *(names or ())),
+            ).fetchall()
+            values = {}
+            for key, value in rows:
+                try:
+                    values[key] = json.loads(value)
+                except (TypeError, ValueError):
+                    values[key] = value
+            return values
+        finally:
+            conn.close()
+
     def load_history(self):
         conn = self.db.get_connection()
         try:
@@ -1070,6 +1112,63 @@ class HistoryManager(CharacterScopedService):
             except Exception:
                 pass
 
+        messages = self._decode_history_rows(rows, select_cols)
+        return {
+            "fixed_parts": [],
+            "messages": messages,
+            "temp_context": [],
+            "variables": variables,
+        }
+
+    def with_presentation_metadata(self, messages: Iterable[dict]) -> list[dict]:
+        """Attach UI-only provenance without letting cache rows define facts.
+
+        The timeline owns the conversation itself, but reasoning and request
+        provenance are presentation data. A bubble rendered from the timeline
+        must keep its exact request snapshot id, otherwise the context viewer
+        can only fall back to the global last request.
+        """
+        result = [dict(message) for message in messages]
+        identities = list(dict.fromkeys(
+            str(message["message_id"]) for message in result if message.get("message_id")
+        ))
+        columns = ["id", "role", "content", "meta_data", "message_id"]
+        if "thinking" in self._history_cols:
+            columns.append("thinking")
+        stored: dict[str, dict] = {}
+        with self.db.connection() as conn:
+            for start in range(0, len(identities), 400):
+                batch = identities[start:start + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT {', '.join(columns)} FROM history "
+                    f"WHERE character_id=? AND message_id IN ({placeholders}) "
+                    "ORDER BY id",
+                    (self.storage_key, *batch),
+                ).fetchall()
+                for record in self._decode_history_rows(rows, columns):
+                    stored[str(record["message_id"])] = record
+        provenance_keys = ("thinking", "sample_id", "context_snapshot_id")
+        for message in result:
+            cached = stored.get(str(message.get("message_id") or ""))
+            if not cached or cached.get("content") != message.get("content"):
+                continue
+            for key in provenance_keys:
+                if cached.get(key) and not message.get(key):
+                    message[key] = cached[key]
+        return result
+
+    def export_timeline_history(self) -> list[dict]:
+        """Read every retained fact, including archived rows, for the timeline import."""
+        columns = self._history_select_columns()
+        with self.db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(columns)} FROM history WHERE character_id=? "
+                f"{self._history_not_deleted_clause()} ORDER BY id", (self.storage_key,),
+            ).fetchall()
+        return self._decode_history_rows(rows, columns)
+
+    def _decode_history_rows(self, rows, select_cols: list[str]) -> list[dict]:
         messages: list[dict] = []
         for row in rows:
             rd = dict(zip(select_cols, row))
@@ -1090,12 +1189,7 @@ class HistoryManager(CharacterScopedService):
             msg = self._normalize_loaded_message(msg)
             messages.append(msg)
 
-        return {
-            "fixed_parts": [],
-            "messages": messages,
-            "temp_context": [],
-            "variables": variables,
-        }
+        return messages
 
     def save_history(self, data):
         messages = [msg for msg in (data.get("messages", []) or []) if isinstance(msg, dict)]
@@ -1190,7 +1284,7 @@ class HistoryManager(CharacterScopedService):
                 except Exception:
                     pass
                 logger.error(f"DB Error saving history atomically: {format_exception(e)}", exc_info=True)
-                return
+                raise HistoryBatchWriteError("Failed to save history snapshot") from e
             finally:
                 try:
                     conn.close()
@@ -1203,7 +1297,6 @@ class HistoryManager(CharacterScopedService):
         """Экспортирует текущую активную историю в JSON-файл (бекап/снапшот).
         Сохраняет в Histories/{storage_key}/Saved/chat_history_{timestamp}.json.
         Возвращает путь к файлу или '' при ошибке."""
-        import shutil
         histories_dir = os.environ.get("NEUROMITA_HISTORIES_DIR", os.path.join(os.getcwd(), "Histories"))
         save_dir = os.path.join(histories_dir, self.storage_key, "Saved")
         os.makedirs(save_dir, exist_ok=True)
@@ -1269,6 +1362,8 @@ class HistoryManager(CharacterScopedService):
 
         pending_embeddings: list[tuple[int, str]] = []
         for row_id, msg in committed:
+            if bool(msg.get("_history_is_deleted", False)):
+                continue
             content_text = self._extract_text_for_embedding(msg.get("content"))
             if content_text:
                 pending_embeddings.append((row_id, str(content_text)))
@@ -1279,6 +1374,32 @@ class HistoryManager(CharacterScopedService):
         row_id = self._insert_history_row(msg=message, is_active=1)
         self._schedule_message_embedding(row_id, message)
         return row_id
+
+    def replace_timeline_cache(self, messages: list[dict]) -> None:
+        """Rebuild disposable SQL/RAG rows from one authoritative branch projection."""
+        if not self._history_cols:
+            self._refresh_history_columns()
+        committed = []
+        with self._write_lock:
+            messages = self.with_presentation_metadata(messages)
+            connection = self.db.get_connection()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("UPDATE history SET is_active=0, is_deleted=1, embedding=NULL WHERE character_id=?",
+                                   (self.storage_key,))
+                cursor = connection.cursor()
+                for message in messages:
+                    row_id = self._insert_history_row_tx(cursor, msg=message, is_active=1, dedupe=False)
+                    text = self._extract_text_for_embedding(message.get("content"))
+                    if row_id and text:
+                        committed.append((row_id, text))
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        self._schedule_history_embeddings(committed)
 
     def update_variable(self, key, value):
         conn = self.db.get_connection()
@@ -1334,6 +1455,29 @@ class HistoryManager(CharacterScopedService):
             cursor.execute(
                 f"DELETE FROM variables WHERE character_id = ? AND key IN ({placeholders})",
                 (self.storage_key, *keys),
+            )
+            deleted = cursor.rowcount or 0
+            conn.commit()
+            return deleted
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def clear_variables(self) -> int:
+        """Удаляет все сохранённые переменные персонажа.
+
+        Нужен для полного сброса неразрешённых (не загруженных в память)
+        персонажей: одного clear_history() недостаточно, иначе их переменные
+        переживают сброс и воскресают при следующей загрузке.
+        """
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM variables WHERE character_id = ?",
+                (self.storage_key,),
             )
             deleted = cursor.rowcount or 0
             conn.commit()

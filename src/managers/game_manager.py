@@ -2,10 +2,14 @@ from typing import Dict, Any, Optional, Type
 from main_logger import logger
 from modules.available_games import get_available_games
 from modules.game_interface import GameInterface
-from core.events import Events
-from core.request_policy import resolve_policy
-from core.services import use
+from core.chat_api import ChatAPI
+from core.services import services, use
+from domain.timeline import EventKind, new_id
+from services.timeline_runtime import SessionTimelineRuntime
+from threading import RLock
+from contextlib import nullcontext
 from services.contracts import GameLinkService, SettingsService
+from managers.mini_game_session_registry import mini_game_sessions
 
 
 class GameManager:
@@ -14,6 +18,8 @@ class GameManager:
         self.character = character
         self.active_game: Optional[GameInterface] = None
         self.available_games: Dict[str, Type[GameInterface]] = get_available_games()
+        self._timeline_lock = RLock()
+        self._last_start_event_id = None
 
     def _parse_id_string(self, id_str: str) -> tuple[str, Dict[str, Any]]:
         parts = id_str.split('/')
@@ -70,6 +76,11 @@ class GameManager:
         return True
 
     def start_game(self, full_id_str: str) -> bool:
+        runtime = services().get_optional(SessionTimelineRuntime)
+        with (runtime.writing() if runtime is not None else nullcontext()), self._timeline_lock:
+            return self._start_game(full_id_str)
+
+    def _start_game(self, full_id_str: str) -> bool:
         if self.active_game:
             logger.warning(f"[{self.character.char_id}] Игра уже активна. Остановка перед запуском новой.")
             self.active_game.stop(params={})
@@ -87,9 +98,48 @@ class GameManager:
             return False
 
         logger.info(f"[{self.character.char_id}] Запуск игры '{game_name}' с параметрами: {params}")
-        self.active_game = game_class(self.character, game_name)
-        self.active_game.start(params)
+        game = game_class(self.character, game_name, host=self)
+        runtime = services().get_optional(SessionTimelineRuntime)
+        game.timeline_selection = runtime.selection if runtime is not None else None
+        self.active_game = game
+        game.start(params)
+        if self.active_game is not game:
+            mini_game_sessions().stop(self.character.char_id, game_name)
+            return False
+        get_variable = getattr(self.character, "get_variable", None)
+        if callable(get_variable) and not get_variable("playingGame", False):
+            mini_game_sessions().stop(self.character.char_id, game_name)
+            if self.active_game is game:
+                self.active_game = None
+            return False
+        mini_game_sessions().start(
+            owner_character_id=self.character.char_id,
+            owner_name=str(
+                getattr(self.character, "display_name", "")
+                or getattr(self.character, "name", "")
+                or self.character.char_id
+            ),
+            game_id=game_name,
+        )
+        self._last_start_event_id = self.publish_event(game, "GameStarted", {"parameters": params})
         return True
+
+    def publish_event(self, game: GameInterface, name: str, payload: Dict[str, Any]) -> str | None:
+        runtime = services().get_optional(SessionTimelineRuntime)
+        if runtime is None:
+            return None
+        with runtime.writing() as timeline, self._timeline_lock:
+            if game.timeline_selection != runtime.selection:
+                return None
+            kind = (EventKind.GAME_STARTED if name == "GameStarted" else
+                    EventKind.GAME_ENDED if name in {"GameEnded", "player_game_over", "player_game_closed", "game_closed"}
+                    else EventKind.GAME_ACTION)
+            event = timeline.publish(kind, {
+                "game_id": game.game_id, "instance_id": game.instance_id,
+                "name": name, "data": {key: value for key, value in payload.items() if key != "semantic_id"},
+            }, actor_id=self.character.char_id, observers=(self.character.char_id,),
+                key=f"game:{game.instance_id}:{payload.get('semantic_id') or new_id()}")
+            return event.event_id
 
     def start_game_from_player(self, full_id_str: str) -> bool:
         """Start a game from the desktop UI and optionally invite a Mita reaction.
@@ -105,21 +155,13 @@ class GameManager:
         return started
 
     def _request_manual_start_reaction(self, game_name: str) -> None:
-        """Emit a visible L2 reaction when game requests and reactions allow it."""
+        """Request a visible reaction to a desktop-started mini-game."""
         try:
-            settings = use(SettingsService)
-            # The desktop launch should observe the same mute switch as game
-            # events.  A manual game may still open while requests are muted;
-            # it simply does not generate a Mita response.
-            if bool(settings.get("IGNORE_GAME_REQUESTS", False)):
-                return
-            if not bool(settings.get("REACT_ENABLED", True)):
-                return
-            if not bool(settings.get("REACT_L2_ENABLED", True)):
+            if bool(use(SettingsService).get("IGNORE_GAME_REQUESTS", False)):
                 return
         except Exception as exc:
             logger.debug(
-                f"[{self.character.char_id}] Не удалось проверить настройки реакции на запуск игры: {exc}"
+                f"[{self.character.char_id}] Не удалось проверить настройки запуска игры: {exc}"
             )
             return
 
@@ -128,23 +170,45 @@ class GameManager:
             "seabattle": "Sea Battle",
         }
         game_label = game_labels.get(game_name, game_name or "a mini-game")
-        policy = resolve_policy(model_event_type="react", react_level=2)
-        self.character.event_bus.emit(
-            Events.Chat.SEND_MESSAGE,
-            {
-                "user_input": "",
-                "system_input": (
-                    "[Desktop mini-game] The player manually started "
-                    f"{game_label} with you. The game window is already open. "
-                    "React briefly and naturally in character to the invitation. "
-                    "Do not start or end a game in this reply."
-                ),
-                "event_type": "react",
-                "character_id": self.character.char_id,
-                "sender": "Player",
-                "participants": [],
-                "policy": policy.to_dict(),
-            },
+        ChatAPI.react(
+            character_id=self.character.char_id,
+            instruction=(
+                "[Desktop mini-game] The player manually started "
+                f"{game_label} with you. The game window is already open. "
+                "React briefly and naturally in character to the invitation. "
+                "Do not start or end a game in this reply."
+            ),
+            visible=True,
+            sender="Player",
+            **({"event_id": self._last_start_event_id} if self._last_start_event_id else {}),
+        )
+
+    def request_character_reaction(
+        self,
+        game: GameInterface,
+        instruction: str,
+        *,
+        visible: bool = True,
+        event_id: str | None = None,
+    ) -> bool:
+        """Application boundary used by a concrete mini-game to request chat activity."""
+        if self.active_game is not game:
+            logger.debug(
+                f"[{self.character.char_id}] Игнорируется реакция от неактивной игры "
+                f"'{getattr(game, 'game_id', 'unknown')}'."
+            )
+            return False
+        runtime = services().get_optional(SessionTimelineRuntime)
+        if runtime is not None and game.timeline_selection != runtime.selection:
+            return False
+        if runtime is not None and event_id is None:
+            event_id = self.publish_event(game, "GameActivity", {"description": str(instruction or "")})
+        return ChatAPI.react(
+            character_id=self.character.char_id,
+            instruction=str(instruction or ""),
+            visible=visible,
+            sender="Player",
+            **({"event_id": event_id} if event_id else {}),
         )
 
     def stop_game(self, full_id_str: str):
@@ -160,6 +224,7 @@ class GameManager:
             )
 
         logger.info(f"[{self.character.char_id}] Остановка игры '{self.active_game.game_id}' с параметрами: {params}")
+        self.publish_event(self.active_game, "GameEnded", {"reason": "stopped", "parameters": params})
         self.active_game.stop(params)
         self.active_game = None
 
@@ -174,5 +239,29 @@ class GameManager:
 
     def get_active_game_state_prompt(self) -> Optional[str]:
         if self.active_game:
+            runtime = services().get_optional(SessionTimelineRuntime)
+            if runtime is not None and self.active_game.timeline_selection != runtime.selection:
+                return None
             return self.active_game.get_state_prompt()
         return None
+
+    def restore_paused_snapshot(self, snapshot, *, selection):
+        """Replace a paused process without publishing new gameplay or lifecycle facts."""
+        current = self.active_game
+        if snapshot is None:
+            if current is not None:
+                current.cleanup()
+                self.active_game = None
+            return
+        if current is None or current.game_id != snapshot["game_id"] or not current.process_alive:
+            if current is not None:
+                current.cleanup()
+            current = self.available_games[snapshot["game_id"]](self.character, snapshot["game_id"], host=self)
+            self.active_game = current
+            current.timeline_selection = selection
+            saved = snapshot["state"]
+            current.start({"snapshot": saved, "is_auto": saved.get("is_auto", False),
+                           "is_cheat": saved.get("is_cheat", False), "player_is_white": saved.get("player_is_white", True)})
+            current.pause_for_snapshot()
+        current.apply_paused_snapshot(snapshot["state"])
+        current.instance_id = snapshot["instance_id"]

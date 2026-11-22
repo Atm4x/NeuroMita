@@ -1,0 +1,15 @@
+
+// StagesExperimental keeps one continuous identity across the graph. The
+// current stage modulates strategy, not the whole character. The one-shot
+// secret-reveal event stays here; old-level prompt switching is intentionally
+// not used in this set.
+IF secretExposed THEN
+    LOG "secretExposed"
+    IF secretExposedFirst == False THEN
+        LOG "secretExposedFirst"
+        SET secretExposedFirst = True
+        ADD_SYSTEM_INFO LOAD "Events/SecretExposed.txt"
+    ENDIF
+ENDIF
+
+RETURN LOAD "Main/mainStageBase.txt"

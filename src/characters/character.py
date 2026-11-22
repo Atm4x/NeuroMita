@@ -1,10 +1,12 @@
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 import datetime
 import re
 import os
 import threading
 from typing import Dict, List, Any, Optional
 import json
+from copy import deepcopy
 
 from DSL.path_resolver import LocalPathResolver
 from DSL.post_dsl_engine import PostDslInterpreter
@@ -17,6 +19,7 @@ from domain.dialogue_identity import DialogueActorKind
 from services.contracts import AppVarsService, HistoryService, SettingsService
 
 from managers.game_manager import GameManager
+from core.state_barrier import state_operation
 from managers.memory_manager import is_island
 from schemas.structured_response import StructuredResponse
 
@@ -57,6 +60,9 @@ def _evaluate_custom_param_formula(
 
 
 class Character:
+    DISPLAY_NAME = "Character"
+    STORAGE_NAME = "Character"
+
     dialogue_actor_kind = DialogueActorKind.CHARACTER
     BASE_DEFAULTS: Dict[str, Any] = {
         "attitude": 60.0,
@@ -71,14 +77,19 @@ class Character:
         "LongMemoryRememberCount": 0,
         "player_name": "Игрок",
         "player_name_known": False,
+        # "unmet" — в текущей истории ещё не было состоявшегося обмена
+        # репликами; "acquainted" — игрок уже представлен этой Мите. Это факт
+        # знакомства, а не шкала симпатии и не замена attitude.
+        "relationship_context_phase": "unmet",
     }
 
     def __init__(
         self,
         char_id: str,
-        name: str,
+        display_name: str,
         silero_command: str,
         short_name: str,
+        storage_name: str | None = None,
         miku_tts_name: str = "Player",
         silero_turn_off_video: bool = False,
         initial_vars_override: Dict[str, Any] | None = None,
@@ -87,7 +98,8 @@ class Character:
         self.event_bus = get_event_bus()
 
         self.char_id = char_id
-        self.name = name
+        self.display_name = str(display_name or char_id)
+        self.storage_name = str(storage_name or char_id)
 
         self.silero_command = silero_command
         self.silero_turn_off_video = silero_turn_off_video
@@ -143,7 +155,7 @@ class Character:
         logger.info(
             "\n\nCharacter '%s' (%s) initialized. Prompt set: %s. Base path: %s. Initial effective vars: %s\n\n",
             self.char_id,
-            self.name,
+            self.display_name,
             self.prompt_set_name,
             self.base_data_path,
             ", ".join(
@@ -175,10 +187,20 @@ class Character:
         self.set_variable("playingGame", False)
         self.set_variable("game_id", None)
         self.game_manager = GameManager(self)
+        self._initial_session_variables = deepcopy(self.variables)
+
+    @state_operation
+    def restore_session_runtime(self, variables: dict, app_vars: dict, *, initialize_defaults: bool = False):
+        initial = deepcopy(self._initial_session_variables) if initialize_defaults else {}
+        initial.update(deepcopy(variables))
+        self.variables = initial
+        self.app_vars = deepcopy(app_vars)
+        self._dirty_vars.clear()
+        self.history_epoch += 1
 
     def bind_resource_manager(self, manager) -> None:
         self._resource_manager = manager
-        manager.register_character(self.char_id, self.name, self.base_data_path)
+        manager.register_character(self.char_id, self.storage_name, self.base_data_path)
 
     def _resources(self):
         manager = self._resource_manager
@@ -191,16 +213,33 @@ class Character:
 
     @property
     def history_manager(self):
-        return self._resources().history_for(self.char_id, self.name)
+        return self._resources().history_for(self.char_id, self.storage_name)
 
     @property
     def memory_system(self):
-        return self._resources().memory_for(self.char_id, self.name)
+        return self._resources().memory_for(self.char_id, self.storage_name)
 
     @property
     def reminder_system(self):
-        return self._resources().reminders_for(self.char_id, self.name)
+        return self._resources().reminders_for(self.char_id, self.storage_name)
 
+    @property
+    def working_state(self):
+        return self._resources().working_state_for(self.char_id, self.storage_name)
+
+    @property
+    def skills(self):
+        return self._resources().loaded_skills_for(self.char_id, self.storage_name)
+
+    @property
+    def action_receipts(self):
+        return self._resources().action_receipts_for(self.char_id, self.storage_name)
+
+    @property
+    def skill_catalogs(self):
+        return self._resources().skill_catalogs_for(self.char_id, self.storage_name)
+
+    @state_operation(wait=True)
     def ensure_runtime_loaded(self) -> None:
         if self._runtime_loaded:
             return
@@ -252,6 +291,7 @@ class Character:
     def get_variable(self, name: str, default: Any = None) -> Any:
         return self.variables.get(name, default)
 
+    @state_operation
     def set_variable(self, name: str, value: Any):
         if isinstance(value, str):
             val_lower = value.lower()
@@ -276,6 +316,7 @@ class Character:
         self.variables[name] = value
         self._dirty_vars.add(name)
 
+    @state_operation
     def flush_variables(self):
         """Batch-write all dirty variables to DB in a single transaction."""
         if not self._dirty_vars:
@@ -675,8 +716,8 @@ class Character:
             else:
                 priority, content = None, "|".join(parts[1:])
             try:
-                self.memory_system.update_memory(number=number, priority=priority, content=content)
-                logger.info(f"[{self.char_id}] Structured: updated memory #{number}")
+                if self.memory_system.update_memory(number=number, priority=priority, content=content):
+                    logger.info(f"[{self.char_id}] Structured: updated memory #{number}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error updating memory #{number}: {format_exception(e)}")
 
@@ -702,7 +743,7 @@ class Character:
                             self.memory_system.delete_memory(n, save_as_missed)
                 elif delete_str.isdigit():
                     self.memory_system.delete_memory(int(delete_str), save_as_missed)
-                logger.info(f"[{self.char_id}] Structured: deleted memory(ies): {delete_str}")
+                logger.info(f"[{self.char_id}] Structured: processed memory_delete: {delete_str}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error deleting memory '{delete_str}': {format_exception(e)}")
 
@@ -715,8 +756,13 @@ class Character:
                 logger.warning(f"[{self.char_id}] Structured: memory_merge bad format: {merge_str!r}")
                 continue
             tgt_id = int(id_strs[0])
-            src_ids = [int(s) for s in id_strs[1:]]
+            src_ids = list(dict.fromkeys(int(s) for s in id_strs[1:] if int(s) != tgt_id))
+            if not src_ids:
+                continue
             try:
+                if self.memory_system.has_seed_lore([tgt_id, *src_ids]):
+                    logger.info(f"[{self.char_id}] Structured: merge rejected for read-only lore")
+                    continue
                 if not merged_content.strip():
                     parts = [self.memory_system.get_memory_content(tgt_id) or ""]
                     for sid in src_ids:
@@ -735,7 +781,7 @@ class Character:
                 logger.error(f"[{self.char_id}] Structured: error merging {src_ids}→#{tgt_id}: {format_exception(e)}")
 
     def _apply_structured_reminder_ops(self, structured: StructuredResponse):
-        """Apply reminder add/delete operations from a StructuredResponse."""
+        """Apply persisted reminders and autonomous timers from structured output."""
         for entry in (structured.reminder_add or []):
             entry = (entry or "").strip()
             if not entry:
@@ -749,6 +795,19 @@ class Character:
                 logger.info(f"[{self.char_id}] Structured: added reminder due={due_iso.strip()}: {text.strip()[:50]}")
             except Exception as e:
                 logger.error(f"[{self.char_id}] Structured: error adding reminder: {format_exception(e)}")
+
+        for entry in (structured.timer_add or []):
+            entry = (entry or "").strip()
+            if "|" not in entry:
+                if entry:
+                    logger.warning(f"[{self.char_id}] Structured: timer_add bad format (missing '|'): {entry!r}")
+                continue
+            delay_text, instruction = entry.split("|", 1)
+            try:
+                self.reminder_system.add_timer(instruction.strip(), float(delay_text.strip()))
+                logger.info(f"[{self.char_id}] Structured: added timer after {delay_text.strip()} sec: {instruction.strip()[:50]}")
+            except Exception as e:
+                logger.error(f"[{self.char_id}] Structured: error adding timer: {format_exception(e)}")
 
         for delete_str in (structured.reminder_delete or []):
             delete_str = (delete_str or "").strip()
@@ -1001,6 +1060,7 @@ class Character:
             memory_pattern, memory_processor, response, flags=re.DOTALL
         ).strip()
 
+    @state_operation
     def reload_character_data(self):
         logger.info(
             f"[{self.char_id}] Reloading character data from disk (config + history)."
@@ -1048,6 +1108,7 @@ class Character:
 
     # region History
 
+    @state_operation
     def load_history(self):
         """Loads variables from history into self.variables.
         This is called after defaults and overrides are set during __init__.
@@ -1066,15 +1127,118 @@ class Character:
             logger.info(
                 f"[{self.char_id}] No variables found in history, using composed initial values."
             )
+
+        if "relationship_context_phase" not in (loaded_vars or {}):
+            migrated_phase = self._relationship_phase_after_load(
+                loaded_vars,
+                has_history=bool(data.get("messages")),
+                has_memory=self._story_has_memories(),
+            )
+            if migrated_phase:
+                self.set_variable("relationship_context_phase", migrated_phase)
+                logger.info(
+                    f"[{self.char_id}] relationship_context_phase migrated to "
+                    f"'{migrated_phase}' from existing history/memory."
+                )
         return data
+
+    @staticmethod
+    def _relationship_phase_after_load(
+        loaded_vars: Dict[str, Any],
+        *,
+        has_history: bool,
+        has_memory: bool,
+    ) -> Optional[str]:
+        """Фаза знакомства для баз, созданных до появления маркера.
+
+        Отсутствие ключа в БД означает старую базу: если в ней уже есть
+        история или память, игрок и Мита давно знакомы. Свежая база остаётся
+        в "unmet".
+        """
+        if "relationship_context_phase" in (loaded_vars or {}):
+            return None
+        return "acquainted" if (has_history or has_memory) else None
+
+    def _story_has_memories(self) -> bool:
+        try:
+            return bool(self.memory_system.has_active_memories())
+        except Exception:
+            return False
+
+    _ENCOUNTER_EVENT_TYPES = frozenset({"chat", "answer"})
+
+    @staticmethod
+    def _message_has_visible_text(message: Dict[str, Any]) -> bool:
+        content = message.get("content")
+        if isinstance(content, str):
+            return bool(content.strip())
+        if isinstance(content, list):
+            return any(
+                isinstance(part, dict)
+                and str(part.get("type") or "") == "text"
+                and str(part.get("text") or "").strip()
+                for part in content
+            )
+        return False
+
+    def _history_has_player_message(self) -> bool:
+        messages = (self.history_manager.load_history() or {}).get("messages") or []
+        return any(
+            isinstance(message, dict)
+            and str(message.get("role") or "") == "user"
+            and self._message_has_visible_text(message)
+            for message in messages[-40:]
+        )
+
+    def _maybe_mark_encounter(self, messages: List[Dict[str, Any]]) -> None:
+        """Переводит "unmet" в "acquainted" только по состоявшемуся обмену.
+
+        Нужен реальный ответ персонажа в диалоговом событии и реплика игрока
+        в том же пакете или в текущей истории. Автономные таймеры, реакции и
+        неудачные генерации сюда не попадают.
+        """
+        if str(self.get_variable("relationship_context_phase", "unmet")).lower() != "unmet":
+            return
+
+        batch = [message for message in (messages or []) if isinstance(message, dict)]
+        has_dialog_reply = any(
+            str(message.get("role") or "") == "assistant"
+            and str(message.get("event_type") or "") in self._ENCOUNTER_EVENT_TYPES
+            and self._message_has_visible_text(message)
+            for message in batch
+        )
+        if not has_dialog_reply:
+            return
+
+        has_player = any(
+            str(message.get("role") or "") == "user"
+            and self._message_has_visible_text(message)
+            for message in batch
+        )
+        if not has_player:
+            try:
+                has_player = self._history_has_player_message()
+            except Exception as exc:
+                logger.warning(
+                    f"[{self.char_id}] encounter check could not read history: {format_exception(exc)}"
+                )
+                has_player = False
+        if not has_player:
+            return
+
+        self.set_variable("relationship_context_phase", "acquainted")
+        logger.info(f"[{self.char_id}] relationship_context_phase -> acquainted")
 
     def save_character_state_to_history(self, messages: List[Dict[str, str]]):
         """Force-sync full state to DB: flushes dirty variables, then persists
         all messages and variables. Called at end-of-turn and on explicit saves."""
         self.flush_variables()
-        history_data = {"messages": messages, "variables": self.variables.copy()}
+        limit = runtime_profile_for(self).history_message_limit
+        history_data = {"messages": messages[-limit:] if limit is not None else messages,
+                        "variables": self.variables.copy()}
         self.history_manager.save_history(history_data)
 
+    @state_operation
     def clear_history(self):
         logger.info(f"[{self.char_id}] Clearing history and resetting state.")
 
@@ -1092,6 +1256,22 @@ class Character:
         try:
             from managers.core_memory_triggers import reset as reset_core_triggers
             reset_core_triggers(self.char_id)
+        except Exception:
+            pass
+        try:
+            self.working_state.clear(epoch=self.history_epoch)
+        except Exception:
+            pass
+        try:
+            self.skills.clear()
+        except Exception:
+            pass
+        try:
+            self.action_receipts.clear()
+        except Exception:
+            pass
+        try:
+            self.skill_catalogs.clear()
         except Exception:
             pass
 
@@ -1138,6 +1318,7 @@ class Character:
         # [NEW] Используем точечное добавление вместо перезаписи всего списка
         # Это сильно ускорит работу на длинных историях
         self.history_manager.add_message(message)
+        self._maybe_mark_encounter([message])
 
         # Обновлять локальный список в памяти (если он нужен для контекста) можно перезагрузкой
         # или просто не хранить его в классе Character, полагаясь на history_manager.load_history()
@@ -1146,14 +1327,17 @@ class Character:
 
     def add_messages_to_history(self, messages: List[Dict[str, str]]):
         """Atomically append one completed dialog turn for this character."""
-        return self.history_manager.add_messages(messages)
+        result = self.history_manager.add_messages(messages)
+        if result:
+            self._maybe_mark_encounter(messages)
+        return result
 
     # endregion
 
     def current_variables_string(self) -> str:
         """Returns a string representation of key variables for UI/debug display,
         customizable via Post-DSL DEBUG_DISPLAY section."""
-        display_str = f"Character: {self.name} ({self.char_id})\n"
+        display_str = f"Character: {self.display_name} ({self.char_id})\n"
 
         vars_to_display = {}
         if (
@@ -1184,6 +1368,7 @@ class Character:
 
         return display_str.strip()
 
+    @state_operation
     def update_app_vars(self, app_vars: Dict[str, Any]):
         """Обновляет переменные программы для исползования в логике DSL"""
         self.app_vars = app_vars.copy()
@@ -1264,7 +1449,7 @@ class Character:
         """
         return {
             "character_id": str(getattr(self, "char_id", "") or ""),
-            "name": str(getattr(self, "name", "") or ""),
+            "display_name": self.display_name,
             "is_cartridge": bool(getattr(self, "is_cartridge", False)),
             "silero_command": str(getattr(self, "silero_command", "") or ""),
             "short_name": str(getattr(self, "short_name", "") or ""),
@@ -1273,5 +1458,5 @@ class Character:
         }
 
     def __str__(self):
-        return f"Character(id='{self.char_id}', name='{self.name}')"
+        return f"Character(id='{self.char_id}', display_name='{self.display_name}')"
 

@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from managers.history_ui_projector import HistoryUiProjector
+
 from ui.chat.presentation_coordinator import ChatPresentationCoordinator, ChatRenderCommand
+from ui.windows.app_window_base import AppWindowBase
+from controllers.gui.chat_controller import ChatController as GuiChatController
+from core.events import Event, Events
 
 
 def _command(message_id: str, content: str, *, character_id: str = "Crazy") -> ChatRenderCommand:
@@ -28,6 +37,67 @@ def test_live_message_present_before_snapshot_request_is_replayed_when_snapshot_
 
     assert plan.accepted is True
     assert plan.replay == (live,)
+
+
+def test_failed_live_message_keeps_its_error_through_history_replay() -> None:
+    coordinator = ChatPresentationCoordinator()
+    live = _command("in:req-failed", "request that did not reach the model")
+    other_live = _command("in:req-ok", "another request")
+
+    assert coordinator.record_live(live) is True
+    assert coordinator.record_live(other_live) is True
+    assert coordinator.mark_failed(
+        message_id="in:req-failed",
+        character_id="Crazy",
+        error="Provider rejected the request",
+    ) is True
+
+    ticket = coordinator.begin_history_load("Crazy")
+    plan = coordinator.plan_history_projection(
+        request_id=ticket.request_id,
+        response_character_id="Crazy",
+        current_character_id="Crazy",
+        history_messages=[],
+    )
+
+    assert plan.accepted is True
+    replay_by_id = {command.message_id: command for command in plan.replay}
+    assert replay_by_id["in:req-failed"].delivery_error == "Provider rejected the request"
+    assert replay_by_id["in:req-ok"].delivery_error == ""
+
+    assert coordinator.clear_failed(message_id="in:req-failed", character_id="Crazy") is True
+    retry_ticket = coordinator.begin_history_load("Crazy")
+    retry_plan = coordinator.plan_history_projection(
+        request_id=retry_ticket.request_id,
+        response_character_id="Crazy",
+        current_character_id="Crazy",
+        history_messages=[],
+    )
+    assert all(command.delivery_error == "" for command in retry_plan.replay)
+
+
+def test_failure_is_recorded_before_chat_surface_is_bound() -> None:
+    calls = []
+    window = SimpleNamespace(
+        mita_status=None,
+        _pending_chat_error="",
+        _chat_render_context=SimpleNamespace(is_bound=False),
+        _chat_presentation=SimpleNamespace(
+            mark_failed=lambda **kwargs: calls.append(kwargs),
+        ),
+    )
+
+    AppWindowBase._show_error_slot(window, {
+        "error": "Provider rejected the request",
+        "message_id": "in:req-unbound",
+        "character_id": "Crazy",
+    })
+
+    assert calls == [{
+        "message_id": "in:req-unbound",
+        "character_id": "Crazy",
+        "error": "Provider rejected the request",
+    }]
 
 
 def test_commit_after_snapshot_start_is_replayed_when_snapshot_was_taken_too_early() -> None:
@@ -271,6 +341,78 @@ def test_composite_snapshot_covers_separate_live_fragments_with_same_message_id(
     assert coordinator.record_live(image) is False
 
 
+@pytest.mark.parametrize("live_first", [True, False])
+def test_camera_image_is_not_replayed_from_a_player_history_message(live_first: bool) -> None:
+    coordinator = ChatPresentationCoordinator()
+    image_part = {
+        "type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="},
+        "display_role": "assistant",
+    }
+    live = ChatRenderCommand(
+        role="assistant", content=[image_part], character_id="Kind", message_id="in:camera-request",
+    )
+    history = HistoryUiProjector().project_for_ui([{
+        "role": "user", "speaker": "Player", "sender": "Player", "target": "Kind",
+        "image_source": "mita_camera", "message_id": live.message_id,
+        "content": [{"type": "text", "text": "Can you see through your camera?"}, image_part],
+    }])
+    assert history[0]["role"] == "user"
+    assert history[0]["content"][0]["text"] == "Can you see through your camera?"
+    if live_first:
+        assert coordinator.record_live(live) is True
+    ticket = coordinator.begin_history_load("Kind")
+    plan = coordinator.plan_history_projection(
+        request_id=ticket.request_id, response_character_id="Kind", current_character_id="Kind",
+        history_messages=history,
+    )
+    assert plan.accepted is True
+    assert plan.replay == ()
+    assert coordinator.record_live(live) is False
+
+
+@pytest.mark.parametrize("live_role, live_url, message_id", [
+    ("user", "AA==", "in:camera-request"),
+    ("assistant", "BB==", "in:camera-request"),
+    ("assistant", "AA==", "in:another-request"),
+])
+def test_camera_snapshot_does_not_hide_a_different_image_or_message(
+    live_role: str, live_url: str, message_id: str,
+) -> None:
+    coordinator = ChatPresentationCoordinator()
+    live = ChatRenderCommand(
+        role=live_role, character_id="Kind", message_id=message_id,
+        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + live_url}}],
+    )
+    assert coordinator.record_live(live) is True
+    ticket = coordinator.begin_history_load("Kind")
+    plan = coordinator.plan_history_projection(
+        request_id=ticket.request_id, response_character_id="Kind", current_character_id="Kind",
+        history_messages=[{
+            "role": "user", "message_id": "in:camera-request",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="},
+                         "display_role": "assistant"}],
+        }],
+    )
+    assert plan.replay == (live,)
+
+
+def test_image_display_role_does_not_change_text_identity() -> None:
+    coordinator = ChatPresentationCoordinator()
+    text = _command("in:mixed-roles", "same words", character_id="Kind")
+    assert coordinator.record_live(text) is True
+    ticket = coordinator.begin_history_load("Kind")
+    plan = coordinator.plan_history_projection(
+        request_id=ticket.request_id, response_character_id="Kind", current_character_id="Kind",
+        history_messages=[{
+            "role": "assistant", "message_id": text.message_id,
+            "content": [{"type": "text", "text": "same words"},
+                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA=="},
+                         "display_role": "user"}],
+        }],
+    )
+    assert plan.replay == (text,)
+
+
 def test_partial_snapshot_replays_only_uncovered_fragment_for_same_message_id() -> None:
     coordinator = ChatPresentationCoordinator()
     text = _command("in:req-partial", "hello")
@@ -398,6 +540,73 @@ def test_stream_rendering_is_isolated_by_character() -> None:
         "crazy-stream",
         current_character_id="Kind",
     ) is False
+
+
+def test_group_dialogue_surface_renders_live_messages_from_every_participant() -> None:
+    coordinator = ChatPresentationCoordinator()
+    kind = _command("out:kind", "Kind reply", character_id="Kind")
+
+    assert coordinator.record_live(
+        kind,
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is True
+    assert coordinator.record_live(
+        _command("out:ghost", "Unrelated reply", character_id="Ghost"),
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is False
+
+
+def test_group_dialogue_surface_renders_participant_stream_immediately() -> None:
+    coordinator = ChatPresentationCoordinator()
+    coordinator.begin_stream("kind-stream", character_id="Kind")
+
+    assert coordinator.should_render_stream(
+        "kind-stream",
+        current_character_id="Crazy",
+        surface_character_ids=("Crazy", "Kind", "Cappie"),
+    ) is True
+
+
+def test_request_participants_define_surface_without_structured_dialogue_snapshot() -> None:
+    assert AppWindowBase._chat_surface_character_ids(
+        "Crazy",
+        ("Crazy", "Kind", "Cappie"),
+    ) == ("Crazy", "Kind", "Cappie")
+
+
+def test_request_participants_do_not_leak_into_unrelated_selected_character() -> None:
+    assert AppWindowBase._chat_surface_character_ids(
+        "Ghost",
+        ("Crazy", "Kind", "Cappie"),
+    ) == ("Ghost",)
+
+
+def test_gui_adapter_preserves_request_participants_for_live_projection() -> None:
+    emitted = []
+
+    class _Signal:
+        def emit(self, payload):
+            emitted.append(payload)
+
+    class _View:
+        render_chat_event_signal = _Signal()
+
+    controller = object.__new__(GuiChatController)
+    controller.view = _View()
+    controller._on_update_chat_ui(Event(
+        Events.GUI.UPDATE_CHAT_UI,
+        {
+            "role": "assistant",
+            "response": "Kind reply",
+            "character_id": "Kind",
+            "surface_character_ids": ["Crazy", "Kind", "Cappie"],
+        },
+    ))
+
+    assert emitted[0]["character_id"] == "Kind"
+    assert emitted[0]["surface_character_ids"] == ["Crazy", "Kind", "Cappie"]
 
 
 def test_unscoped_stream_conservatively_blocks_history_projection() -> None:

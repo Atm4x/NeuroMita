@@ -16,8 +16,14 @@ class ManagedCharacterRegistry(CharacterRegistry):
             return None
         return self._manager.get_character(str(character_id))
 
+    def register_cartridges(self, definitions) -> None:
+        self._manager.register_cartridges(definitions)
+
     def all_ids(self) -> List[str]:
         return list(self._manager.get_all_characters())
+
+    def stats_of(self, character_id: str) -> Dict[str, float]:
+        return self._manager.get_character_stats(character_id)
 
     def current(self) -> Any:
         return self._manager.current_character
@@ -33,11 +39,14 @@ class ManagedCharacterRegistry(CharacterRegistry):
             return ref.to_voice_profile()
         return {
             "character_id": str(getattr(ref, "char_id", "") or ""),
-            "name": str(getattr(ref, "name", "") or ""),
+            "display_name": str(getattr(ref, "display_name", "") or ""),
         }
 
-    def current_name(self) -> str:
-        return str(getattr(self.current(), "name", "") or "")
+    def current_display_name(self) -> str:
+        return str(getattr(self.current(), "display_name", "") or "")
+
+    def display_name_of(self, character_id: str) -> str:
+        return self._manager.get_display_name(character_id)
 
 
 class SettingsOnlyCharacterRegistry(CharacterRegistry):
@@ -66,10 +75,10 @@ class SettingsOnlyCharacterRegistry(CharacterRegistry):
         selected = self._selected_id()
         if not selected:
             return {}
-        return {"character_id": selected, "name": selected}
+        return {"character_id": selected, "display_name": selected}
 
-    def current_name(self) -> str:
+    def current_display_name(self) -> str:
         return self._selected_id()
 
-    def name_of(self, character_id: str) -> str:
+    def display_name_of(self, character_id: str) -> str:
         return str(character_id or "")

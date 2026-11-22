@@ -12,6 +12,7 @@ class RequestContext:
     client_id: str
     writer: Any
     event_bus: EventBus
+    client_role: str = ""
 
 
 class IActionHandler(Protocol):

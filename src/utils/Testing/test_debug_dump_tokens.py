@@ -26,6 +26,8 @@ class SectionClassifierTests(unittest.TestCase):
         self.assertEqual(_classify_message_section(_sys("<relevant_memories>\n..."), False), "memories")
         self.assertEqual(_classify_message_section(_sys("[Runtime Core Directive: Code 23 — ACTIVE]\n..."), False), "runtime directives")
         self.assertEqual(_classify_message_section(_sys("[Available Tools]\n- memory_search(...)"), False), "tools")
+        self.assertEqual(_classify_message_section(_sys("[SKILLS]\n- music: Music"), False), "skills catalog")
+        self.assertEqual(_classify_message_section(_sys("[LOADED SKILLS]\n## Music"), False), "loaded skills")
         self.assertEqual(_classify_message_section(_sys("You are a cute doll."), False), "character prompts")
 
     def test_user_vs_history(self):

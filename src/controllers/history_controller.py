@@ -1,10 +1,13 @@
 from __future__ import annotations
+from services.native_tool_calls import persisted_native_tool_messages, persisted_schema_skill_message
 from core.error_utils import format_exception
+from domain.character_runtime_profile import runtime_profile_for
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import datetime
 import base64
 import json
+import re
 import time
 import threading
 from io import BytesIO
@@ -12,7 +15,14 @@ from io import BytesIO
 from core.character_locks import character_lock
 from core.events import get_event_bus, Events, Event
 from core.executors import Pools, executors
-from core.message_content import MessageContentCodec
+from core.message_content import IMAGE_PART, MessageContentCodec
+from managers.action_memory import (
+    append_requested_actions,
+    cap_requested_actions,
+    render_requested_actions,
+    requested_action_records,
+    requested_action_records_from_messages,
+)
 from core.response_status import response_status_kind
 from core.services import services, use
 from main_logger import logger
@@ -24,6 +34,7 @@ from services.contracts import (
     SettingsService,
     UtilityGenerationRequest,
 )
+from services.timeline_context import TimelineContext
 
 
 class HistoryController(HistoryService):
@@ -37,12 +48,20 @@ class HistoryController(HistoryService):
     # сообщения. Не зависит от длины списка и переживает любые удаления.
     _SUMMARY_ANCHOR_VAR = "HISTORY_COMPRESSION_SUMMARY_ANCHOR"
     _SUMMARY_SEGMENTS_VAR = "HISTORY_COMPRESSION_SUMMARY_SEGMENTS"
+    _ACTION_MEMORY_RETAINED_VAR = "ACTION_MEMORY_RETAINED_REQUESTS"
     _DEFAULT_COMPRESSION_PROMPT = (
         "Summarize the conversation below into a compact factual memory for "
         "{current_character_name}. Preserve important events, decisions, "
         "relationships, names, promises, and unresolved topics. Do not invent "
         "facts. If a previous summary exists, merge it without duplicating "
-        "information.\n\nPrevious summary:\n{previous_summary}\n\n"
+        "information. [Speaker] labels identify who spoke, not who witnessed the events in their speech. "
+        "Preserve who experienced, reported, or suspected each event. Treat prior summaries as derived notes. "
+        "Do not turn a proposed scene or hypothetical into a past event. Keep private "
+        "agreements attributed to their participants, with their known conditions. "
+        "Treat temporary cognitive effects as past subjective "
+        "experience rather than permanent facts, and do not keep a second "
+        "consciousness or altered identity present after it ended.\n\n"
+        "Previous summary:\n{previous_summary}\n\n"
         "Conversation:\n{history_messages}\n\nSummary:"
     )
 
@@ -53,6 +72,11 @@ class HistoryController(HistoryService):
     #   memory  — сводка уходит отдельной памятью в MemorySystem (легаси).
     _DEFAULT_OUTPUT_TARGET = "layered"
     _EXTERNAL_SUMMARY_TARGETS = ("history", "layered")
+
+    # Сколько последних сообщений с картинками оставлять картинками. Для более
+    # старых окно использует сохранённое текстовое описание: оно дешевле по
+    # токенам и не теряет смысл кадра.
+    _IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT = 1
 
     def __init__(self):
         self.event_bus = get_event_bus()
@@ -65,6 +89,7 @@ class HistoryController(HistoryService):
         # Счётчик сообщений на персонажа для фоновой ревизии памяти (08 P1).
         self._messages_since_last_maintenance: Dict[str, int] = {}
         self._maintenance_inflight: set[str] = set()
+        self._action_memory_cap_warnings: set[str] = set()
         self._closed = False
 
         services().register(HistoryService, self, replace=True)
@@ -141,6 +166,7 @@ class HistoryController(HistoryService):
             self._compression_cooldowns.pop(char_id, None)
             self._messages_since_last_periodic_compression.pop(char_id, None)
             self._messages_since_last_maintenance.pop(char_id, None)
+            self._action_memory_cap_warnings.discard(char_id)
         if timer is not None:
             timer.cancel()
         logger.info(f"[HistoryController][{char_id}] История сброшена: отложенное сжатие снято.")
@@ -157,6 +183,23 @@ class HistoryController(HistoryService):
         effective_limit = 8 if is_game_master else int(memory_limit)
         if effective_limit <= 0:
             effective_limit = 1
+
+        timeline_context = services().get_optional(TimelineContext)
+        if timeline_context is not None:
+            summary, messages = timeline_context.unsummarized(char_id)
+            _, history_limited = self._split_history_by_dialog_limit(messages, effective_limit)
+            history_limited = history_limited[-max(64, effective_limit * 3):]
+            last_message_at = self._last_message_time(history_limited)
+            target_context = timeline_context.conversation.target_context(char_id)
+            if target_context is not None:
+                history_limited.append(target_context)
+            history_limited = list(timeline_context.conversation.content.materialize(history_limited))
+            if image_quality.get("enabled", False):
+                history_limited = self._apply_history_image_quality_reduction(history_limited, image_quality)
+            return PreparedHistory(
+                messages=self._sanitize_history_for_llm(character, history_limited),
+                summary=summary, action_context="", last_message_at=last_message_at,
+            )
 
         history_data = character.history_manager.load_history()
         llm_messages_history: List[Dict[str, Any]] = history_data.get("messages", []) or []
@@ -181,6 +224,7 @@ class HistoryController(HistoryService):
         # того, что фоновое сжатие ещё не догнало историю.
         summary_cut = self._summary_cut_index(character, llm_messages_history)
         unsummarized_history = llm_messages_history[summary_cut:]
+        action_context = self._build_action_memory_context(character)
         window_overflow, history_limited = self._split_history_by_dialog_limit(
             unsummarized_history,
             effective_limit,
@@ -192,6 +236,8 @@ class HistoryController(HistoryService):
                 summarized=llm_messages_history[:summary_cut],
                 window_overflow=window_overflow,
             )
+
+        history_limited = self._replace_older_images_with_descriptions(history_limited)
 
         if image_quality.get('enabled', False):
             history_limited = self._apply_history_image_quality_reduction(history_limited, image_quality)
@@ -205,8 +251,106 @@ class HistoryController(HistoryService):
         return PreparedHistory(
             messages=history_for_llm,
             summary=history_summary,
+            action_context=action_context,
             last_message_at=last_message_at,
         )
+
+    def _action_memory_enabled(self) -> bool:
+        return bool(self._get_setting("ENABLE_ACTION_MEMORY", False))
+
+    def _action_memory_keep_last(self) -> int:
+        try:
+            value = int(self._get_setting("ACTION_MEMORY_RETAIN_LAST", 4) or 4)
+        except (TypeError, ValueError):
+            value = 4
+        return max(1, min(20, value))
+
+    def _action_memory_emergency_max_records(self) -> int:
+        try:
+            value = int(self._get_setting("ACTION_MEMORY_EMERGENCY_MAX_RECORDS", 80) or 80)
+        except (TypeError, ValueError):
+            value = 80
+        return max(1, min(1000, value))
+
+    def _action_memory_emergency_max_chars(self) -> int:
+        try:
+            value = int(self._get_setting("ACTION_MEMORY_EMERGENCY_MAX_CHARS", 8000) or 8000)
+        except (TypeError, ValueError):
+            value = 8000
+        return max(200, min(100_000, value))
+
+    def _load_retained_action_requests(self, character) -> list[str]:
+        try:
+            raw = character.get_variable(self._ACTION_MEMORY_RETAINED_VAR, "[]")
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            parsed = []
+        if not isinstance(parsed, list):
+            return []
+        records: list[dict] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                ref = str(item.get("ref") or "").strip()
+            else:
+                text = str(item).strip()
+                ref = ""
+            if text:
+                records.append({"text": text, "ref": ref})
+        return records
+
+    @staticmethod
+    def _receipt_lookup(character):
+        try:
+            return character.action_receipts.status_for
+        except Exception:
+            return None
+
+    def _build_action_memory_context(
+        self,
+        character,
+    ) -> str:
+        """Render only the retained bridge across the summary boundary.
+
+        Actions of unsummarized assistant turns stay attached to their original
+        reply in ``_sanitize_history_for_llm``. The only separate derivative is
+        this small tail from turns that were successfully summarized.
+        """
+        if not self._action_memory_enabled():
+            return ""
+        records = self._load_retained_action_requests(character)
+        records, capped = cap_requested_actions(
+            records,
+            max_records=self._action_memory_emergency_max_records(),
+            max_chars=self._action_memory_emergency_max_chars(),
+        )
+        char_id = str(getattr(character, "char_id", "") or "")
+        warned = getattr(self, "_action_memory_cap_warnings", None)
+        if warned is None:
+            warned = set()
+            self._action_memory_cap_warnings = warned
+        if capped:
+            if char_id not in warned:
+                logger.warning(
+                    "[HistoryController][%s] Retained action bridge emergency cap reached; "
+                    "waiting for a successful summary to compact it normally.",
+                    char_id or "Unknown",
+                )
+                warned.add(char_id)
+        else:
+            warned.discard(char_id)
+        return render_requested_actions(records, self._receipt_lookup(character))
+
+    def _next_retained_action_requests(
+        self,
+        character,
+        messages_to_compress: List[Dict[str, Any]],
+    ) -> list[str] | None:
+        if not self._action_memory_enabled():
+            return None
+        records = self._load_retained_action_requests(character)
+        records.extend(requested_action_records_from_messages(messages_to_compress))
+        return records[-self._action_memory_keep_last():]
 
     def _compression_enabled(self) -> bool:
         return bool(self._get_setting("ENABLE_HISTORY_COMPRESSION_ON_LIMIT", True)) or bool(
@@ -366,8 +510,58 @@ class HistoryController(HistoryService):
             return
         if getattr(character, "char_id", None) != char_id:
             return
+        if not runtime_profile_for(character).background_memory_enabled:
+            return
+        context = services().get_optional(TimelineContext)
+        if context is not None:
+            self._start_timeline_compression(character, context)
+            self._maybe_run_memory_maintenance(character)
+            return
         self._start_background_compression(character)
         self._maybe_run_memory_maintenance(character)
+
+    def _start_timeline_compression(self, character, context: TimelineContext) -> None:
+        if getattr(self, "_closed", False) or not self._compression_enabled():
+            return
+        char_id = character.char_id
+        with self._compression_guard:
+            if char_id in self._background_compression_inflight:
+                return
+            self._background_compression_inflight.add(char_id)
+        turn = context.conversation.runtime.capture(character_id=char_id)
+
+        def compress():
+            try:
+                with context.conversation.runtime.turn_scope(turn):
+                    previous_summary, messages = context.unsummarized(char_id)
+                    limit = max(1, int(self._get_setting("MODEL_MESSAGE_LIMIT", 40)))
+                    if len(messages) <= max(64, limit * 2):
+                        return
+                    prefix, _ = self._split_history_by_dialog_limit(messages, limit)
+                    if not prefix:
+                        prefix = messages[:-max(32, limit)]
+                    if not prefix:
+                        return
+                    through = max(message["timeline_learned_at"] for message in prefix)
+                    all_prefix = [message for message in context.conversation.context_messages(char_id)
+                                  if message["timeline_learned_at"] <= through]
+                    summary = self._compress_history_singleflight(
+                        character, prefix, previous_summary=previous_summary,
+                    )
+                    if summary:
+                        context.store(char_id, all_prefix, summary)
+            except Exception:
+                logger.warning("Timeline context compression failed for %s", char_id, exc_info=True)
+            finally:
+                with self._compression_guard:
+                    self._background_compression_inflight.discard(char_id)
+
+        try:
+            executors().try_submit(Pools.BACKGROUND_LLM, compress)
+        except Exception:
+            with self._compression_guard:
+                self._background_compression_inflight.discard(char_id)
+            logger.warning("Could not schedule timeline compression for %s", char_id, exc_info=True)
 
     def _maybe_run_memory_maintenance(self, character) -> None:
         """Раз в N ответов запускает фоновую ревизию памяти (dedup-sweep, без LLM)."""
@@ -499,6 +693,10 @@ class HistoryController(HistoryService):
 
         summary_count = self._get_history_summary_count(character)
         anchor_id = self._last_row_id(messages_to_compress)
+        retained_action_requests = self._next_retained_action_requests(
+            character,
+            messages_to_compress,
+        )
         if is_layered:
             _, new_count = self._apply_layered_compression_result(
                 character,
@@ -507,6 +705,7 @@ class HistoryController(HistoryService):
                 compressed_count=len(messages_to_compress),
                 epoch=epoch,
                 anchor_id=anchor_id,
+                retained_action_requests=retained_action_requests,
             )
         else:
             _, new_count = self._apply_compression_result(
@@ -518,6 +717,7 @@ class HistoryController(HistoryService):
                 compressed_count=len(messages_to_compress),
                 epoch=epoch,
                 anchor_id=anchor_id,
+                retained_action_requests=retained_action_requests,
             )
 
         # Сжатие реально применилось — сообщаем UI, чтобы живые счётчики
@@ -543,6 +743,9 @@ class HistoryController(HistoryService):
         "From the dialogue chunk below, extract 0 to {max_n} durable long-term memory "
         "facts worth remembering for {char_name} (promises, preferences, important events, "
         "relationship changes, revealed secrets). Skip small talk and anything trivial. "
+        "Keep the source in the fact itself: who observed it, who reported it, or who suspected it. "
+        "A reported claim is not personal experience. Skip unsupported claims, jokes, and proposed scenes. "
+        "Keep the known participants and conditions of an agreement. Treat prior summaries as derived notes. "
         "Write each fact in the language of the dialogue, short and concrete.\n"
         "Answer ONLY with a JSON array, each item {{\"priority\": \"low|normal|high\", "
         "\"content\": \"...\"}}. Empty array [] if nothing is worth it.\n\n"
@@ -573,21 +776,14 @@ class HistoryController(HistoryService):
             max_n = 3
         max_n = max(1, min(5, max_n))
 
-        chunk_lines = []
-        for m in messages_to_compress:
-            if not isinstance(m, dict):
-                continue
-            text = self._content_to_plain_text(m.get("content"))
-            if not text:
-                continue
-            chunk_lines.append(f"[{'Player' if m.get('role') == 'user' else 'Character'}]: {text}")
-        chunk = "\n".join(chunk_lines)
+        chunk = "\n".join(f"[{speaker}]: {text}" for speaker, text in
+                          self._compression_transcript(character, messages_to_compress))
         if not chunk.strip():
             return
 
         prompt = self._CANDIDATE_PROMPT.format(
             max_n=max_n,
-            char_name=getattr(character, "name", "Character"),
+            char_name=getattr(character, "display_name", "Character"),
             chunk=self._truncate_text_for_prompt(chunk, 6000),
         )
 
@@ -710,6 +906,7 @@ class HistoryController(HistoryService):
         compressed_count: int,
         epoch: Optional[int] = None,
         anchor_id: int = 0,
+        retained_action_requests: list[str] | None = None,
     ) -> tuple[str, int]:
         if epoch is None:
             epoch = self._history_epoch(character)
@@ -752,6 +949,7 @@ class HistoryController(HistoryService):
             summary_text=new_summary,
             summary_count=new_count,
             anchor_id=anchor_id,
+            retained_action_requests=retained_action_requests,
         ):
             return previous_summary, summary_count
         return new_summary, new_count
@@ -921,18 +1119,8 @@ class HistoryController(HistoryService):
             prompt_template = self._DEFAULT_COMPRESSION_PROMPT
 
         try:
-            formatted_lines: List[str] = []
-            for msg in messages_to_compress:
-                # Мультимодальный content — список частей: без разбора картинка
-                # уезжает в промпт целиком в base64 (сжатие раздувалось до
-                # ~180k токенов вместо ~1k).
-                text = self._content_to_plain_text(msg.get("content"))
-                if not text:
-                    continue
-                speaker = "Player" if msg.get("role") == "user" else "Character or System"
-                stamp = f"[{msg.get('time')}] " if msg.get("time") else ""
-                formatted_lines.append(f"{stamp}[{speaker}]: {text}")
-            formatted_messages = "\n".join(formatted_lines)
+            formatted_messages = "\n".join(f"[{speaker}]: {text}" for speaker, text in
+                                           self._compression_transcript(character, messages_to_compress))
             previous_summary_limit = int(self._get_setting("HISTORY_COMPRESSION_PREVIOUS_SUMMARY_MAX_CHARS", 6000))
             previous_summary_trimmed = self._truncate_text_for_prompt(previous_summary, previous_summary_limit)
             if previous_summary and len(str(previous_summary)) > previous_summary_limit:
@@ -942,10 +1130,13 @@ class HistoryController(HistoryService):
                     "(увеличьте HISTORY_COMPRESSION_PREVIOUS_SUMMARY_MAX_CHARS или включите layered)."
                 )
 
-            full_prompt = prompt_template.replace("{history_messages}", formatted_messages)
-            full_prompt = full_prompt.replace("{your character}", getattr(character, "name", "Character"))
-            full_prompt = full_prompt.replace("{current_character_name}", getattr(character, "name", "Character"))
-            full_prompt = full_prompt.replace("{previous_summary}", previous_summary_trimmed)
+            replacements = {
+                "history_messages": formatted_messages,
+                "previous_summary": previous_summary_trimmed,
+                "your character": getattr(character, "display_name", "Character"),
+                "current_character_name": getattr(character, "display_name", "Character"),
+            }
+            full_prompt = re.sub(r"\{([^{}]+)\}", lambda m: replacements.get(m[1], m[0]), prompt_template)
             max_attempts = max(1, int(self._get_setting("HISTORY_COMPRESSION_MAX_ATTEMPTS", 3)))
             base_retry_delay = max(0.0, float(self._get_setting("HISTORY_COMPRESSION_RETRY_BASE_DELAY_SEC", 2.0)))
             max_retry_delay = max(base_retry_delay, float(self._get_setting("HISTORY_COMPRESSION_RETRY_MAX_DELAY_SEC", 20.0)))
@@ -1211,6 +1402,7 @@ class HistoryController(HistoryService):
         summary_count: int,
         anchor_id: int = 0,
         segments: Optional[List[Dict[str, Any]]] = None,
+        retained_action_requests: list[str] | None = None,
     ) -> bool:
         """Одна запись состояния сводки: слои + текст + счётчик + граница.
 
@@ -1244,6 +1436,11 @@ class HistoryController(HistoryService):
                 # Без id границу не сдвигаем: лучше пересжать кусок повторно, чем потерять окно.
                 if anchor_id > 0:
                     character.set_variable(self._SUMMARY_ANCHOR_VAR, int(anchor_id))
+                if retained_action_requests is not None:
+                    character.set_variable(
+                        self._ACTION_MEMORY_RETAINED_VAR,
+                        json.dumps(retained_action_requests, ensure_ascii=False),
+                    )
                 if hasattr(character, "flush_variables"):
                     character.flush_variables()
             return True
@@ -1360,7 +1557,7 @@ class HistoryController(HistoryService):
 
         merged_text = self._compress_history_singleflight(
             character,
-            [{"role": "system", "content": str(s.get("text") or "")} for s in oldest],
+            [{"role": "summary", "content": str(s.get("text") or "")} for s in oldest],
             previous_summary="",
         )
         if not merged_text or not str(merged_text).strip():
@@ -1384,6 +1581,7 @@ class HistoryController(HistoryService):
         compressed_count: int,
         epoch: Optional[int] = None,
         anchor_id: int = 0,
+        retained_action_requests: list[str] | None = None,
     ) -> tuple[str, int]:
         if epoch is None:
             epoch = self._history_epoch(character)
@@ -1405,6 +1603,7 @@ class HistoryController(HistoryService):
             summary_count=new_count,
             anchor_id=anchor_id,
             segments=segments,
+            retained_action_requests=retained_action_requests,
         ):
             return self._get_history_summary(character), summary_count
         logger.info(
@@ -1427,6 +1626,26 @@ class HistoryController(HistoryService):
     def _content_to_plain_text(self, content: Any) -> str:
         """Текст для промпта сжатия. Разбор частей — общий (MessageContentCodec)."""
         return MessageContentCodec.to_prompt_text(content)
+
+    def _compression_transcript(self, character, messages):
+        owner = str(getattr(character, "char_id", "") or "")
+        owner_name = str(getattr(character, "display_name", "") or owner or "Character")
+        fallback_labels = {
+            "user": "Player", "assistant": owner_name, "system": "System note", "summary": "Previous summary",
+        }
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            text = self._content_to_plain_text(message.get("content"))
+            if not text:
+                continue
+            role = message.get("role")
+            author = str(message.get("speaker") or message.get("sender") or "").strip()
+            if role in {"user", "assistant"} and author:
+                label = owner_name if author == owner else "World observation" if author == "World" else author
+            else:
+                label = fallback_labels.get(role, "Event")
+            yield label, text
 
     def _build_local_compression_fallback(
         self,
@@ -1453,25 +1672,7 @@ class HistoryController(HistoryService):
                 )
             )
 
-        assistant_name = str(getattr(character, "name", "") or "Character")
-        for msg in messages_to_compress:
-            if not isinstance(msg, dict):
-                continue
-
-            text = self._content_to_plain_text(msg.get("content"))
-            if not text:
-                continue
-
-            role = str(msg.get("role") or "")
-            if role == "user":
-                speaker = "Player"
-            elif role == "assistant":
-                speaker = assistant_name
-            elif role == "system":
-                speaker = "System"
-            else:
-                speaker = role.title() or "Event"
-
+        for speaker, text in self._compression_transcript(character, messages_to_compress):
             lines.append(f"{speaker}: {self._truncate_text_for_prompt(text, per_message_limit)}")
             if len(lines) >= max_messages + (1 if previous_summary else 0):
                 break
@@ -1486,6 +1687,133 @@ class HistoryController(HistoryService):
             f"Using local compression fallback after provider failure: {failure_details or 'n/a'}"
         )
         return fallback_summary
+
+    @classmethod
+    def _message_has_inline_image(cls, message: Dict[str, Any]) -> bool:
+        if not isinstance(message, dict):
+            return False
+        return any(
+            MessageContentCodec.part_type(part) == IMAGE_PART
+            for part in MessageContentCodec.parts(message.get("content"))
+        )
+
+    @classmethod
+    def _message_image_description(cls, message: Dict[str, Any]) -> str:
+        """Текст, который был сохранён вместе с картинкой при её получении."""
+        if not isinstance(message, dict):
+            return ""
+
+        def _clean(value: Any) -> str:
+            return " ".join(str(value or "").split())
+
+        description_map = message.get("image_descriptions")
+        if isinstance(description_map, dict) and description_map:
+            # Ключи — варианты одного и того же описания, а не описания разных
+            # кадров. Берём лучший доступный вариант, а не склеиваем их все.
+            for key in ("manual", "detailed", "normal", "brief"):
+                value = _clean(description_map.get(key))
+                if value:
+                    return value
+            for value in description_map.values():
+                text = _clean(value)
+                if text:
+                    return text
+        return _clean(message.get("image_description"))
+
+    @classmethod
+    def _count_inline_images(cls, message: Dict[str, Any]) -> int:
+        return sum(
+            1
+            for part in MessageContentCodec.parts(message.get("content"))
+            if MessageContentCodec.part_type(part) == IMAGE_PART
+        )
+
+    @classmethod
+    def _is_player_image_message(cls, message: Dict[str, Any]) -> bool:
+        if str(message.get("role") or "") != "user":
+            return False
+        return str(message.get("image_source") or "").lower() != "mita_camera"
+
+    def _replace_older_images_with_descriptions(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Заменяет base64 картинок в старых сообщениях их описаниями.
+
+        Окно истории отправляется модели целиком на каждом ходу, поэтому
+        встроенные изображения стоят токенов постоянно. У сообщения уже есть
+        текстовое описание изображения (image_descriptions или
+        image_description); для промпта оно несёт тот же смысл, что и сам
+        кадр. Самые свежие сообщения с картинками остаются нетронутыми,
+        остальные получают текст.
+        """
+        if not messages:
+            return messages
+
+        keep_recent = int(
+            self._get_setting(
+                "HISTORY_IMAGE_DESCRIPTION_KEEP_RECENT",
+                self._IMAGE_DESCRIPTION_KEEP_RECENT_DEFAULT,
+            )
+            or 0
+        )
+        keep_recent = max(0, keep_recent)
+
+        image_positions = [
+            index for index, message in enumerate(messages)
+            if self._message_has_inline_image(message)
+        ]
+        if not image_positions:
+            return messages
+
+        # Игрок мог прислать скриншот, который обсуждается прямо сейчас, а Мита
+        # следом отправить свой кадр. Свежесть сама по себе выбрала бы кадр Миты,
+        # поэтому при наличии кадров игрока сохраняем именно их.
+        player_positions = [
+            index for index in image_positions
+            if self._is_player_image_message(messages[index])
+        ]
+        keep_source = player_positions or image_positions
+        keep_positions = set(keep_source[-keep_recent:]) if keep_recent else set()
+
+        updated_messages: List[Dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if index in keep_positions or not self._message_has_inline_image(message):
+                updated_messages.append(message)
+                continue
+
+            # Одно описание не привязано к конкретному кадру из нескольких:
+            # замена в таком сообщении перепутала бы изображения и текст.
+            if self._count_inline_images(message) != 1:
+                updated_messages.append(message)
+                continue
+
+            description = self._message_image_description(message)
+            if not description:
+                updated_messages.append(message)
+                continue
+
+            new_parts: List[Dict[str, Any]] = []
+            replaced = False
+            for part in MessageContentCodec.parts(message.get("content")):
+                if MessageContentCodec.part_type(part) == IMAGE_PART:
+                    if not replaced:
+                        new_parts.append({
+                            "type": "text",
+                            "text": f"[Earlier image — description: {description}]",
+                        })
+                        replaced = True
+                    continue
+                new_parts.append(part)
+
+            if not replaced:
+                updated_messages.append(message)
+                continue
+            updated = dict(message)
+            updated["content"] = new_parts
+            updated_messages.append(updated)
+
+        return updated_messages
 
     def _process_image_quality(self, image_bytes: bytes, target_quality: int) -> Optional[bytes]:
         if not image_bytes:
@@ -1555,7 +1883,7 @@ class HistoryController(HistoryService):
             # The description replaces the image in history; no base64 to degrade.
             # Supports both new dict format and legacy string.
             _has_desc = bool(msg.get("image_descriptions") or msg.get("image_description"))
-            if _has_desc:
+            if _has_desc and not self._message_has_inline_image(msg):
                 updated_messages.append(msg)
                 continue
 
@@ -1683,6 +2011,10 @@ class HistoryController(HistoryService):
         if not messages:
             return []
 
+        from services.dialogue_roster_context import neutralize_dialogue_roster_content
+        from core.tv_observation import format_tv_observation, is_tv_observation_event
+        tv_contexts = {format_tv_observation(m.get("tv_observation")) for m in messages if isinstance(m, dict) and m.get("tv_observation")}
+        tv_contexts.discard("")
         owner_id = str(getattr(character, "char_id", "") or "")
         gap_threshold = self._time_gap_marker_threshold_seconds()
         previous_at: Optional[datetime.datetime] = None
@@ -1696,7 +2028,31 @@ class HistoryController(HistoryService):
             if role not in ("user", "assistant", "system", "event"):
                 continue
 
-            content = m.get("content")
+            # Legacy Unity [DIALOGUE] snapshots were recipient-relative; strip
+            # stale (you) markers from the outgoing copy, not stored history.
+            content = neutralize_dialogue_roster_content(m.get("content"))
+            if role == "system" and isinstance(content, str):
+                for observation in tv_contexts:
+                    content = content.replace(observation, "")
+                if not content.strip():
+                    continue
+            tv_event = is_tv_observation_event(m)
+            if m.get("tv_observation"):
+                role = "user"
+                content = self._prepend_content_prefix(content, "[Past TV observation: already seen; do not react to it again. Newer observations override this snapshot.] ")
+
+            # While a turn remains in the recent history, actions belong to
+            # that exact assistant reply. Do not persist this derived text:
+            # structured_data remains the source of truth in the database.
+            if role == "assistant" and self._action_memory_enabled():
+                content = append_requested_actions(
+                    content,
+                    requested_action_records(
+                        m.get("structured_data"),
+                        turn_uid=str(m.get("task_uid") or ""),
+                    ),
+                    self._receipt_lookup(character),
+                )
 
             speaker = str(m.get("speaker") or m.get("sender") or ("Player" if role == "user" else owner_id) or "Player")
             target = str(m.get("target") or "Player")
@@ -1712,12 +2068,23 @@ class HistoryController(HistoryService):
             if current_at:
                 previous_at = current_at
 
-            content = self._apply_llm_prefix(role, speaker, target, content)
+            if role == 'assistant':
+                native_history = persisted_native_tool_messages(m.get('structured_data'))
+                if native_history:
+                    out.extend(native_history)
+                    continue
+
+            if not tv_event:
+                content = self._apply_llm_prefix(role, speaker, target, content)
             if gap_marker:
                 content = self._prepend_content_prefix(content, gap_marker)
 
             # sanitize keys: strict role/content only
             out.append({"role": role, "content": content})
+            if role == "assistant":
+                skill_message = persisted_schema_skill_message(m.get("structured_data"))
+                if skill_message is not None:
+                    out.append(skill_message)
 
         return out
 

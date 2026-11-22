@@ -137,7 +137,7 @@ class CrossEncoderReranker:
                         runtime_slot="rag:reranker",
                         timeout=30.0,
                         validation_method="warmup_reranker",
-                        validation_payload={"model_name": self.model_name},
+                        validation_payload=self._warmup_payload(),
                         validation_timeout=3600.0,
                     )
                 )
@@ -149,6 +149,11 @@ class CrossEncoderReranker:
                     f"[CrossEncoder] RAG runtime activation failed: {format_exception(exc)}"
                 )
                 return False
+
+    def _warmup_payload(self) -> dict:
+        from managers.rag.local_backend import request_backend_options
+
+        return {"model_name": self.model_name, **request_backend_options()}
 
     @classmethod
     def runtime_epoch(cls) -> int:
@@ -237,6 +242,7 @@ class CrossEncoderReranker:
         if not isinstance(updates, list):
             updates = []
 
+        scored = set()
         for update in updates:
             try:
                 idx = int(update.get("index", -1))
@@ -255,8 +261,13 @@ class CrossEncoderReranker:
                 if getattr(candidate, "debug", None) is None:
                     candidate.debug = {}
                 candidate.debug["cross_encoder"] = ce_score
+                candidate.features["cross_encoder"] = ce_score
+                scored.add(idx)
             except Exception:
                 pass
+
+        if scored:
+            cands[:] = [candidate for idx, candidate in enumerate(cands) if idx in scored]
 
         if bool(result.get("loaded", False)):
             self._set_state(ModelState.READY, epoch=epoch)

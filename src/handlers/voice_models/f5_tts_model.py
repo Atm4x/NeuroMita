@@ -14,6 +14,7 @@ from utils import getTranslationVariant as _, get_character_voice_paths
 
 from core.app_paths import checkpoints_dir
 from core.backends import BackendKind, get_backend_service
+from core.voice_device_selection import device_half_precision_behavior
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
 from handlers.voice_models.install_plan_helpers import (
@@ -301,7 +302,8 @@ class F5TTSInstallSpec:
         backend_kind = cls.required_backend(mid, ctx)
         lang = cls.variant(mid)
         compat_warning = rvc_python_compat_error(cls._rvc_package_spec(ctx)) if cls.is_rvc(mid) else None
-        if cls.is_installed(mid, ctx):
+        clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+        if not clean and cls.is_installed(mid, ctx):
             return InstallPlan(
                 required_backend=backend_kind,
                 backend_context=dict(ctx),
@@ -465,6 +467,7 @@ class F5TTSModel(IVoiceModel):
         self.ruaccent_instance = None
         self._import_attempted_variants = set()
         self._initialized_lang = None
+        self._active_device = None
 
     MODEL_CONFIGS = [
         {
@@ -570,8 +573,9 @@ class F5TTSModel(IVoiceModel):
                 {"key": "f5rvc_rvc_rms_mix_rate", "label": _("[RVC] Смешивание RMS", "[RVC] RMS Mixing"), "type": "entry", "options": {"default": "0.5"},
                  "help": _("Смешивание громкости исходника и RVC (0..1).", "Mix source loudness and RVC result (0..1).")},
                 {"key": "f5rvc_is_half", "label": _("[RVC] Half-precision", "[RVC] Half-precision"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default": "True"},
-                 "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
+                  "options": {"values": ["True", "False"], "default": "True"},
+                  "behavior": device_half_precision_behavior("f5rvc_rvc_device"),
+                  "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
                 {"key": "f5rvc_f0method", "label": _("[RVC] Метод F0", "[RVC] F0 Method"), "type": "combobox",
                  "options": {"values": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default": "rmvpe"},
                  "help": _("Алгоритм извлечения высоты тона.", "Pitch extraction algorithm.")},
@@ -623,6 +627,10 @@ class F5TTSModel(IVoiceModel):
     @classmethod
     def is_model_installed(cls, model_id: str, ctx: Dict[str, Any]) -> bool:
         return F5TTSInstallSpec.is_installed(model_id, ctx)
+
+    @classmethod
+    def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
+        return F5TTSInstallSpec.requirements(model_id, ctx)
 
     @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
@@ -728,6 +736,7 @@ class F5TTSModel(IVoiceModel):
                 "speaking_rate.safetensors",
             )
         self.current_f5_pipeline = pipeline_class(**pipeline_kwargs)
+        self._active_device = str(device)
 
         if F5TTSInstallSpec.is_rvc(mode):
             if self.rvc_handler and not self.rvc_handler.initialized:
@@ -746,6 +755,7 @@ class F5TTSModel(IVoiceModel):
     def cleanup_state(self):
         super().cleanup_state()
         self.current_f5_pipeline = None
+        self._active_device = None
         self.f5_pipeline_module = None
         self.clf5_pipeline_module = None
         self.ruaccent_instance = None
@@ -796,6 +806,16 @@ class F5TTSModel(IVoiceModel):
         mode = self._mode()
         settings = self.parent.load_model_settings(mode)
         is_combined_model = F5TTSInstallSpec.is_rvc(mode)
+        device_key = "f5rvc_f5_device" if is_combined_model else "device"
+        selected_device = str(
+            settings.get(device_key, "cuda" if self.parent.provider == "NVIDIA" else "cpu")
+        )
+        if self._active_device and selected_device != self._active_device:
+            self.current_f5_pipeline = None
+            self.initialized = False
+            self.initialized_for = None
+            if not self.initialize():
+                raise RuntimeError(f"F5-TTS failed to switch to {selected_device}")
 
         output_file = kwargs.get("output_file")
         if not output_file:
@@ -919,6 +939,7 @@ class F5TTSModel(IVoiceModel):
                     filter_radius=int(settings.get("f5rvc_filter_radius", 3)),
                     rms_mix_rate=float(settings.get("f5rvc_rvc_rms_mix_rate", 0.5)),
                     is_half=str(settings.get("f5rvc_is_half", "True")).lower() == "true",
+                    device=str(settings.get("f5rvc_rvc_device", "cuda:0") or "cuda:0"),
                     f0method=settings.get("f5rvc_f0method", None),
                     use_index_file=bool(settings.get("f5rvc_use_index_file", True)),
                     volume=vol

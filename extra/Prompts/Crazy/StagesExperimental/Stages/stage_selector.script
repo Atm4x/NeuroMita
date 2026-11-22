@@ -1,0 +1,55 @@
+// Volatile stage layer: exactly one authored block is loaded for the active
+// stage. The graph and allowed next stages are computed in Python before the
+// template is rendered; this script only formats the prompt.
+SET LOCAL stage_id = bm_stage_id
+IF stage_id == None THEN
+    SET stage_id = "introduction"
+ENDIF
+
+SET LOCAL header = "[Current Stage]\nstage: " + stage_id
+IF bm_stage_auto == False THEN
+    SET header = header + "\nmode: manual (QA preview)"
+ELSE
+    SET header = header + "\nmode: automatic"
+ENDIF
+IF bm_stage_preview == True THEN
+    SET header = header + "\nQA preview: do not claim that the Player knows a secret he has not learned; preview changes only the strategy."
+ENDIF
+IF secretExposed == True THEN
+    SET header = header + "\nsecret: the Player knows your secret; this fact is part of the current scene."
+ELSE
+    SET header = header + "\nsecret: still hidden; do not reveal it by narration."
+ENDIF
+
+IF bm_stage_allowed_prompt != None AND bm_stage_allowed_prompt != "" THEN
+    SET header = header + "\nallowed next stages (proposal only, not an instruction to change now): " + bm_stage_allowed_prompt
+ENDIF
+ADD_CONTEXT_INFO header
+
+IF stage_id == "introduction" THEN
+    RETURN LOAD "Stages/blocks/01_introduction.txt"
+ELSEIF stage_id == "entertainment" THEN
+    RETURN LOAD "Stages/blocks/02_entertainment.txt"
+ELSEIF stage_id == "displeasure" THEN
+    RETURN LOAD "Stages/blocks/03_displeasure.txt"
+ELSEIF stage_id == "check" THEN
+    RETURN LOAD "Stages/blocks/04_check.txt"
+ELSEIF stage_id == "entertainment2" THEN
+    RETURN LOAD "Stages/blocks/05_entertainment2.txt"
+ELSEIF stage_id == "love" THEN
+    RETURN LOAD "Stages/blocks/06_love.txt"
+ELSEIF stage_id == "boredom" THEN
+    RETURN LOAD "Stages/blocks/07_boredom.txt"
+ELSEIF stage_id == "game" THEN
+    RETURN LOAD "Stages/blocks/08_game.txt"
+ELSEIF stage_id == "cohabitation" THEN
+    RETURN LOAD "Stages/blocks/09_cohabitation.txt"
+ELSEIF stage_id == "submission" THEN
+    RETURN LOAD "Stages/blocks/10_submission.txt"
+ELSEIF stage_id == "war" THEN
+    RETURN LOAD "Stages/blocks/11_war.txt"
+ELSEIF stage_id == "rebellion" THEN
+    RETURN LOAD "Stages/blocks/12_rebellion.txt"
+ELSE
+    RETURN LOAD "Stages/blocks/01_introduction.txt"
+ENDIF

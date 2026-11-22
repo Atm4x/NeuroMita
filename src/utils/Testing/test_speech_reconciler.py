@@ -22,6 +22,10 @@ if str(PROJECT_SRC) not in sys.path:
 
 import controllers.speech_controller as speech_module
 from controllers.speech_controller import SpeechController
+from domain.audio_input import AudioInputCatalog
+from services.microphone_selection import MicrophoneSelectionService
+from infrastructure.settings.microphone_preferences import SettingsMicrophonePreferences
+from types import SimpleNamespace
 from core.events import Event
 
 
@@ -50,12 +54,13 @@ class _FakeAsrSettings:
 class _FakeRecognition:
     """Движок ASR. Старт умеет быть медленным — как загрузка модели в жизни."""
 
-    def __init__(self, *, start_delay: float = 0.0):
+    def __init__(self, *, start_delay: float = 0.0, switch_result: bool = True):
         self.running = False
         self.events: list[str] = []
         self.start_delay = start_delay
         self.engine = "google"
         self.applied: list[str] = []
+        self.switch_result = switch_result
         self._lock = threading.Lock()
 
     def speech_recognition_start(self, _device_id, _loop):
@@ -69,6 +74,12 @@ class _FakeRecognition:
         with self._lock:
             self.running = False
             self.events.append("stop")
+
+    def speech_recognition_switch_microphone(self, device_id):
+        device_id = getattr(device_id, "index", device_id) or 0
+        with self._lock:
+            self.events.append(f"switch:{device_id}")
+        return self.switch_result
 
     def set_recognizer_type(self, engine):
         self.engine = engine
@@ -84,13 +95,20 @@ class _SpeechReconcilerCase(unittest.TestCase):
     def tearDown(self):
         speech_module.SpeechRecognition = self._saved_recognition
 
-    def _make(self, *, mic_active=True, start_delay=0.0):
-        recognition = _FakeRecognition(start_delay=start_delay)
+    def _make(self, *, mic_active=True, start_delay=0.0, switch_result=True):
+        recognition = _FakeRecognition(
+            start_delay=start_delay,
+            switch_result=switch_result,
+        )
         speech_module.SpeechRecognition = recognition
 
         settings = _FakeSettings({"MIC_ACTIVE": mic_active})
         controller = SpeechController.__new__(SpeechController)
         controller.settings = settings
+        controller._microphone_service_instance = MicrophoneSelectionService(
+            SettingsMicrophonePreferences(settings),
+            SimpleNamespace(read=lambda **kwargs: AudioInputCatalog()),
+        )
         controller.asr_settings = _FakeAsrSettings()
         controller.device_id = 0
         controller.mic_recognition_active = False
@@ -105,6 +123,7 @@ class _SpeechReconcilerCase(unittest.TestCase):
         controller._running_engine = None
         controller._shutting_down = False
         controller._restart_requested = False
+        controller._full_restart_requested = False
         controller._task_seq = count(1)
 
         # Заглушка ровно на «запустить движок»: проверяем логику согласования,
@@ -217,16 +236,41 @@ class SpeechReconcilerTests(_SpeechReconcilerCase):
         self.assertFalse(controller.mic_recognition_active)
         self.assertEqual(controller.device_id, 3)
 
-    def test_explicit_restart_reopens_the_engine_when_mic_stays_on(self):
+    def test_microphone_change_switches_capture_without_restarting_engine(self):
         controller, recognition, _ = self._make()
         controller._reconcile_once()
 
         controller._on_restart_speech_recognition(Event("restart", {"device_id": 7}))
 
         self.assertTrue(self._wait_settled(controller))
-        self.assertEqual(recognition.events, ["start", "stop", "start"])
+        self.assertEqual(recognition.events, ["start", "switch:7"])
         self.assertTrue(recognition.running)
         self.assertEqual(controller.device_id, 7)
+
+    def test_failed_capture_switch_falls_back_to_full_restart(self):
+        controller, recognition, _ = self._make(switch_result=False)
+        controller._reconcile_once()
+
+        controller._on_restart_speech_recognition(Event("restart", {"device_id": 4}))
+
+        self.assertTrue(self._wait_settled(controller))
+        self.assertEqual(
+            recognition.events,
+            ["start", "switch:4", "stop", "start"],
+        )
+        self.assertTrue(recognition.running)
+
+    def test_manual_full_restart_does_not_use_capture_only_switch(self):
+        controller, recognition, _ = self._make()
+        controller._reconcile_once()
+
+        controller._on_restart_speech_recognition(
+            Event("restart", {"full_restart": True})
+        )
+
+        self.assertTrue(self._wait_settled(controller))
+        self.assertEqual(recognition.events, ["start", "stop", "start"])
+        self.assertTrue(recognition.running)
 
     def test_explicit_stop_turns_the_setting_off(self):
         """STOP приходит от движка при ошибке рантайма: чекбокс не должен врать."""
@@ -261,20 +305,25 @@ class SpeechReconcilerTests(_SpeechReconcilerCase):
         controller._reconcile_once()
         self.assertEqual(recognition.events, ["start"])
 
-        # Выключение приходит ровно в момент остановки старого распознавателя.
-        original_stop = recognition.speech_recognition_stop
+        # Выключение приходит ровно в момент переоткрытия аудиопотока.
+        original_switch = recognition.speech_recognition_switch_microphone
 
-        def stop_and_toggle_off():
-            original_stop()
+        def switch_and_toggle_off(device_id):
+            result = original_switch(device_id)
             settings.set("MIC_ACTIVE", False)
+            return result
 
-        recognition.speech_recognition_stop = stop_and_toggle_off
+        recognition.speech_recognition_switch_microphone = switch_and_toggle_off
         with controller._state_lock:
             controller._restart_requested = True
 
         controller._reconcile_once()
 
-        self.assertEqual(recognition.events, ["start", "stop"], "лишнего старта быть не должно")
+        self.assertEqual(
+            recognition.events,
+            ["start", "switch:0", "stop"],
+            "лишнего старта быть не должно",
+        )
         self.assertFalse(recognition.running)
         self.assertFalse(controller.mic_recognition_active)
 

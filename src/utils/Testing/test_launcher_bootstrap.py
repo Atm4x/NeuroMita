@@ -35,6 +35,21 @@ def test_launcher_is_bound_to_the_interpreter_that_started_it() -> None:
     assert launcher.PYTHON == Path(sys.executable)
 
 
+def test_core_requirements_exclude_legacy_docopt_sources() -> None:
+    requirements = (SOURCE_ROOT.parent / "requirements.txt").read_text(encoding="utf-8")
+    specs = {
+        line.split("#", 1)[0].strip().lower()
+        for line in requirements.splitlines()
+        if line.split("#", 1)[0].strip()
+    }
+
+    assert not any(spec == "docopt" or spec.startswith("docopt-") for spec in specs)
+    assert "pymorphy2" not in specs
+    assert "pymorphy3==2.0.6" in specs
+    assert not any(spec == "num2words" or spec.startswith("num2words==") for spec in specs)
+    assert "num2words2==1.0.20" in specs
+
+
 def test_launcher_uv_is_isolated_from_embedded_python_scripts() -> None:
     launcher = _load_launcher()
     assert launcher.UV_TARGET == launcher.ROOT / ".bootstrap" / "uv"
@@ -506,42 +521,19 @@ def test_core_health_rejects_unowned_top_level_payload(tmp_path, monkeypatch) ->
     assert launcher.core_is_healthy() is False
 
 
-def test_launcher_applies_g4f_override_through_effective_core_requirements(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_launcher_ignores_retired_g4f_settings(tmp_path, monkeypatch):
     launcher = _load_launcher()
     requirements = tmp_path / "requirements.txt"
-    requirements.write_text("g4f[all]==0.4.7.7\nexample-package==1.0\n", encoding="utf-8")
-    settings_file = tmp_path / "Settings" / "settings.json"
-    settings_file.parent.mkdir(parents=True)
-    settings_file.write_text(
-        json.dumps(
-            {
-                "G4F_VERSION": "0.4.7.7",
-                "G4F_UPDATE_PENDING": True,
-                "G4F_TARGET_VERSION": "0.5.0",
-            }
-        ),
-        encoding="utf-8",
-    )
+    requirements.write_text("example-package==1.0\n", encoding="utf-8")
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"G4F_UPDATE_PENDING": True, "G4F_TARGET_VERSION": "0.5.0"}))
+    original = settings_file.read_bytes()
     monkeypatch.setattr(launcher, "REQ_FILE", requirements)
     monkeypatch.setattr(launcher, "SETTINGS_FILE", settings_file)
     monkeypatch.setattr(launcher, "BOOTSTRAP_DIR", tmp_path / ".bootstrap")
-    monkeypatch.setattr(
-        launcher,
-        "EFFECTIVE_REQ_FILE",
-        tmp_path / ".bootstrap" / "effective-requirements.txt",
-    )
-
-    text, desired = launcher._effective_requirements_text()
-
-    assert desired == "0.5.0"
-    assert "g4f[all]==0.5.0" in text
-    assert "g4f[all]==0.4.7.7" not in text
-
-    launcher._mark_pending_g4f_update_applied()
-    saved = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert saved["G4F_VERSION"] == "0.5.0"
-    assert saved["G4F_UPDATE_PENDING"] is False
-    assert saved["G4F_TARGET_VERSION"] is None
+    monkeypatch.setattr(launcher, "EFFECTIVE_REQ_FILE", tmp_path / ".bootstrap/effective-requirements.txt")
+    monkeypatch.setattr(launcher, "_AUDITED_NO_DEPS_REQUIREMENTS", ())
+    path, no_deps = launcher._write_effective_requirements()
+    assert path.read_text() == "example-package==1.0\n"
+    assert no_deps == ()
+    assert settings_file.read_bytes() == original

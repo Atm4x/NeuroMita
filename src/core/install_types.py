@@ -48,3 +48,4 @@ class InstallPlan:
     backend_context: dict[str, Any] = field(default_factory=dict)
     environment_id: Optional[str] = None
     environment_managed: bool = True
+    unsupported_reason: str = ""

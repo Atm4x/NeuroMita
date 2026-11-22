@@ -13,17 +13,14 @@ charset-normalizer==3.4.1
 colorama==0.4.6
 colorlog==6.9.0
 distro==1.9.0
-docopt-ng==0.9.0
 eval-type-backport==0.2.2
 ffmpeg-python==0.2.0
 frozenlist==1.5.0
 future==1.0.0
-# g4f==0.4.8.3
-# g4f~=0.4.7.7
-h11>=0.16,<1
-httpcore>=1.0.9,<2
-httpx==0.28.1
-idna>=3.18,<4
+h11==0.14.0
+httpcore==1.0.7
+# httpx==0.28.1
+idna==3.10
 jiter==0.8.2
 jsonpath-python==1.0.6
 macholib==1.16.3
@@ -33,7 +30,6 @@ mypy-extensions==1.0.0
 nest-asyncio==1.6.0
 num2words2==1.0.20
 # numpy==2.2.3
-openai==1.61.1
 packaging==24.2
 pefile==2023.2.7
 pip==25.0.1
@@ -43,8 +39,8 @@ pyasn1==0.6.1
 pyaudio==0.2.14
 pycparser==2.22
 pycryptodome==3.21.0
-pydantic>=2.12,<3
-pydantic-core>=2.41,<3
+pydantic==2.10.6
+pydantic-core==2.27.2
 pygame==2.6.1
 python-dateutil==2.9.0.post0
 regex>=2025.10.22
@@ -59,7 +55,7 @@ speechrecognition==3.14.1
 telethon==1.38.1
 tiktoken==0.8.0
 tqdm==4.67.1
-typing-extensions>=4.13,<5
+typing-extensions==4.12.2
 typing-inspect==0.9.0
 urllib3==2.3.0
 yarl==1.18.3
@@ -67,7 +63,7 @@ emoji
 nodriver
 platformdirs
 dotenv
-pymorphy2
+pymorphy3==2.0.6
 # tools reqs
 ddgs
 bs4
@@ -77,9 +73,9 @@ bs4
 pyworld==0.3.5
 onnx
 numpy==1.26.0
-httpx2>=2.5.0
+httpx==0.27.0
 h2>=4.1,<5
-pywin32>=311
+pywin32
 py7zr
 uvicorn
 google-cloud-storage

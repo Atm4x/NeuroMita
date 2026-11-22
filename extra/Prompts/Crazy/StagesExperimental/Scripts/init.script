@@ -1,0 +1,46 @@
+RUN ../../../Common/world_knowledge.script
+IF SEED_CHARACTER_MEMORIES != False THEN
+	RUN ./character_seed.script
+ENDIF
+
+LOG "Initialization of variables"
+
+IF Love == None THEN
+	LOG "Love is null"
+	SET Love = 1
+	LOG f"now it is: {Love}"
+ELSE 
+	LOG f"Love is not null {Love}"
+ENDIF
+
+// Fallback defaults for the experimental graph. Python owns validation and
+// transitions; these values only make the first render deterministic if the
+// saved character has not seen the new set before.
+IF bm_stage_schema_version == None THEN
+	SET bm_stage_schema_version = 1
+ENDIF
+IF bm_stage_id == None THEN
+	SET bm_stage_id = "introduction"
+ENDIF
+IF bm_stage_auto == None THEN
+	SET bm_stage_auto = True
+ENDIF
+IF bm_stage_qa_enabled == None THEN
+	SET bm_stage_qa_enabled = True
+ENDIF
+IF bm_stage_show_in_unity == None THEN
+	SET bm_stage_show_in_unity = True
+ENDIF
+IF bm_stage_preview == None THEN
+	SET bm_stage_preview = False
+ENDIF
+IF bm_stage_stage_turns == None THEN
+	SET bm_stage_stage_turns = 0
+ENDIF
+IF bm_stage_min_turns == None THEN
+	SET bm_stage_min_turns = 3
+ENDIF
+
+//SET count_times = count_times + 1
+
+LOG "Initialization of variables"

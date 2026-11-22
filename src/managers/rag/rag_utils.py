@@ -55,14 +55,39 @@ def make_reindex_progress_logger(rag_manager, op: str, total: int, extra_meta: s
 
 # --- Keyword Search Logic (from rag_keyword_search.py) ---
 
+# Canonical ENTITIES names are often English, while players ask in Russian.
+_ENTITY_ALIASES = (
+    ("Crazy Mita", "Безумная Мита", r"(?<!\w)безумн\w*(?:\s+мит\w*)?(?!\w)"),
+    ("Kind Mita", "Добрая Мита", r"(?<!\w)добр(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
+    ("Cappie", "Кепочка", r"(?<!\w)кепочк\w*(?!\w)"),
+    ("Mila", "Мила", r"(?<!\w)мил(?:а|ы|е|у|ой|ою)(?!\w)"),
+    ("Short-Haired Mita", "Коротковолосая Мита", r"(?<!\w)коротковолос\w*(?:\s+мит\w*)?(?!\w)"),
+    ("Creepy Mita", "Жуткая Мита", r"(?<!\w)жутк(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
+    ("Sleepy Mita", "Сонная Мита", r"(?<!\w)сонн(?:ая|ой|ую|ою)(?:\s+мит\w*)?(?!\w)"),
+)
+
+
+def entity_alias_phrases(query: str) -> List[str]:
+    """Translate recognized character names for memory-only lexical lookup."""
+    text = str(query or "").casefold()
+    names: List[str] = []
+    for canonical, localized, localized_pattern in _ENTITY_ALIASES:
+        if re.search(r"(?<!\w)" + re.escape(canonical.casefold()) + r"(?!\w)", text):
+            names.append(localized)
+        elif re.search(localized_pattern, text):
+            names.append(canonical)
+    return names
+
+
+
 TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 CYR_RE = re.compile(r"[А-Яа-яЁё]")
 
 
 @lru_cache(maxsize=1)
 def _get_morph():
-    import pymorphy2  # type: ignore
-    return pymorphy2.MorphAnalyzer()
+    import pymorphy3  # type: ignore
+    return pymorphy3.MorphAnalyzer()
 
 
 @lru_cache(maxsize=1)
@@ -241,6 +266,7 @@ def keyword_score(
 
 # --- FTS Helpers (moved from RAGManager) ---
 
+@lru_cache(maxsize=1024)
 def fts_morph_expand_token(token: str, *, max_forms: int = 20) -> List[str]:
     """Return all word forms for a Cyrillic token using pymorphy2.
 
@@ -260,8 +286,7 @@ def fts_morph_expand_token(token: str, *, max_forms: int = 20) -> List[str]:
             w = form.word.strip().lower()
             if w:
                 forms.add(w)
-        result = sorted(forms)
-        return result[:max_forms]
+        return ([t] + sorted(forms - {t}))[:max_forms]
     except Exception:
         return [t]
 
@@ -273,6 +298,7 @@ def fts_build_match_query(
     min_len: int,
     morph_expand: bool = False,
     prefix_match: bool = False,
+    from_end: bool = False,
 ) -> str:
     """Build an FTS5 MATCH query string.
 
@@ -294,7 +320,9 @@ def fts_build_match_query(
     cleaned = rag_clean_text(str(text or ""))
     if not cleaned:
         return ""
-    tokens = re.findall(r"[0-9A-Za-zА-Яа-я_]+", cleaned.lower())
+    tokens = re.findall(r"[0-9A-Za-zА-Яа-яЁё_]+", cleaned.lower())
+    if from_end:
+        tokens.reverse()
 
     all_terms: List[str] = []   # final FTS terms joined by OR
     base_count = 0

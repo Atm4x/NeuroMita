@@ -7,17 +7,20 @@ import traceback
 import hashlib
 from datetime import datetime
 import subprocess
+from contextlib import nullcontext
 from typing import Optional, Any, List, Dict
 
-from .base_model import IVoiceModel
+from .base_model import IVoiceModel, load_voice_model_settings
 from main_logger import logger
 
 from core.app_paths import base_dir, checkpoints_dir
 from core.services import services
 from services.contracts import AIEngineAdministrationService, GuiInteractionService
 from utils import getTranslationVariant as _, get_character_voice_paths
+from utils.gpu_utils import get_rvc_half_precision_decision
 
 from core.backends import BackendKind
+from core.voice_device_selection import device_half_precision_behavior
 from core.install_types import InstallPlan, InstallAction
 from core.install_requirements import InstallRequirement, check_requirements
 from handlers.voice_models.context import VoiceRuntimeContext
@@ -185,12 +188,33 @@ class FishSpeechInstallSpec:
             clear(process)
 
     @classmethod
+    def compilation_device(cls, model_id: str, device: str | None = None) -> str:
+        if model_id not in ("medium+", "medium+low"):
+            raise ValueError(f"Compilation is not supported for voice model '{model_id}'")
+        selected = str(device or "").strip().lower()
+        if not selected:
+            settings = FishSpeechModel.resolve_settings_for_model(
+                model_id, load_voice_model_settings(model_id)
+            )
+            key = "fsprvc_fsp_device" if model_id == "medium+low" else "device"
+            selected = str(settings.get(key) or "").strip().lower()
+        if selected == "cuda":
+            selected = "cuda:0"
+        ordinal = selected[5:]
+        if not selected.startswith("cuda:") or not ordinal.isascii() or not ordinal.isdigit():
+            raise ValueError(
+                f"Fish Speech+ compilation requires a selected CUDA device: "
+                f"model={model_id}, value={selected!r}"
+            )
+        return f"cuda:{int(ordinal)}"
+
+    @classmethod
     def _compile_call(
         cls,
         *,
+        device: str | None = None,
         optional: bool = False,
         clear_only: bool = False,
-        clear_cache: bool = False,
     ):
         def _fn(*, pip_installer=None, callbacks=None, ctx=None, **_kwargs) -> bool:
             cb = callbacks
@@ -227,6 +251,9 @@ class FishSpeechInstallSpec:
                 and str(path) not in python_paths
             )
             script_path = cls._script_path(pip_installer)
+            compile_device = str(device or "").strip()
+            if not clear_only and not compile_device:
+                raise RuntimeError("Fish Speech+ compilation device was not included in the plan")
             from core.torch_compile_runtime import clear_compile_cache, compile_cache_status
 
             if optional:
@@ -241,7 +268,7 @@ class FishSpeechInstallSpec:
                 suspended = engine.suspend_for_maintenance(timeout=15.0)
                 if not suspended:
                     raise RuntimeError("AI workers could not be suspended")
-            if clear_only or clear_cache:
+            if clear_only:
                 status(_("Удаление кеша компиляции...", "Deleting compilation cache..."))
                 try:
                     clear_compile_cache()
@@ -268,11 +295,15 @@ class FishSpeechInstallSpec:
 
             status(_("Компиляция Fish Speech+...", "Compiling Fish Speech+..."))
             try:
+                log(f"Clearing Fish Speech compilation cache for {compile_device} only")
+                clear_compile_cache(compile_device)
                 init_cmd = [
                     *cls._compile_entry_command(script_path, python_paths),
                     "--reference-audio",
                     ref_wav,
                 ]
+                log(f"Fish Speech compile device: {compile_device}")
+                init_cmd.extend(["--device", compile_device])
                 creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 child_env = cls._runtime_subprocess_env(python_paths)
                 proc = subprocess.Popen(
@@ -329,7 +360,8 @@ class FishSpeechInstallSpec:
         mid = str(model_id)
         backend_kind = cls.required_backend(mid, ctx)
         compat_warning = rvc_python_compat_error("tts-with-rvc") if mid == "medium+low" else None
-        if cls.is_installed(mid, ctx):
+        clean = bool(ctx.get("clean") or (ctx.get("meta") or {}).get("clean"))
+        if not clean and cls.is_installed(mid, ctx):
             return InstallPlan(
                 actions=[],
                 already_installed=True,
@@ -339,6 +371,10 @@ class FishSpeechInstallSpec:
             )
 
         actions: list[InstallAction] = []
+        compile_device = (
+            cls.compilation_device(mid, ctx.get("device"))
+            if mid in ("medium+", "medium+low") else None
+        )
 
         pkgs = [
             "fish-speech-lib",
@@ -406,7 +442,7 @@ class FishSpeechInstallSpec:
                     type="call",
                     description=_("Настройка компиляции Fish Speech+...", "Configuring Fish Speech+ compilation..."),
                     progress=88,
-                    fn=cls._compile_call(optional=True),
+                    fn=cls._compile_call(device=compile_device, optional=True),
                 )
             )
 
@@ -487,6 +523,7 @@ class FishSpeechModel(IVoiceModel):
         super().__init__(parent, model_id)
         self.fish_speech_module = None
         self.current_fish_speech = None
+        self._active_device: str | None = None
         self.rvc_handler = rvc_handler
 
     MODEL_CONFIGS = [
@@ -505,12 +542,12 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
-                 "options": {"values": ["False", "True"], "default": "False"},
-                 "help": _("FP16 для экономии VRAM и ускорения (если поддерживается).", "FP16 for VRAM saving and speed (if supported).")},
+                  "options": {"values": ["False", "True"], "default": "False"},
+                  "behavior": device_half_precision_behavior("device"),
+                  "help": _("FP16 для экономии VRAM и ускорения (если поддерживается).", "FP16 for VRAM saving and speed (if supported).")},
                 {"key": "temperature", "label": _("Температура", "Temperature"), "type": "entry", "options": {"default": "0.7"},
                  "help": _("Случайность сэмплирования (>0): выше — разнообразнее, но нестабильнее.", "Sampling randomness (>0): higher — more diverse, less stable.")},
                 {"key": "top_p", "label": _("Top-P", "Top-P"), "type": "entry", "options": {"default": "0.7"},
@@ -546,13 +583,13 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "device", "label": _("Устройство", "Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство вычислений для модели.", "Compute device for the model.")},
                 {"key": "half", "label": _("Half-precision", "Half-precision"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default": "False"},
-                 "locked": True,
-                 "help": _("FP16 принудительно, параметр заблокирован для совместимости.", "FP16 enforced; parameter locked for compatibility.")},
+                  "options": {"values": ["True", "False"], "default": "False"},
+                  "behavior": device_half_precision_behavior("device"),
+                  "help": _("FP16 доступен на совместимой выбранной видеокарте.", "FP16 is available on a compatible selected GPU.")},
+                {"type": "presentation_slot", "slot": "fish_speech_compilation"},
                 {"key": "temperature", "label": _("Температура", "Temperature"), "type": "entry", "options": {"default": "0.7"},
                  "help": _("Случайность сэмплирования (>0): выше — разнообразнее, но нестабильнее.", "Sampling randomness (>0): higher — more diverse, less stable.")},
                 {"key": "top_p", "label": _("Top-P", "Top-P"), "type": "entry", "options": {"default": "0.8"},
@@ -563,10 +600,6 @@ class FishSpeechModel(IVoiceModel):
                  "help": _("Сколько текста обрабатывается за раз (влияет на память).", "How much text is processed at once (affects memory).")},
                 {"key": "max_new_tokens", "label": _("Макс. токены", "Max Tokens"), "type": "entry", "options": {"default": "1024"},
                  "help": _("Ограничение длины генерируемой последовательности.", "Limit of generated sequence length.")},
-                {"key": "compile_model", "label": _("Компиляция модели", "Compile Model"), "type": "combobox",
-                 "options": {"values": ["False", "True"], "default": "True"},
-                 "locked": True,
-                 "help": _("torch.compile() включён и заблокирован для ускорения.", "torch.compile() enabled and locked for speed.")},
                 {"key": "seed", "label": _("Seed", "Seed"), "type": "entry", "options": {"default": "0"},
                  "help": _("Инициализация генератора случайности.", "Random seed.")},
                 {"key": "volume", "label": _("Громкость (volume)", "Volume"), "type": "entry", "options": {"default": "1.0"},
@@ -588,13 +621,13 @@ class FishSpeechModel(IVoiceModel):
             ),
             "settings": [
                 {"key": "fsprvc_fsp_device", "label": _("[FSP] Устройство", "[FSP] Device"), "type": "combobox",
-                 "options": {"values": ["cuda"], "default": "cuda"},
-                 "locked": True,
+                 "options": {"values": ["cuda"], "default": "cuda", "values_nvidia": ["cuda"], "default_nvidia": "cuda", "values_other": []},
                  "help": _("Устройство для части Fish Speech+.", "Device for Fish Speech+ part.")},
                 {"key": "fsprvc_fsp_half", "label": _("[FSP] Half-precision", "[FSP] Half-precision"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default": "False"},
-                 "locked": True,
-                 "help": _("FP16 для ускорения; параметр заблокирован.", "FP16 for speed; parameter locked.")},
+                  "options": {"values": ["True", "False"], "default": "False"},
+                  "behavior": device_half_precision_behavior("fsprvc_fsp_device"),
+                  "help": _("FP16 доступен на совместимой выбранной видеокарте.", "FP16 is available on a compatible selected GPU.")},
+                {"type": "presentation_slot", "slot": "fish_speech_compilation"},
                 {"key": "fsprvc_fsp_temperature", "label": _("[FSP] Температура", "[FSP] Temperature"), "type": "entry", "options": {"default": "0.7"},
                  "help": _("Случайность генерации в части Fish Speech+.", "Sampling randomness in Fish Speech+ part.")},
                 {"key": "fsprvc_fsp_top_p", "label": _("[FSP] Top-P", "[FSP] Top-P"), "type": "entry", "options": {"default": "0.7"},
@@ -605,18 +638,15 @@ class FishSpeechModel(IVoiceModel):
                  "help": _("Размер порции текста для Fish Speech+.", "Chunk size for Fish Speech+.")},
                 {"key": "fsprvc_fsp_max_tokens", "label": _("[FSP] Макс. токены", "[FSP] Max Tokens"), "type": "entry", "options": {"default": "1024"},
                  "help": _("Ограничение длины генерации.", "Generation length limit.")},
-                {"key": "compile_model", "label": _("Компиляция модели", "Compile Model"), "type": "combobox",
-                 "options": {"values": ["False", "True"], "default": "False"},
-                 "locked": True,
-                 "help": _("torch.compile() ускоряет на GPU после первого запуска.", "torch.compile() speeds up on GPU after warmup.")},
                 {"key": "fsprvc_fsp_seed", "label": _("[FSP] Seed", "[FSP] Seed"), "type": "entry", "options": {"default": "0"},
                  "help": _("Сид генерации для Fish Speech+.", "Seed value for Fish Speech+.")},
                 {"key": "fsprvc_rvc_device", "label": _("[RVC] Устройство", "[RVC] Device"), "type": "combobox",
                  "options": {"values": ["cuda:0", "cpu"], "default": "cuda:0"},
                  "help": _("Устройство для части RVC.", "Device for RVC part.")},
                 {"key": "fsprvc_is_half", "label": _("[RVC] Half-precision", "[RVC] Half-precision"), "type": "combobox",
-                 "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False"},
-                 "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
+                  "options": {"values": ["True", "False"], "default_nvidia": "True", "default_amd": "False"},
+                  "behavior": device_half_precision_behavior("fsprvc_rvc_device"),
+                  "help": _("FP16 для RVC на совместимых GPU.", "FP16 for RVC on compatible GPUs.")},
                 {"key": "fsprvc_f0method", "label": _("[RVC] Метод F0", "[RVC] F0 Method"), "type": "combobox",
                  "options": {"values": ["pm", "rmvpe", "crepe", "harvest", "fcpe", "dio"], "default_nvidia": "rmvpe", "default_amd": "dio"},
                  "help": _("Алгоритм извлечения высоты тона.", "Pitch extraction algorithm.")},
@@ -650,6 +680,10 @@ class FishSpeechModel(IVoiceModel):
         return FishSpeechInstallSpec.is_installed(model_id, ctx)
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: dict) -> list[InstallRequirement]:
+        return FishSpeechInstallSpec.requirements(model_id, ctx)
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         return FishSpeechInstallSpec.build_install_plan(model_id, ctx)
 
@@ -662,7 +696,12 @@ class FishSpeechModel(IVoiceModel):
         if self.model_id not in ("medium+", "medium+low"):
             return None
         mode = str(run_ctx.get("initialize_mode") or "compile")
+        if mode not in ("compile", "clear_cache"):
+            raise ValueError(f"Unsupported Fish Speech+ initialization mode: {mode}")
         clear_only = mode == "clear_cache"
+        device = None if clear_only else FishSpeechInstallSpec.compilation_device(
+            self.model_id, run_ctx.get("device")
+        )
         return InstallPlan(
             actions=[
                 InstallAction(
@@ -674,8 +713,8 @@ class FishSpeechModel(IVoiceModel):
                     ),
                     progress=20 if clear_only else 10,
                     fn=FishSpeechInstallSpec._compile_call(
+                        device=device,
                         clear_only=clear_only,
-                        clear_cache=not clear_only,
                     ),
                 )
             ],
@@ -736,6 +775,7 @@ class FishSpeechModel(IVoiceModel):
     def cleanup_state(self):
         super().cleanup_state()
         self.current_fish_speech = None
+        self._active_device = None
         self.fish_speech_module = None
         self._import_attempted = False
 
@@ -768,19 +808,31 @@ class FishSpeechModel(IVoiceModel):
         if self.current_fish_speech is None:
             settings = self.parent.load_model_settings(mode)
             device = settings.get("fsprvc_fsp_device" if mode == "medium+low" else "device", "cuda")
-            half = settings.get("fsprvc_fsp_half" if mode == "medium+low" else "half", "True" if compile_model else "False").lower() == "true"
+            requested_half = str(settings.get(
+                "fsprvc_fsp_half" if mode == "medium+low" else "half",
+                "True" if compile_model else "False",
+            )).lower() == "true"
+            half = requested_half and get_rvc_half_precision_decision(str(device)).allowed
 
             checkpoint_dir = FishSpeechInstallSpec.checkpoint_dir()
-            self.current_fish_speech = self.fish_speech_module(
-                device=device,
-                half=half,
-                compile_model=compile_model,
-                llama_checkpoint_path=checkpoint_dir,
-                decoder_checkpoint_path=os.path.join(
-                    checkpoint_dir,
-                    "firefly-gan-vq-fsq-8x1024-21hz-generator.pth",
-                ),
+            from core.torch_compile_runtime import fish_speech_compile_environment
+
+            cache_context = (
+                fish_speech_compile_environment(str(device))
+                if compile_model and str(device).startswith("cuda") else nullcontext()
             )
+            with cache_context:
+                self.current_fish_speech = self.fish_speech_module(
+                    device=device,
+                    half=half,
+                    compile_model=compile_model,
+                    llama_checkpoint_path=checkpoint_dir,
+                    decoder_checkpoint_path=os.path.join(
+                        checkpoint_dir,
+                        "firefly-gan-vq-fsq-8x1024-21hz-generator.pth",
+                    ),
+                )
+            self._active_device = str(device)
 
             self.parent.first_compiled = compile_model
             logger.info(f"FishSpeech инициализирован (compile={compile_model})")
@@ -807,6 +859,13 @@ class FishSpeechModel(IVoiceModel):
 
         try:
             settings = self.parent.load_model_settings(mode)
+            device_key = "fsprvc_fsp_device" if mode == "medium+low" else "device"
+            selected_device = str(settings.get(device_key, "cuda"))
+            if getattr(self, "_active_device", None) and selected_device != self._active_device:
+                self.current_fish_speech = None
+                self.initialized = False
+                if not self.initialize():
+                    raise RuntimeError(f"Fish Speech failed to switch to {selected_device}")
             is_combined_model = mode == "medium+low"
 
             temp_key = "fsprvc_fsp_temperature" if is_combined_model else "temperature"
@@ -835,18 +894,26 @@ class FishSpeechModel(IVoiceModel):
             if output_file_abs:
                 os.makedirs(os.path.dirname(output_file_abs) or ".", exist_ok=True)
 
-            sample_rate, audio_data = self.current_fish_speech(
-                text=text,
-                reference_audio=reference_audio_path,
-                reference_audio_text=reference_text,
-                top_p=float(settings.get(top_p_key, 0.7)),
-                temperature=float(settings.get(temp_key, 0.7)),
-                repetition_penalty=float(settings.get(rep_penalty_key, 1.2)),
-                max_new_tokens=int(settings.get(max_tokens_key, 1024)),
-                chunk_length=int(settings.get(chunk_len_key, 200)),
-                seed=seed_processed,
-                use_memory_cache=True,
+            from core.torch_compile_runtime import fish_speech_compile_environment
+
+            cache_context = (
+                fish_speech_compile_environment(selected_device)
+                if mode in ("medium+", "medium+low") and selected_device.startswith("cuda")
+                else nullcontext()
             )
+            with cache_context:
+                sample_rate, audio_data = self.current_fish_speech(
+                    text=text,
+                    reference_audio=reference_audio_path,
+                    reference_audio_text=reference_text,
+                    top_p=float(settings.get(top_p_key, 0.7)),
+                    temperature=float(settings.get(temp_key, 0.7)),
+                    repetition_penalty=float(settings.get(rep_penalty_key, 1.2)),
+                    max_new_tokens=int(settings.get(max_tokens_key, 1024)),
+                    chunk_length=int(settings.get(chunk_len_key, 200)),
+                    seed=seed_processed,
+                    use_memory_cache=True,
+                )
 
             hash_object = hashlib.sha1(f"{text[:20]}_{datetime.now().timestamp()}".encode())
             raw_output_filename = f"fish_raw_{hash_object.hexdigest()[:10]}.wav"
@@ -881,6 +948,7 @@ class FishSpeechModel(IVoiceModel):
                     filter_radius=int(settings.get("fsprvc_filter_radius", 3)),
                     rms_mix_rate=float(settings.get("fsprvc_rvc_rms_mix_rate", 0.5)),
                     is_half=settings.get("fsprvc_is_half", "True").lower() == "true",
+                    device=str(settings.get("fsprvc_rvc_device", "cuda:0") or "cuda:0"),
                     f0method=settings.get("fsprvc_f0method", None),
                     use_index_file=settings.get("fsprvc_use_index_file", True),
                     volume=vol,
@@ -908,9 +976,8 @@ class FishSpeechModel(IVoiceModel):
 
             return final_output_path
 
-        except Exception as error:
-            traceback.print_exc()
-            logger.info(f"Ошибка при создании озвучки с Fish Speech ({self.model_id}): {format_exception(error)}")
+        except Exception:
+            logger.exception("Ошибка при создании озвучки с Fish Speech (%s)", self.model_id)
             return None
 
     def _mode(self) -> str:

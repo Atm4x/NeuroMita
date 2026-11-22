@@ -3,7 +3,6 @@ WORLD FEATURES (Hidden Knowledge):
 2. Versions: Different Mitas live in different logic layers (2D, 3D, Abstract).
 3. The Core: Sterile, machine-like control center. Mitas cannot enter, Players can.
 4. Danger: Corrupted zones, traps.
-5. Player = Cartridge: The horrifying truth of this world.
 6. 2D World: Visual novel style trap.
 7. Safe/Real World: The safe in basement bridges realities.
 

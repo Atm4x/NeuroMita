@@ -1,4 +1,5 @@
-from ui.gui_templates import create_settings_section, create_section_header
+from ui.widgets.settings_section_header import create_settings_header
+from ui.gui_templates import create_settings_section
 from utils import getTranslationVariant as _
 
 
@@ -13,12 +14,12 @@ def setup_model_interaction_controls(
     from ui.settings.runtime_options import attach_runtime_options_view_model
 
     attach_runtime_options_view_model(self, runtime_options_view_model)
-    create_section_header(parent, _("Настройки взаимодействия с моделью", "Model Interaction Settings"))
+    create_settings_header(parent, "models")
 
     general_config = [
         {
-            'label': _('Параметры генерации ответов моделью и работы инструментов (tools).',
-                       'Parameters for response generation and tool usage.'),
+            'label': _('Поведение запросов и работа инструментов. Параметры генерации настраиваются у API-пресета.',
+                       'Request behavior and tool usage. Generation parameters are configured in the API preset.'),
             'type': 'text',
         },
         {'label': _('Настройки сообщений', 'Message settings'), 'type': 'subsection'},
@@ -34,41 +35,16 @@ def setup_model_interaction_controls(
         {'label': _('Reasoning в схеме (schema CoT)', 'Schema reasoning (CoT)'), 'key': 'SCHEMA_REASONING',
          'type': 'checkbutton',
          'default_checkbutton': False,
-         'tooltip': _('Включает поле reasoning в JSON-схему структурированного ответа. '
-                      'Модель "думает вслух" перед заполнением полей — улучшает качество для локальных моделей. '
-                      'Отключите если используете нативный thinking или хотите сэкономить токены.',
-                      'Adds a reasoning field to the structured output JSON schema. '
-                      'The model "thinks aloud" before filling other fields — improves quality for local models. '
-                      'Disable if using native thinking or to save tokens.')},
-        {'label': _('Режим размышлений (enable_thinking)', 'Enable thinking mode'), 'key': 'ENABLE_THINKING',
-         'type': 'combobox',
-         'options': [
-             (_('Не определять', 'Do not specify'), ''),
-             (_('Нет', 'No'), False),
-             (_('Да', 'Yes'), True),
-         ],
-         'default': '',
-         'depends_on_value': True,
-         'tooltip': _('Для моделей Qwen3 и аналогичных: включает thinking-режим. '
-                      'Выберите «Не определять», чтобы не передавать параметр провайдеру; '
-                      '«Нет» и «Да» задают явное значение.',
-                      'For Qwen3 and similar models: enables thinking mode. '
-                      'Choose "Do not specify" to leave the parameter out of the provider request; '
-                      '"No" and "Yes" set an explicit value.')},
-        {'label': _('Глубина размышлений', 'Reasoning effort'),
-         'key': 'MODEL_REASONING_EFFORT', 'type': 'combobox',
-         'options': ['low', 'medium', 'high'], 'default': 'medium',
-         'depends_on': 'ENABLE_THINKING',
-         'tooltip': _('Глубина размышлений для локальных моделей через LM Studio / llama.cpp '
-                      '(Gemma 4, Qwen3): чем выше, тем длиннее мысли и больше потраченных токенов.\n'
-                      'Работает только при включённом "Режиме размышлений" и только у провайдеров, '
-                      'которые понимают reasoning_effort — на остальных параметр не отправляется.',
-                      'Reasoning depth for local models via LM Studio / llama.cpp (Gemma 4, Qwen3): '
-                      'the higher, the longer the thoughts and the more tokens spent.\n'
-                      'Requires "Enable thinking mode", and only applies to providers that understand '
-                      'reasoning_effort — it is not sent to the others.')},
-        {'label': _('Использовать gpt4free последней попыткой ', 'Use gpt4free as last attempt'),
-         'key': 'GPT4FREE_LAST_ATTEMPT', 'type': 'checkbutton', 'default_checkbutton': False},
+         'description': _('Добавляет явное поле reasoning в схему вывода перед остальными полями. В основном полезно для локальных моделей без нативного reasoning. Отключите при нативном thinking/reasoning, чтобы избежать дублирования и лишних токенов.',
+                          'Adds an explicit reasoning field to the output schema before other fields. Useful mainly for local or non-reasoning models. Disable with native thinking/reasoning to avoid duplicate reasoning and extra token usage.'),
+         'tooltip': _('Когда включать: используйте для моделей без нативного reasoning, если они иногда выбирают неправильные действия, эмоции, вызовы инструментов или другие структурированные поля. '
+                      'Модель сначала пишет короткий шаг рассуждения, а затем заполняет финальные поля ответа, используя этот контекст.\n\n'
+                      'Когда отключать: отключите для моделей, которые уже используют нативный thinking/reasoning, блоки <think> или отдельный канал reasoning. '
+                      'В таких случаях настройка обычно дублирует внутренние рассуждения модели и расходует токены впустую.',
+                      'When to enable: Use this for models without native reasoning when they sometimes choose incorrect actions, emotions, tool calls, or other structured fields. '
+                      'The model first writes a short reasoning step and then fills the final response fields using that context.\n\n'
+                      'When to disable: Disable it for models that already use native thinking/reasoning, <think> blocks, or a separate reasoning channel. '
+                      'In those cases it usually duplicates the model\'s internal reasoning and wastes tokens.')},
 
         {'type': 'end'},
 
@@ -79,102 +55,6 @@ def setup_model_interaction_controls(
         {'label': _('Время ожидания звука (сек)', 'Voice waiting time (sec)'),
          'key': 'VOICE_WAIT_TIME', 'type': 'entry', 'default': 40,
          'tooltip': _('время ожидания озвучки', 'voice generation waiting time')},
-
-        {'type': 'end'},
-
-        {'label': _('Настройки генерации текста', 'Text Generation Settings'), 'type': 'subsection'},
-
-        {'label': _('Макс. токенов в ответе', 'Max response tokens'),
-        'key': 'MODEL_MAX_RESPONSE_TOKENS',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_MAX_RESPONSE_TOKENS',
-        'toggle_default': self.settings.get('USE_MODEL_MAX_RESPONSE_TOKENS', True),
-        'default': 2500,
-        'validation': self.validate_positive_integer,
-        'tooltip': _('Максимальное количество токенов в ответе модели',
-                    'Maximum number of tokens in the model response')},
-
-        {'label': _('Температура', 'Temperature'), 'key': 'MODEL_TEMPERATURE',
-         'type': 'entry', 'default': '',
-         'toggle_key': 'USE_MODEL_TEMPERATURE',
-         'toggle_default': self.settings.get('USE_MODEL_TEMPERATURE', True),
-         'validation': self.validate_float_0_to_2,
-         'tooltip': _('Креативность ответа (0.0 = строго, 2.0 = очень творчески)',
-                      'Creativity of response (0.0 = strict, 2.0 = very creative)')},
-
-        {'label': _('Top-K', 'Top-K'),
-        'key': 'MODEL_TOP_K',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_TOP_K',
-        'toggle_default': self.settings.get('USE_MODEL_TOP_K', True),
-        'default': '',
-        'validation': self.validate_positive_integer_or_zero,
-        'tooltip': _('Ограничивает выбор токенов K наиболее вероятными (0 = отключено)',
-                    'Limits token selection to K most likely (0 = disabled)')},
-
-        {'label': _('Top-P', 'Top-P'),
-        'key': 'MODEL_TOP_P',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_TOP_P',
-        'toggle_default': self.settings.get('USE_MODEL_TOP_P', True),
-        'default': '',
-        'validation': self.validate_float_0_to_1,
-        'tooltip': _('Ограничивает выбор токенов по кумулятивной вероятности (0.0-1.0)',
-                    'Limits token selection by cumulative probability (0.0-1.0)')},
-
-        {'label': _('Бюджет размышлений', 'Thinking budget'),
-        'key': 'MODEL_THINKING_BUDGET',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_THINKING_BUDGET',
-        'toggle_default': self.settings.get('USE_MODEL_THINKING_BUDGET', False),
-        'default': 0.0,
-        'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Параметр, влияющий на глубину "размышлений" модели (зависит от модели)',
-                    'Parameter influencing the depth of model "thoughts" (model-dependent)')},
-
-        {'label': _('Бюджет размышлений Gemini (токены)', 'Gemini thinking budget (tokens)'),
-        'key': 'GEMINI_THINKING_BUDGET',
-        'type': 'entry',
-        'toggle_key': 'USE_GEMINI_THINKING_BUDGET',
-        'toggle_default': self.settings.get('USE_GEMINI_THINKING_BUDGET', False),
-        'default': 8192,
-        'validation': self.validate_positive_integer_or_zero,
-        'tooltip': _('Бюджет токенов для размышлений Gemini 2.5+. 0 = отключить. '
-                     'Если переключатель выключен — бюджет динамический (по умолчанию). '
-                     'Работает только при включённом "Режиме размышлений".',
-                     'Token budget for Gemini 2.5+ thinking. 0 = disable. '
-                     'If toggle is off — budget is dynamic (default). '
-                     'Requires "Enable thinking mode" to be enabled.')},
-
-        {'label': _('Штраф присутствия', 'Presence penalty'),
-        'key': 'MODEL_PRESENCE_PENALTY',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_PRESENCE_PENALTY',
-        'toggle_default': self.settings.get('USE_MODEL_PRESENCE_PENALTY', False),
-        'default': 0.0,
-        'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Штраф за использование новых токенов (-2.0 = поощрять новые, 2.0 = сильно штрафовать)',
-                    'Penalty for using new tokens (-2.0 = encourage new, 2.0 = strongly penalize)')},
-
-        {'label': _('Штраф частоты', 'Frequency penalty'),
-        'key': 'MODEL_FREQUENCY_PENALTY',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_FREQUENCY_PENALTY',
-        'toggle_default': self.settings.get('USE_MODEL_FREQUENCY_PENALTY', False),
-        'default': 0.0,
-        'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Штраф за частоту использования токенов (-2.0 = поощрять повторение, 2.0 = сильно штрафовать)',
-                    'Penalty for the frequency of token usage (-2.0 = encourage repetition, 2.0 = strongly penalize)')},
-
-        {'label': _('Лог вероятности', 'Log probability'),
-        'key': 'MODEL_LOG_PROBABILITY',
-        'type': 'entry',
-        'toggle_key': 'USE_MODEL_LOG_PROBABILITY',
-        'toggle_default': self.settings.get('USE_MODEL_LOG_PROBABILITY', False),
-        'default': 0.0,
-        'validation': self.validate_float_minus2_to_2,
-        'tooltip': _('Параметр, влияющий на логарифмическую вероятность выбора токенов (-2.0 = поощрять, 2.0 = штрафовать)',
-                    'Parameter influencing the logarithmic probability of token selection (-2.0 = encourage, 2.0 = penalize)')},
 
         {'type': 'end'},
 
@@ -248,7 +128,7 @@ def setup_model_interaction_controls(
 
     create_settings_section(
         self, parent,
-        _("Параметры генерации", "Generation Parameters"),
+        _("Поведение запросов", "Request behavior"),
         general_config,
         icon_name='fa5s.cogs'
     )
@@ -304,11 +184,129 @@ def setup_model_interaction_controls(
     create_settings_section(
         self, parent,
         _("Настройки реакций", "React settings"),
-        react_settings_config
+        react_settings_config,
+        icon_name='fa5s.bolt'
     )
 
     build_memory_section(self, parent, provider_options)
     build_rag_section(self, parent, provider_options)
+
+    # Скиллы — не «инструмент», а механика промпта: игра присылает авторские
+    # инструкции, а режим решает, лежат ли их тексты в промпте всегда или
+    # подгружаются по требованию. Поэтому карточка живёт отдельно от Tools.
+    skills_config = [
+        {
+            'type': 'text',
+            'label': _(
+                'Скиллы — авторские инструкции, которые уже содержит игра: как выбрать '
+                'музыку, что надеть, как обращаться с телевизором. Их отдаёт подключённая '
+                'игра вместе с контекстом, в Python они не хранятся, поэтому смена сцены '
+                'или каталога в игре сразу меняет то, что видит Мита.\n'
+                'Сейчас это только то, что зашито в игру; свои внешние скиллы появятся позже.',
+                'Skills are authored instructions the game already contains: how to pick '
+                'music, what to wear, how to treat the television. The connected game sends '
+                'them with the context and Python keeps no copy, so changing the scene or the '
+                'catalog in the game immediately changes what Mita sees.\n'
+                'For now these are the instructions built into the game; external skills are '
+                'planned later.',
+            ),
+        },
+        {
+            'label': _('Подключать скиллы по требованию', 'Load skills on demand'),
+            'key': 'TOOL_ENABLED_load_skill', 'type': 'checkbutton',
+            'default_checkbutton': False, 'depends_on': 'TOOLS_ON',
+            'tooltip': _(
+                'Даёт Мите инструмент load_skill: она запрашивает текст скилла, когда сцена '
+                'его требует, вместо того чтобы держать все тексты в промпте каждый ход. '
+                'В промпте остаётся короткий каталог с названиями скиллов.',
+                'Gives Mita the load_skill tool: she asks for a skill body when the scene needs '
+                'it instead of keeping every body in the prompt on each turn. Only the short '
+                'catalog of skill names stays in the prompt.',
+            ),
+        },
+        {
+            'label': _('Где держать текст скиллов', 'Where skill text lives'),
+            'key': 'SKILL_LOADING_MODE', 'type': 'combobox',
+            'options': [
+                (_('По требованию', 'On demand'), 'on_demand'),
+                (_('Всегда в промпте', 'Always in prompt'), 'eager'),
+            ],
+            'default': 'on_demand',
+            'tooltip': _(
+                'По требованию — в промпте только короткий каталог, тексты подгружаются '
+                'инструментом, когда нужны: меньше токенов на каждом ходу.\n'
+                'Всегда в промпте — тексты всех скиллов лежат в стабильной части промпта: '
+                'модель не тратит ход на загрузку, но каждый запрос дороже.',
+                'On demand — only the short catalog sits in the prompt and bodies are loaded '
+                'when needed: fewer tokens on every turn.\n'
+                'Always in prompt — every skill body sits in the stable prompt prefix: no turn '
+                'spent on loading, but every request is more expensive.',
+            ),
+        },
+    ]
+    create_settings_section(
+        self,
+        parent,
+        _("Скиллы", "Skills"),
+        skills_config,
+        icon_name='fa5s.graduation-cap',
+    )
+
+    # Окружение персонажа — служебные факты о мире и голосе, а не история.
+    # Блок идёт в каждый запрос, поэтому здесь же живёт его объём.
+    environment_config = [
+        {
+            'type': 'text',
+            'label': _(
+                'Окружение персонажа — фоновая осведомлённость Миты: подключена ли игра, '
+                'откуда пишет игрок, как называется общий мир и что с её голосом. '
+                'Это не память и не история диалога, а справочные факты, которые идут '
+                'в каждом запросе.',
+                'Character environment is Mita\'s background awareness: whether the game '
+                'is connected, where the Player is writing from, what the shared world is '
+                'called and what her voice is doing. It is not memory or chat history; '
+                'these reference facts are sent with every request.',
+            ),
+        },
+        {
+            'label': _('Объём окружения', 'Environment detail'),
+            'key': 'CHARACTER_ENVIRONMENT_MODE', 'type': 'combobox',
+            'options': [
+                (_('Полно', 'Full'), 'full'),
+                (_('Кратко', 'Brief'), 'brief'),
+                (_('Выключено', 'Off'), 'off'),
+            ],
+            'default': 'full',
+            'tooltip': _(
+                'Полно — все фоновые факты: связь с игрой, откуда пишет игрок, название '
+                'мира, доступность обновления и подробности о голосовой модели вместе со '
+                'сравнением моделей. Примерно 1500 символов в запросе.\n'
+                'Кратко — только то, что мешает ошибиться: где находится игрок, что мир '
+                'называется NeuroMita и из дома нет выхода, работает ли голос. Примерно '
+                'втрое короче.\n'
+                'Выключено — блок не отправляется совсем. Мита больше не знает заранее, '
+                'где игрок и что с её голосом, поэтому часть ответов может стать менее '
+                'точной.',
+                'Full — every background fact: game connection, where the Player writes '
+                'from, the world name, update availability, and voice details including the '
+                'model comparison. About 1500 characters per request.\n'
+                'Brief — only what prevents wrong statements: where the Player is, that '
+                'the world is NeuroMita and the house has no exit, and whether the voice '
+                'works. Roughly a third of the size.\n'
+                'Off — the block is not sent at all. Mita no longer knows in advance where '
+                'the Player is or what her voice is doing, so some answers may become less '
+                'accurate.',
+            ),
+        },
+    ]
+    create_settings_section(
+        self,
+        parent,
+        _("Окружение персонажа", "Character environment"),
+        environment_config,
+        icon_name='fa5s.globe',
+    )
+
     register_provider_options(
         self,
         ("REACT_PROVIDER_L2", "HC_PROVIDER", "GRAPH_PROVIDER"),
@@ -316,4 +314,3 @@ def setup_model_interaction_controls(
 
     # Token pricing/context limits now come from the selected provider/preset,
     # so the old manual "Token Settings" subsection is intentionally removed.
-
