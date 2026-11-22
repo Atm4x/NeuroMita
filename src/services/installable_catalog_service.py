@@ -10,6 +10,12 @@ from typing import Any, Iterable
 
 from core.daemon_executor import DaemonExecutor
 from core.installables.compatibility import evaluate_installable_compatibility
+from core.setting_behaviors import normalize_setting_behaviors
+from core.voice_device_selection import (
+    expand_voice_device_schema,
+    migrate_voice_device_values,
+    validate_voice_devices,
+)
 from core.services import services
 from installables.catalog_manifest import catalog_by_id, catalog_entries
 from main_logger import logger
@@ -79,14 +85,21 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
         except Exception:
             self._asr_settings_subscription = None
 
-    def _on_setting_changed(self, _change: Any) -> None:
-        # Component readiness can depend on device/model/provider settings.
-        # A single invalidation point prevents stale per-screen interpretations.
-        self.invalidate()
+    def _invalidate_category(self, category: str) -> None:
+        for entry in catalog_entries():
+            if str(entry.metadata_ru.get("category") or "") == category:
+                self.invalidate(entry.id)
+
+    def _on_setting_changed(self, change: Any) -> None:
+        if str(getattr(change, "key", "") or "") == "VOICE_LANGUAGE":
+            self._invalidate_category("tts")
 
     def _on_asr_setting_changed(self, change: Any) -> None:
         engine_id = str(getattr(change, "engine_id", "") or "").strip()
-        self.invalidate(f"asr:{engine_id}" if engine_id else None)
+        if engine_id:
+            self.invalidate(f"asr:{engine_id}")
+        else:
+            self._invalidate_category("asr")
 
     def close(self) -> None:
         with self._lock:
@@ -457,6 +470,8 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             self._require_install_supported(entry)
         component = self.require_component(normalized)
         run_ctx = self._component_context(entry, refresh=False)
+        if normalized_operation == "initialize" and run_ctx.get("missing_backend"):
+            raise RuntimeError(run_ctx["missing_backend"]["message"])
         trusted_execution_keys = {
             "task_id",
             "meta",
@@ -472,6 +487,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             "pip_installer",
             "callbacks",
             "initialize_mode",
+            "device",
         }
         for key, value in dict(execution_ctx or {}).items():
             if key in trusted_execution_keys:
@@ -539,7 +555,8 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             component = self._as_configurable(self.require_component(component_id))
             if component is None:
                 return []
-            return list(component.settings_schema() or [])
+            schema = list(component.settings_schema() or [])
+            return expand_voice_device_schema(schema, self._hardware_snapshot())
         except Exception as exc:
             logger.error(
                 f"Installable settings schema failed for '{component_id}': {format_exception(exc)}",
@@ -552,7 +569,11 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             component = self._as_configurable(self.require_component(component_id))
             if component is None:
                 return {}
-            return dict(component.load_settings() or {})
+            values = dict(component.load_settings() or {})
+            migrated = migrate_voice_device_values(self.settings_schema(component_id), values)
+            if migrated != values:
+                component.save_settings(migrated)
+            return migrated
         except Exception as exc:
             logger.error(
                 f"Installable settings load failed for '{component_id}': {format_exception(exc)}",
@@ -569,15 +590,20 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             component = self._as_configurable(self.require_component(component_id))
             if component is None:
                 return {"ok": False, "errors": {"_": "Component is not configurable"}}
+            schema = self.settings_schema(component_id)
+            normalized_values = normalize_setting_behaviors(schema, values)
+            device_errors = validate_voice_devices(schema, normalized_values)
+            if device_errors:
+                return {"ok": False, "errors": device_errors}
             validate = getattr(component, "validate_settings", None)
             if callable(validate):
-                result = validate(values)
+                result = validate(normalized_values)
                 if not bool(getattr(result, "ok", True)):
                     return {
                         "ok": False,
                         "errors": dict(getattr(result, "errors", {}) or {}),
                     }
-            component.save_settings(values)
+            component.save_settings(normalized_values)
             self.invalidate(component_id)
             return {"ok": True, "errors": {}}
         except Exception as exc:
@@ -817,8 +843,9 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             for item in (cuda.get("devices") or ())
             if isinstance(item, dict) and item.get("ordinal") is not None
         ]
-        result["voice_language"] = "ru"
-        if self._settings is not None:
+        if category == "tts":
+            result["voice_language"] = "ru"
+        if category == "tts" and self._settings is not None:
             try:
                 result["voice_language"] = str(
                     self._settings.get("VOICE_LANGUAGE", "ru") or "ru"
@@ -837,6 +864,7 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
             category=category,
             item_id=item_id,
             ctx=result,
+            require_runtime=False,
         )
 
     @staticmethod
@@ -850,6 +878,13 @@ class DefaultInstallableCatalogService(InstallableCatalogService):
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _inspect_component(self, entry: Any, component_ctx: dict[str, Any]) -> dict[str, Any]:
+        missing = component_ctx.get("missing_backend")
+        if missing:
+            status = self._failed_status(entry, missing["message"], code="backend_missing")
+            status["installed"] = True
+            status["message"] = missing["message"]
+            status["details"]["missing_backend"] = dict(missing)
+            return status
         component = self.require_component(entry.id)
         return dict(component.status(dict(component_ctx)).as_dict())
 

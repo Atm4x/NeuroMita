@@ -1,5 +1,6 @@
 from __future__ import annotations
 from core.error_utils import format_exception
+from core.trace_context import trace_scope
 
 import threading
 import time
@@ -13,7 +14,12 @@ from core.serial_dispatcher import SerialDispatcher
 from main_logger import logger
 
 
-_ORDERED_EVENT_NAMES = frozenset(
+_ASR_ORDERED_EVENT_NAMES = frozenset({
+    "speech_text_recognized", "asr_capture_progress",
+    "send_asr_text", "send_asr_capture_state",
+})
+
+_ORDERED_EVENT_NAMES = _ASR_ORDERED_EVENT_NAMES | frozenset(
     {
         "create_task",
         "update_task_status",
@@ -29,6 +35,12 @@ _ORDERED_EVENT_NAMES = frozenset(
 
 _COMMAND_EVENT_NAMES = frozenset(
     {
+        "character_set_current",
+        "character_reload_data",
+        "character_reload_all_data",
+        "character_reload_prompts",
+        "character_clear_history",
+        "character_clear_all_histories",
         "installable_install",
         "installable_uninstall",
         "installable_initialize",
@@ -319,13 +331,15 @@ class EventBus:
             self._safe_call(callback, event)
 
     def _safe_call(self, callback: Callable[..., Any], event: Event) -> None:
-        try:
-            callback(event)
-        except Exception as exc:
-            logger.error(
-                f"Event subscriber failed for '{event.name}': {format_exception(exc)}",
-                exc_info=True,
-            )
+        data = event.data if isinstance(event.data, dict) else {}
+        with trace_scope(data.get("trace_id")):
+            try:
+                callback(event)
+            except Exception as exc:
+                logger.error(
+                    f"Event subscriber failed for '{event.name}': {format_exception(exc)}",
+                    exc_info=True,
+                )
 
     def _get_active_subscribers(self, event_name: str) -> List[Callable[..., Any]]:
         subscribers = self._subscribers.get(event_name)
@@ -394,6 +408,8 @@ class EventBus:
     def _order_key(event: Event, *, explicit: Any = None) -> Any:
         if explicit is not None:
             return explicit
+        if event.name in _ASR_ORDERED_EVENT_NAMES:
+            return "asr_capture"
         data = event.data if isinstance(event.data, dict) else {}
         return (
             data.get("stream_id")
@@ -557,6 +573,7 @@ class Events:
         UPDATE_CHAT_FONT_SIZE = "update_chat_font_size"
         RELOAD_CHAT_HISTORY = "reload_chat_history"
         REMOVE_LAST_CHAT_WIDGETS = "remove_last_chat_widgets"
+        CLEAR_CHAT_MESSAGE_ERROR = "clear_chat_message_error"
         UPDATE_TOKEN_COUNT_UI = "update_token_count_ui"
         GET_GUI_WINDOW_ID = "get_gui_window_id"
         CHECK_TRITON_DEPENDENCIES = "check_triton_dependencies"
@@ -574,13 +591,14 @@ class Events:
         VOICEOVER_UI_READY = "voiceover_ui_ready"
         VOICEOVER_REFRESH = "voiceover_refresh"
         VOICEOVER_MODEL_SELECTED = "voiceover_model_selected"
+        VOICEOVER_MODEL_INITIALIZE = "voiceover_model_initialize"
+        VOICEOVER_MODEL_REINITIALIZE = "voiceover_model_reinitialize"
 
     class Model:
         """События для управления LLM, персонажами и историей"""
         LOAD_HISTORY = "load_history"
         GET_CHAT_HISTORY = "get_chat_history"
         LOAD_MORE_HISTORY = "load_more_history"
-        SCHEDULE_G4F_UPDATE = "schedule_g4f_update"
         GET_CURRENT_CONTEXT_TOKENS = "get_current_context_tokens"
         GET_TOKEN_STATS = "get_token_stats"
         CALCULATE_COST = "calculate_cost"
@@ -621,6 +639,10 @@ class Events:
         INSERT_SYSTEM_MESSAGE = "chat_insert_system_message"
         SAVE_SNAPSHOT = "chat_save_snapshot"
         LOAD_SNAPSHOT = "chat_load_snapshot"
+
+    class Reminder:
+        """Notifications for persisted reminders and short autonomous timers."""
+        CHANGED = "reminder_changed"
 
     class Dialogue:
         """Ephemeral dialogue runtime facts consumed by the Python UI."""
@@ -672,8 +694,13 @@ class Events:
         SPEECH_TEXT_RECOGNIZED = "speech_text_recognized"
         GET_MICROPHONE_LIST = "get_microphone_list"
         REFRESH_MICROPHONE_LIST = "refresh_microphone_list"
+        MICROPHONE_TEST_CHANGED = "microphone_test_changed"
         SET_GIGAAM_OPTIONS = "set_gigaam_options"
         RESTART_SPEECH_RECOGNITION = "restart_speech_recognition"
+        REFRESH_ASR_STATUS = "refresh_asr_status"
+        ASR_PTT_STATE = "asr_ptt_state"
+        ASR_CAPTURE_PROGRESS = "asr_capture_progress"
+        ASR_CAPTURE_CHANGED = "asr_capture_changed"
 
         INSTALL_ASR_MODEL = "install_asr_model"
         CHECK_ASR_MODEL_INSTALLED = "check_asr_model_installed" 
@@ -683,7 +710,7 @@ class Events:
         ASR_MODEL_INSTALL_FAILED = "asr_model_install_failed"
         ASR_MODEL_INITIALIZED = "asr_model_initialized"
         ASR_FAILED = "asr_failed"
-        
+
         GET_RECOGNIZER_SETTINGS_SCHEMA = "get_asr_settings_schema"
         GET_RECOGNIZER_SETTINGS = "get_asr_settings"
         SET_RECOGNIZER_OPTION = "set_recognizer_option"
@@ -691,7 +718,6 @@ class Events:
         ASR_MODEL_INIT_STARTED = "asr_model_init_started"
         GET_ASR_MODELS_GLOSSARY = "get_asr_models_glossary"
         GET_ASR_ENGINES_LIST = "get_asr_engines_list"
-        
 
     class Capture:
         """События для захвата экрана и камеры"""
@@ -722,10 +748,14 @@ class Events:
         GET_CHAT_SERVER = "get_chat_server"
         SET_PATCH_TO_SOUND_FILE = "set_patch_to_sound_file"
         SEND_TASK_UPDATE = "send_task_update"
+        SEND_DIALOGUE_INTERIM = "send_dialogue_interim"
         LOAD_SERVER_SETTINGS = "load_server_settings"
         ECHO_CHAT_MESSAGE_REQUESTED = "echo_chat_message_requested"
         SEND_ASR_TEXT = "send_asr_text"
+        SEND_ASR_CAPTURE_STATE = "send_asr_capture_state"
+        SEND_STAGE_UI = "send_stage_ui"
         CLIENT_DISCONNECTED = "server_client_disconnected"
+        GAME_DIALOGUE_TARGET_CHANGED = "game_dialogue_target_changed"
         ASR_TEXT_UNDELIVERED = "asr_text_undelivered"
 
     class Telegram:
@@ -857,11 +887,14 @@ class Events:
     class Character:
         SET_CURRENT = "character_set_current"
         RELOAD_DATA = "character_reload_data"
+        RELOAD_ALL_DATA = "character_reload_all_data"
         RELOAD_PROMPTS = "character_reload_prompts"
         CLEAR_HISTORY = "character_clear_history"
         CLEAR_ALL_HISTORIES = "character_clear_all_histories"
 
         CURRENT_CHANGED = "character_current_changed"
+        DATA_RELOADED = "character_data_reloaded"
+        HISTORY_CLEARED = "character_history_cleared"
 
     class Protocols:
         GET_PROTOCOL_LIST = "get_protocol_list"

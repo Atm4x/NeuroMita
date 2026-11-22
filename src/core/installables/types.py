@@ -23,6 +23,7 @@ class ComponentStatusCode(str, Enum):
     NOT_INSTALLED = "not_installed"
     INSTALLED = "installed"
     READY = "ready"
+    NEEDS_REINSTALL = "needs_reinstall"
     BACKEND_MISSING = "backend_missing"
     FAILED = "failed"
 

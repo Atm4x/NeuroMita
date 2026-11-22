@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from core.state_barrier import state_operation
 
 from main_logger import logger
 from managers.settings_manager import SettingsManager
@@ -34,6 +35,7 @@ class GraphStore:
     # ------------------------------------------------------------------
     # Schema
     # ------------------------------------------------------------------
+    @state_operation
     def _ensure_schema(self) -> None:
         with self.db.connection() as conn:
             cur = conn.cursor()
@@ -112,6 +114,7 @@ class GraphStore:
     # ------------------------------------------------------------------
     # Processed-message tracking
     # ------------------------------------------------------------------
+    @state_operation
     def clear_for_character(self) -> Dict[str, int]:
         """Hard-delete all graph data for this character. Called from clear_history()."""
         counts: Dict[str, int] = {}
@@ -137,6 +140,7 @@ class GraphStore:
         logger.info(f"[GraphStore] clear_for_character '{self.character_id}': {counts}")
         return counts
 
+    @state_operation
     def mark_messages_processed(self, message_ids: List[int]) -> None:
         """Mark history message IDs as processed (regardless of whether entities were found)."""
         if not message_ids:
@@ -163,6 +167,7 @@ class GraphStore:
     # ------------------------------------------------------------------
     # Entities
     # ------------------------------------------------------------------
+    @state_operation
     def upsert_entity(
         self,
         name: str,
@@ -213,6 +218,7 @@ class GraphStore:
                 except Exception:
                     pass
 
+    @state_operation
     def add_alias(self, entity_id: int, surface: str, language: str = "auto") -> None:
         """Register a surface form as alias for an existing entity."""
         surface = self.normalize_name(surface)
@@ -237,6 +243,7 @@ class GraphStore:
             ).fetchone()
         return int(row[0]) if row else None
 
+    @state_operation
     def store_entity_embedding(
         self, entity_id: int, embedding: bytes, model_name: str = ""
     ) -> None:
@@ -296,6 +303,7 @@ class GraphStore:
     # ------------------------------------------------------------------
     # Relations
     # ------------------------------------------------------------------
+    @state_operation
     def upsert_relation(
         self,
         subject_id: int,
@@ -377,7 +385,8 @@ class GraphStore:
                 r.confidence,
                 e1.entity_type AS subject_type,
                 e2.entity_type AS object_type,
-                r.created_at
+                r.created_at,
+                r.is_protected
             FROM graph_relations r
             JOIN graph_entities e1 ON r.subject_id = e1.id
             JOIN graph_entities e2 ON r.object_id  = e2.id
@@ -452,6 +461,7 @@ class GraphStore:
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    @state_operation
     def set_entity_type(self, entity_id: int, entity_type: str) -> bool:
         """Задать тип сущности по id (id — глобальный PK, character-фильтр не нужен).
 
@@ -533,6 +543,7 @@ class GraphStore:
     # ------------------------------------------------------------------
     # TTL cleanup
     # ------------------------------------------------------------------
+    @state_operation
     def apply_graph_ttl_cleanup(self) -> Dict[str, int]:
         """
         Delete old graph relations and orphaned entities based on TTL settings.

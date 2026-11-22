@@ -1,61 +1,300 @@
 from __future__ import annotations
 
 SETTINGS_PAGE_QSS = r"""
-/* ========= API Presets ========= */
-QFrame#PresetsPanel {
-    background-color: rgba({settings_panel_rgb}, 0.96);
-    border: 1px solid {panel_border};
-    border-radius: 16px;
+QWidget#SettingsSectionHeader, QWidget#SettingsSectionHeader QWidget { background: transparent; border: none; font-family: "Segoe UI"; }
+QWidget#SettingsPageRoot QWidget#SettingsSectionHeader QLabel#SettingsSectionIcon,
+QWidget#SettingsSectionHeader QLabel#SettingsSectionIcon { background: {chip_hover}; border-radius: 12px; }
+QWidget#SettingsPageRoot QWidget#SettingsSectionHeader QLabel#SettingsSectionTitle,
+QWidget#SettingsSectionHeader QLabel#SettingsSectionTitle { color: {text}; font-size: 23px; font-weight: 700; padding: 0px; margin: 0px; }
+QWidget#SettingsPageRoot QWidget#SettingsSectionHeader QLabel#SettingsSectionDescription,
+QWidget#SettingsSectionHeader QLabel#SettingsSectionDescription { color: {muted}; font-size: 12px; font-weight: 400; padding: 0px; margin: 0px; }
+
+QWidget#MicrophoneSettingsWorkspace { background: transparent; font-family: "Segoe UI"; }
+QWidget#MicrophoneSettingsWorkspace QWidget { font-family: "Segoe UI"; }
+QWidget#MicrophoneSettingsWorkspace QFrame#ASRCard {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 14px;
 }
-QListWidget#PresetsList {
-    background: rgba({sandbox_bg_rgb}, 0.88);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    padding: 6px;
-    color: {text};
-    outline: 0;
+QWidget#MicrophoneSettingsWorkspace QFrame#ASRSettingRow {
+    background: {card_alt_bg}; border: 1px solid {border_soft}; border-radius: 10px;
 }
-QListWidget#PresetsList::item { padding: 6px 6px; color: {text}; }
-QListWidget#PresetsList::item:hover {
-    background: rgba({accent_rgb}, 0.10);
+QWidget#MicrophoneSettingsWorkspace QLabel { border: none; background: transparent; }
+QWidget#MicrophoneSettingsWorkspace QLabel#ASRTitle { font-size: 23px; font-weight: 700; color: {text}; }
+QWidget#MicrophoneSettingsWorkspace QLabel#ASRCardTitle { font-size: 15px; font-weight: 600; color: {text}; }
+QWidget#MicrophoneSettingsWorkspace QLabel#ASRSettingTitle { font-size: 13px; font-weight: 600; color: {text}; }
+QWidget#MicrophoneSettingsWorkspace QLabel#ASRDescription { font-size: 12px; font-weight: 400; color: {muted}; }
+QWidget#MicrophoneSettingsWorkspace QLabel#ASRIcon { background: {chip_hover}; border-radius: 10px; }
+QWidget#MicrophoneSettingsWorkspace QFrame#ASRToolbarSeparator { background: {panel_border}; border: none; }
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRModelCatalog,
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRRestart,
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRToolbarRefresh {
+    background: {chip_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+    padding: 0px 14px; min-height: 36px; max-height: 36px; color: {text}; font-weight: 600;
+}
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRToolbarRefresh { padding: 0px; }
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRModelCatalog:hover,
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRRestart:hover,
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRToolbarRefresh:hover { background: {chip_bg}; border-color: {muted}; }
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRRestart:disabled { color: {muted}; }
+QWidget#MicrophoneSettingsWorkspace QComboBox#ASRToolbarInput {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+    padding: 0px 10px; min-height: 36px; max-height: 36px;
+}
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRAction {
+    background: {chip_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+    padding: 8px 12px; color: {text}; font-weight: 600;
+}
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRAction:hover { background: {chip_hover}; border-color: {accent_border}; }
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRAction:checked { background: {accent}; border-color: {accent_border}; }
+QWidget#MicrophoneSettingsWorkspace QPushButton#ASRAction:disabled { color: {muted}; background: {control_bg}; }
+QWidget#MicrophoneSettingsWorkspace QComboBox { min-width: 0px; }
+QWidget#MicrophoneSettingsWorkspace QSpinBox, QWidget#MicrophoneSettingsWorkspace QDoubleSpinBox {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 8px;
+    color: {text}; padding: 5px 8px; min-height: 24px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace, QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QWidget {
+    font-family: "Segoe UI"; letter-spacing: 0px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QFrame#VoiceCard {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 14px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel { background: transparent; border: none; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceTitle { font-size: 23px; font-weight: 700; color: {text}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceSettingTitle { font-size: 13px; font-weight: 600; color: {text}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceCardTitle { font-size: 16px; font-weight: 600; color: {text}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceDescription { font-size: 12px; font-weight: 400; color: {muted}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceCardIcon { background: {chip_hover}; border-radius: 12px; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QFrame#VoiceStatus {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceStatusText {
+    font-size: 12px; font-weight: 500;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QFrame#VoiceMethodSelector {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 11px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoiceMethodButton {
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    color: {muted}; padding: 0px 14px; min-height: 36px; max-height: 36px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoiceMethodButton:hover { background: {chip_hover}; color: {text}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoiceMethodButton:checked {
+    background: {accent}; border-color: {accent_border}; color: #ffffff;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLineEdit,
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QComboBox,
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QDoubleSpinBox {
+    background: {control_bg}; color: {text}; border: 1px solid {panel_border};
+    border-radius: 9px; padding: 0px 10px; min-height: 36px; max-height: 36px; min-width: 0px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton {
+    background: {chip_bg}; color: {text}; border: 1px solid {panel_border};
+    border-radius: 9px; padding: 0px 12px; min-height: 36px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton:hover { border-color: {accent_border}; background: {chip_hover}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoiceModelSettingsButton { padding: 0px; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceModelStatusChip {
+    padding: 8px 10px; border-radius: 8px; background: {control_bg}; color: {muted};
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceModelStatusChip[state="green"] { color: {success}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceModelStatusChip[state="red"] { color: {danger}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceModelStatusChip[state="orange"] { color: #e4ad68; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoiceModelStatusChip[state="loading"] { color: {accent}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QLabel#VoicePreviewStatus {
+    padding: 10px; background: {control_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QWidget#SettingRow { background: transparent; border: none; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoicePrimaryAction,
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#RemoteVoicePreview {
+    background: {accent}; border: 1px solid {accent_border}; color: #ffffff;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoicePrimaryAction:hover,
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#RemoteVoicePreview:hover { background: {accent_hover}; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QSlider::groove:horizontal {
+    height: 5px; border: none; border-radius: 2px; background: {panel_border};
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QSlider::sub-page:horizontal { background: {accent}; border-radius: 2px; }
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QSlider::handle:horizontal {
+    background: {accent}; width: 18px; height: 18px; margin: -7px 0px; border: 1px solid {accent_border}; border-radius: 9px;
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#VoicePrimaryAction:disabled,
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPushButton#RemoteVoicePreview:disabled {
+    background: {btn_disabled_bg}; color: {btn_disabled_fg}; border-color: {panel_border};
+}
+QWidget#SettingsPageRoot QWidget#VoiceoverSettingsWorkspace QPlainTextEdit,
+QWidget#RemoteVoiceWorkspace QPlainTextEdit {
+    background: {control_bg}; color: {text}; border: 1px solid {panel_border};
+    border-radius: 8px; padding: 8px;
+}
+QWidget#VoiceoverSettingsWorkspace QLabel#RemoteVoiceHint,
+QWidget#RemoteVoiceWorkspace QLabel#RemoteVoiceHint {
+    color: {muted}; font-weight: 400; font-size: 12px;
+}
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoiceIconButton,
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoiceSave {
+    background: transparent; border: 1px solid {panel_border}; color: {text};
     border-radius: 8px;
 }
-QListWidget#PresetsList::item:selected {
-    background: rgba({accent_rgb}, 0.18);
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QPushButton#RemoteVoicePreview {
+    background: {accent}; border: 1px solid {accent_border}; color: {text};
     border-radius: 8px;
-    color: #ffffff;
+}
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QPushButton:hover { border-color: {accent}; }
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QPushButton:disabled {
+    background: {btn_disabled_bg}; color: {btn_disabled_fg}; border-color: {panel_border};
+}
+QWidget#VoiceoverSettingsWorkspace QWidget#RemoteVoiceWorkspace QLabel#RemoteVoiceTitle {
+    font-size: 14px; font-weight: 600; color: {text};
+}
+QWidget#CharacterVoiceEditor { background: transparent; }
+QWidget#CharacterVoiceEditor QLineEdit { border-radius: 10px; }
+QWidget#CharacterVoiceEditor QPushButton#RemoteVoiceIconButton { border-radius: 12px; }
+QToolButton#CharacterVoiceScrollButton {
+    background: {control_bg}; border: 1px solid {panel_border}; border-radius: 10px;
+}
+QToolButton#CharacterVoiceScrollButton:hover { background: {chip_hover}; }
+QToolButton#CharacterVoiceScrollButton:disabled { background: transparent; border: none; }
+QWidget#CharacterSettingsWorkspace, QWidget#CharacterSettingsWorkspace QLabel,
+QWidget#CharacterSettingsWorkspace QLineEdit, QWidget#CharacterSettingsWorkspace QComboBox,
+QWidget#CharacterSettingsWorkspace QPushButton, QWidget#CharacterSettingsWorkspace QListWidget,
+QWidget#CharacterSettingsWorkspace QTabBar {
+    font-family: "Segoe UI"; letter-spacing: 0px;
+}
+QLabel#CharacterSettingsTitle { font-size: 22px; font-weight: 700; }
+QWidget#CharacterSettingsWorkspace QLabel#SeparatorLabel { color: {muted}; font-weight: 400; }
+QFrame#CharacterLibrary, QFrame#CharacterDetail {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 12px;
+}
+QFrame#CharacterSection {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection,
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleHeader,
+QWidget#CharacterSettingsWorkspace QFrame#CollapsibleContent {
+    background: {settings_panel_bg};
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection {
+    border: 1px solid {panel_border}; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleHeader {
+    border: none; border-radius: 10px;
+}
+QWidget#CharacterSettingsWorkspace QLabel#CharacterLibraryTitle,
+QLabel#CharacterCount { margin: 0px; padding: 0px; border: none; }
+QLabel#CharacterCount { color: {muted}; }
+QWidget#CharacterSettingsWorkspace QWidget#CharacterActionRow {
+    border-bottom: 1px solid {panel_border};
+}
+QLabel#CharacterActionTitle { font-weight: 600; }
+QListWidget#CharacterList { background: transparent; border: none; outline: none; padding: 0px; }
+QListWidget#CharacterList::item {
+    background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 9px;
+    padding: 3px 8px; font-size: 14px; font-weight: 600;
+}
+QListWidget#CharacterList::item:selected {
+    background: {settings_panel_bg}; border: 1px solid {muted};
+}
+QListWidget#CharacterList::item:hover { border: 1px solid {muted}; }
+QLabel#CharacterName { font-size: 20px; font-weight: 700; }
+QLabel#CharacterId { color: {muted}; font-size: 12px; font-weight: 400; }
+QWidget#CharacterSettingsWorkspace QLabel#CharacterActionDescription {
+    color: {muted}; font-weight: 400; font-size: 12px;
+}
+QWidget#CharacterSettingsWorkspace QWidget#CollapsibleSection[danger="true"] {
+    border: 1px solid {warn_border}; border-radius: 10px;
+}
+QLabel#CharacterLibraryTitle { font-size: 14px; font-weight: 600; }
+QLabel#CharacterActiveBadge {
+    background: rgba({accent_rgb}, 0.18); color: {text}; border-radius: 6px; padding: 5px 9px;
+}
+/* ========= API workspace ========= */
+QWidget#ApiSettingsWorkspace { background: transparent; }
+QWidget#ApiSettingsWorkspace, QWidget#ApiSettingsWorkspace QLabel,
+QWidget#ApiSettingsWorkspace QLineEdit, QWidget#ApiSettingsWorkspace QComboBox,
+QWidget#ApiSettingsWorkspace QPushButton, QWidget#ApiSettingsWorkspace QCheckBox {
+    font-family: "Segoe UI"; letter-spacing: 0px;
+}
+QLabel#ApiSettingsTitle { font-size: 22px; font-weight: 700; color: {text}; }
+QLabel#ApiEditorTitle { font-size: 13px; font-weight: 600; color: {text}; }
+QLabel#ApiPresetName { font-size: 18px; font-weight: 700; color: {text}; }
+QLabel#ApiSettingsSubtitle { color: {muted}; font-size: 12px; }
+QLabel#ApiParameterKey { color: {muted}; font-size: 11px; }
+QFrame#ApiWorkspacePanel {
+    background: transparent; border: none;
+}
+QFrame#ApiPresetSidebar { background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 12px; }
+QFrame#ApiEditorPanel { background: transparent; border: none; }
+QLineEdit#ApiPresetSearch { background: {bg_root}; border: 1px solid {panel_border}; border-radius: 8px; padding: 6px; }
+QSplitter#ApiWorkspaceSplitter { background: transparent; }
+QSplitter#ApiWorkspaceSplitter::handle {
+    background: transparent;
+}
+QSplitter#ApiWorkspaceSplitter::handle:hover { border-left: 1px solid {text}; }
+QFrame#ApiEditorHeader, QFrame#ApiConfigurationHeader {
+    background: {bg_root}; border: 1px solid {panel_border}; border-radius: 10px;
+}
+QFrame#ApiConfigurationHeader { border: 1px solid {panel_border}; border-radius: 8px; }
+QLabel#ApiActiveTag {
+    background: {chip_bg}; color: {success}; border: 1px solid {border_soft};
+    border-radius: 9px; padding: 3px 9px; font-size: 11px; font-weight: 600;
+}
+QFrame#ApiConnectionCard { background: {settings_panel_bg}; border: 1px solid {panel_border}; border-radius: 12px; }
+QTabWidget#ApiEditorTabs::pane { border: none; background: {settings_panel_bg}; }
+QLabel#ApiReserveCount { background: {chip_bg}; color: {text}; border: 1px solid {panel_border}; border-radius: 7px; padding: 6px 10px; }
+QTabWidget#ApiEditorTabs QTabBar { background: transparent; }
+QTabWidget#ApiEditorTabs QTabBar::tab {
+    background: {bg_root}; color: {muted}; border: none;
+    border-bottom: 2px solid transparent; padding: 14px 22px; font-weight: 600;
+}
+QTabWidget#ApiEditorTabs QTabBar::tab:selected {
+    background: {chip_bg}; color: {text}; border-bottom: 2px solid {accent};
+}
+QTabWidget#ApiEditorTabs QTabBar::tab:hover { color: {text}; }
+QTabWidget#ApiEditorTabs QTabBar::tab:first { border-top-left-radius: 11px; }
+QComboBox#ApiArrowCombo { padding-right: 30px; }
+QComboBox#ApiArrowCombo::drop-down { width: 30px; border: none; background: transparent; }
+
+QListWidget#ApiPresetCards, QScrollArea#ApiEditorScroll, QScrollArea#ApiConfigurationScroll, QWidget#ApiEditorContent {
+    background: transparent; border: none; padding: 0; outline: 0;
+}
+QListWidget#ApiPresetCards::item { padding: 0; border: none; background: transparent; }
+QListWidget#ModelParameterFields { background: {bg_root}; border: 1px solid {panel_border}; border-radius: 10px; padding: 6px; }
+QListWidget#ModelParameterFields::item { padding: 8px; border-radius: 6px; color: {text}; }
+QListWidget#ModelParameterFields::item:selected { background: rgba({accent_rgb}, 0.18); color: {text}; }
+QWidget#ApiSettingsWorkspace QPushButton { padding: 0px 14px; border-radius: 8px; font-weight: 600; }
+QPushButton#ApiAddPresetButton, QPushButton#ApiSaveButton {
+    background: {accent}; color: {text}; border: 1px solid {accent_border}; font-weight: 600;
+}
+QPushButton#ApiAddPresetButton:hover, QPushButton#ApiSaveButton:hover { background: {accent_hover}; }
+QPushButton#ApiSaveButton:disabled { background: {btn_disabled_bg}; color: {btn_disabled_fg}; border-color: {panel_border}; }
+QPushButton#ApiCheckButton { background: transparent; border: 1px solid {panel_border}; color: {text}; }
+QPushButton#ApiCheckButton:hover { background: rgba({accent_rgb}, 0.12); border-color: {accent}; }
+QWidget#ApiEditorContent QLineEdit, QWidget#ApiEditorContent QComboBox {
+    background: {bg_root}; border: 1px solid {panel_border};
+    border-radius: 7px; padding: 8px 11px;
+}
+QWidget#ApiEditorContent QLineEdit { placeholder-text-color: {muted}; }
+QWidget#ApiEditorContent QLineEdit:disabled {
+    color: {muted}; placeholder-text-color: {muted};
+    background: {bg_root}; border-color: {panel_border};
+}
+QWidget#ApiEditorContent QComboBox:disabled { color: {muted}; }
+QWidget#ApiEditorContent QLineEdit:focus, QWidget#ApiEditorContent QComboBox:focus { border-color: {accent}; }
+QWidget#ApiEditorContent QLabel[dirty="true"] { color: {link}; }
+QWidget#ApiEditorContent QLineEdit[invalid="true"],
+QWidget#ApiEditorContent QLineEdit[invalid="true"]:focus,
+QWidget#ApiEditorContent QComboBox[invalid="true"],
+QWidget#ApiEditorContent QComboBox[invalid="true"]:focus {
+    border: 1px solid {danger};
+}
+QWidget#ApiSettingsWorkspace QWidget#CollapsibleHeader {
+    background: {bg_root}; border: 1px solid {panel_border}; border-radius: 8px;
 }
 
-QPushButton#AddPresetButton,
-QPushButton#RemovePresetButton,
-QPushButton#MoveUpButton,
-QPushButton#MoveDownButton {
-    background-color: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.10);
-    color: {text};
-    padding: 0px;
-    min-width: 28px;
-    min-height: 28px;
-    border-radius: 8px;
+QWidget#ApiSettingsWorkspace QWidget#CollapsibleHeader QLabel#CollapsibleTitle { font-size: 14px; font-weight: 600; }
+QWidget#ApiSettingsWorkspace QWidget#CollapsibleHeader QLabel#CollapsibleSubtitle { color: {muted}; font-size: 12px; }
+QWidget#ApiSettingsWorkspace QLabel#CollapsibleIcon {
+    background: {chip_bg}; border: 1px solid {panel_border}; border-radius: 9px;
 }
-QPushButton#AddPresetButton:hover,
-QPushButton#RemovePresetButton:hover,
-QPushButton#MoveUpButton:hover,
-QPushButton#MoveDownButton:hover {
-    background-color: rgba({accent_rgb}, 0.16);
-    border: 1px solid {panel_border};
-}
-QPushButton#AddPresetButton:pressed,
-QPushButton#RemovePresetButton:pressed,
-QPushButton#MoveUpButton:pressed,
-QPushButton#MoveDownButton:pressed {
-    background-color: rgba({accent_rgb}, 0.24);
-}
-QPushButton#RemovePresetButton:disabled {
-    color: {muted};
-    border-color: {outline};
-}
-
 /* ========= Settings Page ========= */
 QWidget#SettingsPageRoot,
 QWidget#SettingsWorkspaceContent {
@@ -539,15 +778,6 @@ QWidget#SettingsPageRoot QLabel#AIEngineLoadingText,
 QWidget#SettingsPageRoot QLabel#AIEngineMaintenanceHint {
     color: {muted};
     font-size: 9pt;
-}
-QWidget#SettingsPageRoot QLabel#AIEngineHardwareName {
-    color: {text};
-    font-size: 12pt;
-    font-weight: 700;
-}
-QWidget#SettingsPageRoot QWidget#AIEngineHardwareInfo {
-    background: transparent;
-    border: none;
 }
 QWidget#SettingsPageRoot QPushButton#AIEngineLoadingSpinner:disabled {
     background: transparent;

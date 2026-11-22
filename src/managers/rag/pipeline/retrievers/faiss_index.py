@@ -226,3 +226,10 @@ def faiss_retrieve(
 def invalidate(character_id: str, model_name: str, source_table: str) -> None:
     """Force index rebuild on next query (e.g. after bulk re-indexing)."""
     _cache.invalidate(character_id, model_name, source_table)
+
+
+def invalidate_character(character_id: str) -> None:
+    """Drop every derived index for a restored character, including equal-sized histories."""
+    for key in tuple(_cache._indexes):
+        if key[0] == character_id:
+            _cache.invalidate(*key)

@@ -1,9 +1,12 @@
 # src/presets/api_templates.py
 
+from presets.opencode import template_data as opencode_templates
+
 API_TEMPLATES_DATA = [
     {
         "id": 1,
         "name": "Mistral AI",
+        "settings_schema_id": "mistral",
         "pricing": "mixed",
         "url": "https://api.mistral.ai/v1/chat/completions",
         "default_model": "mistral-large-2512",
@@ -21,6 +24,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 2,
         "name": "OpenRouter",
+        "settings_schema_id": "openrouter",
         "pricing": "mixed",
         "url": "https://openrouter.ai/api/v1/chat/completions",
         "default_model": "nvidia/nemotron-3-super-120b-a12b:free",
@@ -39,6 +43,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 3,
         "name": "Google AI Studio",
+        "settings_schema_id": "google-level",
         "pricing": "mixed",
         "url_tpl": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "default_model": "gemini-3.1-flash-lite",
@@ -58,8 +63,12 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-2.5-pro",
                 "match": "gemini-2.5-pro",
                 "parameters": [
-                    "temperature", "max_tokens", "top_p", "top_k",
-                    "presence_penalty", "frequency_penalty",
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "top_k",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "budget",
@@ -74,8 +83,12 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-2.5-flash",
                 "match": "gemini-2.5-flash",
                 "parameters": [
-                    "temperature", "max_tokens", "top_p", "top_k",
-                    "presence_penalty", "frequency_penalty",
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "top_k",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "budget",
@@ -90,8 +103,12 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-2.5-flash-lite",
                 "match": "gemini-2.5-flash-lite",
                 "parameters": [
-                    "temperature", "max_tokens", "top_p", "top_k",
-                    "presence_penalty", "frequency_penalty",
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "top_k",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "budget",
@@ -106,7 +123,9 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-3.1-flash-lite",
                 "match": "gemini-3.1-flash-lite",
                 "parameters": [
-                    "max_tokens", "presence_penalty", "frequency_penalty",
+                    "max_tokens",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "level",
@@ -121,7 +140,9 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-3.5-flash-lite",
                 "match": "gemini-3.5-flash-lite",
                 "parameters": [
-                    "max_tokens", "presence_penalty", "frequency_penalty",
+                    "max_tokens",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "level",
@@ -136,7 +157,9 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-3.5-flash",
                 "match": "gemini-3.5-flash",
                 "parameters": [
-                    "max_tokens", "presence_penalty", "frequency_penalty",
+                    "max_tokens",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "level",
@@ -150,7 +173,9 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-3.6-flash",
                 "match": "gemini-3.6-flash",
                 "parameters": [
-                    "max_tokens", "presence_penalty", "frequency_penalty",
+                    "max_tokens",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "level",
@@ -165,7 +190,9 @@ API_TEMPLATES_DATA = [
                 "id": "gemini-3.7-flash",
                 "match": "gemini-3.7-flash",
                 "parameters": [
-                    "max_tokens", "presence_penalty", "frequency_penalty",
+                    "max_tokens",
+                    "presence_penalty",
+                    "frequency_penalty",
                 ],
                 "thinking": {
                     "transport": "level",
@@ -228,6 +255,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 6,
         "name": "Groq",
+        "settings_schema_id": "groq",
         "pricing": "mixed",
         "url": "https://api.groq.com/openai/v1/chat/completions",
         "default_model": "llama-3.1-8b-instant",
@@ -245,6 +273,7 @@ API_TEMPLATES_DATA = [
     {
         "id": 7,
         "name": "Together AI",
+        "settings_schema_id": "together",
         "pricing": "mixed",
         "url": "https://api.together.ai/v1/chat/completions",
         "default_model": "openai/gpt-oss-20b",
@@ -297,6 +326,12 @@ API_TEMPLATES_DATA = [
     {
         "id": 9,
         "name": "LM Studio",
+        "pipeline_editable": True,
+        "url_editable": True,
+        "test_url_editable": False,
+        "request_path": "/v1/chat/completions",
+        "test_path": "/v1/models",
+        "settings_schema_id": "local-openai",
         "pricing": "free",
         "badge_kind": "local",
         "url": "http://127.0.0.1:1234/v1/chat/completions",
@@ -311,6 +346,11 @@ API_TEMPLATES_DATA = [
     {
         "id": 10,
         "name": "Ollama",
+        "pipeline_editable": True,
+        "url_editable": True,
+        "test_url_editable": False,
+        "request_path": "/v1/chat/completions",
+        "test_path": "/v1/models",
         "pricing": "free",
         "badge_kind": "local",
         "url": "http://127.0.0.1:11434/v1/chat/completions",
@@ -326,4 +366,39 @@ API_TEMPLATES_DATA = [
         "models_url": "https://ollama.com/search",
         "key_url": "",
     },
+    {
+        "id": 13,
+        "name": "OpenAI Responses (API key)",
+        "settings_schema_id": "openai-responses",
+        "pricing": "paid",
+        "url_editable": True,
+        "test_url_editable": False,
+        "url": "https://api.openai.com/v1/responses",
+        "default_model": "gpt-4o",
+        "known_models": [],
+        "protocol_id": "openai_responses_default",
+        "test_url": "https://api.openai.com/v1/models",
+        "documentation_url": "https://developers.openai.com/api/docs/guides/migrate-to-responses",
+        "models_url": "https://developers.openai.com/api/docs/models",
+        "key_url": "https://platform.openai.com/api-keys",
+    },
+    {
+        "id": 12,
+        "name": "ChatGPT Plan (Codex)",
+        "preferred_model": "gpt-6-luna",
+        "settings_schema_id": "chatgpt-plan",
+        "pricing": "paid",
+        "badge_kind": "subscription",
+        "url": "https://api.openai.com/v1/responses",
+        "default_model": "",
+        "known_models": [],
+        "protocol_id": "chatgpt_plan_default",
+        "test_url": "https://api.openai.com/v1/models",
+        "documentation_url": "https://developers.openai.com/siwc/token-sharing-open-source",
+        "models_url": "https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference",
+        "key_url": "",
+    },
 ]
+
+# Keep ChatGPT Plan as the final built-in for its existing selection contract.
+API_TEMPLATES_DATA[-1:-1] = opencode_templates()

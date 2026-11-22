@@ -11,6 +11,8 @@ from main_logger import logger
 from domain.dialogue_identity import DialogueActorKind
 from domain.conversation_message_ids import ConversationMessageIds
 from services.dialogue_identity_resolver import DialogueIdentityResolver
+from services.conversation_timeline import ConversationTimeline
+from utils.cognitive_effect_notes import build_cognitive_effect_notice, cognitive_effect_change_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +28,53 @@ class ConversationWriteResult:
 
 
 class ConversationEventWriter:
-    def __init__(self, character_ref_resolver: Callable[[str], Any]):
+    def __init__(self, character_ref_resolver: Callable[[str], Any], timeline: ConversationTimeline | None = None):
         self._get_character_ref = character_ref_resolver
         self._identity_resolver = DialogueIdentityResolver(character_ref_resolver)
+        self.timeline = timeline
+
+    def begin_turn(self, request, character_id: str):
+        if self.timeline is None:
+            return None
+        from domain.timeline import new_id
+
+        request.req_id = request.req_id or new_id()
+        speaker = self._identity_resolver.resolve(request.sender, request.dialogue)
+        participants = self.normalize_participants(request.participants)
+        recipients = self._history_recipient_ids(
+            participants, dialogue=request.dialogue, responder_character_id=character_id,
+        )
+        image_source = str(request.image_source or "").strip().lower()
+        private_images = image_source in {"mita_camera", "tv_observer"}
+        tv_observation = (request.game_state or {}).get("tv_observation")
+        incoming = self._build_user_event_message(
+            speaker=speaker.sender_id, target=character_id, participants=participants,
+            user_input=request.user_input, image_data=[] if private_images else request.image_data,
+            image_source="" if private_images else image_source, image_descriptions=None,
+            tv_observation=None,
+            event_type=request.event_type, req_id=request.req_id,
+            turn_id=ConversationMessageIds.turn(request.task_uid or request.req_id),
+        )
+        if incoming is not None:
+            incoming.update(self._dialogue_metadata(request.dialogue))
+        observation = self._build_user_event_message(
+            speaker=character_id, target=character_id, participants=[character_id],
+            user_input="", image_data=request.image_data if private_images else [],
+            image_source=image_source, image_descriptions=None, tv_observation=tv_observation,
+            event_type=request.event_type, req_id=request.req_id,
+            turn_id=ConversationMessageIds.turn(request.task_uid or request.req_id),
+        )
+        if observation is not None:
+            observation["message_id"] = f"observation:{ConversationMessageIds.incoming(request.req_id)}"
+        return self.timeline.begin_turn(
+            character_id=character_id, recipients=recipients, incoming=incoming,
+            actor_id=speaker.sender_id, player=speaker.kind is DialogueActorKind.PLAYER,
+            origin_message_id=request.origin_message_id, event_type=request.event_type,
+            instruction=request.system_input, operation_id=request.task_uid or request.req_id,
+            target_event_id=request.timeline_event_id,
+            initiate=request.timeline_initiate,
+            observation_message=observation,
+        )
 
     def normalize_participants(self, participants: Any) -> list[str]:
         if not participants:
@@ -69,9 +115,11 @@ class ConversationEventWriter:
         roster_ids = [
             str(self._dialogue_value(participant, "character_id", "") or "").strip()
             for participant in self._dialogue_value(dialogue, "participants", []) or []
+            if self._dialogue_value(participant, "is_active", True)
+            and self._dialogue_value(participant, "can_hear_speaker", True)
         ]
         source_ids = [character_id for character_id in roster_ids if character_id]
-        if not source_ids:
+        if not self._dialogue_value(dialogue, "participants", []):
             source_ids = list(participants)
 
         resolved: list[str] = []
@@ -169,7 +217,7 @@ class ConversationEventWriter:
                 continue
 
             local = dict(event_msg)
-            local["role"] = "assistant" if self._identity_resolver.same_id(pid, speaker) else "user"
+            local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
             local.setdefault("sender", speaker)
 
             self._append_history_message(ch, local)
@@ -179,6 +227,7 @@ class ConversationEventWriter:
         user_event: dict | None,
         assistant_event: dict,
         participants: list[str],
+        notices: dict[str, dict] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Persist both sides of the completed turn in one batch per recipient."""
         committed: list[str] = []
@@ -193,12 +242,19 @@ class ConversationEventWriter:
                 continue
 
             local_messages: list[dict] = []
+            notice = (notices or {}).get(pid)
+            if isinstance(notice, dict):
+                local_messages.append(dict(notice))
             for event_msg in (user_event, assistant_event):
                 if not isinstance(event_msg, dict):
                     continue
+                event_id = event_msg.get("timeline_event_id")
+                if self.timeline is not None and event_id and not self.timeline.runtime.timeline.knows(pid, event_id):
+                    continue
                 local = dict(event_msg)
                 speaker = str(local.get("speaker") or "")
-                local["role"] = "assistant" if self._identity_resolver.same_id(pid, speaker) else "user"
+                if local.get("role") not in {"system", "event"}:
+                    local["role"] = "user" if local.get("tv_observation") else ("assistant" if self._identity_resolver.same_id(pid, speaker) else "user")
                 local.setdefault("sender", speaker)
                 local_messages.append(local)
 
@@ -218,6 +274,7 @@ class ConversationEventWriter:
         user_input: str,
         image_data: list[Any],
         image_source: str,
+        tv_observation: dict | None = None,
         image_descriptions: dict[str, str] | None,
         event_type: str,
         req_id: str | None,
@@ -226,13 +283,17 @@ class ConversationEventWriter:
         has_text = bool(str(user_input or "").strip())
         has_images = bool(image_data)
 
-        if not has_text and not has_images:
+        if not has_text and not has_images and not tv_observation:
             return None
 
         chunks: list[dict] = []
 
         if has_text:
             chunks.append({"type": "text", "text": str(user_input)})
+
+        if tv_observation:
+            from core.tv_observation import format_tv_observation
+            chunks.append({"type": "text", "text": format_tv_observation(tv_observation)})
 
         for img in image_data or []:
             if isinstance(img, bytes):
@@ -261,6 +322,9 @@ class ConversationEventWriter:
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "content": chunks,
         }
+        if tv_observation:
+            from core.tv_observation import normalize_tv_observation
+            msg["tv_observation"] = normalize_tv_observation(tv_observation)
         if image_source:
             msg["image_source"] = image_source
         if image_descriptions:
@@ -280,6 +344,8 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
+        is_deleted: bool = False,
         turn_id: str,
     ) -> dict:
         msg = {
@@ -302,6 +368,13 @@ class ConversationEventWriter:
             msg.update(llm_usage)
         if sample_id:
             msg["sample_id"] = sample_id
+        snapshot_id = str(context_snapshot_id or "").strip()
+        if snapshot_id:
+            msg["context_snapshot_id"] = snapshot_id
+        if is_deleted:
+            # Internal HistoryManager flag. It intentionally does not use a
+            # public protocol field and is persisted as is_deleted=1.
+            msg["_history_is_deleted"] = True
         return msg
 
     def _save_drawings_to_disk(self, image_data: list[Any], character_id: str) -> None:
@@ -310,11 +383,11 @@ class ConversationEventWriter:
             ch_ref = self._get_character_ref(character_id)
             if ch_ref is None or not hasattr(ch_ref, "history_manager"):
                 return
-            char_name = getattr(ch_ref.history_manager, "character_name", None) or character_id
+            storage_name = getattr(ch_ref.history_manager, "storage_name", None) or character_id
             histories_dir = os.environ.get(
                 "NEUROMITA_HISTORIES_DIR", os.path.join(os.getcwd(), "Histories")
             )
-            drawings_dir = os.path.join(histories_dir, char_name, "Drawings")
+            drawings_dir = os.path.join(histories_dir, storage_name, "Drawings")
             os.makedirs(drawings_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             for i, img in enumerate(image_data):
@@ -355,6 +428,7 @@ class ConversationEventWriter:
         user_input: str,
         image_data: list[Any],
         image_source: str = "",
+        tv_observation: dict | None = None,
         image_descriptions: dict[str, str] | None = None,
         req_id: str | None,
         origin_message_id: str | None,
@@ -366,6 +440,9 @@ class ConversationEventWriter:
         thinking: str | None = None,
         llm_usage: dict | None = None,
         sample_id: str | None = None,
+        context_snapshot_id: str | None = None,
+        assistant_is_deleted: bool = False,
+        cognitive_effect_changes: list[dict] | None = None,
         dialogue: Any = None,
     ) -> ConversationWriteResult:
         resolved_speaker = self._identity_resolver.resolve(sender, dialogue)
@@ -388,6 +465,10 @@ class ConversationEventWriter:
             dialogue=dialogue,
             responder_character_id=responder_character_id,
         )
+        notices = self._build_cognitive_effect_notices(
+            responder_character_id,
+            [] if assistant_is_deleted else cognitive_effect_changes,
+        )
 
         turn_id = ConversationMessageIds.turn(task_uid or req_id)
 
@@ -400,6 +481,7 @@ class ConversationEventWriter:
                 user_input=user_input,
                 image_data=image_data,
                 image_source=image_source,
+                tv_observation=tv_observation,
                 image_descriptions=image_descriptions,
                 event_type=event_type,
                 req_id=req_id,
@@ -412,11 +494,13 @@ class ConversationEventWriter:
             participants=pts,
             final_text=str(assistant_text or ""),
             event_type=event_type,
-            task_uid=task_uid,
+            task_uid=task_uid or req_id,
             structured_data=structured_data,
             thinking=thinking,
             llm_usage=llm_usage,
             sample_id=sample_id,
+            context_snapshot_id=context_snapshot_id,
+            is_deleted=assistant_is_deleted,
             turn_id=turn_id,
         )
 
@@ -440,10 +524,77 @@ class ConversationEventWriter:
             )
             assistant_event.update(assistant_metadata)
 
-        committed, failed = self._fanout_turn(user_event, assistant_event, history_recipients)
+        if self.timeline is not None:
+            for recipient_id, notice in notices.items():
+                self.timeline.record_message(
+                    notice,
+                    (recipient_id,),
+                    actor_id="World",
+                    note=True,
+                )
+            _incoming, outgoing = self.timeline.complete_turn(
+                user_event, assistant_event, history_recipients,
+                player=resolved_speaker.kind is DialogueActorKind.PLAYER,
+                origin_message_id=origin_message_id,
+            )
+            if user_event is not None:
+                turn = self.timeline.runtime.turn
+                if turn and turn.reply and turn.trigger_id:
+                    incoming = self.timeline.runtime.timeline.event(turn.trigger_id)
+                elif turn and turn.input_event_ids:
+                    incoming = self.timeline.runtime.timeline.event(turn.input_event_ids[0])
+                else:
+                    incoming = self.timeline.find_message(user_event["message_id"])
+                payload = incoming.payload.to_dict()
+                user_event = dict(payload.get("message") or {}, message_id=payload["message_id"],
+                                  content=payload.get("content", ""), speaker=incoming.actor_id)
+                user_event["timeline_event_id"] = incoming.event_id
+            if outgoing is not None:
+                assistant_event["timeline_event_id"] = outgoing.event_id
+        committed, failed = self._fanout_turn(
+            user_event,
+            assistant_event,
+            history_recipients,
+            notices=notices,
+        )
         return ConversationWriteResult(
             user_message_id=str((user_event or {}).get("message_id") or ""),
             assistant_message_id=str(assistant_event.get("message_id") or ""),
             committed_recipient_ids=committed,
             failed_recipient_ids=failed,
         )
+
+    def _build_cognitive_effect_notices(
+        self,
+        observer_character_id: str,
+        changes: list[dict] | None,
+    ) -> dict[str, dict]:
+        observer_character_id = str(observer_character_id or "").strip()
+        if not changes or not observer_character_id:
+            return {}
+        character = self._get_character_ref(observer_character_id)
+        if character is None:
+            return {}
+        seen_change_ids: set[str] = set()
+        history = getattr(character, "history_manager", None)
+        get_recent = getattr(history, "get_recent_messages", None)
+        if callable(get_recent):
+            try:
+                for message in get_recent(limit=64):
+                    seen_change_ids.update(cognitive_effect_change_ids(message))
+            except Exception as exc:
+                logger.warning(
+                    f"[ConversationEventWriter] cognitive notice dedupe failed for "
+                    f"{observer_character_id}: {format_exception(exc)}",
+                    exc_info=True,
+                )
+        notice = build_cognitive_effect_notice(
+            observer_character_id,
+            changes,
+            seen_change_ids=seen_change_ids,
+        )
+        if notice is None:
+            return {}
+        if history is not None and history.contains_message_id(notice["message_id"]):
+            return {}
+        return {observer_character_id: notice}

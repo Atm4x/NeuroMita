@@ -25,7 +25,7 @@ class DatabaseManager:
 
     # Required for concurrent QtSql reads while sqlite3 writes
     _BUSY_TIMEOUT_MS: int = 5000
-    _MIGRATION_TIMESTAMP_NORMALIZATION = "history_timestamp_iso_v1"
+    _MIGRATION_TIMESTAMP_NORMALIZATION = "history_timestamp_iso_v3"
     _MIGRATION_MESSAGE_ID_UNIQUE = "history_message_id_unique_v1"
     _MIGRATION_DIALOGUE_SENDER_IDENTITY = "history_dialogue_sender_identity_v1"
 
@@ -314,7 +314,7 @@ class DatabaseManager:
                     history_desired.append(c)
 
             memories_desired = ["content"]
-            for c in ("type", "priority", "tags", "participants"):
+            for c in ("type", "priority", "tags", "participants", "entities"):
                 if c in mem_cols:
                     memories_desired.append(c)
 
@@ -335,6 +335,29 @@ class DatabaseManager:
                 except Exception as e:
                     logging.warning(f"DB: failed to drop FTS triggers after FTS5 table creation failure: {format_exception(e)}")
                 return False
+
+            # Upgrade older lexical indexes without changing source memories.
+            if "entities" in mem_cols and "entities" not in table_cols("memories_fts"):
+                cur.execute("SAVEPOINT memories_fts_entities_upgrade")
+                try:
+                    self._drop_fts_triggers(conn)
+                    cur.execute(f"DROP TABLE {q('memories_fts')}")
+                    cur.execute(
+                        f"CREATE VIRTUAL TABLE {q('memories_fts')} "
+                        f"USING fts5({', '.join(map(q, memories_desired))})"
+                    )
+                    cols_sql = ", ".join(map(q, memories_desired))
+                    vals_sql = ", ".join(f"COALESCE({q(c)}, '')" for c in memories_desired)
+                    cur.execute(
+                        f"INSERT INTO {q('memories_fts')}(rowid, {cols_sql}) "
+                        f"SELECT id, {vals_sql} FROM {q('memories')}"
+                    )
+                    cur.execute("RELEASE SAVEPOINT memories_fts_entities_upgrade")
+                    logging.info("DB upgrade: memories_fts indexed entities")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT memories_fts_entities_upgrade")
+                    cur.execute("RELEASE SAVEPOINT memories_fts_entities_upgrade")
+                    raise
 
             # Use ACTUAL FTS columns
             history_fts_cols = table_cols("history_fts") or ["content"]
@@ -447,7 +470,17 @@ class DatabaseManager:
             ).fetchall()
         except Exception:
             return False
-        return required.issubset({(str(kind), str(name)) for kind, name in rows})
+        if not required.issubset({(str(kind), str(name)) for kind, name in rows}):
+            return False
+        try:
+            base_cols = {r[1] for r in conn.execute("PRAGMA table_info(memories)")}
+            if "entities" in base_cols:
+                fts_cols = {r[1] for r in conn.execute("PRAGMA table_info(memories_fts)")}
+                if "entities" not in fts_cols:
+                    return False
+        except Exception:
+            return False
+        return True
 
     @staticmethod
     def _ensure_migration_table(cursor: sqlite3.Cursor) -> None:
@@ -588,7 +621,7 @@ class DatabaseManager:
                 if c in hist_cols:
                     history_fts_cols.append(c)
             memories_fts_cols: List[str] = ["content"]
-            for c in ("type", "priority", "tags", "participants"):
+            for c in ("type", "priority", "tags", "participants", "entities"):
                 if c in mem_cols:
                     memories_fts_cols.append(c)
 
@@ -630,6 +663,7 @@ class DatabaseManager:
                    priority TEXT DEFAULT 'Normal',
                    type TEXT DEFAULT 'fact',
                    date_created TEXT,
+                   lore_age_days INTEGER,
                    is_deleted INTEGER DEFAULT 0,
                    embedding_id INTEGER,
                    tags TEXT,
@@ -744,6 +778,7 @@ class DatabaseManager:
                 ("priority", "TEXT DEFAULT 'Normal'"),
                 ("type", "TEXT DEFAULT 'fact'"),
                 ("date_created", "TEXT"),
+                ("lore_age_days", "INTEGER"),
                 ("is_deleted", "INTEGER DEFAULT 0"),
                 ("is_forgotten", "INTEGER DEFAULT 0"),
                 ("embedding_id", "INTEGER"),
@@ -797,19 +832,17 @@ class DatabaseManager:
                         UPDATE history
                         SET timestamp =
                             CASE
-                                WHEN timestamp GLOB '__.__.____ __:__:__' THEN
+                                WHEN timestamp GLOB '??.??.???? ??:??:??' THEN
                                     substr(timestamp, 7, 4) || '-' || substr(timestamp, 4, 2) || '-' ||
                                     substr(timestamp, 1, 2) || ' ' || substr(timestamp, 12, 8)
-                                WHEN timestamp GLOB '__.__.____ __:__' THEN
+                                WHEN timestamp GLOB '??.??.???? ??:??' THEN
                                     substr(timestamp, 7, 4) || '-' || substr(timestamp, 4, 2) || '-' ||
                                     substr(timestamp, 1, 2) || ' ' || substr(timestamp, 12, 5) || ':00'
-                                WHEN timestamp GLOB '__:__' THEN date('now', 'localtime') || ' ' || timestamp || ':00'
                                 ELSE replace(timestamp, 'T', ' ')
                             END
                         WHERE timestamp IS NOT NULL AND TRIM(timestamp) != ''
                           AND (
-                              timestamp GLOB '__.__.____ __:__*'
-                              OR timestamp GLOB '__:__'
+                              timestamp GLOB '??.??.???? ??:??*'
                               OR instr(timestamp, 'T') > 0
                           )
                         """
@@ -951,6 +984,14 @@ class DatabaseManager:
             except Exception:
                 self._history_columns_cache = set()
 
+            # One immutable world-time anchor per world.db, shared by all Mitas.
+            # Existing installations prefer their earliest recorded dialogue.
+            try:
+                from managers.lore_timeline import ensure_world_anchor
+                ensure_world_anchor(cursor)
+            except Exception as exc:
+                logging.warning("DB: failed to initialise lore timeline anchor: %s", format_exception(exc))
+
             conn.commit()
         finally:
             try:
@@ -1049,17 +1090,10 @@ class DatabaseManager:
         """Drop FTS sync triggers so base table writes never fail (safe no-op)."""
         try:
             cur = conn.cursor()
-            cur.executescript(
-                """
-                DROP TRIGGER IF EXISTS history_fts_ai;
-                DROP TRIGGER IF EXISTS history_fts_ad;
-                DROP TRIGGER IF EXISTS history_fts_au;
-
-                DROP TRIGGER IF EXISTS memories_fts_ai;
-                DROP TRIGGER IF EXISTS memories_fts_ad;
-                DROP TRIGGER IF EXISTS memories_fts_au;
-                """
-            )
+            # Unlike executescript(), execute() preserves migration SAVEPOINTs.
+            for table in ("history", "memories"):
+                for suffix in ("ai", "ad", "au"):
+                    cur.execute(f"DROP TRIGGER IF EXISTS {table}_fts_{suffix}")
         except Exception as e:
             logging.warning(f"DB: failed to drop FTS triggers (ignored): {format_exception(e)}")
 

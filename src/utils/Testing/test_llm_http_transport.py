@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import sys
 import threading
 from pathlib import Path
@@ -27,13 +28,12 @@ from handlers.llm_providers.http_transport import (
     LLMHttpClient,
     LLMTimeoutPolicy,
 )
-from handlers.llm_providers.openai_provider import OpenAIProvider
-from handlers.llm_providers.openai_compatible import OpenAICompatibleProvider
 from handlers.llm_providers.streaming import (
     LLMStreamEventType,
     StreamAccumulator,
     StreamDeadlineExceeded,
     StreamDeadlinePolicy,
+    StreamEventChannel,
     StreamSupervisor,
     iter_sse_data,
 )
@@ -79,8 +79,10 @@ def test_transport_reuses_registered_service_client():
 
     transport = LLMHttpClient(enable_http2=False, client_factory=factory)
 
-    assert transport.client_for_url("https://example.test") is transport.client_for_url("https://other.test")
-    assert transport.client_for_url("http://localhost:11434") is transport.client_for_url("https://example.test")
+    for url in ("https://example.test", "https://other.test", "http://localhost:11434"):
+        response = transport.get(url)
+        assert response.json() == {"ok": True}
+        response.close()
     assert created == [("llm", False)]
     transport.close()
 
@@ -95,13 +97,16 @@ def test_transport_client_is_created_with_shared_connection_limits(monkeypatch):
         def close(self):
             return None
 
+        def request(self, method, url, **kwargs):
+            return httpx.Response(200, request=httpx.Request(method, url))
+
     transport = LLMHttpClient(
         enable_http2=False,
         client_factory=lambda _service_id, _http2: DummyClient(),
     )
 
-    transport.client_for_url("http://127.0.0.1:11434/v1")
-    transport.client_for_url("https://example.test/v1")
+    transport.get("http://127.0.0.1:11434/v1").close()
+    transport.get("https://example.test/v1").close()
 
     assert len(created) == 1
     transport.close()
@@ -164,12 +169,14 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
     legacy = []
     cancellation = RequestCancellation()
     req = _request()
+    req.provider_display_name = "OpenRouter"
     req.stream = True
     req.stream_cb = lambda text, channel: legacy.append((channel, text))
     req.stream_event_cb = events.append
     req.extra["_request_cancellation"] = cancellation
     accumulator = StreamAccumulator(req, provider="common", model="model")
 
+    assert events == []
     accumulator.add_reasoning("think")
     accumulator.add_text("answer")
     response = accumulator.complete(finish_reason="stop")
@@ -182,6 +189,7 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
         LLMStreamEventType.COMPLETED,
     ]
     assert [event.sequence for event in events] == [1, 2, 3, 4]
+    assert [event.provider for event in events] == ["OpenRouter"] * 4
     # Мост stream_cb различает каналы явным аргументом, а не <think>-тегами
     # в тексте: подписчику незачем парсить строку, чтобы понять, что пришло.
     assert legacy == [
@@ -190,6 +198,8 @@ def test_stream_accumulator_preserves_exact_events_and_legacy_text_bridge():
     ]
     assert response.text == "answer"
     assert response.reasoning == "think"
+    assert response.provider_name == "common"
+    assert response.provider_display_name == "OpenRouter"
     assert cancellation.has_meaningful_stream_event
 
 
@@ -205,6 +215,34 @@ def test_stream_accumulator_rescues_answer_left_in_the_reasoning_channel():
 
     assert response.text == "весь ответ тут"
     assert response.reasoning is None
+
+
+def test_stream_failure_before_started_emits_display_provider_name():
+    events = []
+    req = _request()
+    req.stream = True
+    req.provider_display_name = "OpenRouter"
+    req.stream_event_cb = events.append
+    channel = StreamEventChannel(req)
+
+    channel.fail(LLMProviderError(provider="common", friendly_message="upstream failed"))
+
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "OpenRouter"),
+        (LLMStreamEventType.FAILED, "OpenRouter"),
+    ]
+
+
+def test_stream_complete_never_serializes_missing_provider_as_none():
+    events = []
+    req = _request()
+    req.provider_name = ""
+    req.stream_event_cb = events.append
+    channel = StreamEventChannel(req)
+
+    channel.complete(LLMResponse(text="ok"))
+
+    assert [event.provider for event in events] == ["", ""]
 
 
 def test_sse_decoder_supports_comments_and_multiline_data():
@@ -355,6 +393,7 @@ def test_openai_compatible_provider_streams_sse_through_normalized_accumulator()
         messages=[{"role": "user", "content": "hi"}],
         api_url="http://localhost:1234/v1",
         provider_name="common",
+        provider_display_name="OpenRouter",
         dialect_id="openai_chat_completions",
         stream=True,
         stream_cb=lambda text, channel: legacy.append((channel, text)),
@@ -367,6 +406,8 @@ def test_openai_compatible_provider_streams_sse_through_normalized_accumulator()
     assert response.text == "hello world"
     assert response.reasoning == "r"
     assert response.finish_reason == "stop"
+    assert response.provider_name == "common"
+    assert response.provider_display_name == "OpenRouter"
     assert legacy == [
         (StreamChannel.REASONING, "r"),
         (StreamChannel.CONTENT, "hello"),
@@ -435,6 +476,7 @@ def test_gemini_provider_uses_real_sse_endpoint_and_streams_deltas():
         messages=[{"role": "user", "content": "hi"}],
         api_url="https://example.test/v1/models/gemini-test:generateContent?key=secret",
         provider_name="gemini",
+        provider_display_name="Google AI Studio",
         stream=True,
     )
 
@@ -445,6 +487,8 @@ def test_gemini_provider_uses_real_sse_endpoint_and_streams_deltas():
     assert response.text == "answer"
     assert response.reasoning == "thought"
     assert response.finish_reason == "STOP"
+    assert response.provider_name == "gemini"
+    assert response.provider_display_name == "Google AI Studio"
     assert requested_urls and ":streamGenerateContent" in requested_urls[0]
     assert "alt=sse" in requested_urls[0]
     transport.close()
@@ -514,127 +558,108 @@ def test_gemini_http_error_preserves_retry_after_header():
     transport.close()
 
 
-def test_openai_sdk_adapter_reuses_httpx_pool_and_disables_hidden_retries():
+
+
+def test_common_provider_falls_back_from_schema_to_json_object_then_plain_json():
+    attempts = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        attempts.append(payload)
+        if "response_format" in payload:
+            mode = payload["response_format"]["type"]
+            return httpx.Response(
+                400,
+                json={"error": {"message": f"{mode} response_format unsupported"}},
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok":true}'}}]},
+        )
+
     transport = LLMHttpClient(
         enable_http2=False,
         client_factory=lambda _service_id, _http2: httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+            transport=httpx.MockTransport(respond)
         ),
     )
-    provider = OpenAIProvider(http_transport=transport)
-    req = LLMRequest(
-        model="gpt-test",
-        messages=[],
-        api_key="key",
-        api_url="https://api.openai.test/v1",
-        provider_name="openai",
-    )
+    provider = CommonProvider(http_transport=transport)
+    req = _request()
+    req.capabilities = {
+        "structured_output": True,
+        "native_structured_output": True,
+        "structured_output_mode": "json_schema",
+    }
 
-    first = provider._get_client(req)
-    second = provider._get_client(req)
+    response = provider.generate(req)
 
-    assert first.max_retries == 0
-    assert second.max_retries == 0
-    assert first._client is second._client
+    assert response.text == '{"ok":true}'
+    assert len(attempts) == 3
+    assert attempts[0]["response_format"]["type"] == "json_schema"
+    assert attempts[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in attempts[2]
     provider.close()
     transport.close()
 
 
-class _CapturingSdkProvider(OpenAICompatibleProvider):
-    name = "capturing-sdk"
-    supports_stream_usage = True
+def test_common_provider_stops_at_plain_json_when_each_format_is_rejected():
+    attempts = []
 
-    def __init__(self, captured):
-        super().__init__()
-        self._captured = captured
+    def respond(request):
+        payload = json.loads(request.content)
+        attempts.append(payload)
+        return httpx.Response(
+            400,
+            json={"error": {"message": "response_format json_object unsupported"}},
+        )
 
-    def is_applicable(self, req):
-        return True
-
-    def _get_client(self, req):
-        captured = self._captured
-
-        class Completions:
-            @staticmethod
-            def create(**kwargs):
-                captured.update(kwargs)
-                return iter(())
-
-        class Chat:
-            completions = Completions()
-
-        class Client:
-            chat = Chat()
-
-            @staticmethod
-            def close():
-                return None
-
-        return Client()
-
-
-def test_stream_usage_is_capability_driven_for_http_and_sdk_adapters():
-    common = CommonProvider()
+    transport = LLMHttpClient(
+        enable_http2=False,
+        client_factory=lambda _service_id, _http2: httpx.Client(
+            transport=httpx.MockTransport(respond)
+        ),
+    )
+    provider = CommonProvider(http_transport=transport)
     req = _request()
-    req.stream = True
+    req.capabilities = {
+        "structured_output": True,
+        "native_structured_output": True,
+        "structured_output_mode": "json_schema",
+    }
+
+    with pytest.raises(LLMProviderError):
+        provider.generate(req)
+
+    assert len(attempts) == 3
+    assert attempts[0]["response_format"]["type"] == "json_schema"
+    assert attempts[1]["response_format"]["type"] == "json_object"
+    assert "response_format" not in attempts[2]
+    provider.close()
+    transport.close()
+
+
+
+
+def test_stream_usage_is_capability_driven_for_chat_adapter():
+    from handlers.llm_providers.protocols.registry import adapter_for
+    req = _request()
     req.capabilities["supports_stream_usage"] = True
-
-    payload = common._build_payload(req, req.model, req.messages)
-    assert payload["stream_options"] == {"include_usage": True}
-
+    adapter = adapter_for("openai_chat_completions")
+    assert adapter.encode(req, wire_stream=True)["stream_options"] == {"include_usage": True}
     req.capabilities["supports_stream_usage"] = False
-    assert "stream_options" not in common._build_payload(req, req.model, req.messages)
-    common.close()
-
-    captured = {}
-    sdk = _CapturingSdkProvider(captured)
-    sdk_req = _request()
-    sdk_req.stream = True
-    sdk.generate(sdk_req)
-    assert captured["stream_options"] == {"include_usage": True}
-    sdk.close()
+    assert "stream_options" not in adapter.encode(req, wire_stream=True)
 
 
-def test_sdk_stream_error_never_returns_partial_success():
-    class Delta:
-        content = "hello"
-        reasoning_content = ""
-        model_extra = {}
-        tool_calls = []
-
-    class Choice:
-        finish_reason = None
-        delta = Delta()
-
-    class TextChunk:
-        model = "model"
-        usage = None
-        choices = [Choice()]
-
-        @staticmethod
-        def model_dump():
-            return {"choices": [{"delta": {"content": "hello"}}]}
-
-    class ErrorChunk:
-        model = "model"
-        usage = None
-        choices = []
-
-        @staticmethod
-        def model_dump():
-            return {"error": {"message": "upstream failed"}}
-
-    provider = _CapturingSdkProvider({})
+def test_chat_stream_error_never_returns_partial_success():
+    from handlers.llm_providers.protocols.registry import adapter_for
     req = _request()
     req.stream = True
     req.extra["_request_cancellation"] = RequestCancellation()
-
+    chunks = [{"choices": [{"delta": {"content": "hello"}}]}, {"error": {"message": "upstream failed"}}]
     with pytest.raises(LLMProviderError) as caught:
-        provider._handle_stream(iter((TextChunk(), ErrorChunk())), req)
-
+        adapter_for("openai_chat_completions").consume_stream(req, chunks)
     assert caught.value.code == "stream.provider_error"
     assert not caught.value.retryable
-    provider.close()
 
 
 def test_stream_supervisor_distinguishes_first_event_and_idle_deadlines():
@@ -704,11 +729,12 @@ class _RunnerResolver:
         return preset
 
 
-def _runner_preset(name: str) -> PresetSettings:
+def _runner_preset(name: str, *, display_name: str = "OpenAI-compatible API") -> PresetSettings:
     return PresetSettings(
         protocol_id="openai_compatible_default",
         dialect_id="openai_chat_completions",
         provider_name="common",
+        provider_display_name=display_name,
         headers={},
         transforms=[],
         capabilities={"streaming": True},
@@ -772,6 +798,113 @@ def test_stream_timeout_before_body_allows_fallback_preset():
 
     assert response is not None and response.text == "fallback ok"
     assert calls == ["main", "main", "fallback"]
+    runner.close()
+
+
+def test_stream_fallback_updates_display_provider_name_for_fallback_events():
+    events = []
+
+    class ProviderManager:
+        def generate(self, req):
+            if req.model == "openrouter-model":
+                raise LLMProviderError(
+                    provider=req.provider_name,
+                    friendly_message="OpenRouter disconnected",
+                    retryable=True,
+                )
+
+            accumulator = StreamAccumulator(req, provider=req.provider_name, model=req.model)
+            accumulator.add_text("fallback answer")
+            return accumulator.complete(finish_reason="stop")
+
+        def close(self):
+            return None
+
+    presets = [
+        _runner_preset("openrouter-model", display_name="OpenRouter"),
+        _runner_preset("google-model", display_name="Google AI Studio"),
+    ]
+    runner = _runner_with_provider(presets, ProviderManager())
+
+    def build_request(preset, model):
+        return LLMRequest(
+            model=model,
+            messages=[],
+            api_url="http://localhost:1234/v1",
+            provider_name=preset.provider_name,
+            provider_display_name=preset.provider_display_name,
+            stream=True,
+            stream_event_cb=events.append,
+        )
+
+    response = runner.run(
+        messages=[],
+        preset_id=None,
+        stream_callback=None,
+        build_request=build_request,
+        max_attempts=1,
+        retry_delay=0.0,
+        request_timeout=1.0,
+    )
+
+    assert response is not None and response.text == "fallback answer"
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "Google AI Studio"),
+        (LLMStreamEventType.TEXT_DELTA, "Google AI Studio"),
+        (LLMStreamEventType.COMPLETED, "Google AI Studio"),
+    ]
+    runner.close()
+
+
+def test_stream_fallback_failure_uses_last_preset_display_provider_name():
+    events = []
+
+    class ProviderManager:
+        def generate(self, req):
+            if req.model == "openrouter-model":
+                raise LLMProviderError(
+                    provider=req.provider_name,
+                    friendly_message="OpenRouter disconnected",
+                    retryable=True,
+                )
+            raise LLMProviderError(
+                provider=req.provider_name,
+                friendly_message="Google AI Studio disconnected",
+                retryable=False,
+            )
+
+        def close(self):
+            return None
+
+    presets = [
+        _runner_preset("openrouter-model", display_name="OpenRouter"),
+        _runner_preset("google-model", display_name="Google AI Studio"),
+    ]
+    runner = _runner_with_provider(presets, ProviderManager())
+
+    response = runner.run(
+        messages=[],
+        preset_id=None,
+        stream_callback=None,
+        build_request=lambda preset, model: LLMRequest(
+            model=model,
+            messages=[],
+            api_url="http://localhost:1234/v1",
+            provider_name=preset.provider_name,
+            provider_display_name=preset.provider_display_name,
+            stream=True,
+            stream_event_cb=events.append,
+        ),
+        max_attempts=1,
+        retry_delay=0.0,
+        request_timeout=1.0,
+    )
+
+    assert response is not None and response.text is None
+    assert [(event.type, event.provider) for event in events] == [
+        (LLMStreamEventType.STARTED, "Google AI Studio"),
+        (LLMStreamEventType.FAILED, "Google AI Studio"),
+    ]
     runner.close()
 
 
@@ -988,113 +1121,3 @@ def test_runner_uses_retry_after_with_a_reasonable_cap():
     assert response is not None and response.text == "ok"
     assert waits == [10.0]
     runner.close()
-
-
-class _SdkToolResponseProvider(OpenAICompatibleProvider):
-    name = "sdk-tool-response"
-
-    def __init__(self, captured, completion):
-        super().__init__()
-        self._captured = captured
-        self._completion = completion
-
-    def is_applicable(self, req):
-        return True
-
-    def _get_client(self, req):
-        captured = self._captured
-        completion = self._completion
-
-        class Completions:
-            @staticmethod
-            def create(**kwargs):
-                captured.update(kwargs)
-                return completion
-
-        class Chat:
-            completions = Completions()
-
-        class Client:
-            chat = Chat()
-
-            @staticmethod
-            def close():
-                return None
-
-        return Client()
-
-
-def test_openai_sdk_native_tool_call_is_normalized():
-    class Function:
-        name = "lookup"
-        arguments = '{"query": "status"}'
-
-    class Call:
-        id = "call-1"
-        function = Function()
-
-    class Message:
-        content = None
-        tool_calls = [Call()]
-
-    class Choice:
-        message = Message()
-        finish_reason = "tool_calls"
-
-    class Completion:
-        choices = [Choice()]
-        model = "model"
-        usage = None
-
-    captured = {}
-    provider = _SdkToolResponseProvider(captured, Completion())
-    req = _request()
-    req.tools_on = True
-    req.tools_payload = [
-        {
-            "name": "lookup",
-            "description": "Look something up.",
-            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-        }
-    ]
-
-    response = provider.generate(req)
-
-    assert captured["tool_choice"] == "auto"
-    assert captured["tools"] == [
-        {
-            "type": "function",
-            "function": {
-                "name": "lookup",
-                "description": "Look something up.",
-                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
-            },
-        }
-    ]
-    assert response.text is None
-    assert response.error_message is None
-    assert len(response.tool_calls) == 1
-    assert response.tool_calls[0].id == "call-1"
-    assert response.tool_calls[0].name == "lookup"
-    assert response.tool_calls[0].arguments == {"query": "status"}
-    provider.close()
-
-
-def test_openai_http_payload_includes_native_tools():
-    common = CommonProvider()
-    req = _request()
-    req.tools_on = True
-    req.tools_payload = [
-        {
-            "name": "lookup",
-            "description": "Look something up.",
-            "parameters": {"type": "object"},
-        }
-    ]
-
-    payload = common._build_payload(req, req.model, req.messages)
-
-    assert payload["tool_choice"] == "auto"
-    assert payload["tools"][0]["type"] == "function"
-    assert payload["tools"][0]["function"]["name"] == "lookup"
-    common.close()

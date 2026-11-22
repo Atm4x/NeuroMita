@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
+from handlers.asr_models.asr_languages import asr_language_field, asr_language_names
 from core.installables.helpers import build_runtime_ctx
 from core.backends import BackendKind, get_backend_service
 from core.install_requirements import InstallRequirement, check_requirements
@@ -39,7 +40,7 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
                 "Offline speech recognition based on GigaAM (PyTorch). Runs in current process.",
                 "Offline speech recognition based on GigaAM (PyTorch). Runs in current process."
             ),
-            "languages": ["Russian"],
+            "languages": asr_language_names("gigaam"),
             "backend": "cpu",
             "gpu_vendor": ["NVIDIA", "CPU"],
             "tags": [
@@ -78,6 +79,7 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
     # ---------- UI schema ----------
     def settings_spec(self):
         return [
+            asr_language_field("gigaam"),
             {"key": "device", "label_ru": "Device", "label_en": "Device",
              "type": "combobox", "options": ["auto", "cuda", "cpu"], "default": "auto"},
             {"key": "model", "label_ru": "Model", "label_en": "Model",
@@ -87,7 +89,7 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
         ]
 
     def get_default_settings(self):
-        return {"device": "auto", "model": self.DEFAULT_MODEL}
+        return {"device": "auto", "model": self.DEFAULT_MODEL, "language": "ru"}
 
     def apply_settings(self, settings: dict):
         dev = settings.get("device")
@@ -348,12 +350,19 @@ class GigaAMRecognizer(SpeechRecognizerInterface):
 
         # device selection
         device_choice = (self.gigaam_device or "auto").strip().lower()
-        if device_choice == "cuda" and not (self._torch.cuda.is_available()):
-            self.logger.warning("CUDA was requested but is unavailable. Falling back to CPU.")
-            device_choice = "cpu"
+        if device_choice == "cuda" or device_choice.startswith("cuda:"):
+            try:
+                cuda_index = int(device_choice.partition(":")[2] or 0)
+            except (TypeError, ValueError):
+                cuda_index = -1
+            if not self._torch.cuda.is_available() or not 0 <= cuda_index < self._torch.cuda.device_count():
+                self.logger.warning("CUDA was requested but is unavailable. Falling back to CPU.")
+                device_choice = "cpu"
+            else:
+                device_choice = f"cuda:{cuda_index}"
 
         if device_choice == "auto":
-            device_choice = "cuda" if self._torch.cuda.is_available() else "cpu"
+            device_choice = "cuda:0" if self._torch.cuda.is_available() else "cpu"
 
         try:
             self.logger.info(f"Loading GigaAM (PyTorch) on {device_choice}...")

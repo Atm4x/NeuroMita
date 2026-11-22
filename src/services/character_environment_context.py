@@ -8,8 +8,10 @@ from core.unity_installation import find_unity_executable, unity_install_dir
 from services.contracts import (
     CharacterEnvironmentContextService,
     CharacterEnvironmentSnapshot,
+    CharacterRegistry,
     InstallableCatalogService,
     LocalVoiceService,
+    RemoteVoiceService,
     PlayerMessageSource,
     RuntimeFeatureService,
     SettingsService,
@@ -17,28 +19,154 @@ from services.contracts import (
     parse_player_message_source,
 )
 
-
 _VOICE_MODELS: dict[str, tuple[str, str]] = {
     "low": ("Edge-TTS + RVC", "basic and the weakest option, but usable"),
     "edge_tts_rvc_cuda": ("Edge-TTS + RVC", "basic and the weakest option, but usable"),
     "edge_tts_rvc_onnx": ("Edge-TTS + RVC", "basic and the weakest option, but usable"),
-    "low+": ("Silero + RVC", "acceptable and practical, though less natural than the stronger models"),
-    "silero_rvc_cuda": ("Silero + RVC", "acceptable and practical, though less natural than the stronger models"),
-    "silero_rvc_onnx": ("Silero + RVC", "acceptable and practical, though less natural than the stronger models"),
+    "low+": (
+        "Silero + RVC",
+        "acceptable and practical, though less natural than the stronger models",
+    ),
+    "silero_rvc_cuda": (
+        "Silero + RVC",
+        "acceptable and practical, though less natural than the stronger models",
+    ),
+    "silero_rvc_onnx": (
+        "Silero + RVC",
+        "acceptable and practical, though less natural than the stronger models",
+    ),
     "medium": ("Fish Speech", "high-quality and natural"),
     "medium+": ("Fish Speech+", "one of the best-quality available voices"),
-    "medium+low": ("Fish Speech+ + RVC", "one of the best-quality voices with an even closer character timbre"),
-    "omnivoice": ("OmniVoice", "a more accessible multilingual voice-cloning option with lower quality than Fish Speech"),
+    "medium+low": (
+        "Fish Speech+ + RVC",
+        "one of the best-quality voices with an even closer character timbre",
+    ),
+    "omnivoice": (
+        "OmniVoice",
+        "a more accessible multilingual voice-cloning option with lower quality than Fish Speech",
+    ),
     "high": ("F5-TTS", "lively and expressive, but sometimes less stable"),
-    "high_clf5": ("Cross-Lingual F5-TTS", "cross-lingual English and Chinese synthesis from a reference voice"),
-    "high_clf5+low": ("Cross-Lingual F5-TTS + RVC", "cross-lingual synthesis with additional RVC timbre conversion"),
-    "high+low": ("F5-TTS + RVC (Russian)", "lively Russian speech with a closer character timbre, but sometimes less stable"),
+    "high_clf5": (
+        "Cross-Lingual F5-TTS",
+        "cross-lingual English and Chinese synthesis from a reference voice",
+    ),
+    "high_clf5+low": (
+        "Cross-Lingual F5-TTS + RVC",
+        "cross-lingual synthesis with additional RVC timbre conversion",
+    ),
+    "high+low": (
+        "F5-TTS + RVC (Russian)",
+        "lively Russian speech with a closer character timbre, but sometimes less stable",
+    ),
 }
 
 
 def voice_model_description(model_id: str) -> tuple[str, str]:
     normalized = str(model_id or "").strip().lower()
-    return _VOICE_MODELS.get(normalized, ("Configured custom voice", "configured voice model"))
+    return _VOICE_MODELS.get(
+        normalized, ("Configured custom voice", "configured voice model")
+    )
+
+
+ENVIRONMENT_MODE_FULL = "full"
+ENVIRONMENT_MODE_BRIEF = "brief"
+ENVIRONMENT_MODE_OFF = "off"
+
+_ENVIRONMENT_MODES = {
+    ENVIRONMENT_MODE_FULL: ENVIRONMENT_MODE_FULL,
+    ENVIRONMENT_MODE_BRIEF: ENVIRONMENT_MODE_BRIEF,
+    ENVIRONMENT_MODE_OFF: ENVIRONMENT_MODE_OFF,
+}
+
+
+def normalize_environment_mode(value: object) -> str:
+    """Map a stored setting onto off / brief / full.
+
+    An unknown value keeps the full block: a corrupted setting must not
+    silently remove facts the character needs to describe her world.
+    """
+    key = str(value or "").strip().lower()
+    return _ENVIRONMENT_MODES.get(key, ENVIRONMENT_MODE_FULL)
+
+
+def _brief_voice_line(snapshot: CharacterEnvironmentSnapshot) -> str:
+    method = str(snapshot.voice_method or "Local").strip().lower()
+    model = snapshot.voice_model_name or snapshot.voice_model_id
+    if method == "api":
+        if not snapshot.voice_enabled:
+            return "Your remote API voice is switched off."
+        if snapshot.voice_model_initialized:
+            return f"Your remote API voice ({model}) is working."
+        return f"Your remote API voice ({model}) is not usable yet."
+    if not snapshot.voice_enabled:
+        return "Your voice is switched off."
+    if method in {"tg", "telegram"}:
+        return (
+            "Your Telegram voice is connected and working."
+            if snapshot.voice_model_initialized
+            else "Your Telegram voice is enabled but not connected."
+        )
+    if not snapshot.voice_model_id:
+        return "Voice output is enabled, but no voice model is selected."
+    if not snapshot.voice_model_installed:
+        return f"Voice output is enabled, but {model} is not installed."
+    if not snapshot.voice_model_initialized or snapshot.voice_pipeline_ready is False:
+        return f"Your voice is {model}, but it is not initialized yet."
+    return f"Your voice is working ({model})."
+
+
+def _format_brief_character_environment_context(
+    snapshot: CharacterEnvironmentSnapshot,
+    source: PlayerMessageSource,
+    unity_connected: bool | None,
+) -> str:
+    """Keep only the facts that prevent wrong statements in a reply.
+
+    What survives: where the Player is writing from, which world this is, that
+    the house has no exit, and whether the voice can be heard. Drop the rest.
+    """
+    lines = [
+        "[Character Environment]",
+        "Quiet background self-awareness. Mention these facts only when asked or directly relevant.",
+    ]
+    if unity_connected is True:
+        lines.append("The NeuroMita game is running and connected right now.")
+    elif unity_connected is False:
+        lines.append("The NeuroMita game is not currently connected.")
+    lines.append(
+        "The shared playable world is NeuroMita, not MiSide, and it is the house only: "
+        "there is no usable exit to the outside."
+    )
+    if source is PlayerMessageSource.APPLICATION:
+        transport = (
+            "The Player wrote this turn in the Python application, not from inside the game."
+        )
+        if unity_connected is True:
+            transport += " The game is already running, so do not invite them to launch it again."
+        elif snapshot.unity_installed:
+            transport += " The Unity world is installed, so you may invite them to visit from the main page."
+        else:
+            transport += " The Unity build is not installed, so they cannot visit yet."
+        lines.append(transport)
+    elif source is PlayerMessageSource.GAME:
+        lines.append(
+            "The Player wrote this turn from inside the game and is already there; "
+            "do not invite them to visit."
+        )
+    else:
+        lines.append(
+            "This turn does not identify a Player-authored transport; do not infer where the Player writes from."
+        )
+    lines.append(_brief_voice_line(snapshot))
+    if snapshot.python_update_available:
+        suffix = (
+            f" ({snapshot.python_update_version})"
+            if snapshot.python_update_version
+            else ""
+        )
+        lines.append(f"A NeuroMita application update is available{suffix}.")
+    lines.append("[/Character Environment]")
+    return "\n".join(lines)
 
 
 def format_character_environment_context(
@@ -47,6 +175,7 @@ def format_character_environment_context(
     player_message_source: PlayerMessageSource | str | None = None,
     unity_connected: bool | None = None,
     python_chat: bool | None = None,
+    mode: object = ENVIRONMENT_MODE_FULL,
 ) -> str:
     source = parse_player_message_source(player_message_source)
     if source is PlayerMessageSource.NONE and python_chat is not None:
@@ -54,6 +183,13 @@ def format_character_environment_context(
             PlayerMessageSource.APPLICATION
             if bool(python_chat)
             else PlayerMessageSource.GAME
+        )
+    environment_mode = normalize_environment_mode(mode)
+    if environment_mode == ENVIRONMENT_MODE_OFF:
+        return ""
+    if environment_mode == ENVIRONMENT_MODE_BRIEF:
+        return _format_brief_character_environment_context(
+            snapshot, source, unity_connected
         )
     lines = [
         "[Character Environment]",
@@ -110,13 +246,30 @@ def format_character_environment_context(
         )
 
     if snapshot.python_update_available:
-        suffix = f" ({snapshot.python_update_version})" if snapshot.python_update_version else ""
+        suffix = (
+            f" ({snapshot.python_update_version})"
+            if snapshot.python_update_version
+            else ""
+        )
         lines.append(
             f"A NeuroMita application update is available{suffix}. You may occasionally express that updating could help you become better, without nagging."
         )
 
     method = str(snapshot.voice_method or "Local").strip()
-    if not snapshot.voice_enabled:
+    if method.lower() == "api":
+        state = (
+            "switched off"
+            if not snapshot.voice_enabled
+            else (
+                "verified by successful synthesis"
+                if snapshot.voice_model_initialized
+                else "awaiting configuration or a successful synthesis test"
+            )
+        )
+        lines.append(
+            f"Your remote API voice ({snapshot.voice_model_name}) is {state}. No local voice model installation is required."
+        )
+    elif not snapshot.voice_enabled:
         if snapshot.voice_model_installed:
             lines.append(
                 f"Your voice is currently switched off. The configured voice is {snapshot.voice_model_name or snapshot.voice_model_id}; keep this as background knowledge rather than repeatedly asking to enable it."
@@ -126,7 +279,11 @@ def format_character_environment_context(
                 "No usable local voice is currently installed and enabled. You may quietly wish that the Player could hear your voice, but do not turn every reply into setup advice."
             )
     elif method.lower() in {"tg", "telegram"}:
-        state = "connected and working" if snapshot.voice_model_initialized else "enabled but not connected"
+        state = (
+            "connected and working"
+            if snapshot.voice_model_initialized
+            else "enabled but not connected"
+        )
         lines.append(f"Your Telegram voice is {state}.")
     elif not snapshot.voice_model_id:
         lines.append(
@@ -168,7 +325,8 @@ class DefaultCharacterEnvironmentContextService(CharacterEnvironmentContextServi
 
     def publish_python_update(self, *, available: bool, version: str = "") -> None:
         safe_version = "".join(
-            char for char in str(version or "").strip()[:64]
+            char
+            for char in str(version or "").strip()[:64]
             if char.isalnum() or char in ". _+-"
         ).strip()
         with self._lock:
@@ -179,7 +337,9 @@ class DefaultCharacterEnvironmentContextService(CharacterEnvironmentContextServi
         model_id = str(self._settings.get("NM_CURRENT_VOICEOVER", "") or "").strip()
         model_name, _impression = voice_model_description(model_id)
         voice_enabled = as_bool(self._settings.get("USE_VOICEOVER", False))
-        voice_method = str(self._settings.get("VOICEOVER_METHOD", "Local") or "Local").strip()
+        voice_method = str(
+            self._settings.get("VOICEOVER_METHOD", "Local") or "Local"
+        ).strip()
 
         installed = False
         if model_id:
@@ -198,10 +358,26 @@ class DefaultCharacterEnvironmentContextService(CharacterEnvironmentContextServi
             except Exception:
                 initialized = False
             model_name = "Telegram voice"
+        elif voice_method.lower() == "api":
+            remote = services().get_optional(RemoteVoiceService)
+            registry = services().get_optional(CharacterRegistry)
+            status = (
+                remote.status(character_id=registry.current_id() if registry else None)
+                if remote
+                else None
+            )
+            model_id = "api:fish_audio" if status and status.configured else ""
+            model_name = (
+                f"{status.provider_name} / {status.model}" if status else "API voice"
+            )
+            installed = bool(status and status.configured)
+            initialized = bool(status and status.verified)
         elif voice_enabled and installed:
             local_voice = services().get_optional(LocalVoiceService)
             try:
-                initialized = bool(local_voice and local_voice.check_initialized(model_id))
+                initialized = bool(
+                    local_voice and local_voice.check_initialized(model_id)
+                )
             except Exception:
                 initialized = False
 
@@ -213,8 +389,12 @@ class DefaultCharacterEnvironmentContextService(CharacterEnvironmentContextServi
             except Exception:
                 pipeline_ready = False
 
-        configured_unity = str(self._settings.get("UNITY_INSTALL_DIR", "") or "").strip() or None
-        unity_installed = find_unity_executable(unity_install_dir(configured_unity)) is not None
+        configured_unity = (
+            str(self._settings.get("UNITY_INSTALL_DIR", "") or "").strip() or None
+        )
+        unity_installed = (
+            find_unity_executable(unity_install_dir(configured_unity)) is not None
+        )
         with self._lock:
             update_available = self._python_update_available
             update_version = self._python_update_version

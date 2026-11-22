@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
+from handlers.asr_models.asr_languages import asr_language_field, asr_language_names
 from core.installables.helpers import build_runtime_ctx
 from core.events import Events, get_event_bus
 from core.backends import BackendKind
@@ -38,7 +39,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
                 "Offline speech recognition based on GigaAM via ONNXRuntime. "
                 "Uses DirectML on Windows with CPU fallback and runs in a separate process."
             ),
-            "languages": ["Russian"],
+            "languages": asr_language_names("gigaam_onnx"),
             "gpu_vendor": ["NVIDIA", "AMD", "INTEL", "CPU"],
             "tags": [
                 _("ONNX", "ONNX"),
@@ -86,6 +87,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
     # ---------- UI schema ----------
     def settings_spec(self):
         return [
+            asr_language_field("gigaam_onnx"),
             {"key": "device", "label_ru": "Устройство", "label_en": "Device",
              "type": "combobox", "options": ["auto", "cpu", "dml"], "default": "auto"},
             {"key": "model", "label_ru": "Модель", "label_en": "Model",
@@ -95,7 +97,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
         ]
 
     def get_default_settings(self):
-        return {"device": "auto", "model": self.DEFAULT_MODEL}
+        return {"device": "auto", "model": self.DEFAULT_MODEL, "language": "ru"}
 
     def apply_settings(self, settings: dict):
         dev = settings.get("device")
@@ -197,7 +199,13 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
             self._current_gpu = str(run_ctx.get("gpu_vendor") or "CPU")
         run_ctx.setdefault("gpu_vendor", self._current_gpu)
         st = check_requirements(self.requirements(), ctx=run_ctx)
-        return bool(st.get("ok"))
+        if not st.get("ok"):
+            return False
+        manifest = self.install_manifest()
+        return bool(manifest) and all(
+            os.path.isfile(item["dest"]) and os.path.getsize(item["dest"]) > 0
+            for item in manifest
+        )
     
     def install_manifest(self) -> list[dict]:
         model_name = self._normalized_ckpt_name()
@@ -456,7 +464,7 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
         )
 
         init_options = {
-            "device": self.gigaam_device,
+            "device": self._runtime_device(),
             "model": self.gigaam_model,
             "onnx_path": self.gigaam_onnx_export_path,
             "model_path": self.gigaam_model_path,
@@ -474,6 +482,12 @@ class GigaAMOnnxRecognizer(SpeechRecognizerInterface):
 
         self.logger.success("GigaAM ONNX процесс успешно запущен и инициализирован")
         return True
+
+    def _runtime_device(self) -> str:
+        from core.voice_device_selection import VoiceDeviceCatalog
+        from utils.gpu_utils import get_hardware_snapshot
+
+        return VoiceDeviceCatalog(get_hardware_snapshot()).resolve_runtime_device(self.gigaam_device)
 
     def _stop_process(self):
         if not self._process:

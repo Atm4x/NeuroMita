@@ -19,8 +19,9 @@ from main_logger import logger
 
 TEXT_PART = "text"
 IMAGE_PART = "image_url"
+IMAGE_REFERENCE_PART = "image_ref"
 
-_known_types = frozenset({TEXT_PART, IMAGE_PART})
+_known_types = frozenset({TEXT_PART, IMAGE_PART, IMAGE_REFERENCE_PART})
 _reported_unknown: set[str] = set()
 _report_lock = threading.Lock()
 
@@ -64,7 +65,7 @@ class MessageContentCodec:
     @classmethod
     def placeholder(cls, part: Dict[str, Any]) -> str:
         part_type = cls.part_type(part)
-        if part_type == IMAGE_PART:
+        if part_type in {IMAGE_PART, IMAGE_REFERENCE_PART}:
             return "[image]"
         if not part_type:
             return ""
@@ -253,6 +254,19 @@ class MessageContentCodec:
                 merged.insert(0, {"type": TEXT_PART, "text": prefix})
             return merged
         return prefix + str(content)
+
+    @classmethod
+    def append_text(cls, content: Any, suffix: str) -> Any:
+        """Добавляет текст после content, сохраняя порядок мультимодальных частей."""
+        if not suffix:
+            return content
+        if isinstance(content, str):
+            return content + suffix
+        if isinstance(content, list):
+            # A dedicated final text part preserves the order: an action block
+            # belongs after every original text/image part of the reply.
+            return [*content, {"type": TEXT_PART, "text": suffix}]
+        return str(content or "") + suffix
 
 
 __all__ = ["MessageContentCodec", "TEXT_PART", "IMAGE_PART"]

@@ -3,7 +3,6 @@ from core.error_utils import format_exception
 
 import gc
 import os
-import traceback
 from typing import Dict, Optional, Any, List
 
 import ffmpeg
@@ -174,11 +173,11 @@ class LocalVoice:
         model = self._registry.get(model_id)
         if not model:
             logger.error(f"Unknown model id for init: {model_id}")
-            return False
+            raise ValueError(f"Unknown voice model: {model_id}")
 
         if not self.is_model_installed(model_id):
             logger.error(f"Model '{model_id}' is not installed.")
-            return False
+            raise RuntimeError(f"Voice model '{model_id}' is not installed in the active runtime")
 
         self.current_model_id = model_id
         ok = False
@@ -190,7 +189,7 @@ class LocalVoice:
             ok = bool(model.initialize(init=init))
         except Exception as e:
             logger.error(f"initialize_model failed for {model_id}: {format_exception(e)}", exc_info=True)
-            ok = False
+            raise
 
         if ok:
             self.active_model_instance = model
@@ -276,10 +275,10 @@ class LocalVoice:
             return output_path
         except ffmpeg.Error as fe:
             err = fe.stderr.decode(errors="ignore") if getattr(fe, "stderr", None) else ""
-            logger.error(f"FFmpeg error:\n{format_exception(err)}\n{traceback.format_exc()}")
+            logger.exception("FFmpeg error: %s", format_exception(err))
             return None
         except Exception:
-            logger.error(f"convert_wav_to_stereo error:\n{traceback.format_exc()}")
+            logger.exception("convert_wav_to_stereo error")
             return None
 
     async def voiceover(self, text: str, *, output_file: str, character: Optional[Any] = None) -> Optional[str]:

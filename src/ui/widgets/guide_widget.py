@@ -97,13 +97,37 @@ class GuideWidget(QWidget):
     # They intentionally cover the control itself rather than the red number label.
     _STEP_TARGETS = {
         "PresetGuidePage": {
-            1: (0.88, 0.20, 0.10, 0.12), 2: (0.18, 0.22, 0.43, 0.10),
-            3: (0.20, 0.67, 0.48, 0.09), 4: (0.03, 0.63, 0.18, 0.10),
-            5: (0.05, 0.82, 0.82, 0.07), 6: (0.05, 0.89, 0.82, 0.07),
+            1: (0.212, 0.368, 0.122, 0.045),
+            2: (0.656, 0.562, 0.273, 0.039),
+            3: (0.656, 0.745, 0.248, 0.037),
+            4: (0.816, 0.718, 0.084, 0.024),
+            5: (0.744, 0.368, 0.099, 0.045),
+            6: (0.846, 0.368, 0.102, 0.045),
         },
         "VoiceoverGuidePage": {
-            1: (0.91, 0.31, 0.08, 0.14), 2: (0.13, 0.43, 0.83, 0.10),
-            3: (0.13, 0.78, 0.83, 0.10), 4: (0.90, 0.62, 0.09, 0.12),
+            1: (0.0544, 0.2205, 0.0340, 0.0261),
+            2: (0.2633, 0.2227, 0.0578, 0.0232),
+            3: (0.3197, 0.2227, 0.0680, 0.0232),
+            4: (0.4065, 0.2227, 0.0442, 0.0232),
+            5: (0.5293, 0.3295, 0.0272, 0.0232),
+            6: (0.1088, 0.3295, 0.4082, 0.0232),
+            7: (0.1088, 0.3614, 0.4082, 0.0232),
+            8: (0.1156, 0.6003, 0.3673, 0.0232),
+            9: (0.4884, 0.5963, 0.0272, 0.0232),
+            10: (0.5327, 0.6352, 0.0204, 0.0174),
+            11: (0.1156, 0.6323, 0.3673, 0.0232),
+            12: (0.1088, 0.6641, 0.4082, 0.0232),
+            13: (0.1558, 0.7883, 0.0612, 0.0522),
+            14: (0.4517, 0.9014, 0.1497, 0.0116),
+            15: (0.1116, 0.8974, 0.3401, 0.0232),
+            16: (0.4293, 0.9432, 0.1224, 0.0203),
+        },
+        "MicrophoneGuidePage": {
+            1: (0.100, 0.415, 0.105, 0.035),
+            2: (0.055, 0.300, 0.030, 0.028),
+            3: (0.390, 0.415, 0.375, 0.035),
+            4: (0.030, 0.490, 0.460, 0.480),
+            5: (0.510, 0.490, 0.460, 0.480),
         },
         "MemoryRagGuidePage": {
             1: (0.03, 0.13, 0.24, 0.10), 2: (0.05, 0.22, 0.88, 0.10),
@@ -124,6 +148,15 @@ class GuideWidget(QWidget):
         "ScreenCaptureGuidePage": {
             1: (0.04, 0.29, 0.39, 0.12), 2: (0.90, 0.40, 0.08, 0.15),
         },
+        "ModelsGuidePage": {
+            1: (0.488, 0.415, 0.178, 0.059),
+            2: (0.367, 0.606, 0.210, 0.040),
+            3: (0.367, 0.679, 0.210, 0.040),
+            4: (0.367, 0.750, 0.210, 0.040),
+            5: (0.367, 0.821, 0.210, 0.040),
+            6: (0.367, 0.893, 0.210, 0.040),
+            7: (0.367, 0.962, 0.210, 0.036),
+        },
         "CameraGuidePage": {
             3: (0.04, 0.50, 0.39, 0.12), 4: (0.90, 0.63, 0.08, 0.12),
             9: (0.17, 0.72, 0.77, 0.10),
@@ -131,6 +164,11 @@ class GuideWidget(QWidget):
         "CameraDependenciesGuidePage": {
             5: (0.88, 0.26, 0.08, 0.10), 6: (0.39, 0.08, 0.20, 0.09),
             7: (0.02, 0.73, 0.19, 0.09), 8: (0.82, 0.64, 0.15, 0.09),
+        },
+        "FinalGuidePage": {
+            1: (0.924, 0.100, 0.036, 0.050),
+            2: (0.790, 0.758, 0.135, 0.045),
+            3: (0.938, 0.750, 0.028, 0.045),
         },
     }
 
@@ -974,7 +1012,7 @@ class GuideWidget(QWidget):
                     f'<b>{number}.</b></a>'
                 )
                 if label:
-                    return f'{number_html} <b>{label}</b>'
+                    return f'{number_html}&nbsp;<b>{label}</b>'
                 return number_html
             return marker_re.sub(repl, value)
 
@@ -1248,20 +1286,20 @@ class PresetGuidePage(IGuidePage):
     def get_description_ru(self):
         return """Чтобы НейроМита ожила и могла с вами общаться, ей нужен доступ к языковой модели — её «мозгу». Для этого мы создадим ваш первый пресет API. Это просто!
 
-• Откройте настройки и перейдите во вкладку <b>API</b>. Нажмите <b>1 +</b>, чтобы добавить новый пресет.
-• Выберите <b>2 - Шаблон</b> провайдера — например, OpenRouter, Gemini, или KodikRouter и нажмите <b>OK</b>. Если вашего провайдера нет в списке, используйте вариант «Без шаблона».
-Затем вам понадобится <b>3 - API-ключ</b>. Перейдите по ссылке <b>4 - Получить ключ</b>, зарегистрируйтесь у провайдера и вставьте ключ в соответствующее поле.
-Чтобы проверить, всё ли работает, нажмите <b>5 - Тест подключения</b> и выберите модель из списка. Или оставьте ту, что предложена по умолчанию.
-В конце нажмите <b>6 - Сохранить</b> — и пресет готов! Теперь Мита будет думать именно с помощью этой модели."""
+• Откройте настройки и перейдите во вкладку <b>API</b>. Нажмите <b>1 - + Добавить пресет</b>, чтобы добавить новый пресет.
+• Выберите <b>2 - Шаблон провайдера</b> — например, OpenRouter, Gemini или KodikRouter. Если вашего провайдера нет в списке, используйте вариант «Без шаблона».
+• Затем вам понадобится <b>3 - API-ключ</b>. Перейдите по ссылке <b>4 - Получить ключ</b>, зарегистрируйтесь у провайдера и вставьте ключ в соответствующее поле.
+• Чтобы проверить, всё ли работает, нажмите <b>5 - Проверить</b> и выберите модель из списка. Или выберите модель из списка на сайте провайдера.
+• В конце нажмите <b>6 - Сохранить</b> — и пресет готов! Теперь Мита будет думать именно с помощью этой модели."""
 
     def get_description_en(self):
-        return """For NeuroMita to come alive and chat with you, she needs access to a language model — her “brain”. Let’s create your first API preset. It’s easy!
+        return """For NeuroMita to come to life and be able to communicate with you, she needs access to a language model — her “brain.” To do this, we’ll create your first API preset. It’s easy!
 
-Open the settings and go to the <b>API</b> tab. Click <b>1 +</b> to add a new preset.
-Choose a <b>2 - Template</b> — for example, OpenRouter, Gemini, or KodikRouter — and click <b>OK</b>. If your provider isn't listed, select “No template”.
-Next, you’ll need an <b>3 - API key</b>. Follow the <b>4 - Get key</b> link, sign up with the provider, and paste the key into the field.
-To make sure everything works, click <b>5 - Test Connection</b> and pick a model from the list. Or keep the default one.
-Finally, click <b>6 - Save</b> — and your preset is ready! Now Mita will think using this model."""
+• Open Settings and go to the <b>API</b> tab. Click <b>1 - + Add Preset</b> to add a new preset.
+• Select <b>2 - Provider Template</b> — for example, OpenRouter, Gemini, or KodikRouter. If your provider isn’t in the list, use the “No Template” option.
+• Then you’ll need <b>3 - API Key</b>. Follow the link <b>4 - Get Key</b>, register with the provider, and paste the key into the corresponding field.
+• To check whether everything works, click <b>5 - Check</b> and select a model from the list. Or select a model from the list on the provider’s website.
+• Finally, click <b>6 - Save</b> — and the preset is ready! Now Mita will think using this model specifically."""
 
     def get_image_filename(self, language: str) -> str:
         return "guide/guide_preset.png" if language == "ru" else "guide/guide_preset1.png"
@@ -1283,24 +1321,52 @@ class VoiceoverGuidePage(IGuidePage):
     def get_description_ru(self):
         return """Хотите, чтобы Мита отвечала голосом?
 • Включите <b>1 - Использовать озвучку</b>.
-• В <b>2 - Методе озвучки</b> выберите <b>TG</b> для Telegram или <b>Local</b> для локального синтеза.
+• В методе озвучки выберите <b>2 - Telegram</b> для озвучки в TG, <b>3 - Локальная</b> для локального синтеза или <b>4 - API</b> для онлайн-генерации.
 
-<b>Если выбрали Local:</b>
-• Укажите <b>3 - язык озвучки</b>.
-• Нажмите <b>4 - Установить</b>. Откроется <b>AI Hub</b>, где можно подобрать голосовую модель.
+<b>Если выбрали Telegram:</b>
+• Вам понадобится указать номер телефона.
+• Также нужно будет использовать ваш аккаунт Telegram.
 
-После установки локальная озвучка готова к работе."""
+<b>Если выбрали Локальная:</b>
+• Нажмите <b>5 - Настройки</b> и загрузите подходящую для вашей видеокарты модель, а также установите голоса Мит.
+• Выберите <b>6 - Модель</b> из установленных.
+• Выберите <b>7 - Язык озвучки</b>.
+Теперь локальная озвучка готова к работе.
+
+<b>Если выбрали API-озвучку:</b>
+• Выберите <b>8 - Профиль озвучки</b> либо <b>9 - +</b> создайте свой профиль.
+• Откройте <b>10 - Ссылку сайта озвучки</b>, зарегистрируйтесь и получите API-ключ.
+• Введите <b>11 - API-ключ</b>.
+• Выберите <b>12 - Модель озвучки</b>.
+• Выберите <b>13 - Персонажа</b>, откройте <b>14 - Страницу с выбором голосов</b> и найдите там подходящий голос.
+• Вставьте <b>15 - ID голоса</b> или ссылку на него.
+• Нажмите <b>16 - Сохранить профиль</b>.
+Теперь API-озвучка работает."""
 
     def get_description_en(self):
         return """Want Mita to answer with a voice?
 • Enable <b>1 - Use speech</b>.
-• In <b>2 - Voiceover Method</b>, choose <b>TG</b> for Telegram or <b>Local</b> for local synthesis.
+• In the voiceover method, choose <b>2 - Telegram</b> for voiceover in TG, <b>3 - Local</b> for local synthesis, or <b>4 - API</b> for online generation.
 
-<b>If you choose Local:</b>
-• Select <b>3 - the voice language</b>.
-• Click <b>4 - Install</b>. <b>AI Hub</b> will open so you can choose a voice model.
+<b>If you chose Telegram:</b>
+• You'll need to provide your phone number.
+• You'll also need to use your Telegram account.
 
-After installation, local voiceover is ready to use."""
+<b>If you chose Local:</b>
+• Click <b>5 - Settings</b> and download a model suitable for your GPU, and install Mita voices.
+• Choose <b>6 - Model</b> from the installed ones.
+• Choose <b>7 - Voiceover language</b>.
+Now local voiceover is ready to use.
+
+<b>If you chose API voiceover:</b>
+• Choose <b>8 - a voice profile</b>, or <b>9 - +</b> to create your own.
+• Open <b>10 - the voice service link</b>, register, and get an API key.
+• Enter <b>11 - API key</b>.
+• Choose <b>12 - Voiceover model</b>.
+• Choose <b>13 - Character</b>, open <b>14 - the character voice selection page</b>, and find the matching voice.
+• Paste <b>15 - Voice ID</b> or a link to it.
+• Click <b>16 - Save profile</b>.
+Now API voiceover works."""
 
     def get_image_filename(self, language: str) -> str:
         return "guide/guide_voice.png" if language == "ru" else "guide/guide_voice1.png"
@@ -1310,7 +1376,7 @@ After installation, local voiceover is ready to use."""
 
 
     def get_image_crop(self):
-        return (0.02, 0.09, 0.98, 0.70)
+        return None
 
 
 class MicrophoneGuidePage(IGuidePage):
@@ -1325,30 +1391,30 @@ class MicrophoneGuidePage(IGuidePage):
     def get_description_ru(self):
         return """Вы можете не только слышать Миту, но и говорить с ней, используя ввод голосом.
 
-Чтобы включить микрофон:
+<b>Чтобы включить микрофон:</b>
 • Перейдите в настройки.
 • Выберите вкладку <b>ASR</b> со значком микрофона.
-• Выберите ваш микрофон из <b>1 - списка устройств</b>.
-• Нажмите кнопку <b>2 - Перейти к настройкам AI Engine</b>.
-• Откроется <b>AI Hub</b> — перейдите на вкладку <b>3 - Распознавание (ASR)</b>.
-• Выберите подходящую модель распознавания речи и дождитесь установки.
-• Установите галочку <b>4 - Микрофон активен</b>
+• Нажмите <b>1 - Каталог моделей</b> и установите модель распознавания речи.
+• Включите переключатель <b>2 - Микрофон активен</b>.
+• Выберите активное <b>3 - Устройство ввода</b>.
 
-Теперь можно общаться с Митой голосом."""
+<b>Дополнительно:</b>
+• Можно тонко настроить поведение при отправке сообщений — установите нужные галочки в разделе <b>4 - Поведение и отправка</b>.
+• Если речь распознаётся плохо, загляните в <b>5 - Параметры распознавания</b>."""
 
     def get_description_en(self):
         return """You can not only hear Mita, but also talk to her using voice input.
 
-To set up the microphone:
+<b>To enable the microphone:</b>
 • Go to Settings.
 • Select the <b>ASR</b> tab with the microphone icon.
-• Choose your microphone from <b>1 - the device list</b>.
-• Click the <b>2 - Open AI Engine settings</b> button.
-• The <b>AI Hub</b> will open — go to the <b>3 - ASR</b> tab.
-• Select a suitable speech recognition model and wait for it to install.
-• Check the box <b>4 - Microphone active</b>.
+• Click <b>1 - Model catalog</b> and install a speech recognition model.
+• Turn on the <b>2 - Microphone active</b> toggle.
+• Choose the active <b>3 - Input device</b>.
 
-Now you can talk to Mita with your voice."""
+<b>Additionally:</b>
+• You can fine-tune the behavior for sending messages — check the needed boxes in the <b>4 - Behavior and sending</b> section.
+• If speech is recognized poorly, look into <b>5 - Recognition Parameters</b>."""
 
     def get_image_filename(self, language: str) -> str:
         return "guide/guide_microphone.png" if language == "ru" else "guide/guide_microphone1.png"
@@ -1462,8 +1528,8 @@ class ScreenAnalysisGuidePage(IGuidePage):
 • Перейдите в настройки и откройте раздел <b>Изображения</b>.
 • Откройте вкладку <b>3 - Настройки захвата с камеры</b>.
 • Активируйте переключатель <b>4 - Включить захват с камеры</b> (у вас должна быть подключена веб-камера).
-• Если OpenCV не установлен, сначала сделайте видимым раздел <b>5 - AI Engine</b> в общих настройках.
-• Откройте вкладку <b>6 - AI Engine</b> и нажмите в этой вкладке кнопку <b>AI Hub</b>.
+• Если OpenCV не установлен, сначала сделайте видимым раздел <b>5 - ИИ-движок</b> в общих настройках.
+• Откройте вкладку <b>6 - ИИ-движок</b> и нажмите в этой вкладке кнопку <b>AI Hub</b>.
 • В AI Hub перейдите на вкладку <b>7 - Зависимости</b>.
 • Установите <b>8 - OpenCV</b>.
 • Вернитесь в <b>3 - Настройки захвата с камеры</b> и <b>9 - выберите камеру</b>.
@@ -1689,8 +1755,8 @@ class CameraDependenciesGuidePage(IGuidePage):
 
     def get_description_ru(self):
         return """Этот шаг нужен только если камера требует OpenCV.
-• В общих настройках сделайте видимым <b>5 - AI Engine</b>.
-• Откройте <b>6 - AI Engine</b> и перейдите в <b>AI Hub</b>.
+• В общих настройках сделайте видимым <b>5 - ИИ-движок</b>.
+• Откройте <b>6 - ИИ-движок</b> и перейдите в <b>AI Hub</b>.
 • В AI Hub выберите <b>7 - Зависимости</b> и установите <b>8 - OpenCV</b>.
 • Вернитесь к настройкам камеры и выберите устройство в <b>9</b>."""
 
@@ -1727,36 +1793,36 @@ class ModelsGuidePage(IGuidePage):
 Для большинства случаев стандартные настройки уже хороши, но если хочется больше креативности или, наоборот, строгости — эти параметры для вас.
 
 <b>Где находятся:</b>
-• Откройте настройки и перейдите во вкладку <b>Модели</b>.
-• Разверните вкладку <b>1 - Настройки генерации текста</b>.
+• Откройте настройки и перейдите во вкладку <b>API</b>.
+• Откройте раздел <b>1 - Параметры генерации</b>.
 
 <b>Основные параметры:</b>
-• <b>2 - Макс. токенов в ответе</b> — максимальная длина ответа Миты. Если ответы обрываются — увеличьте значение.
-• <b>3 - Температура</b> — управляет креативностью. 0.0 — очень строгие, предсказуемые ответы; 2.0 — очень творческие и неожиданные.
-• <b>4 - Top-K</b> — ограничивает выбор только K самых вероятных следующих слов. Чем ниже K (например, 10), тем суше ответ. Чем выше (например, 80), тем разнообразнее лексика.
-• <b>5 - Top-P</b> — ядерная выборка: модель перебирает слова, пока их суммарная вероятность не достигнет P. Например, P=0.9 означает, что модель выберет из самого узкого набора слов, дающих 90% уверенности. Низкое P — более сфокусированный ответ, высокое P — больше экспериментов.
-• <b>6 - Штраф присутствия</b> — насколько модель избегает повторения уже использованных слов. Положительное значение 0.1–2.0 заставит Миту чаще говорить о новых вещах, а не топтаться на одном.
-• <b>7 - Штраф частоты</b> — снижает вероятность повторения одних и тех же слов пропорционально их частоте в ответе. Полезно, если Мита начинает «зацикливаться». Обычно хватает небольшого значения 0.1–0.5, чтобы ответы стали разнообразнее.
+• <b>2 - Температура</b> — управляет креативностью. 0.0 — очень строгие, предсказуемые ответы; 2.0 — очень творческие и неожиданные.
+• <b>3 - Макс. токенов в ответе</b> — максимальная длина ответа Миты. Если ответы обрываются — увеличьте значение.
+• <b>4 - Top-P</b> — ядерная выборка: модель перебирает слова, пока их суммарная вероятность не достигнет P. Например, P=0.9 означает, что модель выберет из самого узкого набора слов, дающих 90% уверенности. Низкое P — более сфокусированный ответ, высокое P — больше экспериментов.
+• <b>5 - Штраф присутствия</b> — насколько модель избегает повторения уже использованных слов. Положительное значение 0.1–2.0 заставит Миту чаще говорить о новых вещах, а не топтаться на одном.
+• <b>6 - Штраф частоты</b> — снижает вероятность повторения одних и тех же слов пропорционально их частоте в ответе. Полезно, если Мита начинает «зацикливаться». Обычно хватает небольшого значения 0.1–0.5, чтобы ответы стали разнообразнее.
+• <b>7 - Глубина размышлений</b> — управляет тем, сколько модель тратит на внутренние рассуждения перед ответом. Чем выше значение, тем глубже и подробнее она «думает», но тем медленнее и дороже получается ответ. Чем ниже — тем быстрее и дешевле, но ответы проще.
 
 Не бойтесь экспериментировать: если результат не нравится, всегда можно вернуться к стандартным."""
 
     def get_description_en(self):
-        return """You can fine-tune how Mita formulates her responses.
-The default settings work well for most cases, but if you want more creativity or stricter answers — these parameters are for you.
+        return """You can fine-tune exactly how Mita formulates her responses.
+For most cases, the default settings are already good, but if you want more creativity or, conversely, more strictness, these parameters are for you.
 
 <b>Where to find them:</b>
-• Open Settings and go to the <b>Models</b> tab.
-• Expand the <b>1 - Text Generation Settings</b> section.
+• Open Settings and go to the <b>API</b> tab.
+• Open the <b>1 - Generation parameters</b> section.
 
-<b>Key parameters:</b>
-• <b>2 - Max tokens in response</b> — the maximum length of Mita's answer. If responses get cut off, increase this value.
-• <b>3 - Temperature</b> — controls creativity. 0.0 gives very strict, predictable answers; 2.0 gives very creative, unexpected ones.
-• <b>4 - Top-K</b> — limits the selection to only the K most likely next words. A low K (e.g., 10) makes answers more focused and dry; a higher K (e.g., 80) adds lexical variety.
-• <b>5 - Top-P</b> — nucleus sampling: the model considers words until their total probability reaches P. For example, P=0.9 means the model picks from the smallest set of words that together have at least 90% confidence. Lower P gives more focused answers, higher P encourages more variety.
-• <b>6 - Presence penalty</b> — how much the model avoids repeating words already used. A positive value of 0.1–2.0 encourages Mita to bring up new topics rather than circling around the same ones.
-• <b>7 - Frequency penalty</b> — reduces the chance of repeating the same words based on how often they've appeared. Useful if Mita starts sounding repetitive. A small value of 0.1–0.5 usually makes responses more diverse.
+<b>Main parameters:</b>
+• <b>2 - Temperature</b> — controls creativity. 0.0 — very strict, predictable responses; 2.0 — very creative and unexpected.
+• <b>3 - Max tokens in response</b> — the maximum length of Mita’s response. If responses are cut off, increase the value.
+• <b>4 - Top-P</b> — nucleus sampling: the model considers words until their cumulative probability reaches P. For example, P=0.9 means the model will choose from the narrowest set of words that gives 90% confidence. A low P — a more focused response; a high P — more experimentation.
+• <b>5 - Presence penalty</b> — how much the model avoids repeating words it has already used. A positive value of 0.1–2.0 will make Mita talk about new things more often instead of dwelling on the same thing.
+• <b>6 - Frequency penalty</b> — reduces the probability of repeating the same words in proportion to their frequency in the response. Useful if Mita starts “looping.” Usually, a small value of 0.1–0.5 is enough to make responses more varied.
+• <b>7 - Reasoning depth</b> — controls how much effort the model spends on internal reasoning before responding. The higher the value, the deeper and more detailed it “thinks,” but the slower and more expensive the response becomes. The lower it is, the faster and cheaper, but the responses are simpler.
 
-Feel free to experiment: if you don't like the results, you can always go back to the defaults."""
+Don’t be afraid to experiment: if you don’t like the result, you can always return to the defaults."""
 
     def get_image_filename(self, language: str) -> str:
         return "guide/guide_models.png" if language == "ru" else "guide/guide_models1.png"
@@ -1826,8 +1892,7 @@ class FinalGuidePage(IGuidePage):
 Если нужно общение только в чате, откройте Песочницу.
 Здесь также можно:
 • Выбрать понравившуюся Миту — <b>2 - Крейзи, Добрая, Сонная и другие</b>.
-• Выбрать или настроить <b>3 - Набор промптов</b>, который определит характер и поведение Миты.
-• Выбрать <b>4 - Пресет</b> для Миты.
+• Открыть <b>3 - настройки персонажа</b> — здесь можно выбрать набор промптов и провайдера для Мит.
 • Можно сразу начать чат — Мита ответит, используя созданный вами пресет.
 
 <b>Помните: это лишь основные настройки. Не бойтесь исследовать и другие разделы — NeuroMita умеет гораздо больше!</b>"""
@@ -1844,8 +1909,7 @@ If the game is already installed, just click “Play” and begin your adventure
 If you only need text chat, open the Sandbox.
 Here you can also:
 • Choose your favorite Mita — <b>2 - Crazy, Kind, Sleepy and others</b>.
-• Select or customize <b>3 - a prompt set</b> that defines Mita's character and behavior.
-• Choose <b>4 - a preset</b> for Mita.
+• Open <b>3 - character settings</b> — here you can choose the prompt set and the provider for each Mita.
 • Start chatting right away — Mita will respond using the preset you created.
 
 <b>Remember: these are just the main settings. Don't be afraid to explore other sections — NeuroMita can do a whole lot more!</b>"""

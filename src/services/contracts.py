@@ -4,11 +4,13 @@
 UI или тяжёлые зависимости. Реализации живут рядом (services/*) либо у своего
 владельца-контроллера.
 """
+
 from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -16,11 +18,19 @@ from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional
 
 from core.cancellation import CancellationToken
 from core.request_policy import RequestPolicy
-
+from core.remote_voice import (
+    RemoteVoiceConfiguration,
+    RemoteVoicePreset,
+    RemoteVoiceStatus,
+    RemoteVoiceTemplate,
+)
+from domain.audio_input import ASRInputDevice, AudioInputCatalog
+from domain.timeline.models import TimelineTurn
 
 # ---------------------------------------------------------------------------
 # Настройки
 # ---------------------------------------------------------------------------
+
 
 class SettingsService(ABC):
     """Единственный источник значений настроек."""
@@ -61,6 +71,23 @@ class SettingsService(ABC):
         replay: bool = False,
     ) -> Any:
         raise NotImplementedError
+
+
+class RuntimeIPCService(ABC):
+    @abstractmethod
+    def register_object(self, instance: Any) -> tuple[str, ...]: ...
+
+    @abstractmethod
+    def start(self, *, port: int | None = None) -> bool: ...
+
+    @abstractmethod
+    def stop(self) -> None: ...
+
+    @abstractmethod
+    def status(self) -> Dict[str, Any]: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +142,9 @@ class ASRSettingsService(ABC):
     def set_model_option(self, engine_id: str, key: str, value: Any) -> None: ...
 
     @abstractmethod
-    def subscribe(self, callback: Callable[[Any], None], *, replay: bool = False) -> Any: ...
+    def subscribe(
+        self, callback: Callable[[Any], None], *, replay: bool = False
+    ) -> Any: ...
 
 
 class InstallableCatalogService(ABC):
@@ -200,7 +229,11 @@ class InstallableCatalogService(ABC):
         ):
             metadata = row.get("metadata") if isinstance(row, dict) else None
             status = row.get("status") if isinstance(row, dict) else None
-            if isinstance(metadata, dict) and isinstance(status, dict) and status.get("ready"):
+            if (
+                isinstance(metadata, dict)
+                and isinstance(status, dict)
+                and status.get("ready")
+            ):
                 result.append(str(metadata.get("item_id") or ""))
         return tuple(item for item in result if item)
 
@@ -348,7 +381,16 @@ class AppVarsService(ABC):
 # Персонажи
 # ---------------------------------------------------------------------------
 
+
 class CharacterRegistry(ABC):
+    def register_cartridges(self, definitions) -> None:
+        """Install validated virtual character definitions without changing the selected Mita."""
+        raise NotImplementedError("This character registry does not support cartridges")
+
+    def stats_of(self, character_id: str) -> Dict[str, float]:
+        """Read statistics without materializing a character runtime."""
+        return {"attitude": 60.0, "boredom": 10.0, "stress": 5.0}
+
     @abstractmethod
     def get(self, character_id: str) -> Any:
         """Ссылка на персонажа или None, если такого id нет."""
@@ -366,19 +408,20 @@ class CharacterRegistry(ABC):
     def current_profile(self) -> Dict[str, Any]: ...
 
     @abstractmethod
-    def current_name(self) -> str: ...
+    def current_display_name(self) -> str: ...
 
-    def name_of(self, character_id: str) -> str:
-        """Имя персонажа; если его нет — сам id (для подписей в UI)."""
+    def display_name_of(self, character_id: str) -> str:
+        """Display label for a character; falls back to its stable id."""
         if not character_id:
             return ""
         ref = self.get(str(character_id))
-        return str(getattr(ref, "name", "") or character_id)
+        return str(getattr(ref, "display_name", "") or character_id)
 
 
 # ---------------------------------------------------------------------------
 # asyncio loop
 # ---------------------------------------------------------------------------
+
 
 class LoopService(ABC):
     @abstractmethod
@@ -397,6 +440,7 @@ class LoopService(ABC):
 # Связь с игрой
 # ---------------------------------------------------------------------------
 
+
 class GameLinkService(ABC):
     @abstractmethod
     def is_connected(self) -> bool: ...
@@ -408,6 +452,14 @@ class GameLinkService(ABC):
         «последний подключившийся сокет» мог смениться, пока фраза распознавалась.
         """
         return ""
+
+    def unity_target_character_id(self) -> str:
+        """Last character addressed by a Unity request, if known."""
+        return ""
+
+    def set_unity_target_character_id(self, character_id: str) -> bool:
+        """Record or clear the target; return whether it changed."""
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,10 +482,14 @@ class RuntimeCapabilitiesService(ABC):
 # История
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class PreparedHistory:
     messages: List[Dict[str, Any]]
     summary: str = ""
+    # Small deterministic bridge of requested actions whose source turns were
+    # already summarized. Recent actions stay with their assistant message.
+    action_context: str = ""
     # Время последнего сообщения истории. Сами messages уезжают провайдеру
     # строго как role/content, поэтому таймстемп едет отдельным полем —
     # иначе «сколько прошло с прошлого раза» посчитать не из чего.
@@ -466,6 +522,7 @@ class HistoryService(ABC):
 # ---------------------------------------------------------------------------
 # Разговор
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class DialogueParticipant:
@@ -578,7 +635,9 @@ class DialogueRuntimeSnapshot:
 
     @property
     def is_active(self) -> bool:
-        return bool(self.conversation_id and self.source is not DialogueRuntimeSource.NONE)
+        return bool(
+            self.conversation_id and self.source is not DialogueRuntimeSource.NONE
+        )
 
     @property
     def auto_turns_remaining(self) -> int:
@@ -633,7 +692,11 @@ def parse_dialogue_turn_context(raw: object) -> Optional[DialogueTurnContext]:
         if participant.actor_id:
             participants.append(participant)
 
-    spoken = [str(actor_id).strip() for actor_id in (raw.get("spoken_actor_ids", []) or []) if str(actor_id).strip()]
+    spoken = [
+        str(actor_id).strip()
+        for actor_id in (raw.get("spoken_actor_ids", []) or [])
+        if str(actor_id).strip()
+    ]
     return DialogueTurnContext(
         conversation_id=str(raw.get("conversation_id") or "").strip(),
         epoch=_int("epoch"),
@@ -679,6 +742,7 @@ def parse_dialogue_turn_context(raw: object) -> Optional[DialogueTurnContext]:
 # Промпт
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PromptBuildRequest:
     character: Any
@@ -712,7 +776,8 @@ class PromptBuildResult:
     messages: List[Dict[str, Any]]
     history_messages: List[Dict[str, Any]]
     user_message: Optional[Dict[str, Any]]
-    support_intents: bool = False
+    support_intents: bool = True
+    cognitive_effect_changes: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class PromptBuilderService(ABC):
@@ -723,6 +788,7 @@ class PromptBuilderService(ABC):
 # ---------------------------------------------------------------------------
 # Генерация
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ChatGenerationRequest:
@@ -742,6 +808,9 @@ class ChatGenerationRequest:
     req_id: Optional[str] = None
     origin_request_id: Optional[str] = None
     origin_message_id: Optional[str] = None
+    timeline_event_id: Optional[str] = None
+    timeline_initiate: bool = False
+    timeline_turn: TimelineTurn | None = None
     task_uid: Optional[str] = None
     policy: Optional[RequestPolicy] = None
     disable_history_compression: bool = False
@@ -771,6 +840,10 @@ class ChatGenerationResult:
     # Repaired structured output remains displayable but cannot authorize routing.
     structured_parse_level: str = ""
     control_plane_trusted: bool = False
+    # Intermediate spoken tool-call openers awaiting the final game response.
+    # The Python chat keeps individual bubbles; Unity receives them in-order
+    # with the final reply because one task has only one terminal delivery.
+    tool_preludes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -804,15 +877,20 @@ class UtilityGenerationResult:
 
 class GenerationService(ABC):
     @abstractmethod
-    def generate_chat(self, request: ChatGenerationRequest) -> Optional[ChatGenerationResult]: ...
+    def generate_chat(
+        self, request: ChatGenerationRequest
+    ) -> Optional[ChatGenerationResult]: ...
 
     @abstractmethod
-    def generate_utility(self, request: UtilityGenerationRequest) -> UtilityGenerationResult: ...
+    def generate_utility(
+        self, request: UtilityGenerationRequest
+    ) -> UtilityGenerationResult: ...
 
 
 # ---------------------------------------------------------------------------
 # API-пресеты
 # ---------------------------------------------------------------------------
+
 
 class ApiPresetService(ABC):
     """Чтение эффективных API-пресетов. На пути генерации резолвер берёт пресет
@@ -875,9 +953,7 @@ class TelegramService(ABC):
 
 class TelegramAuthService(ABC):
     @abstractmethod
-    async def request(
-        self, kind: str, *, error: str = "", attempt: int = 1
-    ) -> str: ...
+    async def request(self, kind: str, *, error: str = "", attempt: int = 1) -> str: ...
 
     @abstractmethod
     def resolve(self, request_id: str, value: str) -> bool: ...
@@ -893,13 +969,49 @@ class ModelStateService(ABC):
     @abstractmethod
     def token_stats(self) -> Dict[str, Any]: ...
 
+
+
+class ChatService(ABC):
+    """Application-level semantic entrypoint for character chat turns."""
+
     @abstractmethod
-    def schedule_g4f_update(self, version: str = "latest") -> bool: ...
+    def reply(
+        self,
+        *,
+        character_id: str,
+        message_id: str,
+        user_input: str = "",
+        system_input: str = "",
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def react(
+        self,
+        *,
+        character_id: str,
+        instruction: str = "",
+        event_id: str | None = None,
+        visible: bool = True,
+        sender: str = "Player",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    def initiate(
+        self,
+        *,
+        character_id: str,
+        instruction: str,
+        sender: str = "System",
+        participants: Optional[List[str]] = None,
+    ) -> bool: ...
 
 
 class GenerationActivityService(ABC):
     @abstractmethod
-    def active_generation_count(self) -> int: ...
+    def active_generation_count(self, character_id: Optional[str] = None) -> int: ...
 
 
 class CaptureService(ABC):
@@ -916,9 +1028,56 @@ class CaptureService(ABC):
     def camera_capture_active(self) -> bool: ...
 
 
+class DesktopWatchService(ABC):
+    @abstractmethod
+    def is_watching(self) -> bool: ...
+
+    @abstractmethod
+    def desktop_frames(self, limit: int = 1) -> List[Any]: ...
+
+    @abstractmethod
+    def capture_desktop_now(self, limit: int = 1) -> List[Any]: ...
+
+    @abstractmethod
+    def apply_desktop_state(self, state: Any) -> dict: ...
+
+    @abstractmethod
+    def prompt_block(self) -> str: ...
+
 class AudioStateService(ABC):
     @abstractmethod
     def is_waiting_answer(self) -> bool: ...
+
+
+class RemoteVoiceService(ABC):
+    @abstractmethod
+    def templates(self) -> tuple[RemoteVoiceTemplate, ...]: ...
+
+    @abstractmethod
+    def configuration(self) -> RemoteVoiceConfiguration: ...
+
+    @abstractmethod
+    def save_preset(self, preset: RemoteVoicePreset) -> RemoteVoiceConfiguration: ...
+
+    @abstractmethod
+    def select_preset(self, preset_id: str) -> RemoteVoiceConfiguration: ...
+
+    @abstractmethod
+    def add_preset(self, template_id: str) -> RemoteVoiceConfiguration: ...
+
+    @abstractmethod
+    def delete_preset(self, preset_id: str) -> RemoteVoiceConfiguration: ...
+
+    @abstractmethod
+    def status(self, *, character_id: str | None = None) -> RemoteVoiceStatus: ...
+
+    @abstractmethod
+    async def synthesize(
+        self, text: str, *, character_id: str | None = None
+    ) -> str: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
 
 
 class LocalVoiceService(ABC):
@@ -938,6 +1097,11 @@ class LocalVoiceService(ABC):
 
     @abstractmethod
     def initialize_model(self, model_id: str) -> Any: ...
+
+    @abstractmethod
+    def reinitialize_model(self, model_id: str) -> Any:
+        """Restart the owning TTS runtime if needed, then initialize with current settings."""
+        ...
 
     @abstractmethod
     def triton_status(self, *, refresh: bool = False) -> Dict[str, Any]: ...
@@ -974,12 +1138,42 @@ class VoiceModelService(ABC):
         model_id: str,
         *,
         clear_only: bool = False,
+        device: str | None = None,
         with_ui: bool = True,
         timeout_sec: float | None = None,
     ) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ASRCaptureState:
+    enabled: bool = False
+    ready: bool = False
+    mode: str = "radio"
+    active: bool = False
+    permitted: bool = False
+    session_id: str = ""
+    phase: str = "idle"
+    error: str = ""
+
+
 class SpeechService(ABC):
+    @abstractmethod
+    def capture_state(self) -> ASRCaptureState: ...
+
+    @abstractmethod
+    def set_radio_capture(
+        self,
+        *,
+        active: bool,
+        session_id: str,
+        generation: int,
+        cancelled: bool = False,
+        renew: bool = False,
+    ) -> bool: ...
+
+    @abstractmethod
+    def release_radio_capture(self, session_id: str) -> None: ...
+
     @abstractmethod
     def recognizer_settings_schema(self, engine: str) -> List[Dict[str, Any]]: ...
 
@@ -992,8 +1186,15 @@ class SpeechService(ABC):
     @abstractmethod
     def microphone_list_async(
         self,
-        callback: Callable[[List[str], BaseException | None], None],
+        callback: Callable[[List[ASRInputDevice], BaseException | None], None],
     ) -> None: ...
+
+    def microphone_catalog_async(self, callback) -> None:
+        self.microphone_list_async(
+            lambda devices, error=None: callback(
+                AudioInputCatalog(tuple(devices or ())), error
+            )
+        )
 
     @abstractmethod
     def asr_models_glossary_async(
@@ -1037,14 +1238,11 @@ class MCPService(ABC):
     def list_cached_tools(self, server_id: str) -> Any: ...
 
     def list_tools(self, server_id: str) -> Any:
-        """Backward-compatible cache-only discovery alias."""
         return self.list_cached_tools(server_id)
 
     @abstractmethod
     def call_tool(
-        self,
-        server_id: str,
-        remote_name: str,
+        self, server_id: str, remote_name: str,
         arguments: Optional[Dict[str, Any]] = None,
     ) -> Any: ...
 
@@ -1099,13 +1297,26 @@ class AIEngineAdministrationService(ABC):
     def topology_snapshot(self) -> Dict[str, Any]: ...
 
     @abstractmethod
-    def switch_topology(self, mode: str, *, timeout: float = 30.0) -> Dict[str, Any]: ...
+    def switch_topology(
+        self, mode: str, *, timeout: float = 30.0
+    ) -> Dict[str, Any]: ...
 
     @abstractmethod
     def suspend_for_maintenance(self, *, timeout: float = 15.0) -> bool: ...
 
     @abstractmethod
     def resume_after_maintenance(self) -> bool: ...
+
+    @contextmanager
+    def maintenance_session(self, *, timeout: float = 15.0):
+        """Keep inference suspended until filesystem maintenance finishes."""
+        if not self.suspend_for_maintenance(timeout=timeout):
+            raise RuntimeError("AI workers could not be stopped")
+        try:
+            yield
+        finally:
+            if not self.resume_after_maintenance():
+                raise RuntimeError("AI workers could not be restarted")
 
 
 class HardwareInventoryService(ABC):

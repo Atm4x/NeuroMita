@@ -8,7 +8,10 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from handlers.asr_audio_capture import AudioCaptureConfig, AudioCaptureService
-
+from handlers.asr_audio_devices import ASR_CAPTURE_SAMPLE_RATE
+from handlers.asr_input_gate import ASRInputGate
+from domain.audio_input import MicrophoneSelection
+from infrastructure.audio.selection_wire import capture_selection_from_payload
 
 class ASRService:
     """
@@ -26,6 +29,8 @@ class ASRService:
 
     def __init__(self, *, emit_event: Callable[[str, Any], None]):
         self.emit_event = emit_event
+        self._input_gate = ASRInputGate()
+        self._capture_generation = 0
 
         self._recognizer = None
         self._engine_id: str = "google"
@@ -34,6 +39,7 @@ class ASRService:
         self._active: bool = False
         self._task: Optional[asyncio.Task] = None
         self._stop_reason: Optional[str] = None
+        self._live_config: Optional[dict[str, Any]] = None
 
         self._vad_model = None
 
@@ -52,13 +58,21 @@ class ASRService:
         if m == "get_status":
             return {"running": bool(self._active)}
 
+        if m == "set_input_gate":
+            return self._input_gate.apply(payload)
+
         if m == "start_live":
             engine_id = str(payload.get("engine_id") or "google").strip()
-            mic_index = int(payload.get("microphone_index", 0) or 0)
+            selection = capture_selection_from_payload(payload)
             engine_settings = payload.get("engine_settings") if isinstance(payload.get("engine_settings"), dict) else {}
 
             vad_cfg = payload.get("vad") if isinstance(payload.get("vad"), dict) else {}
-            sample_rate = int(vad_cfg.get("sample_rate", 16000) or 16000)
+            requested_sample_rate = int(vad_cfg.get("sample_rate", ASR_CAPTURE_SAMPLE_RATE) or ASR_CAPTURE_SAMPLE_RATE)
+            sample_rate = ASR_CAPTURE_SAMPLE_RATE
+            if requested_sample_rate != sample_rate and self._logger is not None:
+                self._logger.warning(
+                    f"Unsupported ASR sample rate {requested_sample_rate}; using {sample_rate} Hz"
+                )
             chunk_size = int(vad_cfg.get("chunk_size", 512) or 512)
             vad_threshold = float(vad_cfg.get("vad_threshold", 0.5) or 0.5)
             silence_timeout = float(vad_cfg.get("silence_timeout", 0.6) or 0.6)
@@ -67,11 +81,16 @@ class ASRService:
             min_speech_duration = float(vad_cfg.get("min_speech_duration", 0.35) or 0.0)
 
             await self._stop_live_internal(reason="restart")
+            gate_state = payload.get("input_gate")
+            if isinstance(gate_state, dict):
+                self._input_gate.apply({**gate_state, "active": False})
+            else:
+                self._input_gate.configure(input_mode=payload.get("input_mode", "radio"))
 
             try:
                 ok = await self._start_live_internal(
                     engine_id=engine_id,
-                    mic_index=mic_index,
+                    selection=selection,
                     engine_settings=engine_settings,
                     sample_rate=sample_rate,
                     chunk_size=chunk_size,
@@ -90,6 +109,10 @@ class ASRService:
                 self.emit_event("status", {"running": False, "reason": "start_failed"})
             return bool(ok)
 
+        if m == "switch_input":
+            selection = capture_selection_from_payload(payload)
+            return bool(await self._switch_input_internal(selection))
+
         if m == "stop_live":
             await self._stop_live_internal(reason="requested")
             return True
@@ -100,7 +123,7 @@ class ASRService:
         self,
         *,
         engine_id: str,
-        mic_index: int,
+        selection: MicrophoneSelection,
         engine_settings: dict,
         sample_rate: int,
         chunk_size: int,
@@ -109,40 +132,60 @@ class ASRService:
         pre_buffer_duration: float,
         max_speech_duration: float,
         min_speech_duration: float = 0.0,
+        reuse_loaded_models: bool = False,
     ) -> bool:
-        self._engine_id = engine_id
-        self._engine_settings = engine_settings or {}
+        if reuse_loaded_models:
+            rec = self._recognizer
+            vad_model = self._vad_model
+            if rec is None or vad_model is None or self._engine_id != engine_id:
+                return False
+        else:
+            self._engine_id = engine_id
+            self._engine_settings = engine_settings or {}
 
-        rec = await asyncio.to_thread(self._get_recognizer, engine_id)
-        if rec is None:
-            return False
-
-        try:
-            if hasattr(rec, "apply_settings"):
-                await asyncio.to_thread(rec.apply_settings, self._engine_settings)
-        except Exception:
-            pass
-
-        if hasattr(rec, "status"):
-            try:
-                status = await asyncio.to_thread(
-                    rec.status,
-                    {"engine_settings": dict(self._engine_settings)},
-                )
-                if not bool(status.ready):
-                    return False
-            except Exception:
+            rec = await asyncio.to_thread(self._get_recognizer, engine_id)
+            if rec is None:
                 return False
 
-        # Most legacy recognizer ``init`` implementations are declared async but
-        # perform imports, model loading and filesystem/network work
-        # synchronously. Run their private event loop off the shared AI loop.
-        ok = await asyncio.to_thread(lambda: asyncio.run(rec.init()))
-        if not ok:
-            return False
+            try:
+                if hasattr(rec, "apply_settings"):
+                    await asyncio.to_thread(rec.apply_settings, self._engine_settings)
+            except Exception:
+                pass
 
-        vad_model = await self._get_vad_model()
+            if hasattr(rec, "status"):
+                try:
+                    status = await asyncio.to_thread(
+                        rec.status,
+                        {"engine_settings": dict(self._engine_settings)},
+                    )
+                    if not bool(status.ready):
+                        return False
+                except Exception:
+                    return False
+
+            # Most legacy recognizer ``init`` implementations are declared async but
+            # perform imports, model loading and filesystem/network work
+            # synchronously. Run their private event loop off the shared AI loop.
+            ok = await asyncio.to_thread(lambda: asyncio.run(rec.init()))
+            if not ok:
+                return False
+
+            vad_model = await self._get_vad_model()
+
+        self._live_config = {
+            "engine_id": engine_id,
+            "engine_settings": dict(self._engine_settings),
+            "sample_rate": sample_rate,
+            "chunk_size": chunk_size,
+            "vad_threshold": vad_threshold,
+            "silence_timeout": silence_timeout,
+            "pre_buffer_duration": pre_buffer_duration,
+            "max_speech_duration": max_speech_duration,
+            "min_speech_duration": min_speech_duration,
+        }
         capture = AudioCaptureService(self._logger)
+        capture_generation = self._capture_generation
 
         self._active = True
         service_loop = asyncio.get_running_loop()
@@ -155,13 +198,13 @@ class ASRService:
 
             service_loop.call_soon_threadsafe(_resolve)
 
-        async def _handle_text(text: str):
+        async def _handle_text(text: str, context: dict):
             t = (text or "").strip()
             if t:
-                self.emit_event("text", {"text": t})
+                self.emit_event("text", {"text": t, "capture_context": context})
 
         def _active_flag():
-            return bool(self._active)
+            return bool(self._active and capture_generation == self._capture_generation)
 
         def _speech_probability(audio: np.ndarray, rate: int) -> float:
             import torch
@@ -169,10 +212,13 @@ class ASRService:
             tensor = torch.from_numpy(np.asarray(audio, dtype=np.float32))
             return float(vad_model(tensor, rate).item())
 
-        async def _transcribe_segment(audio: np.ndarray, rate: int) -> None:
+        async def _transcribe_segment(audio: np.ndarray, rate: int, context: dict | None = None) -> None:
+            context = context or self._input_gate.snapshot()
+            if not self._active or capture_generation != self._capture_generation or not self._input_gate.valid(context):
+                return
             text = await rec.transcribe(audio, rate)
-            if text:
-                await _handle_text(text)
+            if text and self._active and capture_generation == self._capture_generation and self._input_gate.valid(context):
+                await _handle_text(text, context)
 
         async def _runner():
             failed = False
@@ -180,7 +226,7 @@ class ASRService:
                 await asyncio.to_thread(
                     lambda: asyncio.run(
                         capture.run(
-                            microphone_index=mic_index,
+                            selection=selection,
                             config=AudioCaptureConfig(
                                 sample_rate=sample_rate,
                                 chunk_size=chunk_size,
@@ -194,6 +240,10 @@ class ASRService:
                             speech_probability=_speech_probability,
                             on_segment=_transcribe_segment,
                             on_ready=_mark_capture_ready,
+                            input_gate=self._input_gate,
+                            on_segment_context=_transcribe_segment,
+                            background_transcription=True,
+                            on_activity=lambda data: self.emit_event("capture", data),
                         )
                     )
                 )
@@ -206,12 +256,13 @@ class ASRService:
                 else:
                     self.emit_event("error", {"message": format_exception(e)})
             finally:
-                self._active = False
+                if capture_generation == self._capture_generation:
+                    self._active = False
                 if not capture_ready.done():
                     capture_ready.set_exception(
                         RuntimeError("Audio capture stopped before the microphone became ready")
                     )
-                elif not failed and self._stop_reason is None:
+                elif not failed and self._stop_reason is None and capture_generation == self._capture_generation:
                     # Цикл захвата завершился сам, снять его никто не просил —
                     # это авария (например отвалилось устройство).
                     self.emit_event(
@@ -246,25 +297,48 @@ class ASRService:
             self._task = None
             if isinstance(exc, asyncio.TimeoutError):
                 message = (
-                    f"Микрофон {mic_index} не передал аудиоданные за 10 секунд; "
+                    f"Микрофон {selection.name or selection.index} не передал аудиоданные за 10 секунд; "
                     "устройство или аудиодрайвер не отвечает"
                 )
             else:
-                message = format_exception(exc).strip() or f"Не удалось запустить микрофон {mic_index}"
+                message = (
+                    f"Не удалось запустить микрофон {selection.name or selection.index}: "
+                    f"{format_exception(exc)}"
+                )
             raise RuntimeError(message) from exc
 
         if self._task.done() or not self._active:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
             raise RuntimeError(
-                f"ASR audio capture on microphone {mic_index} stopped during startup"
+                f"ASR audio capture on microphone {selection.name or selection.index} stopped during startup"
             )
 
         self.emit_event("status", {"running": True})
         return True
 
-    async def _stop_live_internal(self, *, reason: str = "requested"):
+    async def _switch_input_internal(self, selection: MicrophoneSelection) -> bool:
+        """Reopen only the microphone stream, retaining ASR and VAD models."""
+
+        config = dict(self._live_config or {})
+        if not self._active or self._task is None or not config:
+            return False
+
+        await self._stop_capture_internal(reason="switch_input", emit_status=False)
+        return await self._start_live_internal(
+            selection=selection,
+            reuse_loaded_models=True,
+            **config,
+        )
+
+    async def _stop_capture_internal(
+        self,
+        *,
+        reason: str,
+        emit_status: bool,
+    ) -> None:
         self._stop_reason = reason
+        self._capture_generation += 1
         self._active = False
 
         if self._task is not None:
@@ -278,6 +352,13 @@ class ASRService:
             finally:
                 self._task = None
 
+        self._stop_reason = None
+        if emit_status:
+            self.emit_event("status", {"running": False, "reason": reason})
+
+    async def _stop_live_internal(self, *, reason: str = "requested"):
+        await self._stop_capture_internal(reason=reason, emit_status=False)
+
         if self._recognizer is not None:
             try:
                 await asyncio.to_thread(self._recognizer.cleanup)
@@ -287,7 +368,7 @@ class ASRService:
                 self._recognizer = None
 
         self._unload_vad_model()
-        self._stop_reason = None
+        self._live_config = None
         self.emit_event("status", {"running": False, "reason": reason})
 
     async def _get_vad_model(self):

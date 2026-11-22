@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from core.events import Event, Events, get_event_bus
 from core.services import services, use
+from main_logger import logger
 from services.contracts import (
     ApiPresetService,
     CaptureService,
@@ -93,8 +94,58 @@ class _ProviderOptionsController:
 
 
 class _SettingsSectionsController:
+    _PREPARATION_MODULES = {
+        "api": ("controllers.gui.api_settings",),
+        "characters": ("controllers.gui.character_settings_logic",),
+        "voice": (
+            "controllers.gui.voiceover_settings_view_model",
+            "controllers.gui.voiceover_settings_logic",
+            "controllers.gui.audio_model_controller",
+            "controllers.gui.voice_model_controller",
+            "ui.settings.voiceover_settings.remote_api",
+        ),
+        "microphone": (
+            "controllers.gui.asr_events_controller",
+            "controllers.gui.asr_glossary_controller",
+            "controllers.gui.microphone_settings_controller",
+            "controllers.gui.microphone_settings_logic",
+        ),
+        "ai_engine": ("controllers.gui.ai_engine_settings_view_model",),
+        "game": (
+            "controllers.gui.beat_settings_view_model",
+            "controllers.gui.beat_settings_controller",
+        ),
+        "models": (
+            "controllers.gui.settings_runtime_options_view_model",
+            "controllers.gui.embed_provider_view_model",
+            "controllers.gui.rag_preset_view_model",
+            "controllers.gui.rag_install_view_model",
+            "controllers.gui.rag_memory_controller",
+        ),
+        "screen": ("controllers.gui.settings_runtime_options_view_model",),
+        "updates": ("controllers.gui.updates_settings_controller",),
+        "data_collection": (
+            "ui.settings.data_settings",
+            "controllers.gui.finetune_data_view_model",
+        ),
+    }
+
     def __init__(self, presentation: "UiPresentationHub") -> None:
         self._presentation = presentation
+
+    @classmethod
+    def prepare_section(cls, category: str) -> None:
+        """Import section dependencies in a worker without creating Qt objects."""
+        from importlib import import_module
+        from ui.pages.settings.section_registry import get_settings_section_specs
+
+        spec = next(
+            item for item in get_settings_section_specs() if item.key == category
+        )
+        if isinstance(spec.builder_ref, str) and ":" in spec.builder_ref:
+            import_module(spec.builder_ref.partition(":")[0])
+        for module_name in cls._PREPARATION_MODULES.get(category, ()):
+            import_module(module_name)
 
     @staticmethod
     def preload_sections(preloads) -> None:
@@ -122,10 +173,14 @@ class _SettingsSectionsController:
             return
         if key == "characters":
             from ui.settings.character_settings import setup_mita_controls
+            from controllers.gui.character_settings_view_model import CharacterSettingsViewModel
 
+            owner = self._section_owner(gui, parent)
+            view_model = self._own_view_model(CharacterSettingsViewModel(), owner)
             setup_mita_controls(
                 gui,
                 parent,
+                view_model=view_model,
                 wire_characters=self.wire_characters,
             )
             return
@@ -281,7 +336,9 @@ class _SettingsSectionsController:
         return controller
 
     def wire_characters(self, gui: Any):
-        from controllers.gui.character_settings_logic import wire_character_settings_logic
+        from controllers.gui.character_settings_logic import (
+            wire_character_settings_logic,
+        )
 
         return wire_character_settings_logic(
             gui,
@@ -289,7 +346,9 @@ class _SettingsSectionsController:
         )
 
     def wire_microphone(self, gui: Any):
-        from controllers.gui.microphone_settings_logic import wire_microphone_settings_logic
+        from controllers.gui.microphone_settings_logic import (
+            wire_microphone_settings_logic,
+        )
 
         return wire_microphone_settings_logic(gui)
 
@@ -299,12 +358,16 @@ class _SettingsSectionsController:
         load_mic_settings(gui)
 
     def wire_voiceover(self, gui: Any):
-        from controllers.gui.voiceover_settings_logic import wire_voiceover_settings_logic
+        from controllers.gui.voiceover_settings_logic import (
+            wire_voiceover_settings_logic,
+        )
 
         return wire_voiceover_settings_logic(gui)
 
     def build_updates(self, gui: Any, parent: Any) -> None:
-        from controllers.gui.updates_settings_controller import setup_updates_settings_controls
+        from controllers.gui.updates_settings_controller import (
+            setup_updates_settings_controls,
+        )
 
         setup_updates_settings_controls(
             gui,
@@ -320,7 +383,9 @@ class _RagController:
 
         self._coordinator = RagSettingsCoordinator()
 
-    def build_memory_section(self, gui: Any, parent: Any, provider_options: list[Any]) -> None:
+    def build_memory_section(
+        self, gui: Any, parent: Any, provider_options: list[Any]
+    ) -> None:
         self._coordinator.build_memory_section(gui, parent, provider_options)
 
     def build_rag_section(
@@ -426,12 +491,19 @@ class _ViewModelFactory:
         )
 
     def voiceover_settings(self, host: Any, *, parent: Any = None):
+        from services.contracts import RemoteVoiceService
         from controllers.gui.voiceover_settings_view_model import (
             VoiceoverSettingsViewModel,
         )
 
         return VoiceoverSettingsViewModel(
             events=self._presentation.events,
+            remote_service=services().get(RemoteVoiceService),
+            telegram_settings=lambda: use(SettingsService),
+            playback_volume=lambda: use(SettingsService).get(
+                "VOICEOVER_LOCAL_VOLUME", 100
+            ),
+            character_registry=lambda: use(CharacterRegistry),
             open_settings=lambda category: host.show_settings_category(
                 category,
                 force=True,
@@ -469,6 +541,11 @@ class _ViewModelFactory:
             settings=self._presentation.settings,
             parent=parent,
         )
+
+    def gallery_page(self, host: Any, *, parent: Any = None):
+        from controllers.gui.gallery_page_view_model import GalleryPageViewModel
+
+        return GalleryPageViewModel(settings=self._presentation.settings, parent=parent)
 
     def ai_hub_settings(self, host: Any, *, parent: Any = None):
         from controllers.gui.ai_hub_settings_view_model import (
@@ -516,6 +593,7 @@ class _ViewModelFactory:
             host=host,
             app=self._presentation.app,
             settings_data=self._presentation.settings_data,
+            prepare_section=self._presentation.settings_sections.prepare_section,
             parent=parent,
         )
 
@@ -543,7 +621,9 @@ class _NewsController:
     def invalidate(self) -> None:
         self._store.invalidate()
 
-    def load_async(self, target: Any, on_ready: Callable[[list[dict[str, Any]]], None]) -> None:
+    def load_async(
+        self, target: Any, on_ready: Callable[[list[dict[str, Any]]], None]
+    ) -> None:
         from controllers.gui.news_controller import load_news_releases_async
 
         load_news_releases_async(self._store, target, on_ready)
@@ -701,8 +781,8 @@ class _CharacterController:
     def get(self, character_id: str):
         return self._service().get(str(character_id))
 
-    def name_of(self, character_id: str) -> str:
-        return self._service().name_of(str(character_id))
+    def display_name_of(self, character_id: str) -> str:
+        return self._service().display_name_of(str(character_id))
 
     def prepare_history(self, **kwargs):
         return use(HistoryService).prepare_for_prompt(**kwargs)
@@ -747,7 +827,9 @@ class _FineTuneController:
         collector = self._instance()
         return dict(collector.get_stats()) if collector else {}
 
-    def load_samples(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def load_samples(
+        self, filters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         collector = self._instance()
         return list(collector.load_samples(filters) or []) if collector else []
 
@@ -815,7 +897,11 @@ class _VoiceController:
 
     def triton_status(self, *, refresh: bool = False) -> dict[str, Any]:
         service = self.local_voice()
-        return dict(service.triton_status(refresh=refresh) or {}) if service is not None else {}
+        return (
+            dict(service.triton_status(refresh=refresh) or {})
+            if service is not None
+            else {}
+        )
 
     def compile_status(self) -> dict[str, Any]:
         service = self.voice_models()
@@ -860,12 +946,28 @@ class _InstallableController:
         service = services().get_optional(VoiceModelService)
         return dict(service.compile_status() or {}) if service is not None else {}
 
-    def compile_model(self, component_id: str, *, clear_only: bool = False) -> bool:
+    def compile_model(
+        self, component_id: str, *, clear_only: bool = False, device: str | None = None
+    ) -> bool:
         service = services().get_optional(VoiceModelService)
         if service is None:
+            logger.error(
+                "Cannot start Fish Speech+ compilation: VoiceModelService is not registered; "
+                f"component={component_id}, clear_only={bool(clear_only)}"
+            )
             return False
         model_id = str(component_id or "").split(":", 1)[-1]
-        return bool(service.start_compile(model_id, clear_only=clear_only, with_ui=True))
+        accepted = bool(
+            service.start_compile(
+                model_id, clear_only=clear_only, device=device, with_ui=True
+            )
+        )
+        if not accepted:
+            logger.error(
+                "VoiceModelService rejected Fish Speech+ compilation: "
+                f"component={component_id}, model_id={model_id}, clear_only={bool(clear_only)}"
+            )
+        return accepted
 
     def admit(self, action: str, payload: dict[str, Any]):
         operations = services().get(InstallableOperationsService)
@@ -966,7 +1068,20 @@ class _ApplicationController:
 
     def gui_controller(self):
         controller = self._main_controller
-        return getattr(controller, "gui_controller", None) if controller is not None else None
+        return (
+            getattr(controller, "gui_controller", None)
+            if controller is not None
+            else None
+        )
+
+    @property
+    def gui_ready(self) -> bool:
+        controller = self.gui_controller()
+        return (
+            self.backend_ready
+            and controller is not None
+            and not bool(getattr(controller, "_closed", False))
+        )
 
     def ensure_feature_async(self, feature: str):
         controller = self._main_controller

@@ -4,21 +4,15 @@ import logging
 import datetime
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+from core.state_barrier import bind_state_job
 from typing import Callable, Optional, Tuple, List, Set, ClassVar
 
 from managers.database_manager import DatabaseManager
 from managers.settings_manager import SettingsManager
 from managers.character_scoped_service import CharacterScopedService
 
-try:
-    from utils.ru_stem import ru_stem as _ru_light_stem
-except Exception:  # стеммер опционален — без него дедуп работает по сырым токенам
-    def _ru_light_stem(word: str) -> str:  # type: ignore
-        return str(word or "").lower()
-
-
 _ISLAND_PREFIX = "island:"
-_ISLAND_TYPES = ("relationship", "opinion", "preferences", "commitments_conflicts")
+_ISLAND_TYPES = ("relationship", "opinion", "preferences", "commitments_conflicts", "language")
 
 
 def is_island(memory_type: Optional[str]) -> bool:
@@ -50,10 +44,10 @@ class MemoryManager(CharacterScopedService):
     _EMBED_EXECUTOR_LOCK: ClassVar[Lock] = Lock()
     _EMBED_EXECUTOR_SHUTDOWN: ClassVar[bool] = False
 
-    def __init__(self, character_name: str = ""):
+    def __init__(self, character_id: str = ""):
         super().__init__(
-            default_character_id=str(character_name or ""),
-            default_character_name=str(character_name or ""),
+            default_character_id=str(character_id or ""),
+            default_storage_name=str(character_id or ""),
         )
         self.db = DatabaseManager()
         self._total_characters: dict[str, int] = {}
@@ -73,6 +67,9 @@ class MemoryManager(CharacterScopedService):
     @total_characters.setter
     def total_characters(self, value: int) -> None:
         self._total_characters[self.character_id] = max(0, int(value or 0))
+
+    def invalidate_snapshot_cache(self) -> None:
+        self._total_characters.pop(self.character_id, None)
 
     @property
     def rag(self):
@@ -135,7 +132,7 @@ class MemoryManager(CharacterScopedService):
                     thread_name_prefix="rag-embed-mem",
                 )
                 cls._EMBED_EXECUTOR = executor
-            executor.submit(job)
+            executor.submit(bind_state_job(job))
             return True
 
     # ------------------------------------------------------------------
@@ -297,77 +294,35 @@ class MemoryManager(CharacterScopedService):
         return a if ra >= rb else b
 
     # ------------------------------------------------------------------
-    # Dedup on insert (lexical similarity, no ML dependency)
-    # ------------------------------------------------------------------
-
+    # Exact replay of a fact, within one recorded timestamp.
     @staticmethod
-    def _dedup_tokens(text: str) -> frozenset:
-        """
-        Нормализуем текст в набор токенов для дешёвого сравнения похожести.
-        Чистый Python, работает и в боевом libs/python без torch.
-        """
-        import re as _re
-        raw = str(text or "").lower()
-        # оставляем буквы/цифры (в т.ч. кириллицу), остальное — разделители
-        parts = _re.split(r"[^0-9a-zа-яё]+", raw)
-        toks = set()
-        for p in parts:
-            p = p.strip()
-            if len(p) < 3:
-                continue
-            # лёгкая ru-нормализация окончаний, если стеммер доступен
-            toks.add(_ru_light_stem(p))
-        return frozenset(toks)
+    def _active_fact_filter(cols):
+        return "character_id=? AND type='fact' AND is_deleted=0" + (
+            " AND is_forgotten=0" if "is_forgotten" in cols else ""
+        )
 
-    @staticmethod
-    def _dedup_similarity(a: frozenset, b: frozenset) -> float:
-        """Jaccard-похожесть двух наборов токенов (0..1)."""
-        if not a or not b:
-            return 0.0
-        inter = len(a & b)
-        if inter == 0:
-            return 0.0
-        return inter / float(len(a | b))
-
-    def _find_duplicate_memory(self, content: str, threshold: float):
-        """
-        Ищем среди активных воспоминаний ближайший дубль по лексической похожести.
-        Возвращает (eternal_id, priority, similarity) для лучшего совпадения >= threshold,
-        иначе None. Острова и summary исключаем — у них своя гигиена.
-        """
-        cand_tokens = self._dedup_tokens(content)
-        if not cand_tokens:
-            return None
-
-        cols = self._mem_cols()
-        where = "character_id=? AND is_deleted=0"
-        params = [self.storage_key]
-        if "is_forgotten" in cols:
-            where += " AND is_forgotten=0"
-        where += f" AND (type IS NULL OR (type NOT LIKE '{_ISLAND_PREFIX}%' AND type != 'summary'))"
-
-        conn = self.db.get_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                f"SELECT eternal_id, priority, content FROM memories WHERE {where}",
-                tuple(params),
-            )
-            rows = cur.fetchall() or []
-        except Exception:
-            return None
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-        best = None
-        for eid, prio, existing in rows:
-            sim = self._dedup_similarity(cand_tokens, self._dedup_tokens(existing))
-            if sim >= threshold and (best is None or sim > best[2]):
-                best = (int(eid), str(prio or "Normal"), sim)
-        return best
+    def _reuse_exact_fact(self, content, date, entities, priority, cols):
+        where = self._active_fact_filter(cols) + " AND content=? AND date_created=?"
+        params = [self.storage_key, content, date]
+        if "entities" in cols:
+            where += " AND entities IS ?"
+            params.append(entities)
+        with self.db.connection() as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT eternal_id, priority FROM memories WHERE {where} ORDER BY eternal_id LIMIT 1",
+                params,
+            ).fetchone()
+            if row is None:
+                return None
+            eid, old_priority = row
+            merged = self._max_priority(old_priority, priority)
+            if merged != old_priority:
+                conn.execute(
+                    "UPDATE memories SET priority=? WHERE character_id=? AND eternal_id=?",
+                    (merged, self.storage_key, eid),
+                )
+            return eid
 
     # ------------------------------------------------------------------
     # Counters
@@ -392,6 +347,22 @@ class MemoryManager(CharacterScopedService):
                 conn.close()
             except Exception:
                 pass
+
+    def has_active_memories(self) -> bool:
+        """Есть ли у персонажа хоть одно активное воспоминание.
+
+        Дешевле, чем собирать и форматировать весь блок памяти: нужен только
+        факт наличия для миграции состояния знакомства.
+        """
+        cols = self._mem_cols()
+        where = "character_id=? AND is_deleted=0"
+        params = [self.storage_key]
+        if "is_forgotten" in cols:
+            where += " AND is_forgotten=0"
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT 1 FROM memories WHERE {where} LIMIT 1", tuple(params))
+            return cursor.fetchone() is not None
 
     # ------------------------------------------------------------------
     # Forget mechanism
@@ -549,56 +520,44 @@ class MemoryManager(CharacterScopedService):
         except Exception:
             return True
 
-    def _dedup_threshold(self) -> float:
-        try:
-            t = float(SettingsManager.get("MEMORY_DEDUP_THRESHOLD", 0.8))
-            return min(1.0, max(0.5, t))
-        except Exception:
-            return 0.8
-
     def add_memory(self, content, date=None, priority="Normal", memory_type="fact", skip_if_exists=False, entities=None):
         """Add a new memory. Returns the eternal_id of the created memory, or None."""
         memory_type = str(memory_type or "fact").strip() or "fact"
         if is_island(memory_type):
             return self.upsert_island(memory_type, content, priority)
 
-        # Дедуп на вставке: близкий по смыслу дубль обновляем на месте, а не плодим.
-        # Только для обычных фактов (острова/summary/сиды — своя гигиена).
-        if (
-            content and not skip_if_exists
-            and memory_type == "fact"
-            and self._dedup_enabled()
-        ):
-            try:
-                dup = self._find_duplicate_memory(str(content), self._dedup_threshold())
-            except Exception:
-                dup = None
-            if dup:
-                dup_eid, dup_prio, sim = dup
-                merged_prio = self._max_priority(dup_prio, priority)
-                # Обновляем существующую формулировкой посвежее, поднимаем приоритет.
-                self.update_memory(number=dup_eid, content=str(content), priority=merged_prio)
-                logging.info(
-                    f"[MemoryManager] Dedup: merged new memory into #{dup_eid} "
-                    f"(similarity={sim:.2f}, priority={merged_prio})"
-                )
-                return dup_eid
+        if date is None:
+            date = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        cols = self._mem_cols()
+        entities_json = None
+        if "entities" in cols and entities:
+            entities_json = entities if isinstance(entities, str) else json.dumps(list(entities), ensure_ascii=False)
+
+        if content and date and not skip_if_exists and memory_type == "fact" and self._dedup_enabled():
+            duplicate_id = self._reuse_exact_fact(content, date, entities_json, priority, cols)
+            if duplicate_id is not None:
+                return duplicate_id
 
         if skip_if_exists and content:
+            forgotten = "is_forgotten" if "is_forgotten" in cols else "0 AS is_forgotten"
             with self.db.connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT id, is_deleted, is_forgotten FROM memories WHERE character_id=? AND content=? LIMIT 1",
-                    (self.storage_key, str(content)),
+                    f"SELECT eternal_id, is_deleted, {forgotten} FROM memories "
+                    "WHERE character_id=? AND content=? AND type=? "
+                    "ORDER BY is_deleted, is_forgotten, eternal_id LIMIT 1",
+                    (self.storage_key, str(content), memory_type),
                 )
                 row = cur.fetchone()
                 if row:
                     mem_id, is_deleted, is_forgotten = row
                     if is_deleted or is_forgotten:
                         # Восстанавливаем удалённое/забытое воспоминание вместо создания дубля
+                        restore_forgotten = ", is_forgotten=0" if "is_forgotten" in cols else ""
                         cur.execute(
-                            "UPDATE memories SET is_deleted=0, is_forgotten=0, priority=? WHERE id=?",
-                            (priority, mem_id),
+                            f"UPDATE memories SET is_deleted=0, priority=?{restore_forgotten} "
+                            "WHERE character_id=? AND eternal_id=?",
+                            (priority, self.storage_key, mem_id),
                         )
                         conn.commit()
                         self._calculate_total_characters()
@@ -606,9 +565,6 @@ class MemoryManager(CharacterScopedService):
 
         # забываем ПЕРЕД добавлением новой
         self._forget_over_limit_memories()
-
-        if date is None:
-            date = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
         # NOTE: эмбеддинги считаем ПОСЛЕ успешного commit, но в фоне (см. ниже),
         # чтобы не блокировать основной поток (UI/генерацию).
@@ -633,12 +589,9 @@ class MemoryManager(CharacterScopedService):
                 insert_cols.append("is_forgotten")
                 insert_vals.append(0)
 
-            if "entities" in cols and entities:
+            if entities_json is not None:
                 insert_cols.append("entities")
-                if isinstance(entities, str):
-                    insert_vals.append(entities)
-                else:
-                    insert_vals.append(json.dumps(list(entities), ensure_ascii=False))
+                insert_vals.append(entities_json)
 
             placeholders = ",".join(["?"] * len(insert_cols))
             sql = f"INSERT INTO memories ({', '.join(insert_cols)}) VALUES ({placeholders})"
@@ -681,40 +634,94 @@ class MemoryManager(CharacterScopedService):
         except Exception as e:
             logging.warning(f"RAG failed to schedule memory embedding (ignored): {format_exception(e)}", exc_info=True)
 
-    def seed_rag_memory(self, content, priority="normal", entities=None) -> Optional[int]:
+    def retire_seed_memories(self, old_contents) -> int:
+        """Soft-delete only exact obsolete seed facts from this character's store.
+
+        Lore edits previously produced two versions because seeds deduplicate by
+        content. This intentionally never searches by similarity or touches
+        personal memories with different wording. Safe to call on every init.
+        """
+        contents = list(dict.fromkeys(str(x).strip() for x in (old_contents or []) if str(x).strip()))
+        if not contents:
+            return 0
+        removed = 0
+        # Previously seeded facts had type=fact and were RAG-only/forgotten.
+        # Never retire an active personal fact just because its text happens
+        # to coincide with a seed that was later removed from the catalogue.
+        has_forgotten = "is_forgotten" in self._mem_cols()
+        seed_filter = (
+            "AND (type='seed_lore' OR (type='fact' AND is_forgotten=1))"
+            if has_forgotten else "AND type='seed_lore'"
+        )
+        try:
+            with self.db.connection() as conn:
+                cur = conn.cursor()
+                for offset in range(0, len(contents), 300):
+                    batch = contents[offset:offset + 300]
+                    placeholders = ",".join("?" for _ in batch)
+                    cur.execute(
+                        f"UPDATE memories SET is_deleted=1 WHERE character_id=? "
+                        f"AND is_deleted=0 {seed_filter} AND content IN ({placeholders})",
+                        (self.storage_key, *batch),
+                    )
+                    removed += max(int(cur.rowcount or 0), 0)
+                conn.commit()
+            if removed:
+                self._calculate_total_characters()
+        except Exception as exc:
+            logging.warning("Failed to retire obsolete lore seeds: %s", format_exception(exc), exc_info=True)
+        return removed
+
+    def seed_rag_memory(self, content, priority="normal", entities=None, lore_age_days=None) -> Optional[int]:
         """Create a RAG-only memory: indexed and retrievable by search, but never
         part of the always-on ``<active_memory>`` block.
 
-        Stored as ``is_forgotten=1`` so it stays out of the active block yet is
-        found by RAG (search ignores the forgotten flag). Deduplicates by exact
-        content — re-seeding the same fact updates it in place (no duplicates)
-        and keeps it RAG-only rather than promoting it into the active block.
+        Stored as ``is_forgotten=1`` with ``type='seed_lore'`` so it stays out
+        of the active block yet remains RAG-searchable. Re-seeding by exact
+        content migrates legacy forgotten ``fact`` rows in place, retaining
+        their original ID and date (date is for audit, not RAG recency).
         """
         if not content or not str(content).strip():
             return None
         content = str(content).strip()
+        if lore_age_days is not None:
+            lore_age_days = int(lore_age_days)
+            if not 0 <= lore_age_days <= 36500:
+                raise ValueError("lore_age_days must be in 0..36500")
 
         cols = self._mem_cols()
         has_forgotten = "is_forgotten" in cols
         if not has_forgotten:
             # Without the forget column we cannot keep a memory out of the active
             # block; fall back to a normal (skip-if-exists) memory.
-            return self.add_memory(content, priority=priority, skip_if_exists=True, entities=entities)
+            return self.add_memory(
+                content, priority=priority, memory_type="seed_lore",
+                skip_if_exists=True, entities=entities,
+            )
 
         with self.db.connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT eternal_id FROM memories WHERE character_id=? AND content=? LIMIT 1",
+                "SELECT eternal_id FROM memories "
+                "WHERE character_id=? AND content=? "
+                "AND (type='seed_lore' OR (type='fact' AND is_forgotten=1)) "
+                "ORDER BY CASE WHEN type='seed_lore' THEN 0 ELSE 1 END, eternal_id "
+                "LIMIT 1",
                 (self.storage_key, content),
             )
             row = cur.fetchone()
             if row:
                 eid = int(row[0])
-                # Keep it RAG-only: undelete but force forgotten, refresh priority.
+                # Keep it RAG-only; migrate previously seeded forgotten fact rows
+                # without resetting their ID or creation timestamp.
+                # Updating the timeline does not modify the embedded text,
+                # original date_created, memory ID or the player's lived facts.
+                age_update = ", lore_age_days=?" if "lore_age_days" in cols else ""
+                age_params = (lore_age_days,) if age_update else ()
                 cur.execute(
-                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=? "
-                    "WHERE character_id=? AND eternal_id=?",
-                    (priority, self.storage_key, eid),
+                    "UPDATE memories SET is_deleted=0, is_forgotten=1, priority=?, type='seed_lore'"
+                    + age_update + " WHERE character_id=? AND eternal_id=?",
+                    (priority, *age_params, self.storage_key, eid),
                 )
                 conn.commit()
                 self._schedule_embed(eid, content)
@@ -732,7 +739,10 @@ class MemoryManager(CharacterScopedService):
             insert_cols = ["character_id", "eternal_id", "content", "priority",
                            "type", "date_created", "is_deleted", "is_forgotten"]
             insert_vals = [self.storage_key, new_id, content, priority,
-                           "fact", date, 0, 1]
+                           "seed_lore", date, 0, 1]
+            if "lore_age_days" in cols:
+                insert_cols.append("lore_age_days")
+                insert_vals.append(lore_age_days)
             if "entities" in cols and entities:
                 insert_cols.append("entities")
                 insert_vals.append(
@@ -837,8 +847,11 @@ class MemoryManager(CharacterScopedService):
             logging.warning(f"[MemoryManager] upsert_island failed: {format_exception(e)}", exc_info=True)
             return None
 
-    def seed_island(self, island_type: str, content: str, priority: str = "high") -> Optional[int]:
-        """Create a starting island only when no row of this type ever existed."""
+    def seed_island(
+        self, island_type: str, content: str, priority: str = "high", *,
+        replace_exact: str | None = None,
+    ) -> Optional[int]:
+        """Initialize an island, optionally replacing the exact previous factory text."""
         short = island_subtype(island_type)
         if short is None:
             logging.warning(f"[MemoryManager] seed_island: unknown island type {island_type!r}, ignored.")
@@ -854,7 +867,17 @@ class MemoryManager(CharacterScopedService):
                     "SELECT eternal_id FROM memories WHERE character_id=? AND type=? LIMIT 1",
                     (self.storage_key, full_type),
                 )
-                if cur.fetchone():
+                current = cur.fetchone()
+                if current:
+                    if replace_exact:
+                        cur.execute(
+                            "UPDATE memories SET content=? WHERE character_id=? AND type=? "
+                            "AND eternal_id=? AND is_deleted=0 AND content=?",
+                            (str(content).strip(), self.storage_key, full_type, current[0], replace_exact),
+                        )
+                        replaced = cur.rowcount > 0
+                        conn.commit()
+                        return int(current[0]) if replaced else None
                     return None
         except Exception as e:
             logging.warning(f"[MemoryManager] seed_island lookup failed: {format_exception(e)}", exc_info=True)
@@ -915,7 +938,7 @@ class MemoryManager(CharacterScopedService):
         Если захочешь — можно расширить на забытые, но это уже другой UX.
         """
         cols = self._mem_cols()
-        where = "character_id=? AND eternal_id=? AND is_deleted=0"
+        where = "character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'"
         params = [self.storage_key, number]
         if "is_forgotten" in cols:
             where += " AND is_forgotten=0"
@@ -965,6 +988,17 @@ class MemoryManager(CharacterScopedService):
 
         return True
 
+    def has_seed_lore(self, numbers: list[int]) -> bool:
+        if not numbers:
+            return False
+        placeholders = ",".join("?" for _ in numbers)
+        with self.db.connection() as conn:
+            return conn.execute(
+                f"SELECT 1 FROM memories WHERE character_id=? AND type='seed_lore' "
+                f"AND eternal_id IN ({placeholders}) LIMIT 1",
+                (self.storage_key, *numbers),
+            ).fetchone() is not None
+
     def get_memory_content(self, number: int):
         """Return content of an active memory by eternal_id, or None if not found."""
         cols = self._mem_cols()
@@ -1000,7 +1034,7 @@ class MemoryManager(CharacterScopedService):
                 select_cols.append("is_forgotten")
 
             cursor.execute(
-                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                f"SELECT {', '.join(select_cols)} FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                 (self.storage_key, number)
             )
             row = cursor.fetchone()
@@ -1058,7 +1092,7 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch source
                 cur.execute(
-                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                    "SELECT content, entities FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                     (self.storage_key, source_id),
                 )
                 src = cur.fetchone()
@@ -1068,7 +1102,7 @@ class MemoryManager(CharacterScopedService):
 
                 # Fetch target
                 cur.execute(
-                    "SELECT content, entities, type FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0",
+                    "SELECT content, entities, type FROM memories WHERE character_id=? AND eternal_id=? AND is_deleted=0 AND type IS NOT 'seed_lore'",
                     (self.storage_key, target_id),
                 )
                 tgt = cur.fetchone()
@@ -1131,106 +1165,48 @@ class MemoryManager(CharacterScopedService):
             return True
 
     def run_maintenance(self) -> dict:
-        """
-        Фоновая ревизия активной памяти БЕЗ LLM: находит накопившиеся дубли и
-        схлопывает их (полный проход, а не только на вставке). Кластеризует активные
-        факты по лексической похожести, в каждой группе оставляет «лучший» экземпляр
-        (приоритет → свежесть → длина), остальные merge'ит в него.
-
-        Возвращает {"merged": N, "clusters": M}. Безопасно вызывать из BACKGROUND_LLM.
-        """
+        """Collapse exact fact copies without refreshing their age or indexing their text again."""
         result = {"merged": 0, "clusters": 0}
         if not self._maintenance_enabled():
             return result
 
-        threshold = self._dedup_threshold()
-
         cols = self._mem_cols()
-        where = "character_id=? AND is_deleted=0"
-        params = [self.storage_key]
-        if "is_forgotten" in cols:
-            where += " AND is_forgotten=0"
-        where += f" AND (type IS NULL OR (type NOT LIKE '{_ISLAND_PREFIX}%' AND type != 'summary'))"
-
-        conn = self.db.get_connection()
+        where = self._active_fact_filter(cols)
+        entities_col = "entities" if "entities" in cols else "NULL"
+        groups = {}
         try:
-            cur = conn.cursor()
-            cur.execute(
-                f"SELECT eternal_id, priority, content, date_created FROM memories WHERE {where}",
-                tuple(params),
-            )
-            rows = cur.fetchall() or []
+            with self.db.connection() as conn, conn:
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute(
+                    f"SELECT eternal_id, priority, content, date_created, {entities_col} FROM memories "
+                    f"WHERE {where} AND content != '' AND date_created != '' ORDER BY eternal_id",
+                    (self.storage_key,),
+                )
+                for eid, priority, content, date, entities in rows:
+                    groups.setdefault((content, date, entities), []).append((eid, priority))
+                for copies in groups.values():
+                    if len(copies) < 2:
+                        continue
+                    keeper, priority = copies[0]
+                    for source, source_priority in copies[1:]:
+                        priority = self._max_priority(priority, source_priority)
+                        conn.execute(
+                            "UPDATE memories SET is_deleted=1 WHERE character_id=? AND eternal_id=?",
+                            (self.storage_key, source),
+                        )
+                    if priority != copies[0][1]:
+                        conn.execute(
+                            "UPDATE memories SET priority=? WHERE character_id=? AND eternal_id=?",
+                            (priority, self.storage_key, keeper),
+                        )
+                    result["merged"] += len(copies) - 1
+                    result["clusters"] += 1
         except Exception as e:
-            logging.warning(f"[MemoryManager] run_maintenance fetch failed (ignored): {format_exception(e)}", exc_info=True)
-            return result
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            logging.warning(f"[MemoryManager] run_maintenance failed: {format_exception(e)}", exc_info=True)
+            return {"merged": 0, "clusters": 0}
 
-        if len(rows) < 2:
-            return result
-
-        # Собираем элементы с токенами
-        items = []
-        for eid, prio, content, date in rows:
-            toks = self._dedup_tokens(content)
-            if not toks:
-                continue
-            items.append({
-                "eid": int(eid),
-                "prio": str(prio or "Normal"),
-                "content": str(content or ""),
-                "date": str(date or ""),
-                "tokens": toks,
-            })
-
-        # Жадная кластеризация по представителям
-        clusters: List[list] = []
-        for it in items:
-            placed = False
-            for cl in clusters:
-                if self._dedup_similarity(it["tokens"], cl[0]["tokens"]) >= threshold:
-                    cl.append(it)
-                    placed = True
-                    break
-            if not placed:
-                clusters.append([it])
-
-        def _score(m):
-            return (
-                self._PRIORITY_ORDER.get(m["prio"].strip().lower(), 1),
-                self._parse_dt(m["date"]),
-                len(m["content"]),
-            )
-
-        merged_total = 0
-        cluster_count = 0
-        for cl in clusters:
-            if len(cl) < 2:
-                continue
-            cluster_count += 1
-            keeper = max(cl, key=_score)
-            keeper_prio = keeper["prio"]
-            keeper_content = keeper["content"]
-            for m in cl:
-                if m["eid"] == keeper["eid"]:
-                    continue
-                keeper_prio = self._max_priority(keeper_prio, m["prio"])
-                if self.merge_memories(source_id=m["eid"], target_id=keeper["eid"], new_content=keeper_content):
-                    merged_total += 1
-            # обновим приоритет кипера, если поднялся
-            if keeper_prio.strip().lower() != keeper["prio"].strip().lower():
-                self.update_memory(number=keeper["eid"], content=keeper_content, priority=keeper_prio)
-
-        if merged_total:
-            logging.info(
-                f"[MemoryManager] Maintenance: merged {merged_total} duplicate memories "
-                f"in {cluster_count} clusters for '{self.storage_key}'"
-            )
-        result["merged"] = merged_total
-        result["clusters"] = cluster_count
+        if result["merged"]:
+            self._calculate_total_characters()
         return result
 
     def apply_ttl_cleanup(self) -> int:
@@ -1328,8 +1304,8 @@ class MemoryManager(CharacterScopedService):
                             chunk = to_forget[i:i + BATCH]
                             ph = ",".join("?" * len(chunk))
                             conn.execute(
-                                f"UPDATE memories SET is_forgotten=1 WHERE eternal_id IN ({ph})",
-                                chunk,
+                                f"UPDATE memories SET is_forgotten=1 WHERE character_id=? AND eternal_id IN ({ph})",
+                                [self.storage_key, *chunk],
                             )
                         total += len(to_forget)
 
@@ -1393,14 +1369,11 @@ class MemoryManager(CharacterScopedService):
         with self.db.connection() as conn:
             cur = conn.cursor()
             for emb_table in ("embeddings", "sentence_embeddings"):
-                try:
-                    cur.execute(
-                        f"DELETE FROM {emb_table} WHERE source_table='memories' AND character_id=?"
-                        " AND source_id IN (SELECT id FROM memories WHERE character_id=? AND is_deleted=1)",
-                        (self.storage_key, self.storage_key),
-                    )
-                except Exception as e:
-                    logging.warning(f"[MemoryManager] purge_deleted: {emb_table} cleanup failed: {format_exception(e)}")
+                cur.execute(
+                    f"DELETE FROM {emb_table} WHERE source_table='memories' AND character_id=?"
+                    " AND source_id IN (SELECT eternal_id FROM memories WHERE character_id=? AND is_deleted=1)",
+                    (self.storage_key, self.storage_key),
+                )
             cur.execute(
                 "DELETE FROM memories WHERE character_id=? AND is_deleted=1",
                 (self.storage_key,),
@@ -1569,7 +1542,13 @@ class MemoryManager(CharacterScopedService):
             'memory_delete: ["2"]                — delete N:2; range: "3-7"; multi: "2,5"',
             'memory_merge: ["3,7,12:merged text"] — merge into first ID; rest deleted; content optional',
             'memory_add: ["island:relationship|summary"] — replace one running island',
-            "Use English to save tokens.",
+            'memory_add: ["island:language|<language>. Reply to the Player in <language>."] — store/update primary language',
+            "Keep memory entries concise. Update an existing entry when the same event develops.",
+            "Preserve the source: personal experience, reported information, or suspicion. "
+            "When updating or merging, keep the speaker or evidence and the known time and conditions. "
+            "If a new report conflicts with the old account, keep the accounts separate with their sources. "
+            "Never write a proposed scene or a hypothetical as something that already happened. "
+            "Keep private agreements scoped to their known participants and conditions.",
         ]
 
         island_block = None

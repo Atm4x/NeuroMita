@@ -1,5 +1,4 @@
 # src/handlers/llm_providers/base.py
-import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Callable, Optional, Any, Mapping
@@ -71,7 +70,10 @@ class LLMRequest:
     # protocol-driven routing
     protocol_id: Optional[str] = None
     dialect_id: Optional[str] = None
+    # Technical routing key, e.g. `common` for OpenAI-compatible APIs.
     provider_name: Optional[str] = None
+    # Human-readable external service, e.g. `OpenRouter`.
+    provider_display_name: Optional[str] = None
 
     headers: Dict[str, str] = field(default_factory=dict)
     transforms: List[Dict[str, Any]] = field(default_factory=list)
@@ -87,6 +89,7 @@ class LLMRequest:
     tools_payload: Optional[Any] = None
     tools_dialect: Optional[str] = None
 
+    native_parameters: Optional[Dict[str, Any]] = None
     extra: Dict[str, Any] = field(default_factory=dict)
     settings: Optional[Any] = None
     depth: int = 0
@@ -94,6 +97,10 @@ class LLMRequest:
     allowed_tool_names: Optional[frozenset[str]] = None
 
     structured_model: Optional[Any] = None
+
+    @property
+    def wire_stream(self) -> bool:
+        return bool(self.stream or (self.capabilities or {}).get("force_wire_stream"))
 
 
 @dataclass
@@ -160,24 +167,15 @@ class LLMUsage:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """Provider-neutral description of a tool invocation requested by an LLM."""
-
-    id: str
     name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
+    arguments: Dict[str, Any]
+    id: str
 
 
-def normalize_tool_arguments(raw_arguments: Any) -> Dict[str, Any]:
-    """Convert provider-specific tool arguments into a JSON-object mapping."""
-    if isinstance(raw_arguments, Mapping):
-        return dict(raw_arguments)
-    if isinstance(raw_arguments, str):
-        try:
-            parsed = json.loads(raw_arguments or "{}")
-        except Exception:
-            return {}
-        return dict(parsed) if isinstance(parsed, Mapping) else {}
-    return {}
+@dataclass(frozen=True)
+class ToolResult:
+    id: str
+    content: str
 
 
 @dataclass
@@ -185,16 +183,20 @@ class LLMResponse:
     text: Optional[str]
     usage: Optional[LLMUsage] = None
     model: Optional[str] = None
+    # Technical routing key; the same meaning as LLMRequest.provider_name.
     provider_name: Optional[str] = None
+    # Human-readable external service name for UI and diagnostics.
+    provider_display_name: Optional[str] = None
     finish_reason: Optional[str] = None
     error_message: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None
     raw: Dict[str, Any] = field(default_factory=dict)
-    tool_calls: List[ToolCall] = field(default_factory=list)
 
     # Размышления, которые провайдер отдал отдельным каналом. В text их быть
     # не должно: text — только то, что видит игрок.
     reasoning: Optional[str] = None
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    protocol_history: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def _to_int(value: Any) -> int:
@@ -309,8 +311,9 @@ class BaseProvider(ABC):
 __all__ = [
     "LLMRequest",
     "LLMUsage",
-    "ToolCall",
     "LLMResponse",
+    "ToolCall",
+    "ToolResult",
     "BaseProvider",
     "RequestCancellation",
     "RequestCancelledError",
@@ -323,6 +326,5 @@ __all__ = [
     "register_cancellable_resource",
     "resolve_total_timeout",
     "normalize_usage_payload",
-    "normalize_tool_arguments",
     "LLMProviderError",
 ]

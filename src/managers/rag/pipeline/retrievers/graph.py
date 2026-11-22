@@ -1,7 +1,7 @@
 """
 GraphRetriever — retrieves entity-relation triples from the graph store.
 
-Matches query keywords against ``graph_entities.name`` (exact + prefix),
+Matches query keywords and aliases against ``graph_entities.name``,
 fetches 1-hop neighborhood, returns Candidates with formatted triples.
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ from core.error_utils import format_exception
 
 import logging
 from typing import Any, Dict, List
+from managers.rag.rag_utils import entity_alias_phrases, extract_keywords
 
 from ..types import Candidate, QueryState
 from ..config import RAGConfig
@@ -36,9 +37,9 @@ class GraphRetriever:
                 logger.debug(f"GraphRetriever: vector search failed: {format_exception(e)}")
 
         # Keyword match (always active as fallback / additive).
-        kw_names = self._match_entities(qs.keywords)
+        kw_names = set(self._match_entities(qs.keywords, entity_alias_phrases(qs.user_query)))
 
-        matched_names = list(set(vec_names) | set(kw_names))
+        matched_names = sorted(set(vec_names) | kw_names)
 
         # Store matched entities in QueryState for EntityEnricher to use.
         if matched_names:
@@ -58,7 +59,10 @@ class GraphRetriever:
             subj = t.get("subject", "")
             pred = t.get("predicate", "")
             obj_ = t.get("object", "")
-            conf = float(t.get("confidence", 1.0) or 1.0)
+            raw_confidence = t.get("confidence")
+            conf = min(1.0, max(0.0, float(1.0 if raw_confidence is None else raw_confidence)))
+            if conf <= 0:
+                continue
 
             triple_key = f"{subj}|{pred}|{obj_}"
             if triple_key in seen:
@@ -70,6 +74,8 @@ class GraphRetriever:
 
             # Score heuristic: confidence × keyword overlap.
             kw_overlap = self._keyword_overlap(qs.keywords, subj, obj_)
+            direct_match = subj in kw_names or obj_ in kw_names
+            evidence = conf * (0.5 + 0.5 * kw_overlap) if direct_match else conf * 0.25
 
             c = Candidate(
                 source="graph",
@@ -82,43 +88,48 @@ class GraphRetriever:
                     "subject_type": t.get("subject_type", ""),
                     "object_type": t.get("object_type", ""),
                     "created_at": t.get("created_at", ""),
+                    "is_protected": bool(t.get("is_protected")),
                 },
                 features={
                     "confidence": conf,
                     "kw_overlap": kw_overlap,
+                    "graph_evidence": evidence,
                 },
-                score=conf * (0.5 + 0.5 * kw_overlap),
+                score=evidence,
             )
             out.append(c)
 
         logger.debug(f"GraphRetriever: {len(matched_names)} matched entities → {len(out)} triples")
         return out
 
-    def _match_entities(self, keywords: List[str]) -> List[str]:
-        """Match keywords against entity names (exact + prefix)."""
-        if not keywords:
+    def _match_entities(self, keywords: List[str], aliases: List[str] | None = None) -> List[str]:
+        """Match names by normalized tokens or a recognized alias."""
+        if not keywords and not aliases:
             return []
 
         all_entities = self.gs.get_all_entities(limit=1000)
         entity_names = [e["name"] for e in all_entities]
 
         matched: set[str] = set()
-        kw_lower = [k.lower() for k in keywords if k.strip()]
+        lemmatize = bool(getattr(self.cfg, "lemmatization", True))
+        kw_lower = set(extract_keywords(" ".join(keywords), max_terms=max(12, len(keywords)),
+                                       min_len=3, lemmatize=lemmatize))
+        alias_names = {alias.casefold() for alias in aliases or []}
 
         for ename in entity_names:
-            for kw in kw_lower:
-                if ename == kw or ename.startswith(kw) or kw.startswith(ename):
-                    matched.add(ename)
-                    break
+            terms = set(extract_keywords(ename, max_terms=12, min_len=3, lemmatize=lemmatize))
+            if ename.casefold() in alias_names or terms.intersection(kw_lower):
+                matched.add(ename)
 
-        return list(matched)
+        return sorted(matched)
 
     @staticmethod
     def _keyword_overlap(keywords: List[str], subj: str, obj_: str) -> float:
         """Fraction of keywords that appear in subject or object names."""
         if not keywords:
             return 0.0
-        kw_set = {k.lower() for k in keywords if k.strip()}
-        tokens = set(subj.split()) | set(obj_.split())
-        hits = sum(1 for k in kw_set if k in tokens or any(k in t for t in tokens))
+        kw_set = set(extract_keywords(" ".join(keywords), max_terms=max(12, len(keywords)),
+                                    min_len=3, lemmatize=True))
+        tokens = set(extract_keywords(f"{subj} {obj_}", max_terms=24, min_len=3, lemmatize=True))
+        hits = len(kw_set.intersection(tokens))
         return min(hits / max(len(kw_set), 1), 1.0)

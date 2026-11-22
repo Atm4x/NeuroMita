@@ -3,8 +3,11 @@ from core.error_utils import format_exception
 
 import base64
 import os
+import re
 import uuid
 from typing import Any, Callable
+
+from PyQt6.QtCore import QTimer
 
 from core.events import Events, get_event_bus
 from domain.conversation_message_ids import ConversationMessageIds
@@ -24,7 +27,7 @@ from services.contracts import (
 )
 from utils import getTranslationVariant as _
 
-from .async_runner import run_async
+from .async_runner import dispatch_to_gui, run_async
 
 
 class AppShellController:
@@ -48,10 +51,17 @@ class AppShellController:
         self._main_controller = None
         self._backend_error = ""
         self._closed = False
+        self._history_cleared_subscription = self._event_bus.subscribe(
+            Events.Character.HISTORY_CLEARED, self._on_character_history_cleared, weak=False,
+        )
 
     @property
     def backend_ready(self) -> bool:
-        return not self._closed and self._main_controller is not None and not self.is_closing
+        return (
+            not self._closed
+            and self._main_controller is not None
+            and not self.is_closing
+        )
 
     @property
     def backend_error(self) -> str:
@@ -67,6 +77,9 @@ class AppShellController:
         self._main_controller = controller
         self._backend_error = ""
         self._presentation.app.attach_backend(controller)
+        history_signal = getattr(self._view, "load_chat_history_signal", None)
+        if history_signal is not None:
+            QTimer.singleShot(0, history_signal.emit)
 
     def detach_backend(self) -> None:
         self._main_controller = None
@@ -84,6 +97,7 @@ class AppShellController:
         if self._closed:
             return
         self._closed = True
+        self._history_cleared_subscription.close()
         controller = self._main_controller
         try:
             close_pages = self._close_pages
@@ -105,19 +119,39 @@ class AppShellController:
             self._presentation.app.detach_backend()
 
     def load_history(self, *, request_id: str = "", character_id: str = "") -> None:
-        self._event_bus.emit(Events.Model.LOAD_HISTORY, {
-            "request_id": str(request_id or ""),
-            "character_id": str(character_id or ""),
-        })
+        self._event_bus.emit(
+            Events.Model.LOAD_HISTORY,
+            {
+                "request_id": str(request_id or ""),
+                "character_id": str(character_id or ""),
+            },
+        )
 
     def load_more_history(self, *, character_id: str = "") -> None:
-        self._event_bus.emit(Events.Model.LOAD_MORE_HISTORY, {
-            "character_id": str(character_id or ""),
-        })
+        self._event_bus.emit(
+            Events.Model.LOAD_MORE_HISTORY,
+            {
+                "character_id": str(character_id or ""),
+            },
+        )
 
     def clear_chat(self) -> None:
         self._view.render_chat_cleared()
         self._event_bus.emit(Events.Chat.CLEAR_CHAT)
+
+    def _on_character_history_cleared(self, event) -> None:
+        data = event.data or {}
+        character_id = str(data.get("character_id") or "").strip()
+
+        def apply():
+            if self._closed:
+                return
+            if not data.get("all_characters") and character_id != self.current_character_id():
+                return
+            self.clear_chat()
+            self._view.update_debug_info()
+
+        dispatch_to_gui(self._view, apply)
 
     @staticmethod
     def _dedupe_images(image_list):
@@ -133,7 +167,9 @@ class AppShellController:
         return result
 
     @staticmethod
-    def _merge_text(explicit_text: str, entry_text: str, *, merge_with_entry: bool) -> tuple[str, bool]:
+    def _merge_text(
+        explicit_text: str, entry_text: str, *, merge_with_entry: bool
+    ) -> tuple[str, bool]:
         explicit = str(explicit_text or "").strip()
         draft = str(entry_text or "").strip()
         if not merge_with_entry or not draft:
@@ -187,6 +223,10 @@ class AppShellController:
         settings = use(SettingsService)
         staged_images = self._view.staged_images_snapshot()
         character_id = self.current_character_id()
+        if from_entry and self._handle_stage_command(user_input, character_id):
+            if getattr(self._view, "user_entry", None) is not None:
+                self._view.user_entry.clear()
+            return True
         auto_screen = bool(settings.get("AUTO_ATTACH_IMAGES", False))
         auto_camera = bool(settings.get("ENABLE_CAMERA_CAPTURE", False))
 
@@ -216,6 +256,30 @@ class AppShellController:
             camera_limit=int(settings.get("CAMERA_CAPTURE_HISTORY_LIMIT", 1) or 1),
             on_ready=finish,
         )
+        return True
+
+    _STAGE_COMMAND_RE = re.compile(r"^/stage(?:\s+(.*))?$", re.IGNORECASE)
+
+    def _emit_stage_event(self, text: str, character_id: str) -> None:
+        self._event_bus.emit(Events.GUI.UPDATE_CHAT_UI, {
+            "role": "event",
+            "response": str(text or ""),
+            "character_id": str(character_id or ""),
+            "message_id": f"stage-{uuid.uuid4().hex}",
+            "is_initial": False,
+        })
+
+    def _handle_stage_command(self, user_input: str, character_id: str) -> bool:
+        match = self._STAGE_COMMAND_RE.match(str(user_input or "").strip())
+        if match is None:
+            return False
+
+        from services.mita_stages import get_mita_stage_service
+
+        service = get_mita_stage_service()
+        character = use(CharacterRegistry).current()
+        output = service.handle_command(character, str(match.group(1) or ""))
+        self._emit_stage_event(output, character_id)
         return True
 
     def _finish_send_message(
@@ -261,11 +325,28 @@ class AppShellController:
                 for image in all_image_data
             ]
             if not user_input:
-                label = _("<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>", "<Images>")
-                if staged_image_data and not current_image_data and not explicit_image_data:
-                    label = _("<\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>", "<Attached Images>")
-                elif (current_image_data or explicit_image_data) and not staged_image_data:
-                    label = _("<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u044d\u043a\u0440\u0430\u043d\u0430>", "<Screen Image>")
+                label = _(
+                    "<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>",
+                    "<Images>",
+                )
+                if (
+                    staged_image_data
+                    and not current_image_data
+                    and not explicit_image_data
+                ):
+                    label = _(
+                        "<\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u043b\u0435\u043d\u043d\u044b\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f>",
+                        "<Attached Images>",
+                    )
+                    if len(all_image_data) == 1:
+                        label = _("<Прикрепленное изображение>", "<Attached Image>")
+                elif (
+                    current_image_data or explicit_image_data
+                ) and not staged_image_data:
+                    label = _(
+                        "<\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u044d\u043a\u0440\u0430\u043d\u0430>",
+                        "<Screen Image>",
+                    )
                 image_content.insert(0, {"type": "text", "content": label + "\n"})
 
         self._view.render_outgoing_message(
@@ -312,8 +393,12 @@ class AppShellController:
             capture = services().get_optional(CaptureService)
             if capture is None:
                 return [], []
-            screen_frames = list(capture.capture_screen(screen_limit) or []) if auto_screen else []
-            camera_frames = list(capture.camera_frames(camera_limit) or []) if auto_camera else []
+            screen_frames = (
+                list(capture.capture_screen(screen_limit) or []) if auto_screen else []
+            )
+            camera_frames = (
+                list(capture.camera_frames(camera_limit) or []) if auto_camera else []
+            )
             return screen_frames, camera_frames
 
         run_async(self._view, worker, on_ready, name="app-send-capture")
@@ -321,7 +406,9 @@ class AppShellController:
     def request_debug_info(self, on_ready: Callable[[str], None]) -> None:
         def worker() -> str:
             model = services().get_optional(ModelStateService)
-            return str(model.debug_info() if model is not None else "Debug info not available")
+            return str(
+                model.debug_info() if model is not None else "Debug info not available"
+            )
 
         run_async(self._view, worker, on_ready, name="app-debug-info")
 
@@ -351,13 +438,31 @@ class AppShellController:
             )
             from managers.rag.readiness import rag_readiness
 
+            if method == "API":
+                from services.contracts import RemoteVoiceService
+
+                remote = services().get_optional(RemoteVoiceService)
+                from services.contracts import CharacterRegistry
+
+                registry = services().get_optional(CharacterRegistry)
+                character_id = registry.current_id() if registry else None
+                voice_initialized = bool(
+                    use_voice
+                    and remote
+                    and remote.status(character_id=character_id).verified
+                )
+
             rag = rag_readiness()
             return {
                 "game_connected": bool(use(GameLinkService).is_connected()),
                 "silero_connected": bool(telegram and telegram.is_silero_connected()),
                 "mic_active": bool(speech and speech.mic_active()),
-                "screen_capture_active": bool(capture and capture.screen_capture_active()),
-                "camera_capture_active": bool(capture and capture.camera_capture_active()),
+                "screen_capture_active": bool(
+                    capture and capture.screen_capture_active()
+                ),
+                "camera_capture_active": bool(
+                    capture and capture.camera_capture_active()
+                ),
                 "rag_enabled": bool(settings.get("RAG_ENABLED", False)),
                 # Настройка говорит «включён», а плашка обязана говорить «работает»:
                 # модели RAG поднимаются уже после старта.
@@ -371,14 +476,22 @@ class AppShellController:
 
         run_async(self._view, worker, on_ready, name="app-status-colors")
 
-    def insert_debug_message(self, *, text: str, character_id: str, as_user: bool) -> None:
+    def insert_debug_message(
+        self, *, text: str, character_id: str, as_user: bool
+    ) -> None:
         self._event_bus.emit(
             Events.Chat.INSERT_SYSTEM_MESSAGE,
-            {"text": str(text), "character_id": str(character_id), "as_user": bool(as_user)},
+            {
+                "text": str(text),
+                "character_id": str(character_id),
+                "as_user": bool(as_user),
+            },
         )
 
     def save_snapshot(self, character_id: str) -> None:
-        self._event_bus.emit(Events.Chat.SAVE_SNAPSHOT, {"character_id": str(character_id)})
+        self._event_bus.emit(
+            Events.Chat.SAVE_SNAPSHOT, {"character_id": str(character_id)}
+        )
 
     def load_snapshot(self, *, file_path: str, character_id: str) -> None:
         self._event_bus.emit(
@@ -408,4 +521,6 @@ class AppShellController:
         if local_voice is None:
             return False, False
         normalized = str(model_id or "")
-        return bool(local_voice.is_installed(normalized)), bool(local_voice.check_initialized(normalized))
+        return bool(local_voice.is_installed(normalized)), bool(
+            local_voice.check_initialized(normalized)
+        )

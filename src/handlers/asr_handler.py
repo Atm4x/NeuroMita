@@ -1,3 +1,8 @@
+from domain.audio_input import MicrophoneSelection
+from infrastructure.audio.selection_wire import (
+    as_microphone_selection,
+    capture_selection_payload,
+)
 from core.error_utils import format_exception
 import time
 import os
@@ -14,6 +19,7 @@ from utils import getTranslationVariant as _
 from handlers.asr_models.speech_recognizer_base import SpeechRecognizerInterface
 from handlers.asr_models.registry import create_recognizer, engine_classes
 from handlers.asr_audio_capture import AudioCaptureConfig, AudioCaptureService
+from handlers.asr_input_gate import ASRInputGate
 from core.events import get_event_bus, Events, Event
 from core.performance_trace import performance_traces
 from core.install_types import DEFAULT_INSTALL_TIMEOUT_SEC
@@ -74,12 +80,19 @@ def _on_ai_engine_event(event: Event):
     ev = str(data.get("event") or "")
     payload = data.get("data") if isinstance(data.get("data"), dict) else {}
 
+    if ev == "capture":
+        get_event_bus().emit(Events.Speech.ASR_CAPTURE_PROGRESS, payload)
+        return
+
     if ev == "text":
         text = str(payload.get("text") or "").strip()
         if text:
             trace = performance_traces().start(source="asr", attributes={"engine": str(payload.get("engine") or "remote")})
             trace.mark("asr.text_ready")
-            get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {"text": text, "trace_id": trace.trace_id})
+            get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {
+                "text": text, "trace_id": trace.trace_id,
+                **({"capture_context": payload["capture_context"]} if "capture_context" in payload else {}),
+            })
         return
 
     # Движок может поднять живое распознавание сам: при смене состава окружений
@@ -179,7 +192,28 @@ def register_asr_install_events() -> None:
 register_asr_engine_bridge()
 
 class SpeechRecognition:
+    _input_gate = ASRInputGate()
+
+    @staticmethod
+    def publish_input_gate() -> None:
+        if not SpeechRecognition._is_running or not SpeechRecognition._remote_asr_mode:
+            return
+        engine = SpeechRecognition._get_ai_engine()
+        if engine is None:
+            return
+        try:
+            future = engine.call("asr", "set_input_gate", SpeechRecognition._input_gate.snapshot())
+            def report_failure(done):
+                try:
+                    done.result()
+                except Exception as exc:
+                    logger.warning(f"ASR gate update failed: {format_exception(exc)}")
+            future.add_done_callback(report_failure)
+        except Exception as exc:
+            logger.warning(f"ASR gate update failed: {format_exception(exc)}")
+
     microphone_index = 0
+    microphone_selection = MicrophoneSelection()
     active = True
     _recognizer_type = "google"
     _engine_settings: Dict[str, dict] = {}
@@ -318,7 +352,13 @@ class SpeechRecognition:
             return []
         try:
             if hasattr(inst, "settings_spec"):
-                return inst.settings_spec() or []
+                from core.voice_device_selection import expand_voice_device_schema
+                from utils.gpu_utils import get_hardware_snapshot
+
+                return expand_voice_device_schema(
+                    list(inst.settings_spec() or []),
+                    get_hardware_snapshot(),
+                )
         except Exception as e:
             logger.warning(f"settings_spec error for {engine}: {format_exception(e)}")
         return []
@@ -394,7 +434,8 @@ class SpeechRecognition:
                             tensor = torch.from_numpy(np.asarray(audio, dtype=np.float32))
                             return float(vad_model(tensor, sample_rate).item())
 
-                        async def transcribe_segment(audio: np.ndarray, sample_rate: int) -> None:
+                        async def transcribe_segment(audio: np.ndarray, sample_rate: int, context: dict | None = None) -> None:
+                            context = context or SpeechRecognition._input_gate.snapshot()
                             trace = performance_traces().start(
                                 source="asr",
                                 attributes={
@@ -406,8 +447,8 @@ class SpeechRecognition:
                                 with trace.span("asr.transcribe"):
                                     text = await inst.transcribe(audio, sample_rate)
                                 text = str(text or "").strip()
-                                if text:
-                                    await SpeechRecognition._handle_voice_message(text, trace_id=trace.trace_id)
+                                if text and SpeechRecognition._input_gate.valid(context):
+                                    await SpeechRecognition._handle_voice_message(text, trace_id=trace.trace_id, capture_context=context)
                                 else:
                                     performance_traces().finish(trace.trace_id, "empty")
                             except Exception as exc:
@@ -416,7 +457,7 @@ class SpeechRecognition:
 
                         capture = AudioCaptureService(logger)
                         await capture.run(
-                            microphone_index=SpeechRecognition.microphone_index,
+                            selection=SpeechRecognition.microphone_selection,
                             config=AudioCaptureConfig(
                                 sample_rate=SpeechRecognition.VOSK_SAMPLE_RATE,
                                 chunk_size=SpeechRecognition.CHUNK_SIZE,
@@ -429,6 +470,12 @@ class SpeechRecognition:
                             is_active=lambda: SpeechRecognition.active,
                             speech_probability=speech_probability,
                             on_segment=transcribe_segment,
+                            input_gate=SpeechRecognition._input_gate,
+                            on_segment_context=transcribe_segment,
+                            background_transcription=True,
+                            on_activity=lambda data: get_event_bus().emit(
+                                Events.Speech.ASR_CAPTURE_PROGRESS, data
+                            ),
                         )
                     else:
                         logger.error(
@@ -464,9 +511,12 @@ class SpeechRecognition:
         logger.info("Speech recognition loop stopped.")
 
     @staticmethod
-    async def _handle_voice_message(text: str, trace_id: str | None = None):
+    async def _handle_voice_message(text: str, trace_id: str | None = None, capture_context: dict | None = None):
         if text and text.strip():
-            get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {'text': text.strip(), 'trace_id': trace_id})
+            get_event_bus().emit(Events.Speech.SPEECH_TEXT_RECOGNIZED, {
+                'text': text.strip(), 'trace_id': trace_id,
+                **({'capture_context': capture_context} if capture_context is not None else {}),
+            })
 
     @staticmethod
     def _get_ai_engine():
@@ -480,7 +530,32 @@ class SpeechRecognition:
             return None
 
     @staticmethod
-    def speech_recognition_start(device_id: int, loop) -> bool:
+    def _live_payload(selection: MicrophoneSelection | int) -> dict:
+        selection = as_microphone_selection(selection)
+        engine_id = SpeechRecognition._recognizer_type
+        return {
+            "engine_id": engine_id,
+            **capture_selection_payload(selection),
+            "engine_settings": SpeechRecognition._engine_settings.get(engine_id, {})
+            or {},
+            "input_gate": {**SpeechRecognition._input_gate.snapshot(), "active": False},
+            "vad": {
+                "sample_rate": SpeechRecognition.VOSK_SAMPLE_RATE,
+                "chunk_size": SpeechRecognition.CHUNK_SIZE,
+                "vad_threshold": SpeechRecognition.VAD_THRESHOLD,
+                "silence_timeout": SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC,
+                "pre_buffer_duration": SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC,
+                "max_speech_duration": SpeechRecognition.MAX_SPEECH_DURATION_SEC,
+                "min_speech_duration": SpeechRecognition.MIN_SPEECH_DURATION_SEC,
+            },
+        }
+
+    @staticmethod
+    def speech_recognition_start(selection: MicrophoneSelection | int, loop) -> bool:
+        selection = as_microphone_selection(selection)
+        device_id = selection.index or 0
+        SpeechRecognition.microphone_selection = selection
+        SpeechRecognition._input_gate.reset()
         with SpeechRecognition._start_lock:
             if SpeechRecognition._is_running:
                 SpeechRecognition.speech_recognition_stop()
@@ -508,22 +583,7 @@ class SpeechRecognition:
                     "The ASR service is unavailable. See the log for details.",
                 ))
             else:
-                vad = {
-                    "sample_rate": SpeechRecognition.VOSK_SAMPLE_RATE,
-                    "chunk_size": SpeechRecognition.CHUNK_SIZE,
-                    "vad_threshold": SpeechRecognition.VAD_THRESHOLD,
-                    "silence_timeout": SpeechRecognition.VAD_SILENCE_TIMEOUT_SEC,
-                    "pre_buffer_duration": SpeechRecognition.VAD_PRE_BUFFER_DURATION_SEC,
-                    "max_speech_duration": SpeechRecognition.MAX_SPEECH_DURATION_SEC,
-                    "min_speech_duration": SpeechRecognition.MIN_SPEECH_DURATION_SEC,
-                }
-                settings = SpeechRecognition._engine_settings.get(engine_id, {}) or {}
-                start_payload = {
-                    "engine_id": engine_id,
-                    "microphone_index": int(device_id or 0),
-                    "engine_settings": settings,
-                    "vad": vad,
-                }
+                start_payload = SpeechRecognition._live_payload(selection)
                 activate = getattr(eng, "activate_environment", None)
                 try:
                     activated = callable(activate) and activate(
@@ -578,11 +638,66 @@ class SpeechRecognition:
         return True
 
     @staticmethod
+    def speech_recognition_switch_microphone(
+        selection: MicrophoneSelection | int,
+    ) -> bool:
+        """Switch only the managed capture stream, keeping loaded models alive."""
+        selection = as_microphone_selection(selection)
+        device_id = selection.index or 0
+
+        if not SpeechRecognition._is_running or not SpeechRecognition._remote_asr_mode:
+            return False
+
+        SpeechRecognition._input_gate.reset()
+        SpeechRecognition.publish_input_gate()
+
+        eng = SpeechRecognition._get_ai_engine()
+        if not eng:
+            return False
+
+        try:
+            future = eng.call(
+                "asr",
+                "switch_input",
+                capture_selection_payload(selection),
+            )
+            switched = bool(future.result(timeout=15.0))
+        except Exception as exc:
+            logger.error(
+                f"Не удалось переключить поток ASR на микрофон {device_id}: "
+                f"{format_exception(exc)}",
+                exc_info=True,
+            )
+            return False
+
+        if switched:
+            SpeechRecognition.microphone_index = int(device_id or 0)
+            SpeechRecognition.microphone_selection = selection
+            update_replay = getattr(eng, "update_runtime_validation_payload", None)
+            if callable(update_replay):
+                updated = bool(
+                    update_replay(
+                        "asr",
+                        SpeechRecognition._recognizer_type,
+                        SpeechRecognition._live_payload(selection),
+                    )
+                )
+                if not updated:
+                    logger.warning(
+                        "ASR microphone switched, but worker replay state "
+                        "could not be updated."
+                    )
+            logger.info(f"ASR microphone stream switched to device {device_id}")
+        return switched
+
+    @staticmethod
     async def speech_recognition_start_async():
         await SpeechRecognition.live_recognition()
 
     @staticmethod
     def speech_recognition_stop():
+        SpeechRecognition._input_gate.reset()
+        SpeechRecognition.publish_input_gate()
         if not SpeechRecognition._is_running:
             return
 

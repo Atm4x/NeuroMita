@@ -21,18 +21,21 @@ from services.contracts import (
     AppVarsService,
     CharacterRegistry,
     CharacterEnvironmentContextService,
+    ChatService,
     EmbeddingPresetService,
     EmbeddingService,
     GameLinkService,
     GenerationActivityService,
     AudioStateService,
     CaptureService,
+    DesktopWatchService,
     GuiInteractionService,
     InstallService,
     LocalVoiceService,
     ModelStateService,
     RuntimeFeatureService,
     RuntimeCapabilitiesService,
+    RuntimeIPCService,
     SpeechService,
     VoiceModelService,
     InstallableCatalogService,
@@ -43,13 +46,18 @@ from services.contracts import (
     TelegramAuthService,
     TelegramService,
 )
-from services.game_link_service import DisconnectedGameLinkService, ServerGameLinkService
+from services.game_link_service import (
+    DisconnectedGameLinkService,
+    ServerGameLinkService,
+)
 from services.loop_service import NoLoopService
 from services.telegram_service import UnavailableTelegramService
 from services.settings_service import DefaultAppVarsService
 from services.runtime_features import FeatureSpec, RuntimeFeatureManager
 from services.runtime_capabilities import DefaultRuntimeCapabilitiesService
-from services.character_environment_context import DefaultCharacterEnvironmentContextService
+from services.character_environment_context import (
+    DefaultCharacterEnvironmentContextService,
+)
 
 if TYPE_CHECKING:
     from controllers.settings_controller import SettingsController
@@ -68,6 +76,10 @@ class MainController:
         self.startup_mode = self._normalize_startup_mode(startup_mode)
         self.backend_enabled = self.startup_mode in {"full", "headless"}
         self.headless = self.startup_mode == "headless"
+        from core.state_barrier import StateBarrier
+        self.session_state_barrier = StateBarrier()
+        if self.backend_enabled:
+            services().register(StateBarrier, self.session_state_barrier, replace=True)
 
         self.dialog_active = False
         self._close_lock = threading.Lock()
@@ -86,6 +98,7 @@ class MainController:
         self.embedding_controller = None
         self.reranker_controller = None
         self.capture_controller = None
+        self.desktop_watch_controller = None
         self.reminder_controller = None
         self.speech_controller = None
         self.graph_controller = None
@@ -105,11 +118,26 @@ class MainController:
         self.settings = self.settings_controller.settings
         startup_trace.mark("controller.settings.ready")
         settings_service = services().get(SettingsService)
+        from services.contracts import RemoteVoiceService
+        from services.remote_voice_service import DefaultRemoteVoiceService
+
+        services().register(
+            RemoteVoiceService, DefaultRemoteVoiceService(), replace=True
+        )
+        from services.runtime_ipc_service import DefaultRuntimeIPCService
+
+        self.runtime_ipc_service = services().register(
+            RuntimeIPCService,
+            DefaultRuntimeIPCService(settings_service),
+            replace=True,
+        )
         from services.asr_settings_service import ensure_asr_settings_service
 
         ensure_asr_settings_service()
         if not services().is_registered(InstallableCatalogService):
-            from services.installable_catalog_service import DefaultInstallableCatalogService
+            from services.installable_catalog_service import (
+                DefaultInstallableCatalogService,
+            )
 
             services().register(
                 InstallableCatalogService,
@@ -127,7 +155,9 @@ class MainController:
             replace=True,
         )
         services().register(
-            AppVarsService, DefaultAppVarsService(settings_service, self.game_link), replace=True
+            AppVarsService,
+            DefaultAppVarsService(settings_service, self.game_link),
+            replace=True,
         )
         services().register(
             CharacterEnvironmentContextService,
@@ -169,7 +199,9 @@ class MainController:
             from controllers.ai_engine_controller import AIEngineController
             from controllers.character_controller import CharacterController
             from controllers.chat_controller import ChatController
-            from controllers.embedding_presets_controller import EmbeddingPresetsController
+            from controllers.embedding_presets_controller import (
+                EmbeddingPresetsController,
+            )
             from controllers.history_controller import HistoryController
             from controllers.loop_controller import LoopController
             from controllers.model_controller import ModelController
@@ -180,16 +212,16 @@ class MainController:
         self.loop_controller = self._build_component("loop", LoopController)
         logger.notify("LoopController initialized.")
 
-        with startup_trace.phase("controller.pending_update"):
-            self._check_and_perform_pending_update()
-
-        self.ai_engine_controller = self._build_component("ai_engine", AIEngineController)
+        self.ai_engine_controller = self._build_component(
+            "ai_engine", AIEngineController
+        )
         services().register(AIEngineService, self.ai_engine_controller, replace=True)
         services().register(
             AIEngineAdministrationService,
             self.ai_engine_controller,
             replace=True,
         )
+        self.runtime_ipc_service.register_object(self.ai_engine_controller)
         from services.ai_environment_maintenance_service import (
             DefaultAIEnvironmentMaintenanceService,
         )
@@ -223,7 +255,9 @@ class MainController:
         self.embedding_presets_controller = self._build_component(
             "embedding_presets", EmbeddingPresetsController
         )
-        services().register(EmbeddingPresetService, self.embedding_presets_controller, replace=True)
+        services().register(
+            EmbeddingPresetService, self.embedding_presets_controller, replace=True
+        )
         logger.notify("EmbeddingPresetsController успешно инициализирован.")
 
         self.character_controller = self._build_component(
@@ -235,16 +269,67 @@ class MainController:
         )
         logger.notify("CharacterController успешно инициализирован.")
 
+        from infrastructure.timeline.bootstrap import bootstrap_timeline
+        from managers.database_manager import DatabaseManager
+        from services.conversation_timeline import ConversationTimeline
+        from services.timeline_runtime import SessionTimelineRuntime
+
+        character_manager = self.character_controller.character_manager
+        conversation_timeline = self._build_component(
+            "session_timeline", lambda: bootstrap_timeline(
+                DatabaseManager(), character_manager.resources, character_manager.get_all_characters(),
+                state=self.session_state_barrier,
+            ),
+        )
+        services().register(ConversationTimeline, conversation_timeline, replace=True)
+        services().register(SessionTimelineRuntime, conversation_timeline.runtime, replace=True)
+        conversation_timeline.runtime.activate(conversation_timeline.runtime.selection.branch_id)
+        from services.unity_timeline import UnityTimelineIngress
+
+        services().register(UnityTimelineIngress, UnityTimelineIngress(conversation_timeline.runtime), replace=True)
+        from infrastructure.timeline.context import SQLiteContextSummaries
+        from services.timeline_context import TimelineContext
+
+        services().register(TimelineContext, TimelineContext(
+            conversation_timeline, SQLiteContextSummaries(DatabaseManager().get_connection),
+        ), replace=True)
+
         self.model_controller = self._build_component(
             "model", lambda: ModelController(self.settings)
         )
         services().register(ModelStateService, self.model_controller, replace=True)
+        from infrastructure.timeline.character_state import SQLiteCharacterState
+        from infrastructure.timeline.restoration import SQLiteRestorationJournal
+        from managers.session_state_participants import CharacterRuntimeSnapshot, GamesSnapshot, ModelContextSnapshot, CatalogSnapshotParticipant
+        from services.session_restoration import SessionRestoration
+
+        def live_variables(identity):
+            character = character_manager.get_loaded_character(identity)
+            return dict(character.variables) if character is not None else None
+
+        restoration = SessionRestoration(conversation_timeline.runtime, (
+            CatalogSnapshotParticipant(SQLiteCharacterState(DatabaseManager().get_connection,
+                character_manager.get_all_characters, live_variables,
+                retired_character_ids=character_manager.retired_cartridge_ids), character_manager),
+            CatalogSnapshotParticipant(GamesSnapshot(character_manager, conversation_timeline.runtime), character_manager),
+            CatalogSnapshotParticipant(CharacterRuntimeSnapshot(character_manager, conversation_timeline), character_manager),
+            ModelContextSnapshot(self.model_controller),
+        ), SQLiteRestorationJournal(DatabaseManager().get_connection))
+        services().register(SessionRestoration, restoration, replace=True)
+        restoration.recover()
+        from infrastructure.timeline.unity_sessions import SQLiteUnitySessions
+        from services.unity_sessions import UnitySessions
+        services().register(UnitySessions, UnitySessions(restoration,
+            SQLiteUnitySessions(DatabaseManager().get_connection)), replace=True)
         logger.notify("ModelController успешно инициализирован.")
 
         self.chat_controller = self._build_component(
             "chat", lambda: ChatController(self.settings)
         )
-        services().register(GenerationActivityService, self.chat_controller, replace=True)
+        services().register(ChatService, self.chat_controller, replace=True)
+        services().register(
+            GenerationActivityService, self.chat_controller, replace=True
+        )
         logger.notify("ChatController успешно инициализирован.")
 
         with startup_trace.phase("controller.optional_features.configure"):
@@ -265,7 +350,9 @@ class MainController:
         with startup_trace.phase(f"controller.{name}"):
             return factory()
 
-    def _configure_optional_features(self, target_folder: str, settings_service) -> None:
+    def _configure_optional_features(
+        self, target_folder: str, settings_service
+    ) -> None:
         feature_manager = RuntimeFeatureManager(settings_service, max_workers=2)
         self.feature_manager = feature_manager
         services().register(RuntimeFeatureService, feature_manager, replace=True)
@@ -277,9 +364,13 @@ class MainController:
             return bool(settings.get("USE_VOICEOVER", False))
 
         def local_voice_enabled(settings) -> bool:
-            return voice_enabled(settings) and str(
-                settings.get("VOICEOVER_METHOD", "Local") or "Local"
-            ).strip().lower() == "local"
+            return (
+                voice_enabled(settings)
+                and str(settings.get("VOICEOVER_METHOD", "Local") or "Local")
+                .strip()
+                .lower()
+                == "local"
+            )
 
         def telegram_enabled(settings) -> bool:
             return voice_enabled(settings) and str(
@@ -365,7 +456,9 @@ class MainController:
                     "ENABLE_CAMERA_CAPTURE",
                     "AUTO_ATTACH_IMAGES",
                 ),
-                enabled=lambda settings: bool(settings.get("ENABLE_IMAGE_ANALYSIS", False))
+                enabled=lambda settings: bool(
+                    settings.get("ENABLE_IMAGE_ANALYSIS", False)
+                )
                 and any(
                     bool(settings.get(key, False))
                     for key in (
@@ -378,6 +471,25 @@ class MainController:
                 provided_services=(CaptureService,),
                 shutdown=lambda controller: controller.shutdown(),
                 priority=60,
+            )
+        )
+        feature_manager.register(
+            FeatureSpec(
+                name="desktop_watch",
+                setting_keys=(
+                    "DESKTOP_WATCH_ENABLED",
+                    "DESKTOP_MODE_ACTIVE",
+                    "ENABLE_IMAGE_ANALYSIS",
+                ),
+                enabled=lambda settings: bool(
+                    settings.get("DESKTOP_MODE_ACTIVE", False)
+                )
+                and bool(settings.get("DESKTOP_WATCH_ENABLED", True))
+                and bool(settings.get("ENABLE_IMAGE_ANALYSIS", True)),
+                factory=self._create_desktop_watch_controller,
+                provided_services=(DesktopWatchService,),
+                shutdown=lambda controller: controller.shutdown(),
+                priority=61,
             )
         )
         feature_manager.register(
@@ -413,8 +525,9 @@ class MainController:
         feature_manager.register(
             FeatureSpec(
                 name="graph",
-                setting_keys=("GRAPH_EXTRACTION_ENABLED",),
-                enabled=enabled("GRAPH_EXTRACTION_ENABLED"),
+                setting_keys=("RAG_ENABLED", "GRAPH_EXTRACTION_ENABLED"),
+                enabled=lambda settings: bool(settings.get("RAG_ENABLED", False))
+                and bool(settings.get("GRAPH_EXTRACTION_ENABLED", False)),
                 factory=self._create_graph_controller,
                 priority=75,
             )
@@ -488,8 +601,19 @@ class MainController:
 
     def _create_speech_controller(self):
         from controllers.speech_controller import SpeechController
+        import sounddevice
+        from infrastructure.audio.portaudio_catalog import PortAudioCatalogProvider
+        from infrastructure.settings.microphone_preferences import (
+            SettingsMicrophonePreferences,
+        )
+        from services.microphone_selection import MicrophoneSelectionService
 
-        controller = SpeechController()
+        controller = SpeechController(
+            microphones=MicrophoneSelectionService(
+                SettingsMicrophonePreferences(services().get(SettingsService)),
+                PortAudioCatalogProvider(sounddevice),
+            )
+        )
         self.speech_controller = controller
         return controller
 
@@ -500,6 +624,12 @@ class MainController:
         self.capture_controller = controller
         return controller
 
+    def _create_desktop_watch_controller(self):
+        from controllers.desktop_watch_controller import DesktopWatchController
+
+        controller = DesktopWatchController()
+        self.desktop_watch_controller = controller
+        return controller
     def _create_reminder_controller(self):
         from controllers.reminder_controller import ReminderController
 
@@ -541,9 +671,7 @@ class MainController:
     def _create_installable_controller(self):
         from controllers.installable_controller import InstallableController
 
-        controller = InstallableController(
-            services().get(InstallableCatalogService)
-        )
+        controller = InstallableController(services().get(InstallableCatalogService))
         self.installable_controller = controller
         return controller
 
@@ -562,7 +690,14 @@ class MainController:
         mode = str(startup_mode or "full").strip().lower()
         if mode in {"gui-only", "gui_only", "ui-only", "ui_only"}:
             return "gui_only"
-        if mode in {"headless", "server", "server-only", "server_only", "no-gui", "no_gui"}:
+        if mode in {
+            "headless",
+            "server",
+            "server-only",
+            "server_only",
+            "no-gui",
+            "no_gui",
+        }:
             return "headless"
         return "full"
 
@@ -570,7 +705,7 @@ class MainController:
         # Старый серверный API (ServerControllerOld / server_old.py) удалён —
         # всегда используем новый. Настройка USE_NEW_API больше ни на что не
         # влияет и оставлена только для совместимости со старыми settings.json.
-        if getattr(self, 'server_controller', None):
+        if getattr(self, "server_controller", None):
             return
 
         from controllers.server_controller import ServerController
@@ -586,20 +721,27 @@ class MainController:
 
             self.view = view
             self.gui_controller = GuiController(self, view)
-            services().register(GuiInteractionService, self.gui_controller, replace=True)
+            services().register(
+                GuiInteractionService, self.gui_controller, replace=True
+            )
             logger.notify("GuiController успешно инициализирован.")
-            if self.feature_manager is not None and self.feature_manager.is_ready("voice_models"):
+            if self.feature_manager is not None and self.feature_manager.is_ready(
+                "voice_models"
+            ):
                 self.event_bus.emit(Events.GUI.VOICEOVER_REFRESH)
         return self.gui_controller
 
-
     def _subscribe_to_events(self):
-        self.event_bus.subscribe(Events.Model.SCHEDULE_G4F_UPDATE, self._on_schedule_g4f_update, weak=False)
+        self.event_bus.subscribe(
+            Events.GUI.SHOW_LOADING_POPUP, self._on_show_loading_popup, weak=False
+        )
+        self.event_bus.subscribe(
+            Events.GUI.CLOSE_LOADING_POPUP, self._on_close_loading_popup, weak=False
+        )
 
-        self.event_bus.subscribe(Events.GUI.SHOW_LOADING_POPUP, self._on_show_loading_popup, weak=False)
-        self.event_bus.subscribe(Events.GUI.CLOSE_LOADING_POPUP, self._on_close_loading_popup, weak=False)
-
-        self.event_bus.subscribe(Events.Server.SET_DIALOG_ACTIVE, self._on_set_dialog_active, weak=False)
+        self.event_bus.subscribe(
+            Events.Server.SET_DIALOG_ACTIVE, self._on_set_dialog_active, weak=False
+        )
 
     def close_app(self):
         with self._close_lock:
@@ -613,7 +755,14 @@ class MainController:
             try:
                 callback()
             except Exception as exc:
-                logger.error(f"Ошибка при остановке {name}: {format_exception(exc)}", exc_info=True)
+                logger.error(
+                    f"Ошибка при остановке {name}: {format_exception(exc)}",
+                    exc_info=True,
+                )
+
+        runtime_ipc = getattr(self, "runtime_ipc_service", None)
+        if runtime_ipc is not None:
+            shutdown_step("runtime IPC", runtime_ipc.close)
 
         server_controller = getattr(self, "server_controller", None)
         if server_controller is not None:
@@ -627,6 +776,11 @@ class MainController:
 
         # Воркеры настроек (переиндексация, миграции, экспорт) переживают закрытие
         # окна и дёргают колбэки с уже уничтоженными виджетами — гасим до GUI.
+        from services.contracts import RemoteVoiceService
+
+        remote_voice = services().get_optional(RemoteVoiceService)
+        if remote_voice is not None:
+            shutdown_step("remote voice", remote_voice.close)
         shutdown_step("GUI task workers", gui_task_supervisor().stop_all)
 
         gui_controller = getattr(self, "gui_controller", None)
@@ -684,25 +838,11 @@ class MainController:
             shutdown_step("settings writer", close_settings)
 
         shutdown_step("EventBus", shutdown_event_bus)
-        shutdown_step("background tasks", lambda: task_supervisor().shutdown(timeout=3.0))
+        shutdown_step(
+            "background tasks", lambda: task_supervisor().shutdown(timeout=3.0)
+        )
         shutdown_step("executor pools", lambda: executors().shutdown_all(wait=False))
         logger.info("Закрываемся")
-
-    def _check_and_perform_pending_update(self):
-        update_pending = self.settings.get("G4F_UPDATE_PENDING", False)
-        if not update_pending:
-            return
-        self.settings.set("G4F_UPDATE_PENDING", False)
-        self.settings.set("G4F_TARGET_VERSION", None)
-        self.settings.save_settings()
-        logger.warning("Сброшено устаревшее запланированное обновление g4f.")
-
-    def _on_schedule_g4f_update(self, event: Event):
-        logger.warning(
-            "Запрос обновления g4f отклонён: автоматическая установка отключена."
-        )
-        return False
-
 
     def _on_show_loading_popup(self, event: Event):
         message = event.data.get("message", "Loading...")
@@ -716,4 +856,4 @@ class MainController:
             self.event_bus.emit("hide_loading_popup")
 
     def _on_set_dialog_active(self, event: Event):
-        self.dialog_active = event.data.get('active', False)
+        self.dialog_active = event.data.get("active", False)

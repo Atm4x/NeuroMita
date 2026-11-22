@@ -8,17 +8,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from main_logger import logger
-
-
-_LM_RERANKER_PATTERNS = (
-    "qwen3-reranker",
-    "qwen/qwen3-reranker",
-)
-
-
-def _is_lm_reranker(model_name: str) -> bool:
-    lower = str(model_name or "").lower()
-    return any(p in lower for p in _LM_RERANKER_PATTERNS)
+from managers.rag.local_backend import is_lm_reranker as _is_lm_reranker
 
 
 def _checkpoints_dir() -> str:
@@ -38,6 +28,9 @@ def shutdown_rag_runtime() -> None:
         embedding_handler._unload_shared()
 
     WorkerCrossEncoderReranker.clear_all()
+    onnx_module = sys.modules.get("handlers.ai_engine.rag_onnx")
+    if onnx_module is not None:
+        onnx_module.OnnxEmbeddingHandler.clear()
 
     gc.collect()
     torch = sys.modules.get("torch")
@@ -46,7 +39,7 @@ def shutdown_rag_runtime() -> None:
 
 
 class WorkerCrossEncoderReranker:
-    _instances: dict[str, "WorkerCrossEncoderReranker"] = {}
+    _instances: dict[tuple[str, str, str], "WorkerCrossEncoderReranker"] = {}
     _cls_lock: Lock = Lock()
 
     _QWEN3_RERANKER_INSTRUCTION = (
@@ -55,8 +48,12 @@ class WorkerCrossEncoderReranker:
     _BATCH_SIZE_LM: int = 16
     _BATCH_SIZE_SEQCLS: int = 32
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, backend: str = "torch", device: str = "auto") -> None:
         self.model_name = str(model_name or "")
+        if backend not in {"torch", "onnx"}:
+            raise ValueError(f"Unknown local RAG backend: {backend}")
+        self.backend = backend
+        self.onnx_device = device
         self._tokenizer = None
         self._model = None
         self._load_lock = Lock()
@@ -67,17 +64,18 @@ class WorkerCrossEncoderReranker:
         self._device = None
 
     @classmethod
-    def get(cls, model_name: str) -> "WorkerCrossEncoderReranker":
+    def get(cls, model_name: str, backend: str = "torch", device: str = "auto") -> "WorkerCrossEncoderReranker":
         model_name = str(model_name or "")
-        if model_name not in cls._instances:
+        key = (model_name, backend, device)
+        if key not in cls._instances:
             with cls._cls_lock:
-                if model_name not in cls._instances:
-                    cls._instances[model_name] = cls(model_name)
-        return cls._instances[model_name]
+                if key not in cls._instances:
+                    cls._instances[key] = cls(model_name, backend, device)
+        return cls._instances[key]
 
     @classmethod
-    def status(cls, model_name: str) -> dict[str, Any]:
-        inst = cls._instances.get(str(model_name or ""))
+    def status(cls, model_name: str, backend: str = "torch", device: str = "auto") -> dict[str, Any]:
+        inst = cls._instances.get((str(model_name or ""), backend, device))
         return {
             "loaded": bool(inst and inst._model is not None),
             "failed": bool(inst and inst._failed),
@@ -103,7 +101,17 @@ class WorkerCrossEncoderReranker:
                 from managers.rag.install_spec import TARGET_RERANKER, ensure_runtime_ready
                 from managers.settings_manager import SettingsManager
 
-                ensure_runtime_ready(TARGET_RERANKER)
+                ensure_runtime_ready(TARGET_RERANKER, ctx={"rag_backend": self.backend})
+                if self.backend == "onnx":
+                    from handlers.ai_engine.rag_onnx import OnnxTextModel
+
+                    self._model = OnnxTextModel("reranker", self.model_name, self.onnx_device)
+                    self._tokenizer = self._model.tokenizer
+                    if self._is_lm:
+                        self._tokenizer.padding_side = "left"
+                        self._token_true_id = self._tokenizer.convert_tokens_to_ids("yes")
+                        self._token_false_id = self._tokenizer.convert_tokens_to_ids("no")
+                    return True
                 import torch
 
                 cache_dir = _checkpoints_dir()
@@ -212,35 +220,38 @@ class WorkerCrossEncoderReranker:
         return str((candidate or {}).get("content") or "")
 
     def _score_seqcls(self, query: str, candidates: list[dict[str, Any]], early_exit_score: float = 1.1) -> list[float]:
-        import torch
-
         pairs = [(query, self._candidate_content(c)) for c in candidates]
         all_scores: list[float] = []
-        for i in range(0, len(pairs), self._BATCH_SIZE_SEQCLS):
-            batch = pairs[i:i + self._BATCH_SIZE_SEQCLS]
+        batch_size = 1 if self.backend == "onnx" else self._BATCH_SIZE_SEQCLS
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
             enc = self._tokenizer(
                 [p[0] for p in batch],
                 [p[1] for p in batch],
                 padding=True,
                 truncation=True,
                 max_length=512,
-                return_tensors="pt",
-            ).to(self._device)
-            with torch.no_grad():
-                logits = self._model(**enc).logits
+                return_tensors="np" if self.backend == "onnx" else "pt",
+            )
+            if self.backend == "onnx":
+                logits = self._model.predict(enc, "logits")
+            else:
+                import torch
+
+                enc = enc.to(self._device)
+                with torch.no_grad():
+                    logits = self._model(**enc).logits
             raw = logits.squeeze(-1) if logits.shape[-1] == 1 else logits[:, -1]
             all_scores.extend(raw.tolist())
             if (
                 early_exit_score <= 1.0
-                and len(all_scores) >= self._BATCH_SIZE_SEQCLS
+                and len(all_scores) >= batch_size
                 and max(all_scores) >= early_exit_score
             ):
                 break
         return all_scores
 
     def _score_lm(self, query: str, candidates: list[dict[str, Any]], early_exit_score: float = 1.1) -> list[float]:
-        import torch
-
         prefix = (
             "<|im_start|>system\n"
             "Judge whether the Document meets the requirements based on the Query and "
@@ -262,24 +273,36 @@ class WorkerCrossEncoderReranker:
         false_id = self._token_false_id
         all_probs: list[float] = []
 
-        for i in range(0, len(prompts), self._BATCH_SIZE_LM):
-            batch = prompts[i:i + self._BATCH_SIZE_LM]
+        batch_size = 1 if self.backend == "onnx" else self._BATCH_SIZE_LM
+        for i in range(0, len(prompts), batch_size):
+            batch = prompts[i:i + batch_size]
             enc = self._tokenizer(
                 batch,
                 padding=True,
                 truncation=True,
                 max_length=512,
-                return_tensors="pt",
-            ).to(self._device)
-            with torch.no_grad():
-                logits = self._model(**enc).logits
-            last_logits = logits[:, -1, :]
-            pair = torch.stack([last_logits[:, false_id], last_logits[:, true_id]], dim=-1)
-            probs = torch.softmax(pair, dim=-1)
+                return_tensors="np" if self.backend == "onnx" else "pt",
+            )
+            if self.backend == "onnx":
+                import numpy as np
+
+                logits = self._model.predict(enc, "logits")
+                pair = logits[:, -1, [false_id, true_id]].astype(np.float32)
+                exps = np.exp(pair - pair.max(axis=-1, keepdims=True))
+                probs = exps / exps.sum(axis=-1, keepdims=True)
+            else:
+                import torch
+
+                enc = enc.to(self._device)
+                with torch.no_grad():
+                    logits = self._model(**enc).logits
+                last_logits = logits[:, -1, :]
+                pair = torch.stack([last_logits[:, false_id], last_logits[:, true_id]], dim=-1)
+                probs = torch.softmax(pair, dim=-1)
             all_probs.extend(probs[:, 1].tolist())
             if (
                 early_exit_score <= 1.0
-                and len(all_probs) >= self._BATCH_SIZE_LM
+                and len(all_probs) >= batch_size
                 and max(all_probs) >= early_exit_score
             ):
                 break

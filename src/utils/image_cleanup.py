@@ -12,6 +12,7 @@ from core.error_utils import format_exception
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import NamedTuple
 
@@ -51,28 +52,32 @@ def _collect_referenced_paths(db_path: Path) -> set[str]:
     that are referenced in any message's meta_data.
     """
     referenced: set[str] = set()
-    if not db_path.exists():
-        return referenced
+    history_id = None
     try:
-        conn = sqlite3.connect(str(db_path))
-        cur = conn.cursor()
-        cur.execute("SELECT meta_data FROM history WHERE meta_data IS NOT NULL")
-        for (meta_raw,) in cur.fetchall():
-            if not meta_raw:
-                continue
-            try:
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            cur = conn.execute("SELECT id, meta_data FROM history WHERE meta_data IS NOT NULL")
+            for history_id, meta_raw in cur:
+                if not meta_raw:
+                    continue
                 meta = json.loads(meta_raw)
-                for part in meta.get("multimodal_parts") or []:
+                if not isinstance(meta, dict):
+                    raise ValueError("Invalid message metadata")
+                parts = meta.get("multimodal_parts")
+                if parts is None:
+                    parts = []
+                if not isinstance(parts, list):
+                    raise ValueError("Invalid multimodal parts")
+                for part in parts:
                     if not isinstance(part, dict):
-                        continue
+                        raise ValueError("Invalid multimodal image reference")
                     url = (part.get("image_url") or {}).get("url", "")
                     if url and not str(url).startswith("data:") and not str(url).startswith("http"):
-                        referenced.add(os.path.normcase(str(url)))
-            except Exception:
-                pass
-        conn.close()
+                        referenced.add(os.path.normcase(os.path.abspath(str(url))))
     except Exception as e:
-        logger.warning(f"[image_cleanup] Failed to scan DB {db_path}: {format_exception(e)}")
+        location = f" in history.id={history_id}" if history_id is not None else ""
+        message = f"Image cleanup stopped: image references could not be fully read{location} ({type(e).__name__})"
+        logger.warning(f"[image_cleanup] {message}; DB: {db_path}")
+        raise RuntimeError(message) from e
     return referenced
 
 
@@ -130,7 +135,7 @@ def scan_orphaned_images() -> tuple[list[Path], int]:
     orphans: list[Path] = []
     total_bytes = 0
     for f in all_files:
-        if os.path.normcase(str(f)) not in referenced:
+        if os.path.normcase(os.path.abspath(f)) not in referenced:
             orphans.append(f)
             try:
                 total_bytes += f.stat().st_size

@@ -65,7 +65,7 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         key="characters",
         icon_name="fa6s.user",
         nav_label=("Персонажи", "Characters"),
-        title=("Персонажи", "Characters"),
+        title=("Настройки персонажей", "Character settings"),
         subtitle=(
             "Профили, шаблоны поведения и история выбранного персонажа.",
             "Profiles, behavior presets and selected character history.",
@@ -77,10 +77,10 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         key="voice",
         icon_name="fa6s.volume-high",
         nav_label=("Озвучка", "Voice"),
-        title=("Озвучка", "Voice"),
+        title=("Настройки озвучки", "Voiceover settings"),
         subtitle=(
-            "Голосовой выход, локальные голоса и параметры синтеза.",
-            "Speech output, local voices and synthesis settings.",
+            "Голоса персонажей, подключение и воспроизведение.",
+            "Character voices, connection and playback.",
         ),
         min_mode="advanced",
         builder_ref="ui.settings.voiceover_settings:setup_voiceover_controls",
@@ -90,10 +90,10 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
         key="microphone",
         icon_name="fa6s.microphone",
         nav_label=("ASR", "ASR"),
-        title=("Микрофон и ASR", "Microphone and ASR"),
+        title=("Настройки микрофона", "Microphone settings"),
         subtitle=(
-            "Устройства ввода, распознавание речи и словарь терминов.",
-            "Input devices, speech recognition and glossary settings.",
+            "Устройства ввода, распознавание речи и проверка микрофона.",
+            "Input devices, speech recognition and microphone testing.",
         ),
         min_mode="advanced",
         builder_ref="ui.settings.microphone_settings:setup_microphone_controls",
@@ -101,8 +101,8 @@ SETTINGS_SECTION_SPECS: tuple[SettingsSectionSpec, ...] = (
     SettingsSectionSpec(
         key="ai_engine",
         icon_name="fa6s.microchip",
-        nav_label=("AI Engine", "AI Engine"),
-        title=("Управление AI Engine", "AI Engine management"),
+        nav_label=("ИИ-движок", "AI Engine"),
+        title=("Управление ИИ-движком", "AI Engine management"),
         subtitle=(
             "Аппаратный профиль, модели, режим workers и обслуживание AI-окружений.",
             "Hardware profile, models, worker topology and AI environment maintenance.",

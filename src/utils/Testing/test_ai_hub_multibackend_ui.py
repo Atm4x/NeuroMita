@@ -70,6 +70,42 @@ def test_nvidia_accepts_onnx_but_amd_rejects_cuda() -> None:
     assert verdict("onnx", "AMD")["recommended"]
 
 
+def test_reinstall_card_keeps_warning_menu_and_reinstall_action() -> None:
+    _app()
+    row = _row(backend="cpu", vendor="CPU")
+    row["status"] = {
+        "code": "needs_reinstall", "installed": True, "ready": False,
+        "message": "Dependencies need to be reinstalled",
+    }
+    installs = []
+    reinstalls = []
+    card = ModelCard(
+        row, on_install=installs.append, on_uninstall=lambda _id: None,
+        on_open_settings=lambda _id: None, on_reinstall=reinstalls.append,
+    )
+    warning = card.findChild(QLabel, "AIHubStatusUpdate")
+    assert warning is not None
+    assert warning.toolTip() == row["status"]["message"]
+    assert card.property("state") == "needs_reinstall"
+    assert len(card.findChildren(QPushButton, "AIHubCardPrimary")) == 1
+    assert len(card.findChildren(QPushButton, "AIHubCardMenuBtn")) == 1
+    assert card._install_btn.text() in ("Переустановить", "Reinstall")
+    assert card._menu_btn is not None
+
+    from unittest.mock import patch
+
+    with patch.object(card, "_confirm_and_reinstall", side_effect=reinstalls.append):
+        card._install_btn.click()
+    assert reinstalls == [row["metadata"]["id"]]
+    assert installs == []
+    card.set_state("queued")
+    assert not card._install_btn.isEnabled()
+    assert not card._menu_btn.isEnabled()
+    card.set_state("idle")
+    assert card._install_btn.isEnabled()
+    assert card._install_btn.text() in ("Переустановить", "Reinstall")
+
+
 def test_nvidia_onnx_card_is_allowed_but_marked_not_recommended() -> None:
     _app()
     card = ModelCard(

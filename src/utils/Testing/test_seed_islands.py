@@ -114,5 +114,44 @@ class SeedIslandTests(unittest.TestCase):
         self.assertEqual(isl, evolved, "seed_island затёр эволюционировавший остров")
 
 
+    def test_updated_seed_retires_only_exact_obsolete_facts(self):
+        cid, sub = "CrazyLoreMigration", "Crazy/Default"
+        mem = self._MM(cid)
+        mem.rag = None
+        obsolete_active = "Мита — ИИ, живущая в доме. Она заботится об игроке."
+        obsolete_rag = 'The house is an isolated loop; there is no "outside" beyond the rendered rooms (дом, ловушка, выход).'
+        customized = obsolete_active + " Моё личное уточнение."
+        mem.add_memory(obsolete_active, skip_if_exists=True)
+        mem.seed_rag_memory(obsolete_rag)
+        mem.add_memory(customized, skip_if_exists=True)
+
+        self._run_init(cid, sub)
+        with mem.db.connection() as conn:
+            cur = conn.cursor()
+            for content in (obsolete_active, obsolete_rag):
+                cur.execute(
+                    "SELECT is_deleted FROM memories WHERE character_id=? AND content=?",
+                    (cid, content),
+                )
+                self.assertEqual(cur.fetchone()[0], 1, content)
+            cur.execute(
+                "SELECT is_deleted FROM memories WHERE character_id=? AND content=?",
+                (cid, customized),
+            )
+            self.assertEqual(cur.fetchone()[0], 0, "player-edited memories must remain")
+            cur.execute(
+                "SELECT is_forgotten FROM memories WHERE character_id=? AND content LIKE ? AND is_deleted=0",
+                (cid, "%Игроки, даже уже записанные на картриджи%"),
+            )
+            row = cur.fetchone()
+            self.assertIsNotNone(row, "new RAG-only lore was not seeded")
+            self.assertEqual(row[0], 1, "new lore must be forgotten/RAG-only")
+
+        # Retiring and seeding the same data on a subsequent init is idempotent.
+        before = self._counts(mem, cid)
+        self._run_init(cid, sub)
+        self.assertEqual(before, self._counts(mem, cid))
+
+
 if __name__ == "__main__":
     unittest.main()

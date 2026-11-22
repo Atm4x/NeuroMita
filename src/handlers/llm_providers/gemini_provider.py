@@ -6,7 +6,12 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from main_logger import logger
 from core.message_content import MessageContentCodec
-from handlers.llm_providers.errors import build_provider_error, build_stream_error, coerce_provider_error
+from handlers.llm_providers.errors import (
+    LLMProviderError,
+    build_provider_error,
+    build_stream_error,
+    coerce_provider_error,
+)
 from handlers.llm_providers.param_mapper import filter_jsonable_params
 from schemas.structured_response import StructuredResponse
 
@@ -20,13 +25,14 @@ from .base import (
     normalize_usage_payload,
 )
 from .streaming import StreamAccumulator, iter_json_values, iter_sse_data, track_response_body
+from .message_transforms import iter_positioned_messages
+from services.structured_response_capabilities import provider_schema_options
 
 
 class GeminiProvider(BaseProvider):
     name = "gemini"
     priority = 20
-    # Native tool-call parsing is not implemented by this provider yet.
-    supports_tools_native = False
+    supports_tools_native = True
     supports_streaming = True
     supports_streaming_with_tools = False
     tools_dialect_id: str = "gemini"
@@ -42,6 +48,8 @@ class GeminiProvider(BaseProvider):
         """Keep application JSON parsing separate from Gemini schema transport."""
         caps = capabilities or {}
         if not caps.get("structured_output", False):
+            return False
+        if not caps.get("native_structured_output", True):
             return False
         model_profile = caps.get("model_profile")
         return not (
@@ -113,8 +121,6 @@ class GeminiProvider(BaseProvider):
 
         return [{"role": "user", "parts": [{"text": prefix}]}] + contents
 
-    _INLINE_SYSTEM_TAG = "[SYSTEM INFO]"
-
     @staticmethod
     def _parts_have_payload(parts: list) -> bool:
         for part in parts or []:
@@ -127,27 +133,11 @@ class GeminiProvider(BaseProvider):
             return True  # inline_data / functionCall и прочее непустое по определению
         return False
 
-    @classmethod
-    def _prefix_parts_with_tag(cls, parts: list) -> list:
-        """Помечает parts тегом, чтобы служебный блок не читался как речь игрока."""
-        out = [dict(p) if isinstance(p, dict) else p for p in parts]
-        for part in out:
-            if isinstance(part, dict) and "text" in part:
-                part["text"] = f"{cls._INLINE_SYSTEM_TAG}\n{part.get('text', '')}"
-                return out
-        out.insert(0, {"text": cls._INLINE_SYSTEM_TAG})
-        return out
-
     def _format_messages_for_gemini_api(self, messages):
         system_parts = []
         contents = []
-        # system до первого сообщения диалога — статическая инструкция, ей место
-        # в system_instruction. Всё, что идёт дальше, позиционно: такой блок
-        # относится к соседним репликам, и в system_instruction он оторвался бы
-        # от своего места и уехал в начало запроса. Поэтому едет в contents.
-        dialogue_started = False
 
-        for msg in messages:
+        for msg, inline_system in iter_positioned_messages(messages):
             role = msg.get("role")
             content = msg.get("content")
 
@@ -155,13 +145,12 @@ class GeminiProvider(BaseProvider):
                 parts = self._format_content_to_parts(content)
                 if not self._parts_have_payload(parts):
                     continue
-                if dialogue_started:
+                if inline_system:
                     contents.append({"role": "user", "parts": self._prefix_parts_with_tag(parts)})
                 else:
                     system_parts.extend(parts)
                 continue
 
-            dialogue_started = True
             gemini_role = "model" if role == "assistant" else "user"
             contents.append({"role": gemini_role, "parts": self._format_content_to_parts(content)})
 
@@ -169,6 +158,16 @@ class GeminiProvider(BaseProvider):
         if system_parts:
             result["system_instruction"] = {"parts": system_parts}
         return result
+
+    @staticmethod
+    def _prefix_parts_with_tag(parts: list) -> list:
+        out = [dict(part) if isinstance(part, dict) else part for part in parts]
+        for part in out:
+            if isinstance(part, dict) and "text" in part:
+                part["text"] = f"[SYSTEM INFO]\n{part.get('text', '')}"
+                return out
+        out.insert(0, {"text": "[SYSTEM INFO]"})
+        return out
 
     def _format_content_to_parts(self, content):
         parts = []
@@ -298,10 +297,22 @@ class GeminiProvider(BaseProvider):
 
         return filter_jsonable_params(cfg)
 
+    def _generation_config(self, req: LLMRequest) -> dict:
+        if req.native_parameters is not None:
+            from copy import deepcopy
+            return deepcopy(req.native_parameters.get("generationConfig", {}))
+        return self._map_unified_params_to_generation_config(
+            req.extra, req.model, (req.capabilities or {}).get("model_profile"),
+        )
+
     def generate_request_gemini(self, req: LLMRequest) -> LLMResponse:
         if req.depth > 3:
             logger.error("Превышена глубина рекурсии для Gemini tool calls")
-            return LLMResponse(text=None, provider_name=self.name)
+            return LLMResponse(
+                text=None,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
+            )
 
         formatted = self._format_messages_for_gemini_api(req.messages)
 
@@ -332,11 +343,7 @@ class GeminiProvider(BaseProvider):
                 if "text" in part:
                     part["text"] = f"[SYSTEM INFO] {part['text']}"
 
-        gen_cfg = self._map_unified_params_to_generation_config(
-            req.extra,
-            req.model,
-            (req.capabilities or {}).get("model_profile"),
-        )
+        gen_cfg = self._generation_config(req)
 
         caps = req.capabilities or {}
         if self._should_send_native_structured_output(caps):
@@ -344,18 +351,11 @@ class GeminiProvider(BaseProvider):
             mode = caps.get("structured_output_mode", "gemini_schema")
             if mode != "gemini_prompt":
                 model_cls = req.structured_model or StructuredResponse
-                has_custom = bool(caps.get("has_custom_params")) or bool(caps.get("custom_params"))
-                excl = set() if has_custom else {"custom_fields"}
-                if not caps.get("schema_reasoning", True):
-                    excl.add("reasoning")
-                excl.update(str(name) for name in caps.get("structured_exclude_fields") or () if str(name).strip())
-                segment_excl = set(caps.get("structured_segment_exclude_fields") or ())
-                if not caps.get("schema_intents", False):
-                    segment_excl.add("intents")
+                schema_options = provider_schema_options(caps)
                 schema = model_cls.gemini_schema_dict(
-                    exclude_fields=excl or None,
-                    exclude_segment_fields=segment_excl or None,
-                    require_fields=set(caps.get("structured_required_fields") or ()) or None,
+                    exclude_fields=schema_options["exclude_fields"] or None,
+                    exclude_segment_fields=schema_options["exclude_segment_fields"] or None,
+                    require_fields=schema_options["require_fields"] or None,
                 )
                 gen_cfg["responseJsonSchema"] = schema
                 logger.debug("[GeminiProvider] Structured output: responseJsonSchema passed (gemini_schema mode)")
@@ -440,18 +440,48 @@ class GeminiProvider(BaseProvider):
                     if t:
                         text_parts_list.append(t)
 
+            function_calls = [part for part in parts if isinstance(part, dict) and part.get("functionCall")]
+            if not text_parts_list and not function_calls:
+                candidate = (response_data.get("candidates") or [{}])[0]
+                finish_reason = candidate.get("finishReason")
+                block_reason = (response_data.get("promptFeedback") or {}).get("blockReason")
+                logger.warning(
+                    "[GeminiProvider] Empty completion: finishReason=%s blockReason=%s thoughtParts=%d",
+                    finish_reason, block_reason, len(think_texts),
+                )
+                response.close()
+                raise LLMProviderError(
+                    provider=self.name,
+                    friendly_message="Модель вернула пустой ответ. Попробуйте ещё раз или смените модель.",
+                    status_code=200,
+                    provider_message=(
+                        f"Empty completion (finishReason={finish_reason}, blockReason={block_reason})"
+                    ),
+                    raw_payload=response_data if isinstance(response_data, dict) else {},
+                    retryable=True,
+                    code="empty_completion",
+                    url=req.api_url,
+                )
+
             response_text = "".join(text_parts_list) or "..."
 
             result = LLMResponse(
                 text=response_text,
                 usage=self._extract_usage(response_data),
                 model=(response_data.get("modelVersion") if isinstance(response_data, dict) else None) or req.model,
-                provider_name=self.name,
+                provider_name=req.provider_name or self.name,
+                provider_display_name=req.provider_display_name or req.provider_name or self.name,
                 raw=response_data if isinstance(response_data, dict) else {},
                 reasoning="\n".join(think_texts) or None,
             )
             response.close()
             return result
+        except LLMProviderError:
+            try:
+                response.close()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             provider_error = build_provider_error(
                 self.name,

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from core.app_paths import settings_path
 from core.backends import BackendKind
 from core.install_types import InstallPlan
+from core.install_requirements import InstallRequirement, check_requirements
 from core.installables import (
     ComponentCategory,
     ComponentMetadata,
@@ -23,6 +24,19 @@ from handlers.voice_models.context import VoiceRuntimeContext
 
 def _voice_settings_path() -> str:
     return str(settings_path("voice_model_settings.json", create_parent=True))
+
+
+def _requirements_need_reinstall(requirement_status: dict[str, Any]) -> bool:
+    """A component with some required parts present and some missing is a
+    partial, stale install (for example an old overlay with incompatible
+    dependency versions). That state must offer reinstall, not a plain install."""
+    checked = [
+        detail
+        for detail in requirement_status.get("details") or []
+        if detail.get("required", True) and not detail.get("skipped")
+    ]
+    present = sum(1 for detail in checked if detail.get("ok"))
+    return 0 < present < len(checked)
 
 
 def load_voice_model_settings(model_id: str) -> Dict[str, Any]:
@@ -159,6 +173,10 @@ class IVoiceModel(abc.ABC):
         raise NotImplementedError
 
     @classmethod
+    def requirements(cls, model_id: str, ctx: Dict[str, Any]) -> list[InstallRequirement] | None:
+        return None
+
+    @classmethod
     def build_install_plan_for_model(cls, model_id: str, ctx: Dict[str, Any]) -> InstallPlan:
         raise NotImplementedError
 
@@ -223,7 +241,13 @@ class IVoiceModel(abc.ABC):
         run_ctx = build_runtime_ctx(ctx)
         backend = coerce_backend(self.__class__.required_backend_for_model(self.model_id, run_ctx))
         try:
-            installed = bool(self.__class__.is_model_installed(self.model_id, run_ctx))
+            requirements = self.__class__.requirements(self.model_id, run_ctx)
+            requirement_status = (
+                check_requirements(requirements, ctx=run_ctx)
+                if requirements is not None
+                else {"ok": self.__class__.is_model_installed(self.model_id, run_ctx)}
+            )
+            installed = bool(requirement_status.get("ok"))
         except Exception as exc:
             return ComponentStatus(
                 id=self.id,
@@ -239,6 +263,7 @@ class IVoiceModel(abc.ABC):
             installed=installed,
             backend=backend,
             ctx=run_ctx,
+            needs_reinstall=_requirements_need_reinstall(requirement_status),
         )
 
     def build_install_plan(self, ctx: Dict[str, Any] | None = None) -> InstallPlan:

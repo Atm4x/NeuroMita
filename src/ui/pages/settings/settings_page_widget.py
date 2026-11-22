@@ -1,7 +1,8 @@
 from core.error_utils import format_exception
+import time
 import qtawesome as qta
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,7 +29,9 @@ from ui.pages.settings.settings_presentation import (
     PrepareSettingsSection,
     SettingsSectionFailed,
     SettingsSectionReady,
+    SettingsSectionFeaturesReady,
 )
+from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.flow_layout import FlowLayout as _FlowLayout
 from ui.widgets.settings_icon_button import SettingsIconButton
 from main_logger import logger
@@ -43,9 +47,6 @@ _MODE_ALIASES = {
 }
 
 _SECTION_FEATURES: dict[str, tuple[str, ...]] = {
-    # Model metadata is supplied by LocalVoiceController; the voice catalog is
-    # built only after that provider is ready. Both import and construction run
-    # in the runtime-feature pool, never on the Qt thread.
     "voice": ("local_voice", "voice_models"),
     "microphone": ("speech",),
 }
@@ -124,10 +125,17 @@ class SettingsSectionPage(QFrame):
         self.body_layout.setSpacing(12)
         body_layout.addWidget(self.body_host)
 
-        content_layout.addWidget(self.body)
-        content_layout.addStretch(1)
-        self.scroll.setWidget(self.content)
-        root.addWidget(self.scroll)
+        if spec.key in {"api", "characters"}:
+            self.content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            body_layout.setStretch(0, 1)
+            content_layout.addWidget(self.body, 1)
+            self.scroll.setWidget(self.content)
+            root.addWidget(self.scroll, 1)
+        else:
+            content_layout.addWidget(self.body)
+            content_layout.addStretch(1)
+            self.scroll.setWidget(self.content)
+            root.addWidget(self.scroll)
 
     def is_expanded(self) -> bool:
         return True
@@ -139,7 +147,12 @@ class SettingsSectionPage(QFrame):
         self.body.setVisible(True)
 
     def scroll_to_top(self, *, smooth: bool = False, animate=None):
-        bar = self.scroll.verticalScrollBar()
+        scroll = self.scroll
+        if self.spec.key == "api":
+            tabs = self.findChild(QTabWidget, "ApiEditorTabs")
+            if tabs is not None and isinstance(tabs.currentWidget(), QScrollArea):
+                scroll = tabs.currentWidget()
+        bar = (scroll or self.scroll).verticalScrollBar()
         if smooth and callable(animate):
             animate(bar, bar.value(), 0)
         else:
@@ -147,6 +160,8 @@ class SettingsSectionPage(QFrame):
 
 
 class SettingsPage(QWidget):
+    _section_build_requested = pyqtSignal(str)
+
     def __init__(self, parent, view_model, page_actions, settings):
         super().__init__(parent)
         self._view_model = view_model
@@ -181,7 +196,12 @@ class SettingsPage(QWidget):
 
         self._build_ui()
         self._build_section_containers()
+        self._section_build_requested.connect(
+            self._build_section_now,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._view_model.effect_emitted.connect(self._handle_effect)
+        self._view_model.state_changed.connect(self._render_feature_state)
         self.destroyed.connect(lambda *_args: self._view_model.close())
         # Сразу применяем карту видимости, иначе до первого клика в «Видимых
         # разделах» показываются все вкладки, включая отключённые.
@@ -324,6 +344,8 @@ class SettingsPage(QWidget):
             return None
         for section in page.findChildren(QWidget):
             if section.objectName() != "CollapsibleSection":
+                continue
+            if section.property("rememberExpansion") is False:
                 continue
             title_label = getattr(section, "title_label", None)
             if title_label is None:
@@ -554,12 +576,12 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(24, 44, 24, 44)
         layout.setSpacing(10)
 
-        icon = QLabel()
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        try:
+        if state == "loading":
+            icon = LoadingSpinner(box)
+        else:
+            icon = QLabel()
+            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             icon.setPixmap(qta.icon("fa6s.circle-notch", color="#ff6db7").pixmap(28, 28))
-        except Exception:
-            icon.setText("...")
 
         text = message
         if not text:
@@ -573,7 +595,7 @@ class SettingsPage(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addStretch(1)
-        layout.addWidget(icon)
+        layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(label)
         layout.addStretch(1)
         page.body_layout.addWidget(box)
@@ -604,15 +626,49 @@ class SettingsPage(QWidget):
                 feature_names=tuple(required_features),
                 require_backend=category in _BACKEND_REQUIRED_SECTIONS,
                 gui_feature=_SECTION_GUI_FEATURES.get(category),
+                defer_features=category == "voice",
             )
         )
 
     def _handle_effect(self, effect) -> None:
+        if isinstance(effect, SettingsSectionFeaturesReady):
+            spec = self._section_specs.get(effect.category)
+            if spec is not None and spec.preload_key:
+                self._page_actions.preload_settings_sections(
+                    ((spec.key, spec.preload_key),)
+                )
+            return
         if isinstance(effect, SettingsSectionReady):
-            self._build_section_now(effect.category)
+            self._section_build_requested.emit(effect.category)
             return
         if isinstance(effect, SettingsSectionFailed):
             self._finish_section_feature_error(effect.category, RuntimeError(effect.message))
+
+    def _render_feature_state(self, state) -> None:
+        page = self.settings_containers.get("voice")
+        if page is None:
+            return
+        loading = "voice" in state.preparing_features
+        error = dict(state.feature_errors).get("voice", "")
+        for card in page.findChildren(QWidget, "VoiceCard"):
+            if card.property("requiresLocalVoice"):
+                card.setEnabled(not loading and not error)
+                card.setToolTip(error)
+                progress = card.findChild(QWidget, "VoiceRuntimeProgress")
+                if loading and progress is None:
+                    progress = QWidget(card)
+                    progress.setObjectName("VoiceRuntimeProgress")
+                    row = QHBoxLayout(progress)
+                    row.setContentsMargins(0, 0, 0, 0)
+                    row.addWidget(LoadingSpinner(progress))
+                    row.addWidget(QLabel(_("Загрузка...", "Loading...")), 1)
+                    card.layout().insertWidget(1, progress)
+                if progress is not None:
+                    progress.setVisible(loading)
+        chip = page.findChild(QLabel, "VoiceModelStatusChip")
+        if chip is not None and error:
+            chip.setText(_("Компонент недоступен", "Component unavailable"))
+            chip.setToolTip(error)
 
     def _finish_section_feature_error(self, category: str, error: BaseException) -> None:
         logger.error(
@@ -636,13 +692,27 @@ class SettingsPage(QWidget):
             self._loading_sections.discard(category)
             return
 
+        started = time.perf_counter()
         try:
             self._clear_layout(page.body_layout)
             self._page_actions.build_settings_section(category, page.body_layout)
 
+            logger.debug(
+                "[Settings UI] %s widgets and bindings (Qt): %.1f ms",
+                category,
+                (time.perf_counter() - started) * 1000,
+            )
+            finishing = time.perf_counter()
+
             self._promote_first_subsection_header(page)
             self._prepare_settings_subsections(page)
             self._loaded_sections.add(category)
+            self._render_feature_state(self._view_model.state)
+            logger.debug(
+                "[Settings UI] %s section layout (Qt): %.1f ms",
+                category,
+                (time.perf_counter() - finishing) * 1000,
+            )
         except Exception as exc:
             logger.error(
                 "Failed to build settings section '%s': %s",

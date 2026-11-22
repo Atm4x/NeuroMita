@@ -36,6 +36,7 @@ if THIS_DIR not in sys.path:
     sys.path.insert(0, THIS_DIR)
 
 from rag_tester_core import (  # noqa: E402
+    LEXICAL_ONLY_OVERRIDES,
     RagTesterService,
     Scenario,
     TestSuite,
@@ -78,18 +79,21 @@ def cmd_run(args):
     """Run a test suite against a scenario and report metrics."""
     from rag_tester_core import SettingsOverride, setup_test_db
     from managers.rag.rag_manager import RAGManager
-    from handlers.embedding_handler import EmbeddingModelHandler
+    lexical_only = args.lexical_only
 
     if getattr(args, 'db', None):
         setup_test_db(args.db)
 
     overrides = _parse_overrides(args.overrides)
+    if lexical_only:
+        overrides.update(LEXICAL_ONLY_OVERRIDES)
 
     # If overrides contain embed model settings, apply them BEFORE embedding the scenario
     # and reset cached singletons so the right model is used.
     _embed_keys = {"RAG_EMBED_MODEL", "RAG_EMBED_MODEL_CUSTOM", "RAG_EMBED_QUERY_PREFIX"}
     _embed_overridden = bool(overrides) and bool(_embed_keys & set(overrides))
-    if _embed_overridden:
+    if _embed_overridden and not lexical_only:
+        from handlers.embedding_handler import EmbeddingModelHandler
         # Reset fallback handler singleton so it re-initialises with overridden model
         RAGManager._fallback_handler = None
         EmbeddingModelHandler._unload_shared()
@@ -98,7 +102,7 @@ def cmd_run(args):
     if ctx:
         ctx.__enter__()
     try:
-        svc = RagTesterService()
+        svc = RagTesterService(lexical_only=lexical_only)
         scenario = svc.load_scenario_file(args.scenario, fallback_character_id="RAG_TEST")
         suite = TestSuite.from_json(open(args.suite, "r", encoding="utf-8").read())
 
@@ -106,37 +110,36 @@ def cmd_run(args):
         print("Loading scenario into DB…", file=sys.stderr)
         if overrides:
             print(f"  overrides: {overrides}", file=sys.stderr)
-        stats = svc.apply_scenario_to_db(scenario, clear_before=True, embed_now=True, smart_embed=True)
+        stats = svc.apply_scenario_to_db(scenario, clear_before=True, embed_now=not lexical_only, smart_embed=not lexical_only)
         print(f"  context={stats['context']} history={stats['history']} memories={stats['memories']}", file=sys.stderr)
 
         # Pre-flight: verify that embeddings were actually stored.
         # If 0 embeddings → embedding model failed to load silently (wrong Python env, missing torch, etc.)
         # Skip check when vector search is explicitly disabled.
         _vector_disabled = overrides.get("RAG_VECTOR_SEARCH_ENABLED") is False if overrides else False
-        try:
-            if _vector_disabled:
-                raise RuntimeError("vector search disabled — skipping preflight")  # caught below
-            from handlers.embedding_presets import resolve_model_settings
-            _model_hf = resolve_model_settings().get("hf_name", "")
-            from managers.database_manager import DatabaseManager
-            with DatabaseManager().connection() as _conn:
-                _emb_count = _conn.execute(
-                    "SELECT COUNT(*) FROM embeddings WHERE model_name=?", (_model_hf,)
-                ).fetchone()[0]
-            print(f"  embed_model={_model_hf}  stored_embeddings={_emb_count}", file=sys.stderr)
-            if _emb_count == 0:
-                print(
-                    "\n⚠ FATAL: 0 embeddings stored for this model.\n"
-                    "  Embedding model failed to load (missing torch/transformers?).\n"
-                    "  Vector search will be DISABLED — test results are INVALID.\n"
-                    "  Use a Python environment with the required ML libraries.\n",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        except SystemExit:
-            raise
-        except Exception as _pf_err:
-            print(f"  [pre-flight check failed: {_pf_err}]", file=sys.stderr)
+        if not _vector_disabled:
+            try:
+                from handlers.embedding_presets import resolve_model_settings
+                _model_hf = resolve_model_settings().get("hf_name", "")
+                from managers.database_manager import DatabaseManager
+                with DatabaseManager().connection() as _conn:
+                    _emb_count = _conn.execute(
+                        "SELECT COUNT(*) FROM embeddings WHERE model_name=?", (_model_hf,)
+                    ).fetchone()[0]
+                print(f"  embed_model={_model_hf}  stored_embeddings={_emb_count}", file=sys.stderr)
+                if _emb_count == 0:
+                    print(
+                        "\n⚠ FATAL: 0 embeddings stored for this model.\n"
+                        "  Embedding model failed to load (missing torch/transformers?).\n"
+                        "  Vector search will be DISABLED — test results are INVALID.\n"
+                        "  Use a Python environment with the required ML libraries.\n",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+            except SystemExit:
+                raise
+            except Exception as _pf_err:
+                print(f"  [pre-flight check failed: {_pf_err}]", file=sys.stderr)
 
         # Index graph entity embeddings when vector graph search is enabled.
         if overrides and overrides.get("RAG_GRAPH_VECTOR_SEARCH"):
@@ -172,14 +175,20 @@ def cmd_sweep(args):
     from rag_tester_core import setup_test_db
     if getattr(args, 'db', None):
         setup_test_db(args.db)
-    svc = RagTesterService()
+    lexical_only = args.lexical_only
+    svc = RagTesterService(lexical_only=lexical_only)
     scenario = svc.load_scenario_file(args.scenario, fallback_character_id="RAG_TEST")
     suite = TestSuite.from_json(open(args.suite, "r", encoding="utf-8").read())
     config = SweepConfig.from_json_file(args.sweep_config)
+    if lexical_only:
+        locked = config.parameters.keys() & LEXICAL_ONLY_OVERRIDES.keys()
+        if locked:
+            raise ValueError(f"--lexical-only cannot sweep {', '.join(sorted(locked))}")
+        config.fixed_overrides.update(LEXICAL_ONLY_OVERRIDES)
 
     # Load scenario into DB once
     print("Loading scenario into DB…", file=sys.stderr)
-    stats = svc.apply_scenario_to_db(scenario, clear_before=True, embed_now=True, smart_embed=True)
+    stats = svc.apply_scenario_to_db(scenario, clear_before=True, embed_now=not lexical_only, smart_embed=not lexical_only)
     print(f"  context={stats['context']} history={stats['history']} memories={stats['memories']}", file=sys.stderr)
 
     # Count grid size
@@ -592,6 +601,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--limit", type=int, default=10, help="RAG max results (default: 10)")
     p_run.add_argument("--threshold", type=float, default=0.2, help="Similarity threshold (default: 0.2)")
     p_run.add_argument("--overrides", default=None, help="JSON string or path to overrides file")
+    p_run.add_argument("--lexical-only", action="store_true",
+                        help="Run without model loading; requires a scratch --db")
     p_run.add_argument("--db", default=None, help="Custom SQLite DB path (default: Histories/world.db)")
     p_run.add_argument("--format", choices=["json", "text"], default="text", help="Output format")
     p_run.add_argument("--output", default=None, help="Write output to file instead of stdout")
@@ -607,6 +618,8 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=["mean_precision", "mean_recall", "mrr", "mean_ndcg"],
                          help="Metric to optimise (default: mean_recall)")
     p_sweep.add_argument("--top-n", type=int, default=10, help="Show top N results (0=all)")
+    p_sweep.add_argument("--lexical-only", action="store_true",
+                        help="Run without model loading; requires a scratch --db")
     p_sweep.add_argument("--db", default=None, help="Custom SQLite DB path")
     p_sweep.add_argument("--format", choices=["json", "text"], default="text", help="Output format")
     p_sweep.add_argument("--output", default=None, help="Write output to file")
@@ -682,6 +695,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if getattr(args, "lexical_only", False) and not args.db:
+        parser.error("--lexical-only requires an explicit scratch --db path")
 
     try:
         if args.command == "run":

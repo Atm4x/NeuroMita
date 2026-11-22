@@ -8,7 +8,6 @@ import multiprocessing
 import queue # Для command_queue
 import time # Для цикла обработки
 import threading # Для блока __main__
-import traceback # Added for error reporting
 import sys
 
 # Импортируем контроллер из соседнего файла
@@ -17,6 +16,7 @@ from .board_logic import PureBoardLogic # Не используется напр
 from ui.app_icon import application_icon, set_app_user_model_id
 from utils import getTranslationVariant as _
 from utils.win_titlebar import apply_dark_titlebar, install_dark_titlebar_sync
+from main_logger import logger
 
 try:
     from styles.theme import THEME
@@ -407,13 +407,13 @@ class ChessGuiTkinter(QMainWindow):
             control_panel_layout.addWidget(self.btn_new_game_black)
 
             self.mita_reaction_checkbox = QCheckBox(
-                _("Реакция Миты на ход игрока", "Mita reacts to the player's move")
+                _("Автоматически запрашивать ход Миты", "Automatically request Mita's turn")
             )
             self.mita_reaction_checkbox.setChecked(True)
             self.mita_reaction_checkbox.setToolTip(
                 _(
-                    "После принятого хода Мита получает повод для реакции в чате.",
-                    "After an accepted move, Mita gets a prompt to react in chat.",
+                    "После принятого хода автоматически запрашивается ответный ход Миты.",
+                    "After an accepted move, Mita is automatically asked for her reply move.",
                 )
             )
             # The application-wide checkbox styling is intentionally neutral,
@@ -440,6 +440,18 @@ class ChessGuiTkinter(QMainWindow):
                 }}
             """)
             control_panel_layout.addWidget(self.mita_reaction_checkbox)
+
+            self.btn_request_mita_turn = self._create_button(
+                control_panel_widget,
+                _("Ходи", "Your move"),
+                self._request_manual_mita_turn,
+            )
+            self.btn_request_mita_turn.setToolTip(
+                _("Предложить Мите сделать ход.", "Ask Mita to make her move.")
+            )
+            self.btn_request_mita_turn.setVisible(False)
+            self.mita_reaction_checkbox.toggled.connect(self._update_manual_turn_button)
+            control_panel_layout.addWidget(self.btn_request_mita_turn)
             
             control_panel_layout.addStretch()
             
@@ -449,6 +461,7 @@ class ChessGuiTkinter(QMainWindow):
             self.btn_new_game_white = None
             self.btn_new_game_black = None
             self.mita_reaction_checkbox = None
+            self.btn_request_mita_turn = None
         
         central_widget.setLayout(main_layout)
         
@@ -563,11 +576,92 @@ class ChessGuiTkinter(QMainWindow):
             self._set_square_fill_color(r_sel, c_sel, ChessGameModelTkStyles.COLOR_HIGHLIGHT_SELECTED)
         for r_pm, c_pm in self.possible_moves_for_selected_gui_coords:
             self._set_square_fill_color(r_pm, c_pm, ChessGameModelTkStyles.COLOR_HIGHLIGHT_POSSIBLE)
+        self._update_manual_turn_button()
+
+    def _update_manual_turn_button(self):
+        if not self.btn_request_mita_turn or not self.game_controller:
+            return
+
+        board = self.game_controller.get_current_board_object_for_gui()
+        player_turn = (
+            self.game_controller.player_is_white_in_gui and board.turn == chess.WHITE
+        ) or (
+            not self.game_controller.player_is_white_in_gui and board.turn == chess.BLACK
+        )
+        self.btn_request_mita_turn.setVisible(
+            not player_turn
+            and not self.mita_reaction_checkbox.isChecked()
+            and not board.is_game_over()
+            and not self.game_controller.engine_is_thinking
+        )
 
     def show_game_over_message_slot(self, message):
         if self.is_closing: return
-        self.update_status_bar_slot(message) 
-        QMessageBox.information(self, "Игра окончена", message)
+        self.update_status_bar_slot(message)
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(_("Игра окончена", "Game over"))
+        msg_box.setText(message)
+        player_lost = self._did_player_lose()
+        board = self.game_controller.get_current_board_object_for_gui()
+        outcome = board.outcome(claim_draw=True)
+        result = None
+        if outcome is not None:
+            player_color = self.game_controller.get_player_color_is_white_for_gui()
+            result = "draw" if outcome.winner is None else (
+                "player_win" if outcome.winner == player_color else "mita_win"
+            )
+        if player_lost:
+            new_game_button = msg_box.addButton(
+                _("Новая игра", "New game"), QMessageBox.ButtonRole.AcceptRole
+            )
+            close_button = msg_box.addButton(
+                _("Закрыть", "Close"), QMessageBox.ButtonRole.RejectRole
+            )
+            msg_box.setDefaultButton(close_button)
+            msg_box.setEscapeButton(close_button)
+        else:
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.setStyleSheet(f"""
+            QMessageBox {{ background-color: {ChessGameModelTkStyles.COLOR_PANEL_BG}; }}
+            QMessageBox QLabel {{
+                color: {ChessGameModelTkStyles.COLOR_TEXT_LIGHT};
+                font-family: {ChessGameModelTkStyles.UI_FONT_FAMILY};
+                font-size: 11pt;
+            }}
+            QPushButton {{
+                background-color: {ChessGameModelTkStyles.COLOR_BUTTON_BG};
+                color: {ChessGameModelTkStyles.COLOR_BUTTON_TEXT};
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-family: {ChessGameModelTkStyles.UI_FONT_FAMILY};
+                font-size: 10pt;
+                min-width: 60px;
+            }}
+            QPushButton:hover {{ background-color: {ChessGameModelTkStyles.COLOR_BUTTON_HOVER_BG}; }}
+        """)
+        if not player_lost:
+            self._request_game_over_reaction(message, result=result)
+        msg_box.exec()
+        if player_lost:
+            if msg_box.clickedButton() is new_game_button:
+                self.game_controller.new_game()
+                self._request_game_over_reaction(message, "restart", result=result)
+            else:
+                self._request_game_over_reaction(message, "close", result=result)
+                self.is_closing = True
+                self.close()
+
+    def _did_player_lose(self):
+        if not self.game_controller:
+            return False
+        board = self.game_controller.get_current_board_object_for_gui()
+        player_color = (
+            chess.WHITE
+            if self.game_controller.get_player_color_is_white_for_gui()
+            else chess.BLACK
+        )
+        return board.is_checkmate() and board.turn == player_color
 
     def update_status_bar_slot(self, message):
         if self.is_closing: return
@@ -650,7 +744,7 @@ class ChessGuiTkinter(QMainWindow):
                 san_move = current_board_obj.san(chess.Move.from_uci(uci_move_str))
             except Exception:
                 san_move = uci_move_str
-            if self.game_controller.handle_player_move_from_gui(uci_move_str):
+            if self.game_controller.handle_player_move_from_gui(uci_move_str) and not current_board_obj.is_game_over():
                 self._request_mita_reaction(uci_move_str, san_move)
             self.selected_square_gui_coords = None
             self.possible_moves_for_selected_gui_coords = []
@@ -658,16 +752,47 @@ class ChessGuiTkinter(QMainWindow):
 
     def _request_mita_reaction(self, uci_move, san_move):
         """Send only accepted player moves, and only for the current match."""
-        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({
+            event = {
                 "event": "player_chess_move",
                 "uci": str(uci_move),
                 "san": str(san_move),
-            })
+                "react": bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked()),
+            }
+            source = getattr(self.game_controller, "last_move_event", None)
+            if source and source.get("uci") == str(uci_move):
+                event.update({key: source[key] for key in ("semantic_id", "mover", "ply")})
+            self.reaction_queue.put(event)
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess reaction: {format_exception(exc)}")
+
+    def _request_manual_mita_turn(self):
+        if (
+            not self.btn_request_mita_turn
+            or self.mita_reaction_checkbox.isChecked()
+            or not self.reaction_queue
+        ):
+            return
+        try:
+            self.reaction_queue.put({"event": "manual_mita_turn"})
+        except Exception as exc:
+            print(f"GUI Error: Could not queue manual Mita chess turn request: {format_exception(exc)}")
+
+    def _request_game_over_reaction(self, outcome, choice=None, *, result=None):
+        if not self.reaction_queue:
+            return
+        try:
+            event = {"event": "player_game_over", "outcome": str(outcome or "")}
+            event["react"] = bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked())
+            if result:
+                event["result"] = result
+            if choice:
+                event["choice"] = choice
+            self.reaction_queue.put(event)
+        except Exception as exc:
+            print(f"GUI Error: Could not queue Mita chess game-over reaction: {format_exception(exc)}")
 
     def closeEvent(self, event):
         # Programmatic stops use ``is_closing`` and must neither prompt the
@@ -713,16 +838,17 @@ class ChessGuiTkinter(QMainWindow):
             event.ignore()
 
     def _request_game_closed_reaction(self):
-        if not self.mita_reaction_checkbox or not self.mita_reaction_checkbox.isChecked() or not self.reaction_queue:
+        if not self.reaction_queue:
             return
         try:
-            self.reaction_queue.put({"event": "player_game_closed"})
+            self.reaction_queue.put({"event": "player_game_closed",
+                                     "react": bool(self.mita_reaction_checkbox and self.mita_reaction_checkbox.isChecked())})
         except Exception as exc:
             print(f"GUI Error: Could not queue Mita chess close reaction: {format_exception(exc)}")
 
 def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiprocessing.Queue,
                           initial_elo: int, player_is_white_gui: bool, is_auto: bool = False,
-                          is_cheat: bool = False, reaction_queue=None):
+                          is_cheat: bool = False, reaction_queue=None, snapshot_queue=None, initial_snapshot=None):
     print(f"CONSOLE (chess_board_process): >>> ЗАПУСК. ELO: {initial_elo}, Белый: {player_is_white_gui}, auto={is_auto}, cheat={is_cheat}")
     
     app_instance_ref = {"instance": None} 
@@ -734,13 +860,16 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
     def _send_gui_closed(reason: str):
         if close_event_sent["sent"]:
             return
-        if not state_q:
-            close_event_sent["sent"] = True
-            return
-        try:
-            state_q.put({"event": "gui_closed", "reason": str(reason or "")})
-        except Exception:
-            pass
+        if state_q:
+            try:
+                state_q.put({"event": "gui_closed", "reason": str(reason or "")})
+            except Exception:
+                pass
+        if reaction_queue:
+            try:
+                reaction_queue.put({"event": "game_closed"})
+            except Exception:
+                pass
         close_event_sent["sent"] = True
 
     def _proxy_update_status(message):
@@ -778,7 +907,8 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
             board_update_cb_gui=_proxy_update_board,
             game_over_cb_gui=_proxy_game_over,
             is_auto=is_auto,
-            is_cheat=is_cheat
+            is_cheat=is_cheat,
+            semantic_event_queue=reaction_queue,
         )
         print(f"CONSOLE (chess_board_process): [STAGE 1] ChessGameController создан.")
 
@@ -798,7 +928,48 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
         print(f"CONSOLE (chess_board_process): [STAGE 3] ChessGuiTkinter (окно) СОЗДАНО.")
 
         print(f"CONSOLE (chess_board_process): [STAGE 4] Вызов game_controller.new_game()...")
-        game_controller.new_game() 
+        from modules.session_snapshot import GameSnapshotEndpoint, GameStateQueue, validate_game_state
+        game_controller.state_queue = GameStateQueue(state_q)
+
+        def capture_snapshot():
+            return {"board": game_controller.board_logic.snapshot(), "elo": game_controller.current_maia_elo,
+                    "player_is_white": game_controller.player_is_white_in_gui, "is_auto": game_controller.is_auto,
+                    "is_cheat": game_controller.is_cheat, "react_enabled": app.mita_reaction_checkbox.isChecked(),
+                    "engine_pending": game_controller.engine_move_pending}
+
+        def apply_snapshot(state):
+            validate_game_state("chess", state)
+            game_controller.board_logic.restore_snapshot(state["board"])
+            game_controller.player_is_white_in_gui = state["player_is_white"]
+            game_controller.is_auto, game_controller.is_cheat = state["is_auto"], state["is_cheat"]
+            if game_controller.current_maia_elo != state["elo"]:
+                game_controller.change_engine_elo(state["elo"])
+            game_controller.last_move_event = None
+            game_controller.restore_engine_work(state["engine_pending"])
+            while True:
+                try:
+                    gui_event_queue.get_nowait()
+                except queue.Empty:
+                    break
+            app.is_auto = state["is_auto"]
+            app.mita_reaction_checkbox.setChecked(state["react_enabled"])
+            if game_controller.board_update_cb_gui:
+                game_controller.board_update_cb_gui()
+            game_controller._send_state_to_main_process()
+
+        def pause_session(paused):
+            game_controller.set_session_paused(paused)
+            app.setEnabled(not paused)
+
+        endpoint = GameSnapshotEndpoint(snapshot_queue, reaction_queue, capture_snapshot, apply_snapshot,
+                                        pause_session, game_controller.state_queue)
+        if initial_snapshot is None:
+            game_controller.new_game()
+        else:
+            game_controller.state_queue.generation = 1
+            apply_snapshot(initial_snapshot)
+            endpoint.paused = True
+            pause_session(True)
         print(f"CONSOLE (chess_board_process): [STAGE 4] game_controller.new_game() ВЫПОЛНЕН.")
 
         timer = QTimer()
@@ -810,11 +981,17 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 timer.stop()
                 qt_app.quit()
                 return
+
+            game_controller.process_engine_results()
                 
             try:
                 if command_q: 
                     command = command_q.get_nowait()
                     if command:
+                        if endpoint.handle(command):
+                            return
+                        if endpoint.paused and command.get("action") not in {"get_state", "stop_gui_process"}:
+                            return
                         print(f"CONSOLE (chess_board_process): [LOOP] Получена команда: {command}")
                         if command.get("action") == "stop_gui_process": 
                             print(f"CONSOLE (chess_board_process): [LOOP] Команда stop_gui_process, выход из цикла.")
@@ -843,7 +1020,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 pass 
             except Exception as e_loop_command:
                 print(f"CONSOLE (chess_board_process): [LOOP] Ошибка в цикле обработки команд: {format_exception(e_loop_command)}")
-                traceback.print_exc() 
+                logger.exception("[Chess] Ошибка в цикле обработки команд")
 
             try:
                 while not gui_event_queue.empty():
@@ -860,7 +1037,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                 pass
             except Exception as e_gui_event_loop:
                 print(f"CONSOLE (chess_board_process): [LOOP] Ошибка в цикле обработки GUI событий: {format_exception(e_gui_event_loop)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Ошибка в цикле обработки GUI событий")
 
         timer.timeout.connect(process_queues)
         timer.start(50)
@@ -871,7 +1048,7 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
 
     except Exception as e_main_run_try:
         print(f"CONSOLE (chess_board_process): КРИТИЧЕСКАЯ ОШИБКА В ОСНОВНОМ TRY-EXCEPT ПРОЦЕССА GUI: {format_exception(e_main_run_try)}")
-        traceback.print_exc() 
+        logger.exception("[Chess] Критическая ошибка в GUI-процессе")
         if state_q: 
             try:
                 state_q.put({"error": f"Critical unhandled error in GUI process: {format_exception(e_main_run_try)}", "critical_process_failure": True})
@@ -893,14 +1070,14 @@ def run_chess_gui_process(command_q: multiprocessing.Queue, state_q: multiproces
                  print(f"CONSOLE (chess_board_process): [FINALLY] app.close() вызван.")
             except Exception as e_destroy_generic_app:
                 print(f"CONSOLE (chess_board_process): [FINALLY] Непредвиденная ошибка при app.close(): {format_exception(e_destroy_generic_app)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Непредвиденная ошибка при закрытии QApplication")
         elif app_instance_ref.get("instance"): 
             print(f"CONSOLE (chess_board_process): [FINALLY] app не был присвоен в try, но app_instance_ref['instance'] существует. Попытка close() для instance.")
             try:
                  app_instance_ref["instance"].close()
             except Exception as e_destroy_instance_alt:
                  print(f"CONSOLE (chess_board_process): [FINALLY] Ошибка при app_instance_ref['instance'].close(): {format_exception(e_destroy_instance_alt)}")
-                 traceback.print_exc()
+                 logger.exception("[Chess] Ошибка при закрытии резервного QApplication")
 
         print(f"CONSOLE (chess_board_process): >>> ПРОЦЕСС GUI ЗАВЕРШЕН.")
 
@@ -923,7 +1100,7 @@ if __name__ == '__main__':
             except queue.Empty: pass
             except Exception as e_monitor: 
                 print(f"[MAIN TEST] Ошибка чтения из state_queue: {format_exception(e_monitor)}")
-                traceback.print_exc()
+                logger.exception("[Chess] Ошибка чтения state_queue")
                 break
             time.sleep(0.1)
         print("[MAIN TEST] Мониторинг завершен.")

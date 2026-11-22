@@ -5,17 +5,19 @@ from importlib import import_module
 from typing import List, Optional
 
 from main_logger import logger
+from utils import _
 from handlers.llm_providers.base import BaseProvider, LLMRequest, LLMResponse
 from handlers.llm_providers.message_preprocessor import preprocess_messages_for_provider
 from handlers.llm_providers.message_transforms import apply_transforms
 from handlers.llm_providers.http_transport import LLMHttpClient
+from handlers.llm_providers.errors import LLMProviderError
 
 
 _PROVIDER_TYPES = (
-    ("handlers.llm_providers.openai_provider", "OpenAIProvider"),
+    ("handlers.llm_providers.chatgpt_plan_provider", "ChatGPTPlanProvider"),
+    ("handlers.llm_providers.responses_provider", "ResponsesProvider"),
     ("handlers.llm_providers.gemini_provider", "GeminiProvider"),
     ("handlers.llm_providers.common_provider", "CommonProvider"),
-    ("handlers.llm_providers.g4f_provider", "G4FProvider"),
 )
 
 
@@ -54,78 +56,62 @@ class ProviderManager:
                 return provider
         return None
 
-    def _prepare_native_tools(self, req: LLMRequest, provider: BaseProvider) -> None:
-        extra = req.extra or {}
-        if extra.get("event_type") == "mcp_completion":
-            req.tools_on = False
-            req.tools_payload = None
-            req.tools_dialect = None
-            return
-        if not bool(extra.get("tools_requested")):
-            return
-        if not req.tools_on or req.tools_mode != "native":
-            req.tools_payload = None
-            req.tools_dialect = None
-            return
-
-        tool_manager = req.tool_manager
-        dialect_id = str(getattr(provider, "tools_dialect_id", "") or "").strip()
-        if tool_manager is None or not dialect_id:
-            logger.warning("Provider '%s' has no native tool dialect; disabling tools.", provider.name)
-            req.tools_on = False
-            req.tools_payload = None
-            req.tools_dialect = None
-            return
-
-        try:
-            req.tools_payload = tool_manager.get_tools_payload(
-                dialect_id,
-                enabled_names=extra.get("enabled_tool_names"),
-            )
-        except Exception as exc:
-            logger.warning("Failed to build tools for provider '%s': %s", provider.name, exc)
-            req.tools_on = False
-            req.tools_payload = None
-            req.tools_dialect = None
-            return
-        req.tools_dialect = dialect_id
-        req.tools_on = bool(req.tools_payload)
-
-    def _enforce_capabilities(self, req: LLMRequest, provider: BaseProvider) -> None:
+    def _enforce_capabilities(self, req: LLMRequest) -> None:
         caps = req.capabilities or {}
 
         if "streaming" in caps and not bool(caps.get("streaming")):
             req.stream = False
 
         if req.tools_on and req.tools_mode == "native":
-            if not bool(getattr(provider, "supports_tools_native", False)):
-                req.tools_on = False
-            elif "tools_native" in caps and not bool(caps.get("tools_native")):
-                req.tools_on = False
+            if "tools_native" in caps and not bool(caps.get("tools_native")):
+                raise LLMProviderError(
+                    provider=req.provider_name or "unknown",
+                    friendly_message="This endpoint does not support native tools.",
+                    code="capability.native_tools_unsupported", retryable=False, phase="request",
+                )
 
-            if req.stream and not bool(getattr(provider, "supports_streaming_with_tools", False)):
-                req.stream = False
-            elif req.stream and ("streaming_with_tools" in caps) and not bool(caps.get("streaming_with_tools")):
+            if req.stream and ("streaming_with_tools" in caps) and not bool(caps.get("streaming_with_tools")):
                 req.stream = False
 
     def generate(self, req: LLMRequest) -> LLMResponse:
+        if str(req.protocol_id or '').startswith('opencode_'):
+            from presets.opencode import model_family
+            go = req.protocol_id.startswith('opencode_go_')
+            family = req.protocol_id.rsplit('_', 1)[-1]
+            if model_family(req.model, go=go) != family:
+                raise LLMProviderError(
+                    provider='OpenCode', friendly_message=_(
+                        'Эта модель OpenCode использует другой или неподдерживаемый формат API. '
+                        'Загрузите модели для выбранного шаблона OpenCode.',
+                        'This OpenCode model uses a different or unsupported API format. '
+                        'Load models for the selected OpenCode template.'),
+                    code='opencode.model_api_mismatch', retryable=False, phase='request',
+                )
         if not req.provider_name:
             logger.error("Protocol-driven routing requires provider_name in request")
             raise RuntimeError("No provider can handle this request")
 
-        provider = self._find_by_name(req.provider_name)
+        provider_key = req.provider_name
+        if req.dialect_id == "openai_responses" and provider_key in {"common", "openai"}:
+            provider_key = "responses"
+        elif provider_key == "openai":
+            provider_key = "common"
+            req.dialect_id = req.dialect_id or "openai_chat_completions"
+            req.api_url = req.api_url or "https://api.openai.com/v1"
+            req.capabilities.setdefault("supports_stream_usage", True)
+        provider = self._find_by_name(provider_key)
         if not provider:
             details = "; ".join(f"{name}: {format_exception(error)}" for name, error in self._unavailable.items())
             logger.error(f"No provider registered with name '{req.provider_name}'. {details}")
             raise RuntimeError(f"Provider '{req.provider_name}' is unavailable")
 
-        self._enforce_capabilities(req, provider)
-        self._prepare_native_tools(req, provider)
+        self._enforce_capabilities(req)
 
         trace = {
             "protocol_id": req.protocol_id,
             "dialect_id": req.dialect_id,
             "provider_name": req.provider_name,
+            "provider_display_name": req.provider_display_name,
             "transforms": req.transforms or [],
             "transform_trace": [],
         }
@@ -133,15 +119,15 @@ class ProviderManager:
         req.extra["_protocol_trace"] = trace
 
         logger.info(
-            f"Using provider: {provider.name} | protocol={req.protocol_id} | dialect={req.dialect_id}"
+            f"Using provider: {req.provider_display_name or provider.name} "
+            f"| transport={provider.name} | protocol={req.protocol_id} | dialect={req.dialect_id}"
         )
 
-        if not bool((req.extra or {}).get("_tool_loop_prepared", False)):
-            preprocess_messages_for_provider(req, provider)
+        preprocess_messages_for_provider(req, provider)
 
-            if req.transforms:
-                req.messages, transform_trace = apply_transforms(req.messages, req.transforms)
-                trace["transform_trace"] = transform_trace
+        if req.transforms:
+            req.messages, transform_trace = apply_transforms(req.messages, req.transforms)
+            trace["transform_trace"] = transform_trace
 
         logger.debug(f"Protocol trace: {trace}")
         return provider.generate(req)

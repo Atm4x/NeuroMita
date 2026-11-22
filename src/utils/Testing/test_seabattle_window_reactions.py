@@ -14,11 +14,14 @@ PROJECT_SRC = Path(__file__).resolve().parents[2]
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
-
-from modules.SeaBattle.seabattle_gui import SeaBattleWindow
-from modules.SeaBattle.seabattle_instance import SeaBattleGame
+try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+    from modules.SeaBattle.seabattle_gui import SeaBattleWindow
+except ImportError:
+    Qt = None
+    QApplication = None
+    SeaBattleWindow = None
 
 
 class _EventBus:
@@ -51,6 +54,20 @@ class _Settings:
         return self.enabled if self.enabled is not None else default
 
 
+class _QueueWithoutEmpty:
+    def __init__(self, *items) -> None:
+        self.items = list(items)
+
+    def get_nowait(self):
+        if not self.items:
+            raise queue.Empty
+        return self.items.pop(0)
+
+    def empty(self):
+        raise AssertionError("Queue.empty() must not be used for cross-process polling")
+
+
+@unittest.skipIf(QApplication is None, "PyQt6 is not installed")
 class SeaBattleWindowReactionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -79,30 +96,128 @@ class SeaBattleWindowReactionTests(unittest.TestCase):
             window.mita_reaction_checkbox.setChecked(False)
             engine.current_player = engine.player_id
             window.on_opponent_board_click(1, 0, Qt.MouseButton.LeftButton)
-            with self.assertRaises(queue.Empty):
-                reaction_queue.get_nowait()
+            fact = reaction_queue.get_nowait()
+            self.assertEqual(fact["event"], "player_target_selected")
+            self.assertFalse(fact["react"])
+            self.assertTrue(reaction_queue.empty())
         finally:
             window.close()
 
-    def test_bridge_uses_visible_l2_reaction_and_respects_global_switches(self) -> None:
-        character = _Character()
-        game = SeaBattleGame(character)
+    def test_process_commands_drains_queue_without_checking_empty(self) -> None:
+        window = SeaBattleWindow(_QueueWithoutEmpty({"action": "get_state"}), queue.Queue(), queue.Queue())
+        try:
+            with patch.object(window, "send_state_update") as send_state_update:
+                window.process_commands()
 
-        with patch("modules.SeaBattle.seabattle_instance.use", return_value=_Settings(True)):
-            game._dispatch_player_target_reaction(
-                {"coord": "C7", "message": "Попал! Стреляйте еще раз."}
-            )
+            send_state_update.assert_called_once_with()
+        finally:
+            window.close()
 
-        self.assertEqual(len(character.event_bus.events), 1)
-        _event_name, payload = character.event_bus.events[0]
-        self.assertEqual(payload["event_type"], "react")
-        self.assertEqual(payload["policy"]["react_level"], 2)
-        self.assertIn("C7", payload["system_input"])
+    def test_mita_terminal_move_emits_game_over_after_state_update(self) -> None:
+        command_queue = queue.Queue()
+        state_queue = queue.Queue()
+        reaction_queue = queue.Queue()
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        try:
+            command_queue.put({"action": "mita_move", "coord": "A1"})
+            final_state = {"phase": "game_over", "winner": window.game.mita_id, "player_id": window.game.player_id}
+            order = []
 
-        character.event_bus.events.clear()
-        with patch("modules.SeaBattle.seabattle_instance.use", return_value=_Settings(False)):
-            game._dispatch_player_target_reaction({"coord": "D7", "message": "Мимо!"})
-        self.assertEqual(character.event_bus.events, [])
+            with patch.object(window.game.engine, "make_move", return_value=("hit", "Победа")):
+                with patch.object(window.game, "get_full_state", return_value=final_state):
+                    with patch.object(window, "update_view"):
+                        with patch.object(window, "send_state_update", side_effect=lambda: order.append("state")):
+                            original = window._request_game_over_reaction
+
+                            def record_reaction(winner, player_id):
+                                order.append("reaction")
+                                original(winner, player_id)
+
+                            with patch.object(window, "_request_game_over_reaction", side_effect=record_reaction):
+                                window.process_commands()
+
+            self.assertEqual(order, ["state", "reaction"])
+            shot = reaction_queue.get_nowait()
+            self.assertEqual(shot["event"], "mita_shot")
+            self.assertFalse(shot["react"])
+            event = reaction_queue.get_nowait()
+            self.assertEqual(event["event"], "player_game_over")
+            self.assertEqual(event["winner"], window.game.mita_id)
+        finally:
+            window.close()
+
+    def test_last_ship_retains_shot_and_game_over_with_only_one_optional_reaction(self) -> None:
+        for player_wins in (True, False):
+            for enabled in (True, False):
+                with self.subTest(player_wins=player_wins, enabled=enabled):
+                    commands, states, reactions = queue.Queue(), queue.Queue(), queue.Queue()
+                    window = SeaBattleWindow(commands, states, reactions)
+                    try:
+                        engine = window.game.engine
+                        for owner in (engine.player_id, engine.mita_id):
+                            self.assertTrue(engine.place_ship(owner, 0, 0, 1, "h")[0])
+                        engine.game_phase = "battle"
+                        engine.current_player = engine.player_id if player_wins else engine.mita_id
+                        window.mita_reaction_checkbox.setChecked(enabled)
+                        with patch("localization._current_language", return_value="EN"):
+                            if player_wins:
+                                window.on_opponent_board_click(0, 0, Qt.MouseButton.LeftButton)
+                            else:
+                                commands.put({"action": "mita_move", "coord": "A1"})
+                                window.process_commands()
+                        self.assertEqual(window.info_label.text(), "You won!" if player_wins else "Mita won.")
+                        snapshots = []
+                        while not states.empty():
+                            snapshots.append(states.get_nowait())
+                        self.assertEqual(snapshots[-1]["phase"], "game_over")
+                        shot = reactions.get_nowait()
+                        self.assertEqual(shot["event"], "player_target_selected" if player_wins else "mita_shot")
+                        self.assertEqual(shot["coord"], "A1")
+                        self.assertFalse(shot["react"])
+                        event = reactions.get_nowait()
+                        self.assertEqual(event["event"], "player_game_over")
+                        self.assertEqual(event["winner"], engine.current_player)
+                        self.assertEqual(event["react"], enabled)
+                        self.assertTrue(reactions.empty())
+                    finally:
+                        window.close()
+
+    def test_mita_hit_emits_follow_up_reaction_after_state_update(self) -> None:
+        command_queue = queue.Queue()
+        state_queue = queue.Queue()
+        reaction_queue = queue.Queue()
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        try:
+            command_queue.put({"action": "mita_move", "coord": "A1"})
+            order = []
+
+            with patch.object(window.game.engine, "make_move", return_value=("hit", "Попал!")):
+                with patch.object(window.game, "get_full_state", return_value={"phase": "battle"}):
+                    with patch.object(window, "update_view"):
+                        with patch.object(window, "send_state_update", side_effect=lambda: order.append("state")):
+                            with patch.object(window, "_request_mita_hit_reaction", side_effect=lambda *args: order.append("reaction")):
+                                window.process_commands()
+
+            self.assertEqual(order, ["state", "reaction"])
+        finally:
+            window.close()
+
+    def test_manual_turn_button_emits_request_when_automation_is_off(self) -> None:
+        command_queue = queue.Queue()
+        state_queue = queue.Queue()
+        reaction_queue = queue.Queue()
+        window = SeaBattleWindow(command_queue, state_queue, reaction_queue)
+        try:
+            window.mita_reaction_checkbox.setChecked(False)
+            window.game.engine.game_phase = "battle"
+            window.game.engine.current_player = window.game.mita_id
+            window.update_view()
+
+            self.assertFalse(window.btn_request_mita_turn.isHidden())
+            window.btn_request_mita_turn.click()
+            self.assertEqual(reaction_queue.get_nowait()["event"], "manual_mita_turn")
+        finally:
+            window.close()
 
 
 if __name__ == "__main__":

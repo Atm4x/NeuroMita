@@ -18,6 +18,8 @@ from managers.mcp.profiles.codex import CodexTaskService, CodexTaskTool
 from managers.tools.tool_manager import ToolManager
 
 from handlers.llm_providers.base import LLMRequest, LLMResponse
+from schemas.structured_response import StructuredResponse
+from services.native_tool_calls import configure_native_tools, bridge_native_tool_response
 from utils.openrouter_routing import (
     build_openrouter_session_id,
     normalize_openrouter_routing,
@@ -90,6 +92,7 @@ def _save_last_request_context(req, character_name: str = "") -> None:
             "context_snapshot_id": context_snapshot_id,
             "model": getattr(req, "model", None),
             "provider_name": getattr(req, "provider_name", None),
+            "provider_display_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
             "protocol_id": getattr(req, "protocol_id", None),
             "dialect_id": getattr(req, "dialect_id", None),
             "character_name": character_name or "",
@@ -126,6 +129,7 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
                 "context_snapshot_id": context_snapshot_id,
                 "model": getattr(req, "model", None),
                 "provider_name": getattr(req, "provider_name", None),
+                "provider_display_name": getattr(req, "provider_display_name", None) or getattr(req, "provider_name", None),
                 "protocol_id": getattr(req, "protocol_id", None),
                 "dialect_id": getattr(req, "dialect_id", None),
                 "character_name": "",
@@ -139,6 +143,12 @@ def _save_last_response_context(req, response: LLMResponse, *, raw_response_text
             "response_raw": raw_response_text or getattr(response, "text", "") or "",
             "response_model": getattr(response, "model", None) or getattr(req, "model", None),
             "response_provider_name": getattr(response, "provider_name", None) or getattr(req, "provider_name", None),
+            "response_provider_display_name": (
+                getattr(response, "provider_display_name", None)
+                or getattr(req, "provider_display_name", None)
+                or getattr(response, "provider_name", None)
+                or getattr(req, "provider_name", None)
+            ),
             "finish_reason": getattr(response, "finish_reason", None),
             "usage": usage.to_payload() if usage is not None else None,
         })
@@ -332,27 +342,32 @@ class ChatModel:
         def build_request(preset_settings, effective_model: str) -> LLMRequest:
             cfg = self.cfg_loader.effective_for_preset(self.cfg, preset_settings, effective_model)
 
-            params = build_unified_generation_params(
-                settings=self.settings,
-                temperature=cfg.temperature,
-                max_response_tokens=cfg.max_response_tokens,
-                presence_penalty=cfg.presence_penalty,
-                frequency_penalty=cfg.frequency_penalty,
-                log_probability=cfg.log_probability,
-                top_k=cfg.top_k,
-                top_p=cfg.top_p,
-                thinking_budget=cfg.thinking_budget,
-                enable_thinking=cfg.enable_thinking,
-                reasoning_effort=getattr(cfg, "reasoning_effort", None),
-                gemini_thinking_budget=getattr(cfg, "gemini_thinking_budget", None),
-                force_params=getattr(cfg, "preset_forced_params", frozenset()),
-            )
+            native_parameters = getattr(preset_settings, "native_parameters", None)
+            if native_parameters is not None:
+                params = {}
+            else:
+                params = build_unified_generation_params(
+                    settings=self.settings,
+                    temperature=cfg.temperature,
+                    max_response_tokens=cfg.max_response_tokens,
+                    presence_penalty=cfg.presence_penalty,
+                    frequency_penalty=cfg.frequency_penalty,
+                    log_probability=cfg.log_probability,
+                    top_k=cfg.top_k,
+                    top_p=cfg.top_p,
+                    thinking_budget=cfg.thinking_budget,
+                    enable_thinking=cfg.enable_thinking,
+                    reasoning_effort=getattr(cfg, "reasoning_effort", None),
+                    gemini_thinking_budget=getattr(cfg, "gemini_thinking_budget", None),
+                    force_params=getattr(cfg, "preset_forced_params", frozenset()),
+                )
             if request_id:
                 params["request_id"] = str(request_id)
 
             caps = dict(preset_settings.capabilities or {})
             if isinstance(capabilities_override, dict):
                 caps.update(capabilities_override)
+            caps['tools_native'] = bool((preset_settings.capabilities or {}).get('tools_native', False))
 
             req = LLMRequest(
                 model=effective_model,
@@ -363,6 +378,7 @@ class ChatModel:
                 protocol_id=preset_settings.protocol_id,
                 dialect_id=preset_settings.dialect_id,
                 provider_name=preset_settings.provider_name,
+                provider_display_name=preset_settings.provider_display_name,
                 headers=dict(preset_settings.headers or {}),
                 transforms=list(preset_settings.transforms or []),
                 capabilities=caps,
@@ -374,11 +390,17 @@ class ChatModel:
                 stream_cb=stream_callback,
                 stream_event_cb=stream_event_callback,
                 extra=params,
+                native_parameters=native_parameters,
                 tool_manager=self.tool_manager,
                 settings=self.settings,
-                structured_model=structured_model,
+                structured_model=(structured_model or StructuredResponse) if caps.get("structured_output") else structured_model,
             )
 
+            tool_decision = configure_native_tools(req, self.settings, self.tool_manager)
+            if tool_decision["reason"] == "native_protocol_unsupported":
+                logger.info("Native tools unavailable for %s; using schema tools", req.dialect_id)
+            elif tool_decision["reason"] == "native_tools_with_structured_output_unsupported":
+                logger.info("Native tools cannot be combined with structured output for %s; using schema tools", req.protocol_id)
             req.extra["tool_manager"] = self.tool_manager
             req.extra["origin_request_id"] = str(origin_request_id or "")
             req.extra["event_type"] = event_type
@@ -387,20 +409,6 @@ class ChatModel:
             # finetune collection is disabled or several Mitas answer at once.
             req.extra["context_snapshot_id"] = f"ctx_{uuid.uuid4().hex}"
             req.extra["http_timeout_seconds"] = float(request_timeout)
-
-            tools_requested = (
-                bool(self.settings.get("MCP_NATIVE_TOOLS_ON", False))
-                and event_type != "mcp_completion"
-            )
-            if tools_requested:
-                enabled_names = self.settings.get("MCP_NATIVE_TOOL_NAMES", None)
-                if not isinstance(enabled_names, list) or not enabled_names:
-                    enabled_names = None
-                req.extra["tools_requested"] = True
-                req.extra["enabled_tool_names"] = enabled_names
-                req.allowed_tool_names = frozenset(self.tool_manager.get_tool_names(enabled_names))
-                req.tools_on = True
-                req.tools_mode = "native"
             if preset_settings.protocol_id == "openrouter_default":
                 routing = normalize_openrouter_routing(preset_settings.openrouter_routing)
                 if routing:
@@ -415,6 +423,11 @@ class ChatModel:
                 if session_id:
                     req.extra["openrouter_session_id"] = session_id
             _last_req[0] = req
+            if str(preset_settings.protocol_id or '').startswith('opencode_go_'):
+                from utils.opencode_session import session_id as opencode_session_id
+                req.headers['x-opencode-session'] = opencode_session_id(
+                    str(context_character_id or ''), str(context_character_name or ''),
+                )
             _char = None
             # The Sandbox context viewer is a normal user-facing diagnostic,
             # not a debug-only feature. Its fallback file must therefore be
@@ -443,6 +456,7 @@ class ChatModel:
                 suppress_failure_events=suppress_failure_events,
                 trace_id=trace_id,
                 cancellation=cancellation,
+                failure_context=request_options.get("failure_context"),
             )
         except OperationCancelledError:
             raise
@@ -482,6 +496,23 @@ class ChatModel:
         if response_text:
             raw_response_text = response_text.text or ""
             cleaned_response = self._clean_response(response_text.text)
+            response_text.text = cleaned_response
+            try:
+                bridge_native_tool_response(
+                    response_text, _last_req[0], model_cls=structured_model or StructuredResponse,
+                )
+            except (ValueError, TypeError):
+                response_text.text = None
+                response_text.error_message = 'The model returned an invalid native tool response.'
+                response_text.error_details = {"code": "native_tool_call_invalid", "stage": "tools"}
+                from handlers.llm_providers.errors import LLMProviderError
+                self.last_error = LLMProviderError(
+                    provider=_last_req[0].provider_name or '', friendly_message=response_text.error_message,
+                    provider_message='Native tool validation failed', code='native_tool_call_invalid',
+                    retryable=False, phase='response',
+                )
+                return response_text, False
+            cleaned_response = response_text.text
             if cleaned_response:
                 response_text.text = cleaned_response
                 if _last_req[0]:
@@ -515,7 +546,11 @@ class ChatModel:
         preset_settings = self.preset_resolver.resolve(preset_id)
 
         logger.info(f"Using preset: {preset_settings.preset_name}")
-        logger.info(f"Protocol: {preset_settings.protocol_id} | Dialect: {preset_settings.dialect_id} | Provider: {preset_settings.provider_name}")
+        logger.info(
+            f"Protocol: {preset_settings.protocol_id} | Dialect: {preset_settings.dialect_id} "
+            f"| Provider: {preset_settings.provider_display_name} "
+            f"| Transport: {preset_settings.provider_name}"
+        )
         logger.info(f"Capabilities: {preset_settings.capabilities}")
         logger.info(f"Max Response Tokens: {self.cfg.max_response_tokens}, Temperature: {self.cfg.temperature} (base; preset overrides applied separately)")
         logger.info(
@@ -562,6 +597,6 @@ class ChatModel:
         logger.info("Reloading current character data.")
         if self.current_character:
             self.current_character.reload_character_data()
-            logger.info(f"Character {self.current_character.name} data reloaded.")
+            logger.info(f"Character {self.current_character.display_name} data reloaded.")
         else:
             logger.warning("No current character selected to reload.")

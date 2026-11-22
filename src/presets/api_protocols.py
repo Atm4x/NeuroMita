@@ -1,22 +1,27 @@
 # src/presets/api_protocols.py
 from __future__ import annotations
 
+from presets.opencode import protocol_data as opencode_protocols
+
 
 class Dialects:
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+    OPENAI_RESPONSES = "openai_responses"
     GEMINI_GENERATE_CONTENT = "gemini_generate_content"
-    G4F = "g4f"
 
 
 API_PROTOCOLS_DATA = [
     {
         "id": "mistral_default",
+        "settings_schema_id": "mistral",
         "name": "Mistral (OpenAI-compatible)",
+        "display_name": "Mistral",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
         "auth": {"mode": "bearer"},
         "headers": {},
-        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True},
+        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True,
+                         "structured_output_fallback": True},
         "transforms": [
             {"id": "ensure_alternating_roles"},
             {"id": "ensure_last_message_user", "params": {"fallback_user_text": "."}},
@@ -24,14 +29,16 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "openrouter_default",
+        "settings_schema_id": "openrouter",
         "name": "OpenRouter (OpenAI-compatible)",
+        "display_name": "OpenRouter",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
         "auth": {"mode": "bearer"},
         "headers": {"HTTP-Referer": "https://github.com/Atm4x/NeuroMita", "X-Title": "NeuroMita"},
         # OpenRouter aggregates many providers — not all support json_schema,
         # so use json_object (softer mode, relies on prompt) to avoid 400 errors.
-        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "supports_stream_usage": True, "structured_output": True, "structured_output_mode": "json_object", "reasoning_control": "openrouter"},
+        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "supports_stream_usage": True, "structured_output": True, "structured_output_mode": "json_object", "reasoning_control": "openrouter", "structured_output_fallback": True},
         # OpenRouter accepts multiple system messages, so keep the stable prompt
         # blocks separate instead of merging them into one early system block.
         # Merging shifted every block behind a single message and made the
@@ -40,37 +47,91 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "openai_compatible_default",
+        "settings_schema_id": "openai-compatible",
         "name": "OpenAI-compatible (Generic)",
+        "display_name": "OpenAI-compatible API",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
         "auth": {"mode": "bearer"},
         "headers": {},
-        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True},
+        "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True,
+                         "structured_output_fallback": True},
+        "transforms": [],
+    },
+    {
+        "id": "openai_responses_default",
+        "settings_schema_id": "openai-responses",
+        "name": "OpenAI Responses (API key)",
+        "display_name": "OpenAI Responses API",
+        "dialect": Dialects.OPENAI_RESPONSES,
+        "provider": "common",
+        "auth": {"mode": "bearer"},
+        "headers": {},
+        "capabilities": {
+            "tools_native": True,
+            "streaming": True,
+            "streaming_with_tools": True,
+            "supports_stream_usage": True,
+            "structured_output": True,
+            "native_structured_output": True,
+            "structured_output_fallback": False,
+            "images": True,
+            "files": True,
+            "force_wire_stream": False,
+            "tools_namespace": "",
+        },
+        "transforms": [],
+    },
+    {
+        "id": "chatgpt_plan_default",
+        "settings_schema_id": "chatgpt-plan",
+        "settings_schema_migrations": {"openai-compatible": "chatgpt-plan"},
+        "name": "ChatGPT Plan (Responses preview)",
+        "display_name": "ChatGPT Plan (Codex)",
+        "dialect": Dialects.OPENAI_RESPONSES,
+        "provider": "chatgpt_plan",
+        "auth": {"mode": "oauth_chatgpt"},
+        "headers": {},
+        "capabilities": {
+            "tools_native": True,
+            "streaming": True,
+            "streaming_with_tools": True,
+            "supports_stream_usage": True,
+            "structured_output": True,
+            "native_structured_output": True,
+            "images": True,
+            "files": True,
+            "force_wire_stream": True,
+            "tools_namespace": "neuromita",
+        },
         "transforms": [],
     },
     {
         "id": "lmstudio_default",
+        "settings_schema_id": "local-openai",
         "name": "LM Studio (OpenAI-compatible)",
+        "display_name": "LM Studio",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
         "auth": {"mode": "bearer"},
         "headers": {},
-        # Отдельный протокол, а не generic: LM Studio понимает reasoning_effort
-        # ("none" глушит мысли локальных reasoning-моделей вроде Gemma 4 и Qwen3),
-        # тогда как произвольный OpenAI-совместимый сервер на неизвестный параметр
-        # ответит 4xx. json_schema LM Studio держит грамматикой — проверено.
+        # LM Studio/Qwen accepts schema and native tools separately; combining
+        # them can produce an empty grammar. Keep tool calls in the JSON schema.
         "capabilities": {
             "tools_native": True,
             "streaming": True,
             "streaming_with_tools": False,
             "structured_output": True,
             "reasoning_control": "reasoning_effort",
+            "native_tools_with_structured_output": False,
         },
-        "transforms": [],
+        "transforms": [{"id": "normalize_system_messages"}],
     },
     {
         "id": "aiio_default",
+        "settings_schema_id": "openai-compatible",
         "name": "Ai.iO (OpenAI-compatible)",
+        "display_name": "Ai.iO",
         "dialect": Dialects.OPENAI_CHAT_COMPLETIONS,
         "provider": "common",
         "auth": {"mode": "bearer"},
@@ -80,7 +141,9 @@ API_PROTOCOLS_DATA = [
     },
     {
         "id": "google_gemini_default",
+        "settings_schema_id": "google-level",
         "name": "Google Gemini API (generateContent)",
+        "display_name": "Google AI Studio",
         "dialect": Dialects.GEMINI_GENERATE_CONTENT,
         "provider": "gemini",
         "auth": {"mode": "query", "param": "key"},
@@ -88,14 +151,7 @@ API_PROTOCOLS_DATA = [
         "capabilities": {"tools_native": True, "streaming": True, "streaming_with_tools": False, "structured_output": True},
         "transforms": [],
     },
-    {
-        "id": "g4f_default",
-        "name": "GPT4Free",
-        "dialect": Dialects.G4F,
-        "provider": "g4f",
-        "auth": {"mode": "none"},
-        "headers": {},
-        "capabilities": {"tools_native": False, "streaming": False, "streaming_with_tools": False, "structured_output": False},
-        "transforms": [],
-    },
+
 ]
+
+API_PROTOCOLS_DATA.extend(opencode_protocols())

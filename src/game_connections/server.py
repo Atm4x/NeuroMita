@@ -9,7 +9,7 @@ from concurrent.futures import Future
 from itertools import count
 from typing import Optional, Dict, Any, Set, Callable
 from main_logger import logger
-from core.events import get_event_bus, Events
+from core.events import get_event_bus
 from core.task_supervisor import task_supervisor
 from managers.task_manager import TaskStatus
 import uuid
@@ -42,6 +42,8 @@ class ChatServerNew:
     """
 
     def __init__(self, host='127.0.0.1', port=12345):
+        from core.state_barrier import current_state_barrier
+        self._state_owner = current_state_barrier()
         self.host = host
         self.port = port
 
@@ -262,7 +264,17 @@ class ChatServerNew:
     def _forget_client_state(self, client_id: str) -> None:
         with self._clients_lock:
             self.active_connections.pop(client_id, None)
-            self.client_roles.pop(client_id, None)
+            was_desktop = self.client_roles.pop(client_id, None) == self.DESKTOP_ROLE
+            desktop_alive = any(role == self.DESKTOP_ROLE for role in self.client_roles.values())
+        if was_desktop:
+            requested = self.set_desktop_watch_request(client_id, False)
+            from core.services import services
+            from services.contracts import DesktopWatchService
+            watch = services().get_optional(DesktopWatchService)
+            if watch is not None:
+                watch.apply_desktop_state({"watching_screen": requested})
+            if not desktop_alive:
+                self._deactivate_desktop_mode()
         self.client_tasks.pop(client_id, None)
         self.last_participants.pop(client_id, None)
         stale_dialogue_keys = [
@@ -272,7 +284,31 @@ class ChatServerNew:
         for key in stale_dialogue_keys:
             self._last_sent_dialogue_text.pop(key, None)
 
+    def set_desktop_watch_request(self, client_id, requested):
+        with self._clients_lock:
+            if not hasattr(self, "_desktop_watch_requests"):
+                self._desktop_watch_requests = {}
+            self._desktop_watch_requests.pop(client_id, None)
+            if requested and self.client_roles.get(client_id) == self.DESKTOP_ROLE:
+                self._desktop_watch_requests[client_id] = True
+            return any(self._desktop_watch_requests.values())
+
+    def _deactivate_desktop_mode(self) -> None:
+        from core.services import services
+        from services.contracts import SettingsService
+
+        settings = services().get_optional(SettingsService)
+        if settings is None or not settings.get("DESKTOP_MODE_ACTIVE", False):
+            return
+
+        settings.set("DESKTOP_MODE_ACTIVE", False)
+        logger.info("[Desktop] overlay closed - desktop mode off")
     async def process_request(self, request: Dict[str, Any], client_id: str):
+        from core.state_barrier import external_state_operation
+        with external_state_operation(getattr(self, "_state_owner", None)):
+            await self._process_request_in_world(request, client_id)
+
+    async def _process_request_in_world(self, request: Dict[str, Any], client_id: str):
         if not isinstance(request, dict):
             writer = self._writer_for(client_id)
             if writer:
@@ -292,7 +328,9 @@ class ChatServerNew:
             await self.send_error(writer, f"Unknown action: {action}")
             return
 
-        ctx = RequestContext(server=self, client_id=client_id, writer=writer, event_bus=self.event_bus)
+        with self._clients_lock:
+            role = self.client_roles.get(client_id, "")
+        ctx = RequestContext(server=self, client_id=client_id, writer=writer, event_bus=self.event_bus, client_role=role)
         try:
             await handler.handle(request, ctx)
         except asyncio.CancelledError:
@@ -347,9 +385,10 @@ class ChatServerNew:
     async def send_task_update(self, client_id: str, task):
         writer = self._writer_for(client_id)
         if writer is None:
-            return
-        message ={"type": "task_update", "uid": task.uid, "status": task.status.value, "body": task.to_dict()}
-        await self.send_json(writer, message)
+            return False
+        body = task.to_dict()
+        message ={"type": "task_update", "uid": task.uid, "status": body.get("status", task.status.value), "body": body}
+        return await self.send_json(writer, message)
 
     async def send_json(self, writer: asyncio.StreamWriter, data: Dict[str, Any]) -> bool:
         try:
@@ -417,13 +456,17 @@ class ChatServerNew:
     def can_schedule(self) -> bool:
         return bool(self._loop and self._loop.is_running())
 
-    def schedule_send_task_update(self, client_id: str, task) -> None:
+    def schedule_send_task_update(self, client_id: str, task):
         if not self.can_schedule():
-            return
+            return None
+
+        async def _push() -> bool:
+            return await self.send_task_update(client_id, task)
+
         try:
-            asyncio.run_coroutine_threadsafe(self.send_task_update(client_id, task), self._loop)
+            return asyncio.run_coroutine_threadsafe(_push(), self._loop)
         except Exception:
-            pass
+            return None
 
     def schedule_send_json(self, client_id: str, payload: Dict[str, Any]) -> None:
         if not self.can_schedule():
@@ -465,6 +508,7 @@ class ChatServerNew:
 
     # Роль игры: только она вправе принимать ход игрока.
     GAME_ROLE = "game"
+    DESKTOP_ROLE = "desktop"
     # Версия протокола, которую сервер объявляет в ответ на рукопожатие.
     PROTOCOL_VERSION = 1
 
@@ -561,6 +605,11 @@ class ChatServerNew:
         engine: str = "",
         ts: float | None = None,
         final: bool = True,
+        capture_id: str = "",
+        press_generation: int = -1,
+        revision: int = 0,
+        autosend: bool | None = None,
+        delay_sec: float = 0.0,
     ) -> "Future[bool]":
         """Отправить распознанную фразу конкретной сессии мода.
 
@@ -580,6 +629,22 @@ class ChatServerNew:
             "ts": float(ts or time.time()),
             "final": bool(final),
         }
+        if autosend is not None:
+            payload.update(autosend=bool(autosend), delay_sec=max(0.0, float(delay_sec)))
+        if capture_id:
+            payload.update(capture_id=capture_id, press_generation=press_generation,
+                           revision=revision, autosend=bool(autosend), delay_sec=max(0.0, float(delay_sec)), session_id=client_id)
+        return self._schedule_asr_message(client_id, payload)
+
+    def schedule_send_asr_capture_state(self, data: dict) -> "Future[bool]":
+        target = str(data.get("client_id") or "")
+        payload = {key: data[key] for key in (
+            "capture_id", "press_generation", "revision", "phase", "active", "pending", "error",
+            "command_generation", "accepted", "through_generation") if key in data}
+        payload.update(type="asr_capture_state", session_id=target)
+        return self._schedule_asr_message(target, payload)
+
+    def _schedule_asr_message(self, client_id: str, payload: dict) -> "Future[bool]":
 
         if not self.can_schedule():
             return _finished_future(False)

@@ -7,13 +7,23 @@ import threading
 import pygame
 
 from main_logger import logger
+from core.state_barrier import StateLease
 
 
 class AudioHandler:
     _lock = threading.Lock()
 
     @classmethod
-    async def handle_voice_file(cls, file_path, delete: bool = True, volume: int = 100):
+    async def handle_voice_file(
+        cls,
+        file_path,
+        delete: bool = True,
+        volume: int = 100,
+        *,
+        raise_errors: bool = False,
+        state_lease=None,
+        cancellation=None,
+    ):
         """Проигрывает звуковой файл (MP3 или OGG).
 
         volume — громкость воспроизведения в процентах (100 = как есть).
@@ -22,16 +32,20 @@ class AudioHandler:
         """
         try:
             logger.info(f"Проигрываю файл: {file_path}")
-            await cls.play_audio_with_pygame(file_path, volume)
+            await cls.play_audio_with_pygame(file_path, volume, state_lease=state_lease, cancellation=cancellation)
             if os.path.exists(file_path) and delete:
                 try:
                     await asyncio.sleep(0.02)
                     os.remove(file_path)
                     logger.info(f"Файл {file_path} удалён.")
                 except Exception as e:
-                    logger.info(f"Файл {file_path} НЕ удалён. Ошибка: {format_exception(e)}")
+                    logger.info(
+                        f"Файл {file_path} НЕ удалён. Ошибка: {format_exception(e)}"
+                    )
         except Exception as e:
             logger.info(f"Ошибка при воспроизведении файла: {format_exception(e)}")
+            if raise_errors:
+                raise
 
     @staticmethod
     def _amplify_wav(path: str, gain: float) -> str | None:
@@ -50,15 +64,23 @@ class AudioHandler:
             sf.write(tmp_path, data, sr)
             return tmp_path
         except Exception as e:
-            logger.info(f"Не удалось усилить WAV (откат на set_volume): {format_exception(e)}")
+            logger.info(
+                f"Не удалось усилить WAV (откат на set_volume): {format_exception(e)}"
+            )
             return None
 
     @classmethod
-    async def play_audio_with_pygame(self, file_path, volume: int = 100):
+    async def play_audio_with_pygame(self, file_path, volume: int = 100, *, state_lease=None, cancellation=None):
         """Проигрывает аудиофайл с учётом громкости."""
+
+        state_lease = state_lease or StateLease.capture()
 
         def play():
             with AudioHandler._lock:
+                if state_lease is not None:
+                    state_lease.require_current()
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
                 gain = max(0.0, float(volume) / 100.0)
                 play_path = file_path
                 temp_path = None
@@ -77,7 +99,12 @@ class AudioHandler:
                     pygame.mixer.music.load(play_path)  # Pygame поддерживает MP3 и OGG
                     pygame.mixer.music.set_volume(mixer_volume)
                     pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():  # Ждем завершения воспроизведения
+                    while (
+                        pygame.mixer.music.get_busy()
+                    ):  # Ждем завершения воспроизведения
+                        if ((state_lease is not None and not state_lease.current)
+                                or (cancellation is not None and cancellation.cancelled)):
+                            break
                         pygame.time.Clock().tick(10)
                     pygame.mixer.music.stop()
                     pygame.mixer.quit()

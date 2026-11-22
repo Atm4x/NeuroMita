@@ -5,6 +5,7 @@ StructuredOutputPanel — compact debug display of structured AI response data.
 import json
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy
 from PyQt6.QtCore import Qt
+from utils import _
 
 # Modern Dashboard Colors
 CLR_BADGE_BG      = "rgba(255, 255, 255, 0.05)"
@@ -155,14 +156,14 @@ class MemoryBlock(QFrame):
                 layout.addWidget(lbl)
 
 class ReminderBlock(QFrame):
-    def __init__(self, rem_add: list, rem_delete: list, font_sm: int, parent=None):
+    def __init__(self, rem_add: list, rem_delete: list, timer_add: list, font_sm: int, parent=None):
         super().__init__(parent)
         self.setStyleSheet(f"QFrame {{ background-color: {CLR_REMIND_BG}; border: 1px solid {CLR_REMIND_BORDER}; border-radius: 8px; margin: 2px 0px; }}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(2)
 
-        header = QLabel("\u23f0 reminder", self)
+        header = QLabel("\u23f0 schedule", self)
         header.setStyleSheet(f"color: {CLR_REMIND_HEADER}; font-weight: bold; font-size: {font_sm}pt; background: transparent; border: none;")
         layout.addWidget(header)
 
@@ -173,6 +174,12 @@ class ReminderBlock(QFrame):
                 lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 lbl.setStyleSheet(f"color: {CLR_REMIND_TEXT}; font-size: {font_sm}pt; background: transparent; border: none; padding-left: 4px;")
                 layout.addWidget(lbl)
+        for entry in timer_add:
+            lbl = QLabel(f"⏳ {entry}", self)
+            lbl.setWordWrap(True)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lbl.setStyleSheet(f"color: {CLR_REMIND_TEXT}; font-size: {font_sm}pt; background: transparent; border: none; padding-left: 4px;")
+            layout.addWidget(lbl)
 
 class GraphBlock(QFrame):
     def __init__(self, entities: list, relations: list, font_sm: int, parent=None):
@@ -293,16 +300,60 @@ class StructuredOutputPanel(QFrame):
         if mem_add or mem_update or mem_delete or mem_merge:
             layout.addWidget(MemoryBlock(mem_add, mem_update, mem_delete, self._font_sm, layout.parentWidget(), mem_merge=mem_merge))
 
-        rem_add, rem_delete = data.get("reminder_add") or [], data.get("reminder_delete") or []
-        if rem_add or rem_delete:
-            layout.addWidget(ReminderBlock(rem_add, rem_delete, self._font_sm, layout.parentWidget()))
+        rem_add, rem_delete, timer_add = data.get("reminder_add") or [], data.get("reminder_delete") or [], data.get("timer_add") or []
+        if rem_add or rem_delete or timer_add:
+            layout.addWidget(ReminderBlock(rem_add, rem_delete, timer_add, self._font_sm, layout.parentWidget()))
 
         entities, relations = data.get("entities") or [], data.get("relations") or []
         if entities or relations:
             layout.addWidget(GraphBlock(entities, relations, self._font_sm, layout.parentWidget()))
 
+    _NORMALIZED_HIDDEN_FIELDS = frozenset({"response", "response_protocol_version"})
+
+    @staticmethod
+    def _visible_json_payload(data: dict) -> dict:
+        """Top-level fields for the normalized JSON view.
+
+        Presentation-only filter: keeps 0/False, drops empty defaults
+        (None / "" / [] / {}) and derived fields. Nested values are never
+        inspected.
+
+        ``response`` repeats the spoken text already present in segments and
+        ``response_protocol_version`` is internal wire metadata, so the view
+        stays close to the JSON the model actually produced.
+        """
+        visible: dict = {}
+        for key, value in data.items():
+            if key == "_raw_json" or key in StructuredOutputPanel._NORMALIZED_HIDDEN_FIELDS:
+                continue
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            visible[key] = value
+        return visible
+
     def _build_json_view(self, layout: QVBoxLayout, data: dict):
-        raw = data.get("_raw_json") or json.dumps({k: v for k, v in data.items() if k != "_raw_json"}, ensure_ascii=False, indent=2)
+        raw_json = data.get("_raw_json")
+        if raw_json:
+            caption_text = _("Исходный JSON модели", "Raw model JSON")
+            raw = raw_json
+        else:
+            caption_text = _(
+                "Нормализованный ответ (исходный JSON модели недоступен; пустые и служебные поля скрыты)",
+                "Normalized response (raw model JSON unavailable; empty and derived fields hidden)",
+            )
+            raw = json.dumps(self._visible_json_payload(data), ensure_ascii=False, indent=2)
+        try:
+            raw = json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+        except (ValueError, TypeError):
+            pass
+        caption = QLabel(caption_text, layout.parentWidget())
+        caption.setWordWrap(True)
+        caption.setTextFormat(Qt.TextFormat.PlainText)
+        caption.setStyleSheet(
+            f"color: {CLR_FIELD_LABEL}; font-size: {self._font_xs}pt; "
+            "background: transparent; border: none;"
+        )
+        layout.addWidget(caption)
         lbl = QLabel(raw, layout.parentWidget())
         lbl.setWordWrap(True)
         lbl.setTextFormat(Qt.TextFormat.PlainText)

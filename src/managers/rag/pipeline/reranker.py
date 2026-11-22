@@ -56,7 +56,7 @@ class LinearReranker:
                 graph_boost = 1.0
                 if c.source == "graph":
                     graph_boost = float(self.cfg.K7)
-                    score *= graph_boost
+                    score = (score + float(f.get("graph_evidence", 0.0) or 0.0) * self.cfg.K6) * graph_boost
                 c.score = float(score)
                 c.debug = c.debug or {}
                 c.debug.update({
