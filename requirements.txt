@@ -78,7 +78,7 @@ pywin32
 py7zr
 uvicorn
 google-cloud-storage
-python-chess
+chess==1.10.0  # Pin wheel release; avoid broken 1.11.2 sdist metadata build.
 google-api-core
 qtawesome
 pyqt6
