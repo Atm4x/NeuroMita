@@ -17,7 +17,12 @@ from managers.tools.tool_manager import ToolManager
 
 from handlers.llm_providers.base import LLMRequest, LLMResponse
 from schemas.structured_response import StructuredResponse
-from services.native_tool_calls import configure_native_tools, bridge_native_tool_response
+from services.native_tool_calls import (
+    NativeToolCallRejected,
+    bridge_native_tool_response,
+    configure_native_tools,
+    describe_rejection,
+)
 from utils.openrouter_routing import (
     build_openrouter_session_id,
     normalize_openrouter_routing,
@@ -434,14 +439,36 @@ class ChatModel:
                 bridge_native_tool_response(
                     response_text, _last_req[0], model_cls=structured_model or StructuredResponse,
                 )
-            except (ValueError, TypeError):
+            except NativeToolCallRejected as rejected:
+                logger.warning(
+                    "[NativeToolCall] Rejected native tool response: reason=%s detail=%s",
+                    rejected.reason, rejected.detail,
+                )
+                response_text.text = None
+                response_text.error_message = 'The model returned an invalid native tool response.'
+                response_text.error_details = {
+                    "code": "native_tool_call_invalid", "stage": "tools",
+                    "reason": rejected.reason, "detail": rejected.detail,
+                }
+                from handlers.llm_providers.errors import LLMProviderError
+                self.last_error = LLMProviderError(
+                    provider=_last_req[0].provider_name or '', friendly_message=response_text.error_message,
+                    provider_message=describe_rejection(rejected), code='native_tool_call_invalid',
+                    retryable=False, phase='response',
+                )
+                return response_text, False
+            except (ValueError, TypeError) as bridge_error:
+                logger.warning(
+                    "[NativeToolCall] Bridging failed: %s", format_exception(bridge_error),
+                )
                 response_text.text = None
                 response_text.error_message = 'The model returned an invalid native tool response.'
                 response_text.error_details = {"code": "native_tool_call_invalid", "stage": "tools"}
                 from handlers.llm_providers.errors import LLMProviderError
                 self.last_error = LLMProviderError(
                     provider=_last_req[0].provider_name or '', friendly_message=response_text.error_message,
-                    provider_message='Native tool validation failed', code='native_tool_call_invalid',
+                    provider_message=f'Native tool validation failed: {type(bridge_error).__name__}',
+                    code='native_tool_call_invalid',
                     retryable=False, phase='response',
                 )
                 return response_text, False

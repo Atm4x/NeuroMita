@@ -17,6 +17,40 @@ NATIVE_DIALECTS = frozenset({'openai_chat_completions', 'openai_responses'})
 logger = logging.getLogger(__name__)
 
 
+_REJECTION_TEXT = {
+    "schema_tool_call_in_native_mode": "Schema tool calls are forbidden in native mode",
+    "multiple_tool_calls": "The runtime supports one native tool call per turn",
+    "tool_not_advertised": "The model requested an unadvertised or disabled native tool",
+    "tool_call_id_missing": "Native tool call requires a call ID",
+    "tool_arguments_not_object": "Native tool call arguments must be an object",
+    "tool_call_id_reused": "Native tool call ID was already executed in this request",
+    "structured_content_not_object": "Native tool structured content must be an object",
+    "schema_and_native_tool_calls": "Schema and native tool calls cannot be combined",
+}
+
+
+class NativeToolCallRejected(ValueError):
+    """A provider tool call the runtime refuses to execute."""
+
+    def __init__(self, reason: str, detail: dict | None = None):
+        self.reason = reason
+        self.detail = dict(detail or {})
+        super().__init__(_REJECTION_TEXT.get(reason, "Native tool validation failed"))
+
+
+def describe_rejection(rejection: "NativeToolCallRejected") -> str:
+    """Readable provider_message for the failure event."""
+    text = str(rejection)
+    detail = rejection.detail
+    if rejection.reason == "multiple_tool_calls":
+        names = ", ".join(str(name) for name in detail.get("names") or [] if str(name).strip())
+        return f"{text} ({detail.get('count', '?')}{': ' + names if names else ''})"
+    name = str(detail.get("name") or "").strip()
+    if name and rejection.reason in {"tool_not_advertised", "tool_call_id_reused", "tool_call_id_missing"}:
+        return f"{text}: {name}"
+    return text
+
+
 # Intents that may be lifted into tool calls, with the arguments each one needs.
 # Nothing outside this table is ever converted, so a Unity intent cannot turn
 # into a tool call just because the two share a name.
@@ -81,29 +115,43 @@ def bridge_native_tool_response(response, req, *, model_cls=StructuredResponse):
         except ValueError:
             schema_data = None
         if isinstance(schema_data, dict) and _has_schema_tool_call(schema_data):
-            raise ValueError('Schema tool calls are forbidden in native mode')
+            raise NativeToolCallRejected('schema_tool_call_in_native_mode')
     if not calls:
         return response
     if len(calls) != 1:
-        raise ValueError('The runtime supports one native tool call per turn')
+        raise NativeToolCallRejected(
+            'multiple_tool_calls',
+            {'count': len(calls), 'names': [str(getattr(call, 'name', '') or '') for call in calls]},
+        )
     call = calls[0]
     profile = req.capabilities.get('structured_response_profile')
     advertised = {str((tool.get('function') or tool).get('name') or '') for tool in req.tools_payload or []}
     if (not req.tools_on or req.tools_mode != 'native' or not isinstance(profile, StructuredResponseCapabilities)
             or not profile.can_call_tools or call.name not in profile.enabled_tools or call.name not in advertised):
-        raise ValueError('The model requested an unadvertised or disabled native tool')
-    if not isinstance(call.id, str) or not call.id.strip() or not isinstance(call.arguments, dict):
-        raise ValueError('Native tool call requires a call ID and object arguments')
+        raise NativeToolCallRejected(
+            'tool_not_advertised',
+            {'name': str(call.name or ''), 'advertised': sorted(advertised)},
+        )
+    if not isinstance(call.id, str) or not call.id.strip():
+        raise NativeToolCallRejected('tool_call_id_missing', {'name': str(call.name or '')})
+    if not isinstance(call.arguments, dict):
+        raise NativeToolCallRejected(
+            'tool_arguments_not_object',
+            {'name': str(call.name or ''), 'id': call.id},
+        )
     if any(message.get('role') == 'tool' and message.get('tool_call_id') == call.id for message in req.messages):
-        raise ValueError('Native tool call ID was already executed in this request')
+        raise NativeToolCallRejected(
+            'tool_call_id_reused',
+            {'name': str(call.name or ''), 'id': call.id},
+        )
     if text.strip().startswith(('{', '[')):
         data = json.loads(text)
         if not isinstance(data, dict):
-            raise ValueError('Native tool structured content must be an object')
+            raise NativeToolCallRejected('structured_content_not_object')
     else:
         data = {'segments': [{'text': text}] if text else []}
     if _has_schema_tool_call(data):
-        raise ValueError('Schema and native tool calls cannot be combined')
+        raise NativeToolCallRejected('schema_and_native_tool_calls')
     if 'changes' in data or 'events' in data:
         from schemas.sparse_structured_response import normalize_sparse_response
         data = normalize_sparse_response(data, model_cls, profile)

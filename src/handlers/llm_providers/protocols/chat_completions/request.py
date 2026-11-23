@@ -112,6 +112,8 @@ def encode_request(req: LLMRequest, *, wire_stream: bool, supports_stream_usage:
         if not caps.get("tools_native", True):
             raise ValueError("Native tools are not supported by this endpoint.")
         payload["tools"] = encode_tools(req.tools_payload)
+        # The runtime executes one native call per turn; ask for exactly that.
+        payload["parallel_tool_calls"] = False
     return payload
 
 

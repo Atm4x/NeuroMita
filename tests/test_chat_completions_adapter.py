@@ -189,8 +189,10 @@ def test_canonical_flat_tools_are_wrapped_only_in_native_mode(mode):
     payload = ChatCompletionsAdapter().encode(req, wire_stream=False)
     if mode == "native":
         assert payload["tools"] == [{"type": "function", "function": declaration}]
+        assert payload["parallel_tool_calls"] is False
     else:
         assert "tools" not in payload
+        assert "parallel_tool_calls" not in payload
     assert req.tools_payload == [declaration]
 
 
