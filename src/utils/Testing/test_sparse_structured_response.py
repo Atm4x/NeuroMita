@@ -393,10 +393,12 @@ def test_chat_adapter_and_gemini_preserve_optional_response_fields(sparse_enable
 
 
 @pytest.mark.parametrize("support_intents", [False, True])
-def test_prompt_controller_renders_sparse_contract_after_template_intent_resolution(support_intents):
+@pytest.mark.parametrize("roleplay_enabled", [False, True])
+def test_prompt_controller_renders_sparse_contract_after_template_intent_resolution(support_intents, roleplay_enabled):
     from controllers.prompt_controller import PromptController
     from DSL.dsl_engine import DslInterpreter
     from core.request_policy import RequestPolicy
+    from domain.roleplay import RoleplayMode
     script = Path(__file__).resolve().parents[3] / "extra" / "Prompts" / "Structural" / "response_format_json.script"
     class Resolver:
         def resolve_path(self, path):
@@ -415,12 +417,17 @@ def test_prompt_controller_renders_sparse_contract_after_template_intent_resolut
     controller._apply_reply_defaults = lambda *args: None
     controller._resolve_examples_profile = lambda *args: "none"
     caps = {"structured_output": True, "structured_response_profile": profile(), "structured_prompt_features": profile().prompt_features()}
-    stable, volatile, _ = controller._build_system_messages(character, "chat", True, RequestPolicy(), caps)
+    stable, volatile, _ = controller._build_system_messages(
+        character, "chat", True, RequestPolicy(), caps,
+        roleplay_mode=RoleplayMode.FULL if roleplay_enabled else RoleplayMode.OFF,
+    )
     text = "\n".join(message["content"] for message in stable + volatile)
     assert "sparse_changes_v1" in text
     assert "All other segment fields are optional" not in text
     assert '"attitude_change": <number' not in text
     assert ('Segment intents: type' in text) == support_intents
+    assert ("Segment text follows [Roleplay Actions]" in text) == roleplay_enabled
+    assert ("never XML tags or action descriptions" in text) == (not roleplay_enabled)
     assert "response_sparse_format" not in variables
     assert "25-70 words total" in text
     from dataclasses import replace

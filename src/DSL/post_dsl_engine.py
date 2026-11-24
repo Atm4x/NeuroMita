@@ -187,6 +187,10 @@ class PostDslInterpreter:
                 self._local_vars.get(var_name, self.character.variables.get(var_name, def_val))
             )
 
+        def _prompt_feature(name, default):
+            getter = getattr(getattr(self.character, "dsl_interpreter", None), "get_prompt_feature", None)
+            return getter(name, default) if getter is not None else default
+
         eval_scope = {**self.character.variables, **self._local_vars, **context_vars, **self.character.app_vars}
         allowed_calls = {
             "str": str,
@@ -199,6 +203,7 @@ class PostDslInterpreter:
             "min": min,
             "random": random,
             "default": _default,
+            "prompt_feature": _prompt_feature,
         }
 
         try:

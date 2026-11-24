@@ -1904,6 +1904,8 @@ class ModelController(GenerationService, ModelStateService):
         })
 
         combined_messages = prompt_data.messages
+        roleplay_enabled = getattr(prompt_data, "roleplay_enabled", False)
+        effective_capabilities["roleplay_enabled"] = roleplay_enabled
 
         if event_type == "chat":
             self._record_context_snapshot(char_id, "chat", combined_messages)
@@ -2058,6 +2060,8 @@ class ModelController(GenerationService, ModelStateService):
                 )
                 if structured_result is not None:
                     self._consume_temporary_system_infos(char_id, extra_system_infos)
+                    if roleplay_enabled:
+                        structured_result = dataclasses.replace(structured_result, roleplay_enabled=True)
                 return structured_result
 
             inline_graph_json: Optional[str] = None
@@ -2160,6 +2164,7 @@ class ModelController(GenerationService, ModelStateService):
                 message_id=assistant_message_id,
                 sample_id=sample_id or "",
                 context_snapshot_id=context_snapshot_id,
+                roleplay_enabled=roleplay_enabled,
             )
 
         except OperationCancelledError:
@@ -3022,7 +3027,10 @@ class ModelController(GenerationService, ModelStateService):
                 from services.sparse_response_prompt import render_sparse_response_contract
                 combined_messages_v2.append({
                     "role": "system",
-                    "content": render_sparse_response_contract(continuation_profile, structured_model_cls),
+                    "content": render_sparse_response_contract(
+                        continuation_profile, structured_model_cls,
+                        roleplay_enabled=continuation_capabilities.get("roleplay_enabled", False),
+                    ),
                 })
             if not continuation_profile.can_call_tools:
                 continuation_capabilities["tools_prompt"] = ""

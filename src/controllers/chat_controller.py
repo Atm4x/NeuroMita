@@ -14,6 +14,7 @@ from handlers.llm_providers.base import StreamChannel
 from core.cancellation import CancellationToken, OperationCancelledError
 from core.events import Event, EventDelivery, Events, get_event_bus
 from domain.conversation_message_ids import ConversationMessageIds
+from domain.roleplay import roleplay_spoken_text
 from core.executors import Pools, PoolSaturated, executors
 from core.services import use
 from managers.task_manager import TaskStatus
@@ -957,7 +958,11 @@ class ChatController(ChatService, GenerationActivityService):
                     _route_filtered(stream_json_filter.flush_visible())
                 flush_stream_output()
 
-            if (response_text and self.settings.get("USE_VOICEOVER") and eff_policy.allow_voiceover
+            voice_text = task_response_text
+            if getattr(result, "roleplay_enabled", False):
+                voice_text = roleplay_spoken_text(voice_text)
+
+            if (response_text and voice_text and self.settings.get("USE_VOICEOVER") and eff_policy.allow_voiceover
                     and not (isinstance(voice_profile, dict) and voice_profile.get("voice_enabled") is False)):
                 if isinstance(voice_profile, dict):
                     is_game_master = (voice_profile.get("character_id") == "GameMaster")
@@ -985,7 +990,7 @@ class ChatController(ChatService, GenerationActivityService):
 
                         perf_mark(trace_id, "tts.requested")
                         self.event_bus.emit(Events.Audio.VOICEOVER_REQUESTED, {
-                            "text": task_response_text,
+                            "text": voice_text,
                             "speaker": speaker,
                             "task_uid": task_uid,
                             "task_result": voice_task_result,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from domain.roleplay import ROLEPLAY_MODE_SETTING, RoleplayMode
 from ui.gui_templates import create_settings_section
 from utils import _
 
@@ -12,8 +13,26 @@ def add_dialogue_settings_section(self, parent) -> None:
         {
             "type": "text",
             "label": _(
-                "Автоматические разговоры персонажей и продолжения.",
-                "Automatic character conversations and continuations.",
+                "РП, автоматические разговоры персонажей и продолжения.",
+                "Roleplay, automatic character conversations and continuations.",
+            ),
+        },
+        {
+            "label": _("Режим РП", "Roleplay mode"),
+            "key": ROLEPLAY_MODE_SETTING,
+            "type": "combobox",
+            "default": RoleplayMode.OFF.value,
+            "options": [
+                (_("Выкл.", "Off"), RoleplayMode.OFF.value),
+                (_("Лёгкий", "Subtle"), RoleplayMode.SUBTLE.value),
+                (_("Выразительный", "Expressive"), RoleplayMode.EXPRESSIVE.value),
+                (_("Полный", "Full"), RoleplayMode.FULL.value),
+            ],
+            "tooltip": _(
+                "Лёгкий — редкие короткие жесты. Выразительный — больше невербальных реакций в важных сценах. "
+                "Полный — развёрнутый отыгрыш, когда это уместно. Доступные действия игры всегда имеют приоритет.",
+                "Subtle adds occasional brief gestures. Expressive uses more nonverbal reactions in important scenes. "
+                "Full allows more detailed roleplay when appropriate. Available game actions always take priority.",
             ),
         },
         {

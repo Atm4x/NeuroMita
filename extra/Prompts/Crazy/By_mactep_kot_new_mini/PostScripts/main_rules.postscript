@@ -2,8 +2,7 @@
 RULE Remove Asterisks
     MATCH REGEX "(\*{1,3})" 
     ACTIONS
-        REMOVE_MATCH
-        LOG "Удалены звёздочки"
+        REPLACE_MATCH WITH capture_1 if prompt_feature("roleplay_enabled", False) else ""
     END_ACTIONS
 END_RULE
 

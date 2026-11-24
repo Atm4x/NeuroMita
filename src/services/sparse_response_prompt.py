@@ -7,7 +7,7 @@ from schemas.sparse_structured_response import build_sparse_response_model
 from schemas.structured_response import StructuredResponse
 
 
-def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, reply_limits=None) -> str:
+def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, reply_limits=None, roleplay_enabled=False) -> str:
     wire = build_sparse_response_model(model_cls or StructuredResponse, profile)
     schema = wire.json_schema_dict()
     base_example = {"segments": [{"text": "Hello."}], "changes": []}
@@ -15,7 +15,9 @@ def render_sparse_response_contract(profile, model_cls=StructuredResponse, *, re
         "[Structured Response Contract: sparse_changes_v1]",
         "This contract defines the JSON wire format for this request and supersedes field layouts in older examples or history.",
         'Return one JSON object with required "segments" and "changes" arrays. No text outside JSON.',
-        "Segment text contains spoken words, never XML tags or action descriptions. Keep commands, intents, animations and other segment fields inside the corresponding segment.",
+        "Segment text follows [Roleplay Actions] and never contains XML tags."
+        if roleplay_enabled else "Segment text contains spoken words, never XML tags or action descriptions.",
+        "Keep commands, intents, animations and other segment fields inside the corresponding segment.",
         "Put only operations needed this turn in changes. Do not emit null, zero or empty-list changes for unused operations.",
         "Only top-level response operations use changes. Segment fields never belong in changes and changes never contain a segment index.",
         "Each top-level list item is its own change; preserve their order. A scalar change may appear only once per type. Never repeat actions from previous turns.",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from core.error_utils import format_exception
 from domain.character_runtime_profile import runtime_profile_for
+from domain.roleplay import ROLEPLAY_MODE_SETTING, RoleplayMode
 from typing import Dict, Any, List, Optional
 import os
 import re
@@ -463,6 +464,7 @@ class PromptController(PromptBuilderService):
         capabilities: Dict[str, Any] | None = None,
         gm_instruction_override: str | None = None,
         runtime: RuntimeCapabilities | None = None,
+        roleplay_mode: RoleplayMode = RoleplayMode.OFF,
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
         self._setup_character_for_prompt(
             character,
@@ -477,6 +479,7 @@ class PromptController(PromptBuilderService):
         # Expose capabilities as character variables so DSL templates can use them
         # via [{VAR}] substitution (e.g. in response_format_json.script includes).
         caps = capabilities or {}
+        roleplay_enabled = roleplay_mode != RoleplayMode.OFF
         # Каталог tools уходит ОТДЕЛЬНЫМ system-сообщением [Available Tools]
         # (см. ниже), а не внутрь блока схемы: так он считается своей секцией
         # в токен-статистике и не инвалидирует кэш всего блока формата при
@@ -524,6 +527,8 @@ class PromptController(PromptBuilderService):
 
         try:
             feature_overrides = dict(caps.get("structured_prompt_features") or {})
+            feature_overrides["roleplay_mode"] = roleplay_mode.value
+            feature_overrides["roleplay_enabled"] = roleplay_enabled
             profile = caps.get("structured_response_profile") if caps.get("structured_output") else None
             if isinstance(profile, StructuredResponseCapabilities) and not profile.sparse_enabled:
                 profile = None
@@ -567,7 +572,10 @@ class PromptController(PromptBuilderService):
             internal_model = build_structured_response_model(getattr(character, "custom_params", []) or [])
             get_variable = getattr(character, "get_variable", lambda key, default: default)
             reply_limits = {key: get_variable(key, default) for key, default in self._REPLY_DEFAULTS.items()}
-            stable_blocks.append(render_sparse_response_contract(profile, internal_model, reply_limits=reply_limits))
+            stable_blocks.append(render_sparse_response_contract(
+                profile, internal_model, reply_limits=reply_limits,
+                roleplay_enabled=roleplay_enabled,
+            ))
 
         stable_system_messages.extend(build_system_prompts(stable_blocks, separate=separate_prompts))
         volatile_system_messages.extend(build_system_prompts(volatile_blocks, separate=separate_prompts))
@@ -1589,6 +1597,15 @@ class PromptController(PromptBuilderService):
             capabilities["structured_exclude_fields"] = profile.excluded_fields
             capabilities["structured_prompt_features"] = profile.prompt_features()
 
+        roleplay_mode = RoleplayMode.OFF
+        settings = services().get_optional(SettingsService)
+        if (
+            settings is not None
+            and not is_game_master
+            and char_id.casefold() != "gamemaster"
+            and policy.react_level != 1
+        ):
+            roleplay_mode = RoleplayMode.from_setting(settings.get(ROLEPLAY_MODE_SETTING))
         stable_system_messages, volatile_system_messages, dsl_system_infos = self._build_system_messages(
             character,
             event_type,
@@ -1597,6 +1614,7 @@ class PromptController(PromptBuilderService):
             capabilities=capabilities,
             gm_instruction_override=request.gm_instruction_override,
             runtime=request_runtime,
+            roleplay_mode=roleplay_mode,
         )
         dsl_interpreter = getattr(character, "dsl_interpreter", None)
         get_prompt_feature = getattr(dsl_interpreter, "get_prompt_feature", None)
@@ -1983,6 +2001,7 @@ class PromptController(PromptBuilderService):
             user_message=user_message_for_history,
             support_intents=support_intents,
             cognitive_effect_changes=cognitive_effect_changes,
+            roleplay_enabled=roleplay_mode != RoleplayMode.OFF,
         )
 
 

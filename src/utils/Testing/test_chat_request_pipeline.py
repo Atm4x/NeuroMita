@@ -433,6 +433,34 @@ class ChatRequestPipelineTests(unittest.TestCase):
         plain_result = ChatController._build_task_result("hello", None)
         self.assertEqual(plain_result["response_protocol_version"], 3)
 
+    def test_roleplay_remains_in_unity_reply_and_is_omitted_from_voiceover(self):
+        self.controller.settings = _StubSettings({"USE_VOICEOVER": True})
+        generation = _ImmediateGeneration()
+        services().register(GenerationService, generation, replace=True)
+
+        for reply, spoken in (("Привет. *Кивает.*", "Привет."), ("*Кивает.*", "")):
+            with self.subTest(reply=reply):
+                generation.generate_chat = lambda request: ChatGenerationResult(
+                    text=reply, character_id="Crazy", voice_profile={"character_id": "Crazy"},
+                    structured={"segments": [{"text": reply}]}, roleplay_enabled=True,
+                )
+                with patch.object(self.controller.event_bus, "emit", wraps=self.controller.event_bus.emit) as emit:
+                    result = self.controller._run_request("hi", character_id="Crazy", task_uid="rp-task")
+
+                self.assertEqual(result, reply)
+                voices = [call.args[1] for call in emit.call_args_list if call.args[0] == Events.Audio.VOICEOVER_REQUESTED]
+                if spoken:
+                    self.assertEqual([event["text"] for event in voices], [spoken])
+                    task_result = voices[0]["task_result"]
+                else:
+                    self.assertEqual(voices, [])
+                    task_result = next(
+                        call.args[1]["result"] for call in emit.call_args_list
+                        if call.args[0] == Events.Task.UPDATE_TASK_STATUS
+                        and call.args[1].get("status") == TaskStatus.SUCCESS
+                    )
+                self.assertEqual(task_result["segments"][0]["text"], reply)
+
     def test_rejected_structured_response_reports_failure_without_voiceover(self):
         services().register(GenerationService, _RejectedStructuredGeneration(), replace=True)
         self.controller.settings = _StubSettings({"USE_VOICEOVER": True})

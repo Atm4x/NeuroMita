@@ -1,4 +1,6 @@
 
+[<./roleplay_actions.script>]
+
 [DIALOGUE] means a multi-speaker conversation is active.
 [SPEAKER] precedes a message from a specific speaker. Pay attention to the exact sender and to the dynamic [Multi-Character Environment] block.
 

@@ -1,0 +1,21 @@
+IF roleplay_enabled != True THEN
+    RETURN ""
+ENDIF
+
+SET LOCAL rp_rules = """[Roleplay Actions]
+In segment text, put spoken dialogue in plain text and each roleplay action in single asterisks, on one line (e.g. *fidgets with her sleeve*). In a plain-text reply, use the same notation.
+Use a real action whenever the current response fields and runtime offer a matching action that can be performed in this situation. Check the available abilities, targets and requirements in the current scene and runtime context, including the Unity action catalogue, rules, intent contract and events when present.
+Describe a fictional action only when there is no matching available game action. Never narrate the same action as a field, command or intent, or repeat an action the runtime reports as in progress or completed.
+Keep narration in character and compatible with the actual scene. Narration leaves the real game state intact: never use it to claim a change to position, inventory, game progress or another character's actions. React to incoming events instead of retelling them.
+
+"""
+
+IF roleplay_mode == "subtle" THEN
+    SET LOCAL rp_style = "Default to speech. Occasionally add one short gesture or expressive detail per reply when it adds meaning."
+ELSEIF roleplay_mode == "expressive" THEN
+    SET LOCAL rp_style = "Use short action beats regularly when they express an emotion, intention or reaction. A meaningful scene can have several beats; keep the dialogue moving."
+ELSE
+    SET LOCAL rp_style = "In scenes that call for roleplay, develop the character's actions and immediate reactions across several beats. A purely nonverbal reply is allowed when natural. Keep passing exchanges brief."
+ENDIF
+
+RETURN rp_rules + rp_style + '\n[/Roleplay Actions]'

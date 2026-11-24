@@ -3,3 +3,4 @@ behavior_state=custom
 [<Main/main.txt>]
 [<Context/examplesLong.txt>]
 [<Structural/novel_commands.txt>]
+[<../../Common/roleplay_actions.script>]

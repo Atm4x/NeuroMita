@@ -180,10 +180,15 @@ SET LOCAL p_graph_schema_fields = """  "segments": [
   "relations": ["subject|predicate|object", ...],
 [{CUSTOM_PARAMS_SCHEMA}]}"""
 
+IF roleplay_enabled == True THEN
+    SET LOCAL p_text_policy = '\n- "text" follows [Roleplay Actions]. NEVER put XML tags in text.'
+ELSE
+    SET LOCAL p_text_policy = '\n- "text" must contain ONLY spoken words. NEVER put XML tags in text.'
+ENDIF
+
 SET LOCAL p_rules = """
 
-Field descriptions:
-- "text" must contain ONLY spoken words. NEVER put XML tags in text.
+Field descriptions:""" + p_text_policy + """
 - Use only action fields shown in the current request schema. "animations" play once and "idle_animations" loop when those fields are available.
 - Use dedicated fields and typed intents listed in [Unity Intent Contract] for supported actions. Use "commands" only for commands explicitly exposed by the current runtime (for example camera_snapshot or commands described in [Unity Runtime Rules]). Never invent command names.
 """ + p_intents_rules + p_wire_rules + """
@@ -218,8 +223,7 @@ Rules:
 
 SET LOCAL p_graph_rules = """
 
-Field descriptions:
-- "text" must contain ONLY spoken words. NEVER put XML tags in text.
+Field descriptions:""" + p_text_policy + """
 - Use only action fields shown in the current request schema.
 - Use dedicated fields and typed intents listed in [Unity Intent Contract] for supported actions. Use "commands" only for commands explicitly exposed by the current runtime (for example camera_snapshot or commands described in [Unity Runtime Rules]). Never invent command names.
 """ + p_intents_rules + p_wire_rules + """
@@ -313,10 +317,14 @@ ELSE
     SET LOCAL p_tool_footer = ""
 ENDIF
 
-SET LOCAL p_footer = p_tool_footer + """
+IF roleplay_enabled != True THEN
+    SET p_tool_footer = p_tool_footer + """
 
 When a physical event reaches you (for example in [Unity Runtime Events]), react to it first with your body or gaze — an emotion, a look, a small animation — and only then with words. Do not narrate the event; respond to it.
+"""
+ENDIF
 
+SET LOCAL p_footer = p_tool_footer + """
 Tag [SYSTEM INFO] means system information, not player speech.
 Tag [SPEAKER] means you are in a multi-speaker dialogue."""
 

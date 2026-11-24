@@ -777,6 +777,7 @@ class PromptBuildResult:
     user_message: Optional[Dict[str, Any]]
     support_intents: bool = True
     cognitive_effect_changes: List[Dict[str, Any]] = field(default_factory=list)
+    roleplay_enabled: bool = False
 
 
 class PromptBuilderService(ABC):
@@ -841,6 +842,7 @@ class ChatGenerationResult:
     # The Python chat keeps individual bubbles; Unity receives them in-order
     # with the final reply because one task has only one terminal delivery.
     tool_preludes: tuple[str, ...] = ()
+    roleplay_enabled: bool = False
 
 
 @dataclass
